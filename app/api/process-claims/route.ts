@@ -80,6 +80,22 @@ function pickValueByAliases(row: GenericRow, aliases: string[]): string {
   return "";
 }
 
+async function launchBrowser(logs: string[]) {
+  try {
+    logs.push("Attempting browser launch with Chrome channel.");
+    return await chromium.launch({
+      channel: "chrome",
+      headless: true,
+    });
+  } catch (chromeError) {
+    const message = chromeError instanceof Error ? chromeError.message : String(chromeError);
+    logs.push(`Chrome channel unavailable, falling back to Playwright Chromium: ${message}`);
+    return await chromium.launch({
+      headless: true,
+    });
+  }
+}
+
 export async function POST(request: Request): Promise<Response> {
   const logs: string[] = [];
   const startedAt = new Date();
@@ -163,10 +179,7 @@ export async function POST(request: Request): Promise<Response> {
     let globalAutomationError = "";
 
     try {
-      const browser = await chromium.launch({
-        channel: "chrome",
-        headless: true,
-      });
+      const browser = await launchBrowser(logs);
       const context = await browser.newContext();
       const page = await context.newPage();
 
