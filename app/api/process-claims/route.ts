@@ -63,6 +63,23 @@ function pickValue(row: GenericRow, keys: string[]): string {
   return "";
 }
 
+function normalizeKey(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+function pickValueByAliases(row: GenericRow, aliases: string[]): string {
+  const aliasSet = new Set(aliases.map(normalizeKey));
+  for (const [key, value] of Object.entries(row)) {
+    if (aliasSet.has(normalizeKey(key))) {
+      const text = asText(value);
+      if (text) {
+        return text;
+      }
+    }
+  }
+  return "";
+}
+
 export async function POST(request: Request): Promise<Response> {
   const logs: string[] = [];
   const startedAt = new Date();
@@ -101,10 +118,28 @@ export async function POST(request: Request): Promise<Response> {
       );
     }
 
-    const firstLogin = loginRows[0];
-    const username = pickValue(firstLogin, ["username", "Username", "userName", "UserName"]);
-    const password = pickValue(firstLogin, ["password", "Password"]);
-    const loginUrl = pickValue(firstLogin, ["loginUrl", "LoginUrl", "url", "URL"]) ||
+    const loginRow = loginRows.find((row) => {
+      const usernameCandidate = pickValueByAliases(row, [
+        "username",
+        "user name",
+        "userid",
+        "user id",
+        "email",
+      ]);
+      const passwordCandidate = pickValueByAliases(row, ["password", "passcode", "pwd"]);
+      return Boolean(usernameCandidate && passwordCandidate);
+    }) ?? loginRows[0];
+
+    const username = pickValueByAliases(loginRow, [
+      "username",
+      "user name",
+      "userid",
+      "user id",
+      "email",
+    ]);
+    const password = pickValueByAliases(loginRow, ["password", "passcode", "pwd"]);
+    const loginUrl = pickValueByAliases(loginRow, ["loginurl", "url", "website", "site"]) ||
+      pickValue(loginRow, ["loginUrl", "LoginUrl", "url", "URL"]) ||
       "https://providers.iehp.org/account/login";
 
     if (!username || !password) {
@@ -118,40 +153,49 @@ export async function POST(request: Request): Promise<Response> {
     }
 
     logs.push(`Loaded ${claimRows.length} claim rows.`);
+    for (const row of claimRows) {
+      row.BotClaimStatusCheckTime = new Date().toISOString();
+      row.BotClaimStatusCheck = "Failed";
+      row.BotClaimDetails = "";
+      row.BotClaimStatusCheckError = "";
+    }
 
-    const browser = await chromium.launch({
-      channel: "chrome",
-      headless: true,
-    });
-    const context = await browser.newContext();
-    const page = await context.newPage();
+    let globalAutomationError = "";
 
     try {
-      logs.push(`Navigating to login URL: ${loginUrl}`);
-      await page.goto(loginUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
-
-      const usernameInput = page.locator("input[type='email'], input[name*='user'], input[id*='user']").first();
-      const passwordInput = page.locator("input[type='password']").first();
-      const submitButton = page.locator("button[type='submit'], input[type='submit']").first();
-
-      await usernameInput.fill(username);
-      await passwordInput.fill(password);
-      await submitButton.click();
-
-      await page.waitForLoadState("networkidle", { timeout: 60000 });
-      await page.goto("https://providers.iehp.org/claims/status", {
-        waitUntil: "domcontentloaded",
-        timeout: 60000,
+      const browser = await chromium.launch({
+        channel: "chrome",
+        headless: true,
       });
+      const context = await browser.newContext();
+      const page = await context.newPage();
 
-      for (const row of claimRows) {
-        const nowText = new Date().toISOString();
-        row.BotClaimStatusCheckTime = nowText;
-        row.BotClaimStatusCheck = "Failed";
-        row.BotClaimDetails = "";
-        row.BotClaimStatusCheckError = "";
+      try {
+        logs.push(`Navigating to login URL: ${loginUrl}`);
+        await page.goto(loginUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
 
-        try {
+        const usernameInput = page
+          .locator("input[type='email'], input[name*='user'], input[id*='user']")
+          .first();
+        const passwordInput = page.locator("input[type='password']").first();
+        const submitButton = page
+          .locator("button[type='submit'], input[type='submit']")
+          .first();
+
+        await usernameInput.fill(username);
+        await passwordInput.fill(password);
+        await submitButton.click();
+
+        await page.waitForLoadState("networkidle", { timeout: 60000 });
+        await page.goto("https://providers.iehp.org/claims/status", {
+          waitUntil: "domcontentloaded",
+          timeout: 60000,
+        });
+
+        for (const row of claimRows) {
+          row.BotClaimStatusCheckTime = new Date().toISOString();
+
+          try {
           const memberPolicyId = pickValue(row, [
             "Member Policy ID",
             "MemberPolicyID",
@@ -210,16 +254,30 @@ export async function POST(request: Request): Promise<Response> {
           row.BotClaimStatusCheck = "Success";
           row.BotClaimStatusCheckError = "";
           logs.push(`Processed member ${memberPolicyId}: ${count} matching rows.`);
-        } catch (rowError) {
-          row.BotClaimStatusCheck = "Failed";
-          row.BotClaimStatusCheckError = rowError instanceof Error ? rowError.message : "Unknown row error";
-          logs.push(`Row failed: ${row.BotClaimStatusCheckError}`);
+          } catch (rowError) {
+            row.BotClaimStatusCheck = "Failed";
+            row.BotClaimStatusCheckError = rowError instanceof Error
+              ? rowError.message
+              : "Unknown row error";
+            logs.push(`Row failed: ${row.BotClaimStatusCheckError}`);
+          }
+        }
+      } finally {
+        await page.close();
+        await context.close();
+        await browser.close();
+      }
+    } catch (automationError) {
+      globalAutomationError = automationError instanceof Error
+        ? automationError.message
+        : "Unexpected automation error.";
+      logs.push(`Global automation error: ${globalAutomationError}`);
+      for (const row of claimRows) {
+        row.BotClaimStatusCheck = "Failed";
+        if (!asText(row.BotClaimStatusCheckError)) {
+          row.BotClaimStatusCheckError = globalAutomationError;
         }
       }
-    } finally {
-      await page.close();
-      await context.close();
-      await browser.close();
     }
 
     const updatedSheet = XLSX.utils.json_to_sheet(claimRows);
@@ -229,8 +287,10 @@ export async function POST(request: Request): Promise<Response> {
     const outputFileName = `updated-claims-${startedAt.toISOString().replace(/[:.]/g, "-")}.xlsx`;
 
     return Response.json({
-      success: true,
-      message: `Processing completed for ${claimRows.length} rows.`,
+      success: !globalAutomationError,
+      message: globalAutomationError
+        ? `Processing completed with errors for ${claimRows.length} rows.`
+        : `Processing completed for ${claimRows.length} rows.`,
       processedRows: claimRows.length,
       outputFileName,
       outputFileBase64: outputBuffer.toString("base64"),
