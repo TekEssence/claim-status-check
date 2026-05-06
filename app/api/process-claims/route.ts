@@ -1,4 +1,7 @@
-import { chromium } from "playwright";
+import os from "node:os";
+import path from "node:path";
+import chromium from "@sparticuz/chromium";
+import { chromium as playwright, type BrowserContext, type Page } from "playwright-core";
 import * as XLSX from "xlsx";
 
 type GenericRow = Record<string, unknown>;
@@ -80,19 +83,67 @@ function pickValueByAliases(row: GenericRow, aliases: string[]): string {
   return "";
 }
 
-async function launchBrowser(logs: string[]) {
+function shouldUsePersistentProfile(): boolean {
+  const value = process.env.USE_CHROME_PROFILE;
+  if (!value) {
+    return true;
+  }
+  return ["1", "true", "yes"].includes(value.toLowerCase());
+}
+
+async function launchAutomationContext(
+  logs: string[],
+): Promise<{ context: BrowserContext; page: Page }> {
+  if (shouldUsePersistentProfile()) {
+    const userDataDir = process.env.CHROME_USER_DATA_DIR ||
+      path.join(os.homedir(), "Library/Application Support/Google/Chrome");
+    logs.push(`Attempting persistent Chrome profile launch: ${userDataDir}`);
+    try {
+      const context = await playwright.launchPersistentContext(userDataDir, {
+        channel: "chrome",
+        headless: false,
+        ignoreDefaultArgs: ["--disable-extensions"],
+      });
+      const page = context.pages()[0] ?? await context.newPage();
+      return { context, page };
+    } catch (profileError) {
+      const message = profileError instanceof Error ? profileError.message : String(profileError);
+      logs.push(`Persistent profile launch failed, falling back: ${message}`);
+    }
+  }
+
   try {
-    logs.push("Attempting browser launch with Chrome channel.");
-    return await chromium.launch({
-      channel: "chrome",
+    const isLocal = process.env.NODE_ENV === "development" || !process.env.VERCEL;
+    
+    if (isLocal) {
+      logs.push("Attempting local browser launch.");
+      try {
+        const browser = await playwright.launch({
+          channel: "chrome",
+          headless: true,
+        });
+        const context = await browser.newContext();
+        const page = await context.newPage();
+        return { context, page };
+      } catch (localError) {
+        logs.push(`Local chrome launch failed: ${localError instanceof Error ? localError.message : String(localError)}`);
+      }
+    }
+
+    logs.push("Attempting @sparticuz/chromium browser launch for Vercel.");
+    const executablePath = await chromium.executablePath();
+    const browser = await playwright.launch({
+      args: chromium.args,
+      executablePath: executablePath || undefined,
       headless: true,
     });
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    return { context, page };
   } catch (chromeError) {
     const message = chromeError instanceof Error ? chromeError.message : String(chromeError);
-    logs.push(`Chrome channel unavailable, falling back to Playwright Chromium: ${message}`);
-    return await chromium.launch({
-      headless: true,
-    });
+    logs.push(`Browser launch failed: ${message}`);
+    throw new Error(`Browser launch failed: ${message}`);
   }
 }
 
@@ -179,9 +230,7 @@ export async function POST(request: Request): Promise<Response> {
     let globalAutomationError = "";
 
     try {
-      const browser = await launchBrowser(logs);
-      const context = await browser.newContext();
-      const page = await context.newPage();
+      const { context, page } = await launchAutomationContext(logs);
 
       try {
         logs.push(`Navigating to login URL: ${loginUrl}`);
@@ -278,7 +327,6 @@ export async function POST(request: Request): Promise<Response> {
       } finally {
         await page.close();
         await context.close();
-        await browser.close();
       }
     } catch (automationError) {
       globalAutomationError = automationError instanceof Error
