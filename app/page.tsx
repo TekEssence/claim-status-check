@@ -14,6 +14,7 @@ export default function Home() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [status, setStatus] = useState<string>("");
   const [logs, setLogs] = useState<string[]>([]);
+  const [errorScreenshot, setErrorScreenshot] = useState<string | null>(null);
   const [progress, setProgress] = useState<{ completed: number; total: number } | null>(null);
 
   const canSubmit = useMemo(
@@ -54,6 +55,7 @@ export default function Home() {
     setIsProcessing(true);
     setStatus("Reading claim file...");
     setLogs([]);
+    setErrorScreenshot(null);
     setProgress(null);
 
     try {
@@ -128,6 +130,8 @@ export default function Home() {
                 const writable = await claimFileHandle.createWritable();
                 await writable.write(updatedArrayBuffer);
                 await writable.close();
+              } else if (eventData.type === "error_screenshot") {
+                setErrorScreenshot(eventData.image);
               } else if (eventData.type === "done") {
                 setStatus("Processing completed!");
               } else if (eventData.type === "error") {
@@ -218,6 +222,17 @@ export default function Home() {
         {status && (
           <div className="mt-4 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm font-medium">
             {status}
+          </div>
+        )}
+
+        {errorScreenshot && (
+          <div className="mt-4 rounded-md border border-red-200 bg-red-50 p-3">
+            <h2 className="mb-2 text-sm font-semibold text-red-700">Error Screenshot</h2>
+            <img 
+              src={`data:image/jpeg;base64,${errorScreenshot}`} 
+              alt="Browser state on error" 
+              className="max-w-full rounded border border-red-200 shadow-sm"
+            />
           </div>
         )}
 

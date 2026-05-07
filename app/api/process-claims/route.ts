@@ -185,6 +185,15 @@ export async function POST(req: Request) {
               await loggedInIndicator.waitFor({ state: "visible", timeout: 15000 });
               log("Login successful.");
             } catch {
+              // Capture screenshot and HTML on failure
+              try {
+                const screenshot = await page.screenshot({ type: "jpeg", quality: 60 });
+                const currentUrl = page.url();
+                log(`Login verification failed. Current URL: ${currentUrl}`);
+                sendEvent({ type: "error_screenshot", image: screenshot.toString("base64") });
+              } catch (screenshotError) {
+                log("Failed to capture error screenshot.");
+              }
               throw new Error("Failed to verify login success. Check credentials or site structure.");
             }
           }
