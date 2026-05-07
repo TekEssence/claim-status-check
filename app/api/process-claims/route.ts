@@ -315,14 +315,22 @@ export async function POST(req: Request) {
 
               const allRows = page.locator("tr.line-item");
               const totalRows = await allRows.count();
-              let sortDescending = true; // Default assumption: newest first
-              if (totalRows >= 2) {
-                const date0 = await extractDosFromRow(allRows.nth(0));
-                const date1 = await extractDosFromRow(allRows.nth(1));
-                if (date0 && date1) {
-                  sortDescending = date0 >= date1;
+              let sortDescending: boolean | null = null; // null = unknown (can't determine)
+
+              // Scan rows until we find two with DIFFERENT dates to determine sort order
+              let firstSeenDate: Date | null = null;
+              for (let r = 0; r < totalRows; r++) {
+                const d = await extractDosFromRow(allRows.nth(r));
+                if (!d) continue;
+                if (!firstSeenDate) { firstSeenDate = d; continue; }
+                if (d.getTime() !== firstSeenDate.getTime()) {
+                  sortDescending = firstSeenDate >= d;
                   await log(`Row ${i + 1}: Detected sort order: ${sortDescending ? "Descending (newest first)" : "Ascending (oldest first)"}`);
+                  break;
                 }
+              }
+              if (sortDescending === null) {
+                await log(`Row ${i + 1}: Could not detect sort order (all visible rows same date) — early-exit disabled.`);
               }
 
               while (true) {
@@ -370,20 +378,19 @@ export async function POST(req: Request) {
                 }
 
                 // No match on this page.
-                // Early-exit: if the first row's DOS has already passed our target (based on sort order),
-                // the target cannot appear on any subsequent page.
-                const firstRowDos = await extractDosFromRow(page.locator("tr.line-item").first());
-                if (firstRowDos) {
-                  const targetTime = dosDate.getTime();
-                  const firstTime = firstRowDos.getTime();
-                  // Descending: we've passed if first row is OLDER than target (target would have been before this)
-                  // Ascending: we've passed if first row is NEWER than target
-                  const passedTarget = sortDescending
-                    ? firstTime < targetTime
-                    : firstTime > targetTime;
-                  if (passedTarget) {
-                    await log(`Row ${i + 1}: Sort-aware early exit on page ${pageNum} — target DOS not in results.`);
-                    break;
+                // Early-exit: only if sort order is known — if first row has passed our target, stop.
+                if (sortDescending !== null) {
+                  const firstRowDos = await extractDosFromRow(page.locator("tr.line-item").first());
+                  if (firstRowDos) {
+                    const targetTime = dosDate.getTime();
+                    const firstTime = firstRowDos.getTime();
+                    const passedTarget = sortDescending
+                      ? firstTime < targetTime
+                      : firstTime > targetTime;
+                    if (passedTarget) {
+                      await log(`Row ${i + 1}: Sort-aware early exit on page ${pageNum} — target DOS not in results.`);
+                      break;
+                    }
                   }
                 }
 
