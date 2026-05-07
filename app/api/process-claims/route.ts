@@ -270,16 +270,36 @@ export async function POST(req: Request) {
 
               await page.locator("input[name='expressionBox']:visible").first().fill(memberPolicyId);
               
-              // Open Options panel and wait for Angular's post-open reset to settle
-              const optionsBtn = page.locator("div.advanced-search:has-text('Options')");
+              // STEP 1: Open Options panel
+              const optionsBtn = page.locator("div.advanced-search");
+              await log(`Row ${i + 1}: Clicking Options button...`);
               await optionsBtn.click();
-              // Wait long enough for Angular's initialization/reset scripts to finish
               await page.waitForTimeout(2500);
 
-              // Click the text label that has the direct ng-click handler for toggling dateRange.
-              // This is the element a real user clicks (not the material span).
-              await page.locator("label[ng-click*='dateRange']").first().click({ force: true });
-              await page.waitForTimeout(500);
+              // Debug: capture screenshot after Options click
+              const ss1 = await page.screenshot({ type: "jpeg", quality: 60 });
+              await sendEvent({ type: "error_screenshot", index: -1, image: ss1.toString("base64") });
+              await log(`Row ${i + 1}: Screenshot after Options click sent.`);
+
+              // STEP 2: Check what elements are available
+              const labelCount = await page.locator("label[ng-click*='dateRange']").count();
+              const checkboxCount = await page.locator("span.checkbox-material").count();
+              await log(`Row ${i + 1}: Found ${labelCount} ng-click labels, ${checkboxCount} checkbox-material spans.`);
+
+              // STEP 3: Click the label
+              if (labelCount > 0) {
+                await page.locator("label[ng-click*='dateRange']").first().click({ force: true });
+                await log(`Row ${i + 1}: Clicked ng-click label.`);
+              } else {
+                await log(`Row ${i + 1}: WARNING - ng-click label not found! Trying span.checkbox-material.`);
+                await page.locator("span.checkbox-material").first().click({ force: true });
+              }
+              await page.waitForTimeout(800);
+
+              // Debug: capture screenshot after checkbox click
+              const ss2 = await page.screenshot({ type: "jpeg", quality: 60 });
+              await sendEvent({ type: "error_screenshot", index: -2, image: ss2.toString("base64") });
+              await log(`Row ${i + 1}: Screenshot after checkbox click sent.`);
 
               await page.locator("input.min-range:visible, input[ng-model='search.minRange']:visible").first().fill(formatMmDdYyyy(startDate));
               await page.locator("input.max-range:visible, input[ng-model='search.maxRange']:visible").first().fill(formatMmDdYyyy(endDate));
