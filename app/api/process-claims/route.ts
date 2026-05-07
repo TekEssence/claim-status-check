@@ -300,39 +300,77 @@ export async function POST(req: Request) {
               await page.locator('div[full-screen-ajax-loader] .full-screen-bg').waitFor({ state: "hidden", timeout: 30000 }).catch(() => {});
               await page.waitForLoadState("networkidle", { timeout: 30000 });
 
-              // --- Pagination loop: search each page for matching DOS rows ---
+              // --- Pagination loop: find and collect all DOS rows across pages ---
               const dosFormatted = formatMmDdYyyy(dosDate);
-              let matchingRows = page.locator("tr.line-item", { hasText: dosFormatted });
-              let count = await matchingRows.count();
+              const details: string[] = [];
               let pageNum = 1;
+              let foundAny = false;
 
-              while (count === 0) {
-                // Check if "next page" button is enabled
+              while (true) {
+                const matchingRows = page.locator("tr.line-item", { hasText: dosFormatted });
+                const count = await matchingRows.count();
+
+                if (count > 0) {
+                  foundAny = true;
+                  await log(`Row ${i + 1}: Found ${count} matching row(s) on page ${pageNum}.`);
+
+                  // Collect details for each matching row on this page
+                  for (let idx = 0; idx < count; idx++) {
+                    const currentLineItem = matchingRows.nth(idx);
+                    const summaryText = (await currentLineItem.innerText()).replace(/\s+/g, " ").trim();
+                    await currentLineItem.click();
+                    const detailsRow = page.locator(`tr.line-item:has-text("${dosFormatted}") ~ tr.details`).nth(idx);
+                    const detailsContent = detailsRow.locator('.details-content');
+                    await detailsContent.waitFor({ state: "visible", timeout: 10000 });
+                    const headerText = await detailsContent.locator('.details-header').innerText();
+                    const tableText = await detailsContent.locator('table.table-condensed').innerText();
+                    details.push(`Summary: [${summaryText}] | Details: [${headerText.replace(/\s+/g, " ")}] | Status Info: [${tableText.replace(/\s+/g, " ")}]`);
+                  }
+
+                  // Check if the last matching row is also the last row on this page.
+                  // If so, the DOS might continue on the next page.
+                  const allLineItems = page.locator("tr.line-item");
+                  const totalOnPage = await allLineItems.count();
+                  const lastMatchText = await matchingRows.nth(count - 1).innerText();
+                  const lastPageText  = await allLineItems.nth(totalOnPage - 1).innerText();
+                  const dosIsLastRow = lastMatchText.trim() === lastPageText.trim();
+
+                  const nextBtn = page.locator("li.pagination-next:not(.disabled) a").first();
+                  const hasNextPage = await nextBtn.count() > 0;
+
+                  if (dosIsLastRow && hasNextPage) {
+                    await log(`Row ${i + 1}: DOS is last row on page ${pageNum}, checking next page for more...`);
+                    await nextBtn.click();
+                    await page.locator('div[full-screen-ajax-loader] .full-screen-bg').waitFor({ state: "hidden", timeout: 30000 }).catch(() => {});
+                    await page.waitForLoadState("networkidle", { timeout: 15000 });
+                    pageNum++;
+                    continue; // Check next page for more matches
+                  }
+
+                  break; // DOS found, not on last row (or no next page) — we're done
+                }
+
+                // No match on this page — try next page
                 const nextBtn = page.locator("li.pagination-next:not(.disabled) a").first();
-                const nextEnabled = await nextBtn.count() > 0;
-                if (!nextEnabled) break; // No more pages
+                const hasNextPage = await nextBtn.count() > 0;
+                if (!hasNextPage) break;
 
                 await log(`Row ${i + 1}: DOS not found on page ${pageNum}, going to next page...`);
                 await nextBtn.click();
                 await page.locator('div[full-screen-ajax-loader] .full-screen-bg').waitFor({ state: "hidden", timeout: 30000 }).catch(() => {});
                 await page.waitForLoadState("networkidle", { timeout: 15000 });
                 pageNum++;
-
-                matchingRows = page.locator("tr.line-item", { hasText: dosFormatted });
-                count = await matchingRows.count();
               }
 
-              if (count === 0) {
+              if (!foundAny) {
                 const msg = `No matching claim rows on website (searched ${pageNum} page(s)).`;
                 log(`Row ${i + 1}: Failed. ${msg}`);
-                
                 try {
                   const screenshot = await page.screenshot({ type: "jpeg", quality: 60 });
                   await sendEvent({ type: "error_screenshot", index: i, image: screenshot.toString("base64") });
                   const html = await page.evaluate(() => document.documentElement.outerHTML);
                   await sendEvent({ type: "debug_html", index: i, html });
                 } catch { /* ignore */ }
-
                 await sendEvent({
                   type: "row_update",
                   index: i,
@@ -342,27 +380,7 @@ export async function POST(req: Request) {
                 continue;
               }
 
-              await log(`Row ${i + 1}: Found ${count} matching row(s) on page ${pageNum}.`);
-
-              // Collect details from all matching rows on this page
-              const details: string[] = [];
-              for (let index = 0; index < count; index += 1) {
-                const currentLineItem = matchingRows.nth(index);
-                const summaryText = (await currentLineItem.innerText()).replace(/\s+/g, " ").trim();
-                
-                await currentLineItem.click();
-                const detailsRow = page.locator(`tr.line-item:has-text("${dosFormatted}") ~ tr.details`).nth(index);
-                const detailsContent = detailsRow.locator('.details-content');
-                
-                await detailsContent.waitFor({ state: "visible", timeout: 10000 });
-                const headerText = await detailsContent.locator('.details-header').innerText();
-                const tableText = await detailsContent.locator('table.table-condensed').innerText();
-                
-                const fullDetails = `Summary: [${summaryText}] | Details: [${headerText.replace(/\s+/g, " ")}] | Status Info: [${tableText.replace(/\s+/g, " ")}]`;
-                details.push(fullDetails);
-              }
-
-              await log(`Row ${i + 1}: Success (${count} matching rows on page ${pageNum}).`);
+              await log(`Row ${i + 1}: Success (${details.length} total matching rows across ${pageNum} page(s)).`);
               await sendEvent({
                 type: "row_update",
                 index: i,
