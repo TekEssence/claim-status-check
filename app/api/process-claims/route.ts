@@ -274,14 +274,24 @@ export async function POST(req: Request) {
               await optionsBtn.click();
               
               // Wait for dropdown animation
-              await page.waitForTimeout(500);
+              await page.waitForTimeout(1000);
               
-              // Robustly click the checkbox or its label
-              const dosLabel = page.locator("label").filter({ hasText: /search by dos/i });
-              if (await dosLabel.count() > 0) {
-                await dosLabel.first().click();
-              } else {
-                await page.getByText(/search by dos/i).first().click();
+              // Robustly check the checkbox
+              try {
+                // Best practice: use accessibility role
+                await page.getByRole('checkbox', { name: /search by dos/i }).check({ force: true, timeout: 3000 });
+              } catch (e1) {
+                try {
+                  // Fallback 1: Click the label
+                  await page.locator("label").filter({ hasText: /search by dos/i }).first().click({ force: true, timeout: 3000 });
+                } catch (e2) {
+                  // Fallback 2: Execute JS to find and click the exact text node
+                  await page.evaluate(() => {
+                    const all = Array.from(document.querySelectorAll('*'));
+                    const target = all.find(el => el.textContent?.toLowerCase().includes('search by dos') && el.children.length === 0);
+                    if (target && target instanceof HTMLElement) target.click();
+                  });
+                }
               }
 
               await page.locator("input.min-range:visible, input[ng-model='search.minRange']:visible").first().fill(formatMmDdYyyy(startDate));
