@@ -275,8 +275,7 @@ export async function POST(req: Request) {
               await optionsBtn.click();
               await page.waitForTimeout(1000);
 
-              // Only click to enable DOS filter if it is currently OFF.
-              // The parent div has class 'active' only when advancedFilter === 'dateRange'.
+              // Ensure DOS filter is ON. Check state and click only if OFF.
               const isDosChecked = await page.locator(".claim-status-adv-input.active").count() > 0;
               if (!isDosChecked) {
                 await page.locator("label[ng-click*='dateRange']").first().click({ force: true });
@@ -285,6 +284,17 @@ export async function POST(req: Request) {
 
               await page.locator("input.min-range:visible, input[ng-model='search.minRange']:visible").first().fill(formatMmDdYyyy(startDate));
               await page.locator("input.max-range:visible, input[ng-model='search.maxRange']:visible").first().fill(formatMmDdYyyy(endDate));
+
+              // Final validation before Search: the page may have toggled the filter off
+              // after we filled the date inputs. Re-enable if needed (up to 3 attempts).
+              for (let attempt = 0; attempt < 3; attempt++) {
+                const activeNow = await page.locator(".claim-status-adv-input.active").count() > 0;
+                if (activeNow) break;
+                await log(`Row ${i + 1}: DOS filter toggled off before search (attempt ${attempt + 1}). Re-enabling...`);
+                await page.locator("label[ng-click*='dateRange']").first().click({ force: true });
+                await page.waitForTimeout(300);
+              }
+
               await page.locator("button.singleSearchButton:visible, button[ng-click='search.submit()']:visible").first().click();
 
               await page.locator('div[full-screen-ajax-loader] .full-screen-bg').waitFor({ state: "hidden", timeout: 30000 }).catch(() => {});
