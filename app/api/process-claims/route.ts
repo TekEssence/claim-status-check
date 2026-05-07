@@ -58,15 +58,30 @@ export async function POST(req: Request) {
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
     async start(controller) {
-      const sendEvent = (data: any) => {
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
+      // Keep-alive ping to prevent Vercel from buffering or dropping the connection
+      const keepAliveInterval = setInterval(() => {
+        try {
+          controller.enqueue(encoder.encode(`: ping\n\n`));
+        } catch {
+          clearInterval(keepAliveInterval);
+        }
+      }, 1000);
+
+      const sendEvent = async (data: any) => {
+        try {
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
+          // Yield to event loop to allow Node.js to flush the socket
+          await new Promise(resolve => setTimeout(resolve, 50));
+        } catch {
+          // Stream closed
+        }
       };
 
       // Pad the start to bypass Vercel/Cloudflare buffering limits (8KB)
-      controller.enqueue(encoder.encode(`: ${"x".repeat(8192)}\n\n`));
+      await sendEvent({ type: "padding", payload: "x".repeat(8192) });
 
-      const log = (message: string) => {
-        sendEvent({ type: "log", message });
+      const log = async (message: string) => {
+        await sendEvent({ type: "log", message });
       };
 
       try {
@@ -320,10 +335,11 @@ export async function POST(req: Request) {
         }
       } catch (globalError) {
         const msg = globalError instanceof Error ? globalError.message : "Unexpected automation error.";
-        log(`Global automation error: ${msg}`);
-        sendEvent({ type: "error", message: msg });
+        await log(`Global automation error: ${msg}`);
+        await sendEvent({ type: "error", message: msg });
       } finally {
-        sendEvent({ type: "done" });
+        clearInterval(keepAliveInterval);
+        await sendEvent({ type: "done" });
         controller.close();
       }
     }
