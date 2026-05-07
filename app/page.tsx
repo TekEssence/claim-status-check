@@ -14,7 +14,7 @@ export default function Home() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [status, setStatus] = useState<string>("");
   const [logs, setLogs] = useState<string[]>([]);
-  const [errorScreenshot, setErrorScreenshot] = useState<string | null>(null);
+  const [errorScreenshots, setErrorScreenshots] = useState<{ index: number; image: string }[]>([]);
   const [progress, setProgress] = useState<{ completed: number; total: number } | null>(null);
 
   const canSubmit = useMemo(
@@ -55,7 +55,7 @@ export default function Home() {
     setIsProcessing(true);
     setStatus("Reading claim file...");
     setLogs([]);
-    setErrorScreenshot(null);
+    setErrorScreenshots([]);
     setProgress(null);
 
     try {
@@ -131,7 +131,7 @@ export default function Home() {
                 await writable.write(updatedArrayBuffer);
                 await writable.close();
               } else if (eventData.type === "error_screenshot") {
-                setErrorScreenshot(eventData.image);
+                setErrorScreenshots((prev) => [...prev, { index: eventData.index, image: eventData.image }]);
               } else if (eventData.type === "done") {
                 setStatus("Processing completed!");
               } else if (eventData.type === "error") {
@@ -225,14 +225,20 @@ export default function Home() {
           </div>
         )}
 
-        {errorScreenshot && (
-          <div className="mt-4 rounded-md border border-red-200 bg-red-50 p-3">
-            <h2 className="mb-2 text-sm font-semibold text-red-700">Error Screenshot</h2>
-            <img 
-              src={`data:image/jpeg;base64,${errorScreenshot}`} 
-              alt="Browser state on error" 
-              className="max-w-full rounded border border-red-200 shadow-sm"
-            />
+        {errorScreenshots.length > 0 && (
+          <div className="mt-4 flex flex-col gap-4">
+            {errorScreenshots.map((err, i) => (
+              <div key={i} className="rounded-md border border-red-200 bg-red-50 p-3">
+                <h2 className="mb-2 text-sm font-semibold text-red-700">
+                  {err.index === -1 ? "Login Error Screenshot" : `Error Screenshot for Row ${err.index + 1}`}
+                </h2>
+                <img 
+                  src={`data:image/jpeg;base64,${err.image}`} 
+                  alt="Browser state on error" 
+                  className="max-w-full rounded border border-red-200 shadow-sm"
+                />
+              </div>
+            ))}
           </div>
         )}
 

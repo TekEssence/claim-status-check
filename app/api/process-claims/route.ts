@@ -272,15 +272,15 @@ export async function POST(req: Request) {
                 
                 try {
                   const screenshot = await page.screenshot({ type: "jpeg", quality: 60 });
-                  sendEvent({ type: "error_screenshot", image: screenshot.toString("base64") });
+                  await sendEvent({ type: "error_screenshot", index: i, image: screenshot.toString("base64") });
                 } catch { /* ignore */ }
 
-                sendEvent({
+                await sendEvent({
                   type: "row_update",
                   index: i,
                   update: { BotClaimDetails: "No matching rows found for DOS.", BotClaimStatusCheck: "Failed", BotClaimStatusCheckError: msg }
                 });
-                sendEvent({ type: "progress", completed: i + 1, total: claimRows.length });
+                await sendEvent({ type: "progress", completed: i + 1, total: claimRows.length });
                 continue;
               }
 
@@ -301,31 +301,31 @@ export async function POST(req: Request) {
                 details.push(fullDetails);
               }
 
-              log(`Row ${i + 1}: Success (${count} matching rows).`);
-              sendEvent({
+              await log(`Row ${i + 1}: Success (${count} matching rows).`);
+              await sendEvent({
                 type: "row_update",
                 index: i,
                 update: { BotClaimDetails: details.join(" | "), BotClaimStatusCheck: "Success", BotClaimStatusCheckError: "" }
               });
-              sendEvent({ type: "progress", completed: i + 1, total: claimRows.length });
+              await sendEvent({ type: "progress", completed: i + 1, total: claimRows.length });
             } catch (rowError) {
               const msg = rowError instanceof Error ? rowError.message : "Unknown row error";
-              log(`Row ${i + 1}: Failed. ${msg}`);
+              await log(`Row ${i + 1}: Failed. ${msg}`);
               
               // Capture screenshot on row failure
               try {
                 const screenshot = await page.screenshot({ type: "jpeg", quality: 60 });
-                sendEvent({ type: "error_screenshot", image: screenshot.toString("base64") });
+                await sendEvent({ type: "error_screenshot", index: i, image: screenshot.toString("base64") });
               } catch (screenshotError) {
-                log("Failed to capture row error screenshot.");
+                await log("Failed to capture row error screenshot.");
               }
 
-              sendEvent({
+              await sendEvent({
                 type: "row_update",
                 index: i,
                 update: { BotClaimStatusCheck: "Failed", BotClaimStatusCheckError: msg }
               });
-              sendEvent({ type: "progress", completed: i + 1, total: claimRows.length });
+              await sendEvent({ type: "progress", completed: i + 1, total: claimRows.length });
             }
           }
         } finally {
