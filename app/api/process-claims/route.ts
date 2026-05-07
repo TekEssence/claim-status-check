@@ -258,150 +258,268 @@ export async function POST(request: Request): Promise<Response> {
           row.BotClaimStatusCheckTime = new Date().toISOString();
 
           try {
-          const memberPolicyId = pickValue(row, [
-            "Member Policy ID",
-            "MemberPolicyID",
-            "Member ID",
-            "memberPolicyId",
-          ]);
-          const dosRaw = row.DOS ?? row.DateOfService ?? row.dateOfService ?? row["Date of Service"];
-          const dosDate = parseDateInput(dosRaw);
+export async function POST(req: Request) {
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream({
+    async start(controller) {
+      const sendEvent = (data: any) => {
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
+      };
 
-          if (!memberPolicyId) {
-            throw new Error("Missing Member Policy ID in row.");
+      const log = (message: string) => {
+        sendEvent({ type: "log", message });
+      };
+
+      try {
+        const formData = await req.formData();
+        const loginExcelFile = formData.get("loginExcel") as File | null;
+        const claimRowsJson = formData.get("claimRows") as string | null;
+
+        if (!loginExcelFile || !(loginExcelFile instanceof File) || !claimRowsJson) {
+          sendEvent({ type: "error", message: "Missing login Excel file or claim rows." });
+          controller.close();
+          return;
+        }
+
+        const loginArrayBuffer = await loginExcelFile.arrayBuffer();
+        const loginWorkbook = XLSX.read(loginArrayBuffer, { type: "array" });
+        const loginSheetName = loginWorkbook.SheetNames[0];
+        const loginSheet = loginWorkbook.Sheets[loginSheetName];
+        const loginRows = XLSX.utils.sheet_to_json(loginSheet) as GenericRow[];
+
+        if (loginRows.length === 0) {
+          sendEvent({ type: "error", message: "Login Excel file is empty." });
+          controller.close();
+          return;
+        }
+
+        const firstLoginRow = loginRows[0];
+        const rawUrl = asText(firstLoginRow["URL"] ?? firstLoginRow["url"]);
+        const userName = asText(firstLoginRow["User Name"] ?? firstLoginRow["user name"] ?? firstLoginRow["username"]);
+        const password = asText(firstLoginRow["Password"] ?? firstLoginRow["password"]);
+
+        if (!rawUrl || !userName || !password) {
+          sendEvent({ type: "error", message: "Invalid login credentials format." });
+          controller.close();
+          return;
+        }
+
+        const loginUrl = rawUrl.startsWith("http") ? rawUrl : `https://${rawUrl}`;
+        const claimRows = JSON.parse(claimRowsJson) as GenericRow[];
+
+        log(`Received ${claimRows.length} claim rows to process.`);
+        sendEvent({ type: "progress", completed: 0, total: claimRows.length });
+
+        log("Launching browser environment...");
+        const isVercel = process.env.VERCEL === "1" || !!process.env.VERCEL_ENV;
+        const USE_CHROME_PROFILE = false;
+
+        let browser;
+        let context: BrowserContext;
+        let page: Page;
+
+        try {
+          if (isVercel) {
+            log("Attempting @sparticuz/chromium browser launch for Vercel.");
+            browser = await playwright.launch({
+              args: chromium.args,
+              executablePath: await chromium.executablePath(),
+              headless: chromium.headless,
+            });
+            context = await browser.newContext({
+              viewport: { width: 1280, height: 800 },
+              userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            });
+          } else {
+            log("Attempting local Chromium launch.");
+            if (USE_CHROME_PROFILE) {
+              const profilePath = path.join(os.homedir(), "Library/Application Support/Google/Chrome");
+              try {
+                log(`Attempting persistent Chrome profile launch: ${profilePath}`);
+                context = await playwright.launchPersistentContext(profilePath, {
+                  channel: "chrome",
+                  headless: false,
+                  viewport: null,
+                });
+                browser = context.browser();
+              } catch (e) {
+                log(`Persistent profile launch failed, falling back: ${(e as Error).message}`);
+                browser = await playwright.launch({ headless: true });
+                context = await browser.newContext();
+              }
+            } else {
+              browser = await playwright.launch({ headless: true });
+              context = await browser.newContext();
+            }
           }
-          if (!dosDate) {
-            throw new Error("Missing or invalid DOS in row.");
+
+          if (!browser) {
+            throw new Error("Failed to initialize browser instance.");
           }
 
-          const startDate = new Date(dosDate);
-          const endDate = new Date(dosDate);
-          startDate.setDate(startDate.getDate() - 1);
-          endDate.setDate(endDate.getDate() + 1);
+          page = await context.newPage();
+          page.setDefaultTimeout(30000);
 
-          await page.goto("https://providers.iehp.org/claims/status", {
-            waitUntil: "domcontentloaded",
-            timeout: 60000,
-          });
-
-          // 1. IEHP ID Input (ng-model="model.input" or name="expressionBox")
-          await page.locator("input[name='expressionBox']:visible").first().fill(memberPolicyId);
-          
-          // 2. Options "button" (It is a div, not a button!)
-          await page.locator("div.advanced-search:has-text('Options'):visible").click();
-          
-          // 3. Search by DOS Checkbox/Label
-          await page.getByText(/search by dos/i).click();
-          
-          // 4. Start Date (ng-model="search.minRange" or class="min-range")
-          await page.locator("input.min-range:visible, input[ng-model='search.minRange']:visible").first().fill(formatMmDdYyyy(startDate));
-          
-          // 5. End Date (ng-model="search.maxRange" or class="max-range")
-          await page.locator("input.max-range:visible, input[ng-model='search.maxRange']:visible").first().fill(formatMmDdYyyy(endDate));
-          
-          // 6. Search Button (ng-click="search.submit()")
-          await page.locator("button.singleSearchButton:visible, button[ng-click='search.submit()']:visible").first().click();
-
-          // Explicitly wait for the Angular full-screen loader to finish and disappear
-          await page.locator('div[full-screen-ajax-loader] .full-screen-bg').waitFor({ state: "hidden", timeout: 30000 }).catch(() => {});
-
+          log(`Navigating to login URL: ${loginUrl}`);
+          await page.goto(loginUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
           await page.waitForLoadState("networkidle", { timeout: 30000 });
 
-          const matchingRows = page.locator("tr.line-item", {
-            hasText: formatMmDdYyyy(dosDate),
-          });
-
-          const count = await matchingRows.count();
-          if (count === 0) {
-            row.BotClaimDetails = "No matching rows found for DOS.";
-            row.BotClaimStatusCheck = "Failed";
-            row.BotClaimStatusCheckError = "No matching claim rows on website.";
-            logs.push(`No match for member ${memberPolicyId} DOS ${formatMmDdYyyy(dosDate)}.`);
-            continue;
+          const loggedInIndicator = page.locator("a[href*='logout'], button[title*='logout'], text='Log Out', text='Sign Out', .user-profile").first();
+          
+          let isLoggedIn = false;
+          try {
+            await loggedInIndicator.waitFor({ state: "visible", timeout: 5000 });
+            isLoggedIn = true;
+            log("Already logged in (session persisted).");
+          } catch {
+            log("Not logged in. Proceeding with authentication...");
           }
 
-          const details: string[] = [];
-          for (let index = 0; index < count; index += 1) {
-            const currentLineItem = matchingRows.nth(index);
+          if (!isLoggedIn) {
+            await page.locator("input[type='email']:visible, input[name*='user']:visible, input[id*='user']:visible").first().fill(userName);
+            await page.locator("input[type='password']:visible, input[name*='pass']:visible, input[id*='pass']:visible").first().fill(password);
             
-            // 1. Extract the high-level summary from the row before clicking
-            const summaryText = (await currentLineItem.innerText()).replace(/\s+/g, " ").trim();
+            const submitButton = page.locator("button[type='submit']:visible, input[type='submit']:visible, button:has-text('Sign In'):visible, button:has-text('Log In'):visible").first();
+            await submitButton.click();
             
-            // 2. Click the row to expand the details pane
-            await currentLineItem.click();
+            log("Waiting for navigation after login...");
+            await page.waitForNavigation({ waitUntil: "networkidle", timeout: 60000 }).catch(() => log("waitForNavigation timeout, continuing..."));
             
-            // 3. The details row is the very next <tr> after the line-item <tr>
-            // We find it using an adjacent sibling selector
-            const detailsRow = page.locator(`tr.line-item:has-text("${formatMmDdYyyy(dosDate)}") ~ tr.details`).nth(index);
-            const detailsContent = detailsRow.locator('.details-content');
-            
-            // Wait for the details content to become visible
-            await detailsContent.waitFor({ state: "visible", timeout: 10000 });
-            
-            // 4. Extract specific values from the details content
-            // We extract all the definition list text (Claim #, Check #, etc)
-            const headerText = await detailsContent.locator('.details-header').innerText();
-            
-            // We extract the line item table text (Procedure, Billed, Status)
-            const tableText = await detailsContent.locator('table.table-condensed').innerText();
-            
-            const fullDetails = `Summary: [${summaryText}] | Details: [${headerText.replace(/\s+/g, " ")}] | Status Info: [${tableText.replace(/\s+/g, " ")}]`;
-            details.push(fullDetails);
+            try {
+              await loggedInIndicator.waitFor({ state: "visible", timeout: 15000 });
+              log("Login successful.");
+            } catch {
+              throw new Error("Failed to verify login success. Check credentials or site structure.");
+            }
           }
 
-          row.BotClaimDetails = details.join(" | ");
-          row.BotClaimStatusCheck = "Success";
-          row.BotClaimStatusCheckError = "";
-          logs.push(`Processed member ${memberPolicyId}: ${count} matching rows.`);
-          } catch (rowError) {
-            row.BotClaimStatusCheck = "Failed";
-            row.BotClaimStatusCheckError = rowError instanceof Error
-              ? rowError.message
-              : "Unknown row error";
-            logs.push(`Row failed: ${row.BotClaimStatusCheckError}`);
+          for (let i = 0; i < claimRows.length; i++) {
+            const row = claimRows[i];
+            const memberPolicyId = asText(row["Member Policy ID"] ?? row["member policy id"] ?? row["Member ID"]);
+            const dosValue = row["Date Of Service"] ?? row["DOS"] ?? row["date of service"];
+            
+            if (!memberPolicyId || !dosValue) {
+              const msg = "Skipped: Missing Member ID or Date of Service.";
+              log(`Row ${i + 1}: ${msg}`);
+              sendEvent({
+                type: "row_update",
+                index: i,
+                update: { BotClaimStatusCheck: "Skipped", BotClaimStatusCheckError: msg }
+              });
+              sendEvent({ type: "progress", completed: i + 1, total: claimRows.length });
+              continue;
+            }
+
+            const dosDate = parseDateInput(dosValue);
+            if (!dosDate) {
+              const msg = `Skipped: Invalid Date of Service format: ${dosValue}`;
+              log(`Row ${i + 1}: ${msg}`);
+              sendEvent({
+                type: "row_update",
+                index: i,
+                update: { BotClaimStatusCheck: "Skipped", BotClaimStatusCheckError: msg }
+              });
+              sendEvent({ type: "progress", completed: i + 1, total: claimRows.length });
+              continue;
+            }
+
+            const startDate = new Date(dosDate);
+            startDate.setDate(dosDate.getDate() - 15);
+            const endDate = new Date(dosDate);
+            endDate.setDate(dosDate.getDate() + 15);
+
+            log(`Processing Row ${i + 1}: Member ${memberPolicyId}, DOS ${formatMmDdYyyy(dosDate)}`);
+
+            try {
+              log(`Row ${i + 1}: Navigating to Claims Status...`);
+              await page.goto("https://providers.iehp.org/claims-status", {
+                waitUntil: "networkidle",
+                timeout: 60000,
+              });
+
+              await page.locator("input[name='expressionBox']:visible").first().fill(memberPolicyId);
+              await page.locator("div.advanced-search:has-text('Options'):visible").click();
+              await page.getByText(/search by dos/i).click();
+              await page.locator("input.min-range:visible, input[ng-model='search.minRange']:visible").first().fill(formatMmDdYyyy(startDate));
+              await page.locator("input.max-range:visible, input[ng-model='search.maxRange']:visible").first().fill(formatMmDdYyyy(endDate));
+              await page.locator("button.singleSearchButton:visible, button[ng-click='search.submit()']:visible").first().click();
+
+              await page.locator('div[full-screen-ajax-loader] .full-screen-bg').waitFor({ state: "hidden", timeout: 30000 }).catch(() => {});
+              await page.waitForLoadState("networkidle", { timeout: 30000 });
+
+              const matchingRows = page.locator("tr.line-item", {
+                hasText: formatMmDdYyyy(dosDate),
+              });
+
+              const count = await matchingRows.count();
+              if (count === 0) {
+                const msg = "No matching claim rows on website.";
+                log(`Row ${i + 1}: Failed. ${msg}`);
+                sendEvent({
+                  type: "row_update",
+                  index: i,
+                  update: { BotClaimDetails: "No matching rows found for DOS.", BotClaimStatusCheck: "Failed", BotClaimStatusCheckError: msg }
+                });
+                sendEvent({ type: "progress", completed: i + 1, total: claimRows.length });
+                continue;
+              }
+
+              const details: string[] = [];
+              for (let index = 0; index < count; index += 1) {
+                const currentLineItem = matchingRows.nth(index);
+                const summaryText = (await currentLineItem.innerText()).replace(/\s+/g, " ").trim();
+                
+                await currentLineItem.click();
+                const detailsRow = page.locator(`tr.line-item:has-text("${formatMmDdYyyy(dosDate)}") ~ tr.details`).nth(index);
+                const detailsContent = detailsRow.locator('.details-content');
+                
+                await detailsContent.waitFor({ state: "visible", timeout: 10000 });
+                const headerText = await detailsContent.locator('.details-header').innerText();
+                const tableText = await detailsContent.locator('table.table-condensed').innerText();
+                
+                const fullDetails = `Summary: [${summaryText}] | Details: [${headerText.replace(/\s+/g, " ")}] | Status Info: [${tableText.replace(/\s+/g, " ")}]`;
+                details.push(fullDetails);
+              }
+
+              log(`Row ${i + 1}: Success (${count} matching rows).`);
+              sendEvent({
+                type: "row_update",
+                index: i,
+                update: { BotClaimDetails: details.join(" | "), BotClaimStatusCheck: "Success", BotClaimStatusCheckError: "" }
+              });
+              sendEvent({ type: "progress", completed: i + 1, total: claimRows.length });
+            } catch (rowError) {
+              const msg = rowError instanceof Error ? rowError.message : "Unknown row error";
+              log(`Row ${i + 1}: Failed. ${msg}`);
+              sendEvent({
+                type: "row_update",
+                index: i,
+                update: { BotClaimStatusCheck: "Failed", BotClaimStatusCheckError: msg }
+              });
+              sendEvent({ type: "progress", completed: i + 1, total: claimRows.length });
+            }
           }
+        } finally {
+          await page?.close().catch(() => {});
+          await context?.close().catch(() => {});
+          await browser?.close().catch(() => {});
         }
+      } catch (globalError) {
+        const msg = globalError instanceof Error ? globalError.message : "Unexpected automation error.";
+        log(`Global automation error: ${msg}`);
+        sendEvent({ type: "error", message: msg });
       } finally {
-        await page.close();
-        await context.close();
-      }
-    } catch (automationError) {
-      globalAutomationError = automationError instanceof Error
-        ? automationError.message
-        : "Unexpected automation error.";
-      logs.push(`Global automation error: ${globalAutomationError}`);
-      for (const row of claimRows) {
-        row.BotClaimStatusCheck = "Failed";
-        if (!asText(row.BotClaimStatusCheckError)) {
-          row.BotClaimStatusCheckError = globalAutomationError;
-        }
+        sendEvent({ type: "done" });
+        controller.close();
       }
     }
+  });
 
-    const updatedSheet = XLSX.utils.json_to_sheet(claimRows);
-    claimWorkbook.Sheets[claimSheetName] = updatedSheet;
-    const outputBuffer = XLSX.write(claimWorkbook, { type: "buffer", bookType: "xlsx" });
-
-    const outputFileName = `updated-claims-${startedAt.toISOString().replace(/[:.]/g, "-")}.xlsx`;
-
-    return Response.json({
-      success: !globalAutomationError,
-      message: globalAutomationError
-        ? `Processing completed with errors for ${claimRows.length} rows.`
-        : `Processing completed for ${claimRows.length} rows.`,
-      processedRows: claimRows.length,
-      outputFileName,
-      outputFileBase64: outputBuffer.toString("base64"),
-      logs,
-    });
-  } catch (error) {
-    return Response.json(
-      {
-        success: false,
-        message: error instanceof Error ? error.message : "Unexpected processing error.",
-        logs,
-      },
-      { status: 500 },
-    );
-  }
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      "Connection": "keep-alive",
+    },
+  });
 }
