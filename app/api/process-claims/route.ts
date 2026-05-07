@@ -304,7 +304,7 @@ export async function POST(request: Request): Promise<Response> {
 
           await page.waitForLoadState("networkidle", { timeout: 30000 });
 
-          const matchingRows = page.locator("table tr", {
+          const matchingRows = page.locator("tr.line-item", {
             hasText: formatMmDdYyyy(dosDate),
           });
 
@@ -319,8 +319,31 @@ export async function POST(request: Request): Promise<Response> {
 
           const details: string[] = [];
           for (let index = 0; index < count; index += 1) {
-            const rowText = (await matchingRows.nth(index).innerText()).replace(/\s+/g, " ").trim();
-            details.push(rowText);
+            const currentLineItem = matchingRows.nth(index);
+            
+            // 1. Extract the high-level summary from the row before clicking
+            const summaryText = (await currentLineItem.innerText()).replace(/\s+/g, " ").trim();
+            
+            // 2. Click the row to expand the details pane
+            await currentLineItem.click();
+            
+            // 3. The details row is the very next <tr> after the line-item <tr>
+            // We find it using an adjacent sibling selector
+            const detailsRow = page.locator(`tr.line-item:has-text("${formatMmDdYyyy(dosDate)}") ~ tr.details`).nth(index);
+            const detailsContent = detailsRow.locator('.details-content');
+            
+            // Wait for the details content to become visible
+            await detailsContent.waitFor({ state: "visible", timeout: 10000 });
+            
+            // 4. Extract specific values from the details content
+            // We extract all the definition list text (Claim #, Check #, etc)
+            const headerText = await detailsContent.locator('.details-header').innerText();
+            
+            // We extract the line item table text (Procedure, Billed, Status)
+            const tableText = await detailsContent.locator('table.table-condensed').innerText();
+            
+            const fullDetails = `Summary: [${summaryText}] | Details: [${headerText.replace(/\s+/g, " ")}] | Status Info: [${tableText.replace(/\s+/g, " ")}]`;
+            details.push(fullDetails);
           }
 
           row.BotClaimDetails = details.join(" | ");
