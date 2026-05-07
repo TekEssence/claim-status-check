@@ -62,8 +62,8 @@ export async function POST(req: Request) {
         controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
       };
 
-      // Pad the start to bypass Vercel/Cloudflare buffering limits
-      controller.enqueue(encoder.encode(`: ${"x".repeat(2048)}\n\n`));
+      // Pad the start to bypass Vercel/Cloudflare buffering limits (8KB)
+      controller.enqueue(encoder.encode(`: ${"x".repeat(8192)}\n\n`));
 
       const log = (message: string) => {
         sendEvent({ type: "log", message });
@@ -335,6 +335,7 @@ export async function POST(req: Request) {
       "Cache-Control": "no-cache, no-transform",
       "Connection": "keep-alive",
       "X-Accel-Buffering": "no",
+      "Content-Encoding": "none",
     },
   });
 }
