@@ -215,11 +215,13 @@ export async function POST(req: Request) {
 
           const processStartTime = Date.now();
           const MAX_EXECUTION_TIME_MS = 4 * 60 * 1000; // 4 minutes
+          const BATCH_SIZE = 10;
+          let processedInThisBatch = 0;
 
           for (let i = startIndex; i < claimRows.length; i++) {
-            // Check for timeout
-            if (Date.now() - processStartTime > MAX_EXECUTION_TIME_MS) {
-              await log(`Approaching Vercel execution timeout limit. Pausing at Row ${i + 1} to gracefully auto-resume...`);
+            // Check for timeout or batch limit
+            if (Date.now() - processStartTime > MAX_EXECUTION_TIME_MS || processedInThisBatch >= BATCH_SIZE) {
+              await log(`Batch complete. Pausing at Row ${i + 1} to gracefully auto-resume the next chunk...`);
               break; // Break the loop, the finally block will emit 'done' and the frontend will re-trigger
             }
 
@@ -342,6 +344,8 @@ export async function POST(req: Request) {
               });
               await sendEvent({ type: "progress", completed: i + 1, total: claimRows.length });
             }
+
+            processedInThisBatch++;
           }
         } finally {
           await page?.close().catch(() => {});

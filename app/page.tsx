@@ -104,6 +104,7 @@ export default function Home() {
         const decoder = new TextDecoder();
         let buffer = "";
         let currentCompleted = startIndex;
+        let chunkHasError = false;
 
         while (true) {
           const { done, value } = await reader.read();
@@ -147,6 +148,7 @@ export default function Home() {
                   // Handled below loop
                 } else if (eventData.type === "error") {
                   setStatus(`Error: ${eventData.message}`);
+                  chunkHasError = true;
                 }
               } catch (err) {
                 console.error("Failed to parse event data", err);
@@ -156,7 +158,9 @@ export default function Home() {
         }
 
         // Stream closed. Check if we need to auto-resume
-        if (currentCompleted < totalRows) {
+        if (chunkHasError) {
+          setIsProcessing(false);
+        } else if (currentCompleted < totalRows) {
           setStatus(`Auto-resuming from row ${currentCompleted + 1}...`);
           await processChunk(currentCompleted);
         } else {
