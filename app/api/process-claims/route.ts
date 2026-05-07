@@ -300,11 +300,30 @@ export async function POST(req: Request) {
               await page.locator('div[full-screen-ajax-loader] .full-screen-bg').waitFor({ state: "hidden", timeout: 30000 }).catch(() => {});
               await page.waitForLoadState("networkidle", { timeout: 30000 });
 
-              // --- Pagination loop: find and collect all DOS rows across pages ---
+              // --- Detect sort order by comparing first two result rows ---
               const dosFormatted = formatMmDdYyyy(dosDate);
               const details: string[] = [];
               let pageNum = 1;
               let foundAny = false;
+
+              // Extract a date from a row's text using MM/DD/YYYY pattern
+              const extractDosFromRow = async (rowLocator: { innerText: () => Promise<string> }): Promise<Date | null> => {
+                const text = await rowLocator.innerText().catch(() => "");
+                const match = text.match(/(\d{2}\/\d{2}\/\d{4})/);
+                return match ? new Date(match[1]) : null;
+              };
+
+              const allRows = page.locator("tr.line-item");
+              const totalRows = await allRows.count();
+              let sortDescending = true; // Default assumption: newest first
+              if (totalRows >= 2) {
+                const date0 = await extractDosFromRow(allRows.nth(0));
+                const date1 = await extractDosFromRow(allRows.nth(1));
+                if (date0 && date1) {
+                  sortDescending = date0 >= date1;
+                  await log(`Row ${i + 1}: Detected sort order: ${sortDescending ? "Descending (newest first)" : "Ascending (oldest first)"}`);
+                }
+              }
 
               while (true) {
                 const matchingRows = page.locator("tr.line-item", { hasText: dosFormatted });
@@ -350,7 +369,24 @@ export async function POST(req: Request) {
                   break; // DOS found, not on last row (or no next page) — we're done
                 }
 
-                // No match on this page — try next page
+                // No match on this page.
+                // Early-exit: if the first row's DOS has already passed our target (based on sort order),
+                // the target cannot appear on any subsequent page.
+                const firstRowDos = await extractDosFromRow(page.locator("tr.line-item").first());
+                if (firstRowDos) {
+                  const targetTime = dosDate.getTime();
+                  const firstTime = firstRowDos.getTime();
+                  // Descending: we've passed if first row is OLDER than target (target would have been before this)
+                  // Ascending: we've passed if first row is NEWER than target
+                  const passedTarget = sortDescending
+                    ? firstTime < targetTime
+                    : firstTime > targetTime;
+                  if (passedTarget) {
+                    await log(`Row ${i + 1}: Sort-aware early exit on page ${pageNum} — target DOS not in results.`);
+                    break;
+                  }
+                }
+
                 const nextBtn = page.locator("li.pagination-next:not(.disabled) a").first();
                 const hasNextPage = await nextBtn.count() > 0;
                 if (!hasNextPage) break;
