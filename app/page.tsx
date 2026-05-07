@@ -74,7 +74,7 @@ export default function Home() {
       // Read the file locally
       const file = await claimFileHandle.getFile();
       const arrayBuffer = await file.arrayBuffer();
-      const workbook = XLSX.read(arrayBuffer, { type: "array" });
+      const workbook = XLSX.read(arrayBuffer, { type: "array", cellDates: true });
       const sheetName = workbook.SheetNames[0];
       const sheet = workbook.Sheets[sheetName];
       const claimRows = XLSX.utils.sheet_to_json(sheet);
@@ -126,16 +126,36 @@ export default function Home() {
                   currentCompleted = eventData.completed;
                   setProgress({ completed: eventData.completed, total: eventData.total });
                 } else if (eventData.type === "row_update") {
-                  // Update the row in our local array
-                  claimRows[eventData.index] = { 
-                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                    ...(claimRows[eventData.index] as any), 
-                    ...eventData.update 
-                  };
+                  // Find or create headers
+                  const range = XLSX.utils.decode_range(sheet["!ref"] || "A1:A1");
+                  let detailsCol = -1, statusCol = -1, errorCol = -1;
                   
-                  // Save it back to the Excel file incrementally
-                  const updatedSheet = XLSX.utils.json_to_sheet(claimRows);
-                  workbook.Sheets[sheetName] = updatedSheet;
+                  for (let C = range.s.c; C <= range.e.c; ++C) {
+                    const cell = sheet[XLSX.utils.encode_cell({ c: C, r: range.s.r })];
+                    if (cell?.v === "BotClaimDetails") detailsCol = C;
+                    if (cell?.v === "BotClaimStatusCheck") statusCol = C;
+                    if (cell?.v === "BotClaimStatusCheckError") errorCol = C;
+                  }
+
+                  if (detailsCol === -1) { detailsCol = ++range.e.c; sheet[XLSX.utils.encode_cell({ c: detailsCol, r: range.s.r })] = { t: "s", v: "BotClaimDetails" }; }
+                  if (statusCol === -1) { statusCol = ++range.e.c; sheet[XLSX.utils.encode_cell({ c: statusCol, r: range.s.r })] = { t: "s", v: "BotClaimStatusCheck" }; }
+                  if (errorCol === -1) { errorCol = ++range.e.c; sheet[XLSX.utils.encode_cell({ c: errorCol, r: range.s.r })] = { t: "s", v: "BotClaimStatusCheckError" }; }
+                  
+                  sheet["!ref"] = XLSX.utils.encode_range(range);
+
+                  // Update specific cells
+                  const R = eventData.index + 1; // +1 to skip header row
+                  if (eventData.update.BotClaimDetails !== undefined) {
+                    sheet[XLSX.utils.encode_cell({ c: detailsCol, r: R })] = { t: "s", v: eventData.update.BotClaimDetails };
+                  }
+                  if (eventData.update.BotClaimStatusCheck !== undefined) {
+                    sheet[XLSX.utils.encode_cell({ c: statusCol, r: R })] = { t: "s", v: eventData.update.BotClaimStatusCheck };
+                  }
+                  if (eventData.update.BotClaimStatusCheckError !== undefined) {
+                    sheet[XLSX.utils.encode_cell({ c: errorCol, r: R })] = { t: "s", v: eventData.update.BotClaimStatusCheckError };
+                  }
+
+                  // Write updated workbook
                   const updatedArrayBuffer = XLSX.write(workbook, { type: "array", bookType: "xlsx" });
                   
                   // Write to the original file in place
