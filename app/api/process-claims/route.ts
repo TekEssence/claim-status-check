@@ -302,6 +302,9 @@ export async function POST(request: Request): Promise<Response> {
           // 6. Search Button (ng-click="search.submit()")
           await page.locator("button.singleSearchButton:visible, button[ng-click='search.submit()']:visible").first().click();
 
+          // Explicitly wait for the Angular full-screen loader to finish and disappear
+          await page.locator('div[full-screen-ajax-loader] .full-screen-bg').waitFor({ state: "hidden", timeout: 30000 }).catch(() => {});
+
           await page.waitForLoadState("networkidle", { timeout: 30000 });
 
           const matchingRows = page.locator("tr.line-item", {
