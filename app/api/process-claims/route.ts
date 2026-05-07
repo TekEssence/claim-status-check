@@ -284,12 +284,23 @@ export async function POST(request: Request): Promise<Response> {
             timeout: 60000,
           });
 
-          await page.locator("input[id*='member']:visible, input[name*='member']:visible, input[type='text']:visible").first().fill(memberPolicyId);
-          await page.getByRole("button", { name: /more options/i }).click();
+          // 1. IEHP ID Input (ng-model="model.input" or name="expressionBox")
+          await page.locator("input[name='expressionBox']:visible").first().fill(memberPolicyId);
+          
+          // 2. Options "button" (It is a div, not a button!)
+          await page.locator("div.advanced-search:has-text('Options'):visible").click();
+          
+          // 3. Search by DOS Checkbox/Label
           await page.getByText(/search by dos/i).click();
-          await page.locator("input[id*='start']:visible, input[name*='start']:visible").first().fill(formatMmDdYyyy(startDate));
-          await page.locator("input[id*='end']:visible, input[name*='end']:visible").first().fill(formatMmDdYyyy(endDate));
-          await page.getByRole("button", { name: /^search$/i }).first().click();
+          
+          // 4. Start Date (ng-model="search.minRange" or class="min-range")
+          await page.locator("input.min-range:visible, input[ng-model='search.minRange']:visible").first().fill(formatMmDdYyyy(startDate));
+          
+          // 5. End Date (ng-model="search.maxRange" or class="max-range")
+          await page.locator("input.max-range:visible, input[ng-model='search.maxRange']:visible").first().fill(formatMmDdYyyy(endDate));
+          
+          // 6. Search Button (ng-click="search.submit()")
+          await page.locator("button.singleSearchButton:visible, button[ng-click='search.submit()']:visible").first().click();
 
           await page.waitForLoadState("networkidle", { timeout: 30000 });
 
