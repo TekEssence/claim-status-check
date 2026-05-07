@@ -86,7 +86,7 @@ function pickValueByAliases(row: GenericRow, aliases: string[]): string {
 function shouldUsePersistentProfile(): boolean {
   const value = process.env.USE_CHROME_PROFILE;
   if (!value) {
-    return true;
+    return false;
   }
   return ["1", "true", "yes"].includes(value.toLowerCase());
 }
