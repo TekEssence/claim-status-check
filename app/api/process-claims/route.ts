@@ -237,11 +237,11 @@ export async function POST(request: Request): Promise<Response> {
         await page.goto(loginUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
 
         const usernameInput = page
-          .locator("input[type='email'], input[name*='user'], input[id*='user']")
+          .locator("input[type='email']:visible, input[name*='user']:visible, input[id*='user']:visible")
           .first();
-        const passwordInput = page.locator("input[type='password']").first();
+        const passwordInput = page.locator("input[type='password']:visible").first();
         const submitButton = page
-          .locator("button[type='submit'], input[type='submit']")
+          .locator("button[type='submit']:visible, input[type='submit']:visible")
           .first();
 
         await usernameInput.fill(username);
@@ -284,11 +284,11 @@ export async function POST(request: Request): Promise<Response> {
             timeout: 60000,
           });
 
-          await page.locator("input[id*='member'], input[name*='member'], input[type='text']").first().fill(memberPolicyId);
+          await page.locator("input[id*='member']:visible, input[name*='member']:visible, input[type='text']:visible").first().fill(memberPolicyId);
           await page.getByRole("button", { name: /more options/i }).click();
           await page.getByText(/search by dos/i).click();
-          await page.locator("input[id*='start'], input[name*='start']").first().fill(formatMmDdYyyy(startDate));
-          await page.locator("input[id*='end'], input[name*='end']").first().fill(formatMmDdYyyy(endDate));
+          await page.locator("input[id*='start']:visible, input[name*='start']:visible").first().fill(formatMmDdYyyy(startDate));
+          await page.locator("input[id*='end']:visible, input[name*='end']:visible").first().fill(formatMmDdYyyy(endDate));
           await page.getByRole("button", { name: /^search$/i }).first().click();
 
           await page.waitForLoadState("networkidle", { timeout: 30000 });
