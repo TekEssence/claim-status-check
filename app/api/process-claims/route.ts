@@ -310,9 +310,12 @@ export async function POST(req: Request) {
                 const msg = "No matching claim rows on website.";
                 log(`Row ${i + 1}: Failed. ${msg}`);
                 
+                // Capture full page HTML for debugging
                 try {
                   const screenshot = await page.screenshot({ type: "jpeg", quality: 60 });
                   await sendEvent({ type: "error_screenshot", index: i, image: screenshot.toString("base64") });
+                  const html = await page.evaluate(() => document.documentElement.outerHTML);
+                  await sendEvent({ type: "debug_html", index: i, html });
                 } catch { /* ignore */ }
 
                 await sendEvent({
