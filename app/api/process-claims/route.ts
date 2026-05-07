@@ -48,216 +48,12 @@ function parseDateInput(value: unknown): Date | null {
 }
 
 function formatMmDdYyyy(date: Date): string {
-  const month = `${date.getMonth() + 1}`.padStart(2, "0");
-  const day = `${date.getDate()}`.padStart(2, "0");
-  const year = date.getFullYear();
-  return `${month}/${day}/${year}`;
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  const y = String(date.getFullYear());
+  return `${m}/${d}/${y}`;
 }
 
-function pickValue(row: GenericRow, keys: string[]): string {
-  for (const key of keys) {
-    if (key in row) {
-      const value = asText(row[key]);
-      if (value) {
-        return value;
-      }
-    }
-  }
-  return "";
-}
-
-function normalizeKey(value: string): string {
-  return value.toLowerCase().replace(/[^a-z0-9]/g, "");
-}
-
-function pickValueByAliases(row: GenericRow, aliases: string[]): string {
-  const aliasSet = new Set(aliases.map(normalizeKey));
-  for (const [key, value] of Object.entries(row)) {
-    if (aliasSet.has(normalizeKey(key))) {
-      const text = asText(value);
-      if (text) {
-        return text;
-      }
-    }
-  }
-  return "";
-}
-
-function shouldUsePersistentProfile(): boolean {
-  const value = process.env.USE_CHROME_PROFILE;
-  if (!value) {
-    return false;
-  }
-  return ["1", "true", "yes"].includes(value.toLowerCase());
-}
-
-async function launchAutomationContext(
-  logs: string[],
-): Promise<{ context: BrowserContext; page: Page }> {
-  if (shouldUsePersistentProfile()) {
-    const userDataDir = process.env.CHROME_USER_DATA_DIR ||
-      path.join(os.homedir(), "Library/Application Support/Google/Chrome");
-    logs.push(`Attempting persistent Chrome profile launch: ${userDataDir}`);
-    try {
-      const context = await playwright.launchPersistentContext(userDataDir, {
-        channel: "chrome",
-        headless: false,
-        ignoreDefaultArgs: ["--disable-extensions"],
-      });
-      const page = context.pages()[0] ?? await context.newPage();
-      return { context, page };
-    } catch (profileError) {
-      const message = profileError instanceof Error ? profileError.message : String(profileError);
-      logs.push(`Persistent profile launch failed, falling back: ${message}`);
-    }
-  }
-
-  try {
-    const isLocal = process.env.NODE_ENV === "development" || !process.env.VERCEL;
-    
-    if (isLocal) {
-      logs.push("Attempting local browser launch.");
-      try {
-        const browser = await playwright.launch({
-          channel: "chrome",
-          headless: true,
-        });
-        const context = await browser.newContext();
-        const page = await context.newPage();
-        return { context, page };
-      } catch (localError) {
-        logs.push(`Local chrome launch failed: ${localError instanceof Error ? localError.message : String(localError)}`);
-      }
-    }
-
-    logs.push("Attempting @sparticuz/chromium browser launch for Vercel.");
-    const executablePath = await chromium.executablePath();
-    const browser = await playwright.launch({
-      args: chromium.args,
-      executablePath: executablePath || undefined,
-      headless: true,
-    });
-    const context = await browser.newContext();
-    const page = await context.newPage();
-    return { context, page };
-  } catch (chromeError) {
-    const message = chromeError instanceof Error ? chromeError.message : String(chromeError);
-    logs.push(`Browser launch failed: ${message}`);
-    throw new Error(`Browser launch failed: ${message}`);
-  }
-}
-
-export async function POST(request: Request): Promise<Response> {
-  const logs: string[] = [];
-  const startedAt = new Date();
-
-  try {
-    const formData = await request.formData();
-    const loginExcel = formData.get("loginExcel");
-    const claimExcel = formData.get("claimExcel");
-
-    if (!(loginExcel instanceof File) || !(claimExcel instanceof File)) {
-      return Response.json(
-        {
-          success: false,
-          message: "Both login and claim files are required.",
-        },
-        { status: 400 },
-      );
-    }
-
-    const loginBuffer = Buffer.from(await loginExcel.arrayBuffer());
-    const claimBuffer = Buffer.from(await claimExcel.arrayBuffer());
-    const loginWorkbook = XLSX.read(loginBuffer, { type: "buffer" });
-    const claimWorkbook = XLSX.read(claimBuffer, { type: "buffer", cellDates: true });
-
-    const loginSheet = loginWorkbook.Sheets[loginWorkbook.SheetNames[0]];
-    const claimSheetName = claimWorkbook.SheetNames[0];
-    const claimSheet = claimWorkbook.Sheets[claimSheetName];
-
-    const loginRows = XLSX.utils.sheet_to_json<GenericRow>(loginSheet, { defval: "" });
-    const claimRows = XLSX.utils.sheet_to_json<GenericRow>(claimSheet, { defval: "" });
-
-    if (loginRows.length === 0) {
-      return Response.json(
-        { success: false, message: "Login Excel has no rows." },
-        { status: 400 },
-      );
-    }
-
-    const loginRow = loginRows.find((row) => {
-      const usernameCandidate = pickValueByAliases(row, [
-        "username",
-        "user name",
-        "userid",
-        "user id",
-        "email",
-      ]);
-      const passwordCandidate = pickValueByAliases(row, ["password", "passcode", "pwd"]);
-      return Boolean(usernameCandidate && passwordCandidate);
-    }) ?? loginRows[0];
-
-    const username = pickValueByAliases(loginRow, [
-      "username",
-      "user name",
-      "userid",
-      "user id",
-      "email",
-    ]);
-    const password = pickValueByAliases(loginRow, ["password", "passcode", "pwd"]);
-    const loginUrl = pickValueByAliases(loginRow, ["loginurl", "url", "website", "site"]) ||
-      pickValue(loginRow, ["loginUrl", "LoginUrl", "url", "URL"]) ||
-      "https://providers.iehp.org/account/login";
-
-    if (!username || !password) {
-      return Response.json(
-        {
-          success: false,
-          message: "Could not find username/password in login Excel first row.",
-        },
-        { status: 400 },
-      );
-    }
-
-    logs.push(`Loaded ${claimRows.length} claim rows.`);
-    for (const row of claimRows) {
-      row.BotClaimStatusCheckTime = new Date().toISOString();
-      row.BotClaimStatusCheck = "Failed";
-      row.BotClaimDetails = "";
-      row.BotClaimStatusCheckError = "";
-    }
-
-    let globalAutomationError = "";
-
-    try {
-      const { context, page } = await launchAutomationContext(logs);
-
-      try {
-        logs.push(`Navigating to login URL: ${loginUrl}`);
-        await page.goto(loginUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
-
-        const usernameInput = page
-          .locator("input[type='email']:visible, input[name*='user']:visible, input[id*='user']:visible")
-          .first();
-        const passwordInput = page.locator("input[type='password']:visible").first();
-        const submitButton = page
-          .locator("button[type='submit']:visible, input[type='submit']:visible")
-          .first();
-
-        await usernameInput.fill(username);
-        await passwordInput.fill(password);
-        await submitButton.click();
-
-        await page.waitForLoadState("networkidle", { timeout: 60000 });
-        await page.goto("https://providers.iehp.org/claims/status", {
-          waitUntil: "domcontentloaded",
-          timeout: 60000,
-        });
-
-        for (const row of claimRows) {
-          row.BotClaimStatusCheckTime = new Date().toISOString();
-
-          try {
 export async function POST(req: Request) {
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
@@ -315,8 +111,8 @@ export async function POST(req: Request) {
         const USE_CHROME_PROFILE = false;
 
         let browser;
-        let context: BrowserContext;
-        let page: Page;
+        let context: BrowserContext | undefined;
+        let page: Page | undefined;
 
         try {
           if (isVercel) {
@@ -324,7 +120,7 @@ export async function POST(req: Request) {
             browser = await playwright.launch({
               args: chromium.args,
               executablePath: await chromium.executablePath(),
-              headless: chromium.headless,
+              headless: true,
             });
             context = await browser.newContext({
               viewport: { width: 1280, height: 800 },
@@ -353,7 +149,7 @@ export async function POST(req: Request) {
             }
           }
 
-          if (!browser) {
+          if (!browser || !context) {
             throw new Error("Failed to initialize browser instance.");
           }
 
