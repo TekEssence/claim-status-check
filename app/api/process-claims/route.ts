@@ -276,8 +276,9 @@ export async function POST(req: Request) {
               // Wait long enough for Angular's initialization/reset scripts to finish
               await page.waitForTimeout(2500);
 
-              // Click the visible material checkbox span that Angular uses as the toggle
-              await page.locator("span.checkbox-material").first().click({ force: true });
+              // Click the text label that has the direct ng-click handler for toggling dateRange.
+              // This is the element a real user clicks (not the material span).
+              await page.locator("label[ng-click*='dateRange']").first().click({ force: true });
               await page.waitForTimeout(500);
 
               await page.locator("input.min-range:visible, input[ng-model='search.minRange']:visible").first().fill(formatMmDdYyyy(startDate));
