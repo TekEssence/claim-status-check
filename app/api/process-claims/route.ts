@@ -231,7 +231,7 @@ export async function POST(req: Request) {
 
             try {
               log(`Row ${i + 1}: Navigating to Claims Status...`);
-              await page.goto("https://providers.iehp.org/claims-status", {
+              await page.goto("https://providers.iehp.org/claims/status", {
                 waitUntil: "networkidle",
                 timeout: 60000,
               });
