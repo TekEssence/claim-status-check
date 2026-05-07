@@ -276,44 +276,9 @@ export async function POST(req: Request) {
               // Wait long enough for Angular's initialization/reset scripts to finish
               await page.waitForTimeout(2500);
 
-              // Set Angular model directly (bypasses click entirely)
-              await page.evaluate(() => {
-                const el = document.querySelector("[ng-model='search.advancedFilter']");
-                if (el) {
-                  const scope = (window as any).angular?.element(el)?.scope();
-                  if (scope) {
-                    scope.search.advancedFilter = 'dateRange';
-                    scope.$apply();
-                  } else {
-                    const label = el.closest("label");
-                    if (label instanceof HTMLElement) label.click();
-                    else if (el instanceof HTMLElement) el.click();
-                  }
-                }
-              });
-
-              // Wait for Angular to re-render the date fields
-              await page.waitForTimeout(800);
-
-              // Verify the model actually stuck — if not, retry once
-              const modelApplied = await page.evaluate(() => {
-                const el = document.querySelector("[ng-model='search.advancedFilter']");
-                if (!el) return false;
-                const scope = (window as any).angular?.element(el)?.scope();
-                return scope?.search?.advancedFilter === 'dateRange';
-              });
-
-              if (!modelApplied) {
-                // Angular may have reset it again — wait and retry
-                await page.waitForTimeout(1500);
-                await page.evaluate(() => {
-                  const el = document.querySelector("[ng-model='search.advancedFilter']");
-                  if (!el) return;
-                  const scope = (window as any).angular?.element(el)?.scope();
-                  if (scope) { scope.search.advancedFilter = 'dateRange'; scope.$apply(); }
-                });
-                await page.waitForTimeout(800);
-              }
+              // Click the visible material checkbox span that Angular uses as the toggle
+              await page.locator("span.checkbox-material").first().click({ force: true });
+              await page.waitForTimeout(500);
 
               await page.locator("input.min-range:visible, input[ng-model='search.minRange']:visible").first().fill(formatMmDdYyyy(startDate));
               await page.locator("input.max-range:visible, input[ng-model='search.maxRange']:visible").first().fill(formatMmDdYyyy(endDate));
