@@ -164,6 +164,17 @@ export default function Home() {
                   await writable.close();
                 } else if (eventData.type === "error_screenshot") {
                   setErrorScreenshots((prev) => [...prev, { index: eventData.index, image: eventData.image }]);
+                } else if (eventData.type === "debug_html") {
+                  // Automatically trigger a file download for the debug HTML
+                  const blob = new Blob([eventData.html], { type: "text/html" });
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement("a");
+                  a.href = url;
+                  a.download = `debug_dom_row_${eventData.index + 1}.html`;
+                  document.body.appendChild(a);
+                  a.click();
+                  document.body.removeChild(a);
+                  URL.revokeObjectURL(url);
                 } else if (eventData.type === "done") {
                   // Handled below loop
                 } else if (eventData.type === "error") {

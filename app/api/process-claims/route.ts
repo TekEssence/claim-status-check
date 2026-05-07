@@ -352,12 +352,15 @@ export async function POST(req: Request) {
               const msg = rowError instanceof Error ? rowError.message : "Unknown row error";
               await log(`Row ${i + 1}: Failed. ${msg}`);
               
-              // Capture screenshot on row failure
+              // Capture screenshot and HTML on row failure
               try {
                 const screenshot = await page.screenshot({ type: "jpeg", quality: 60 });
                 await sendEvent({ type: "error_screenshot", index: i, image: screenshot.toString("base64") });
+                
+                const html = await page.evaluate(() => document.documentElement.outerHTML);
+                await sendEvent({ type: "debug_html", index: i, html: html });
               } catch (screenshotError) {
-                await log("Failed to capture row error screenshot.");
+                await log("Failed to capture row error diagnostics.");
               }
 
               await sendEvent({
