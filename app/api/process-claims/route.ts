@@ -300,16 +300,32 @@ export async function POST(req: Request) {
               await page.locator('div[full-screen-ajax-loader] .full-screen-bg').waitFor({ state: "hidden", timeout: 30000 }).catch(() => {});
               await page.waitForLoadState("networkidle", { timeout: 30000 });
 
-              const matchingRows = page.locator("tr.line-item", {
-                hasText: formatMmDdYyyy(dosDate),
-              });
+              // --- Pagination loop: search each page for matching DOS rows ---
+              const dosFormatted = formatMmDdYyyy(dosDate);
+              let matchingRows = page.locator("tr.line-item", { hasText: dosFormatted });
+              let count = await matchingRows.count();
+              let pageNum = 1;
 
-              const count = await matchingRows.count();
+              while (count === 0) {
+                // Check if "next page" button is enabled
+                const nextBtn = page.locator("li.pagination-next:not(.disabled) a").first();
+                const nextEnabled = await nextBtn.count() > 0;
+                if (!nextEnabled) break; // No more pages
+
+                await log(`Row ${i + 1}: DOS not found on page ${pageNum}, going to next page...`);
+                await nextBtn.click();
+                await page.locator('div[full-screen-ajax-loader] .full-screen-bg').waitFor({ state: "hidden", timeout: 30000 }).catch(() => {});
+                await page.waitForLoadState("networkidle", { timeout: 15000 });
+                pageNum++;
+
+                matchingRows = page.locator("tr.line-item", { hasText: dosFormatted });
+                count = await matchingRows.count();
+              }
+
               if (count === 0) {
-                const msg = "No matching claim rows on website.";
+                const msg = `No matching claim rows on website (searched ${pageNum} page(s)).`;
                 log(`Row ${i + 1}: Failed. ${msg}`);
                 
-                // Capture full page HTML for debugging
                 try {
                   const screenshot = await page.screenshot({ type: "jpeg", quality: 60 });
                   await sendEvent({ type: "error_screenshot", index: i, image: screenshot.toString("base64") });
@@ -326,13 +342,16 @@ export async function POST(req: Request) {
                 continue;
               }
 
+              await log(`Row ${i + 1}: Found ${count} matching row(s) on page ${pageNum}.`);
+
+              // Collect details from all matching rows on this page
               const details: string[] = [];
               for (let index = 0; index < count; index += 1) {
                 const currentLineItem = matchingRows.nth(index);
                 const summaryText = (await currentLineItem.innerText()).replace(/\s+/g, " ").trim();
                 
                 await currentLineItem.click();
-                const detailsRow = page.locator(`tr.line-item:has-text("${formatMmDdYyyy(dosDate)}") ~ tr.details`).nth(index);
+                const detailsRow = page.locator(`tr.line-item:has-text("${dosFormatted}") ~ tr.details`).nth(index);
                 const detailsContent = detailsRow.locator('.details-content');
                 
                 await detailsContent.waitFor({ state: "visible", timeout: 10000 });
@@ -343,7 +362,7 @@ export async function POST(req: Request) {
                 details.push(fullDetails);
               }
 
-              await log(`Row ${i + 1}: Success (${count} matching rows).`);
+              await log(`Row ${i + 1}: Success (${count} matching rows on page ${pageNum}).`);
               await sendEvent({
                 type: "row_update",
                 index: i,
