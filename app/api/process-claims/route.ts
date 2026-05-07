@@ -8,6 +8,7 @@ type GenericRow = Record<string, unknown>;
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+export const maxDuration = 300; // 5 minutes on Vercel Pro
 
 function asText(value: unknown): string {
   if (value === null || value === undefined) {
@@ -88,9 +89,10 @@ export async function POST(req: Request) {
         const formData = await req.formData();
         const loginExcelFile = formData.get("loginExcel") as File | null;
         const claimRowsJson = formData.get("claimRows") as string | null;
+        const startIndex = parseInt(formData.get("startIndex") as string || "0", 10);
 
         if (!loginExcelFile || !(loginExcelFile instanceof File) || !claimRowsJson) {
-          sendEvent({ type: "error", message: "Missing login Excel file or claim rows." });
+          await sendEvent({ type: "error", message: "Missing login Excel file or claim rows." });
           controller.close();
           return;
         }
@@ -102,7 +104,7 @@ export async function POST(req: Request) {
         const loginRows = XLSX.utils.sheet_to_json(loginSheet) as GenericRow[];
 
         if (loginRows.length === 0) {
-          sendEvent({ type: "error", message: "Login Excel file is empty." });
+          await sendEvent({ type: "error", message: "Login Excel file is empty." });
           controller.close();
           return;
         }
@@ -113,7 +115,7 @@ export async function POST(req: Request) {
         const password = asText(firstLoginRow["Password"] ?? firstLoginRow["password"]);
 
         if (!rawUrl || !userName || !password) {
-          sendEvent({ type: "error", message: "Invalid login credentials format." });
+          await sendEvent({ type: "error", message: "Invalid login credentials format." });
           controller.close();
           return;
         }
@@ -121,8 +123,12 @@ export async function POST(req: Request) {
         const loginUrl = rawUrl.startsWith("http") ? rawUrl : `https://${rawUrl}`;
         const claimRows = JSON.parse(claimRowsJson) as GenericRow[];
 
-        log(`Received ${claimRows.length} claim rows to process.`);
-        sendEvent({ type: "progress", completed: 0, total: claimRows.length });
+        if (startIndex > 0) {
+          await log(`Resuming processing from row ${startIndex + 1}...`);
+        } else {
+          await log(`Received ${claimRows.length} claim rows to process.`);
+        }
+        await sendEvent({ type: "progress", completed: startIndex, total: claimRows.length });
 
         log("Launching browser environment...");
         const isVercel = process.env.VERCEL === "1" || !!process.env.VERCEL_ENV;
@@ -207,7 +213,16 @@ export async function POST(req: Request) {
             }
           }
 
-          for (let i = 0; i < claimRows.length; i++) {
+          const processStartTime = Date.now();
+          const MAX_EXECUTION_TIME_MS = 4 * 60 * 1000; // 4 minutes
+
+          for (let i = startIndex; i < claimRows.length; i++) {
+            // Check for timeout
+            if (Date.now() - processStartTime > MAX_EXECUTION_TIME_MS) {
+              await log(`Approaching Vercel execution timeout limit. Pausing at Row ${i + 1} to gracefully auto-resume...`);
+              break; // Break the loop, the finally block will emit 'done' and the frontend will re-trigger
+            }
+
             const row = claimRows[i];
             const memberPolicyId = asText(row["Member Policy ID"] ?? row["member policy id"] ?? row["Member ID"]);
             const dosValue = row["Date Of Service"] ?? row["DOS"] ?? row["date of service"];

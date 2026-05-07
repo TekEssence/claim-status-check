@@ -24,29 +24,34 @@ export default function Home() {
 
   async function selectClaimFile() {
     try {
-      // @ts-expect-error - File System Access API is not fully typed in all TS setups
-      const [handle] = await window.showOpenFilePicker({
+      // @ts-expect-error window.showOpenFilePicker exists in modern browsers
+      const [fileHandle] = await window.showOpenFilePicker({
         types: [
           {
             description: "Excel Files",
             accept: {
               "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": [".xlsx"],
               "application/vnd.ms-excel": [".xls"],
-              "text/csv": [".csv"],
             },
           },
         ],
+        excludeAcceptAllOption: true,
+        multiple: false,
       });
-      setClaimFileHandle(handle);
-      setClaimFileName(handle.name);
-    } catch (e) {
-      console.error(e);
-      // User likely cancelled the picker
+
+      setClaimFileHandle(fileHandle);
+      const file = await fileHandle.getFile();
+      setClaimFileName(file.name);
+    } catch (err) {
+      if ((err as Error).name !== "AbortError") {
+        console.error("Failed to select file:", err);
+      }
     }
   }
 
-  async function onSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  async function onSubmit(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+
     if (!loginFile || !claimFileHandle) {
       setStatus("Please provide both required files.");
       return;
@@ -78,76 +83,92 @@ export default function Home() {
         throw new Error("Claim Excel file is empty.");
       }
 
-      setStatus(`Starting process for ${claimRows.length} rows...`);
+      const totalRows = claimRows.length;
+      setStatus(`Starting process for ${totalRows} rows...`);
 
-      const formData = new FormData();
-      formData.append("loginExcel", loginFile);
-      formData.append("claimRows", JSON.stringify(claimRows));
+      const processChunk = async (startIndex: number) => {
+        const formData = new FormData();
+        formData.append("loginExcel", loginFile);
+        formData.append("claimRows", JSON.stringify(claimRows));
+        formData.append("startIndex", startIndex.toString());
 
-      const response = await fetch("/api/process-claims", {
-        method: "POST",
-        body: formData,
-      });
+        const response = await fetch("/api/process-claims", {
+          method: "POST",
+          body: formData,
+        });
 
-      if (!response.body) throw new Error("No response body.");
+        if (!response.body) throw new Error("No response body.");
 
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        let currentCompleted = startIndex;
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
 
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n\n");
-        buffer = lines.pop() || "";
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n\n");
+          buffer = lines.pop() || "";
 
-        for (const line of lines) {
-          if (line.startsWith("data: ")) {
-            const dataStr = line.substring(6);
-            try {
-              const eventData = JSON.parse(dataStr);
-              
-              if (eventData.type === "log") {
-                setLogs((prev) => [...prev, eventData.message]);
-              } else if (eventData.type === "progress") {
-                setProgress({ completed: eventData.completed, total: eventData.total });
-              } else if (eventData.type === "row_update") {
-                // Update the row in our local array
-                claimRows[eventData.index] = { 
-                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                  ...(claimRows[eventData.index] as any), 
-                  ...eventData.update 
-                };
+          for (const line of lines) {
+            if (line.startsWith("data: ")) {
+              const dataStr = line.substring(6);
+              try {
+                const eventData = JSON.parse(dataStr);
                 
-                // Save it back to the Excel file incrementally
-                const updatedSheet = XLSX.utils.json_to_sheet(claimRows);
-                workbook.Sheets[sheetName] = updatedSheet;
-                const updatedArrayBuffer = XLSX.write(workbook, { type: "array", bookType: "xlsx" });
-                
-                // Write to the original file in place
-                const writable = await claimFileHandle.createWritable();
-                await writable.write(updatedArrayBuffer);
-                await writable.close();
-              } else if (eventData.type === "error_screenshot") {
-                setErrorScreenshots((prev) => [...prev, { index: eventData.index, image: eventData.image }]);
-              } else if (eventData.type === "done") {
-                setStatus("Processing completed!");
-              } else if (eventData.type === "error") {
-                setStatus(`Error: ${eventData.message}`);
+                if (eventData.type === "log") {
+                  setLogs((prev) => [...prev, eventData.message]);
+                } else if (eventData.type === "progress") {
+                  currentCompleted = eventData.completed;
+                  setProgress({ completed: eventData.completed, total: eventData.total });
+                } else if (eventData.type === "row_update") {
+                  // Update the row in our local array
+                  claimRows[eventData.index] = { 
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    ...(claimRows[eventData.index] as any), 
+                    ...eventData.update 
+                  };
+                  
+                  // Save it back to the Excel file incrementally
+                  const updatedSheet = XLSX.utils.json_to_sheet(claimRows);
+                  workbook.Sheets[sheetName] = updatedSheet;
+                  const updatedArrayBuffer = XLSX.write(workbook, { type: "array", bookType: "xlsx" });
+                  
+                  // Write to the original file in place
+                  const writable = await claimFileHandle.createWritable();
+                  await writable.write(updatedArrayBuffer);
+                  await writable.close();
+                } else if (eventData.type === "error_screenshot") {
+                  setErrorScreenshots((prev) => [...prev, { index: eventData.index, image: eventData.image }]);
+                } else if (eventData.type === "done") {
+                  // Handled below loop
+                } else if (eventData.type === "error") {
+                  setStatus(`Error: ${eventData.message}`);
+                }
+              } catch (err) {
+                console.error("Failed to parse event data", err);
               }
-            } catch (err) {
-              console.error("Failed to parse event data", err);
             }
           }
         }
-      }
+
+        // Stream closed. Check if we need to auto-resume
+        if (currentCompleted < totalRows) {
+          setStatus(`Auto-resuming from row ${currentCompleted + 1}...`);
+          await processChunk(currentCompleted);
+        } else {
+          setStatus("Processing completed!");
+          setIsProcessing(false);
+        }
+      };
+
+      await processChunk(0);
     } catch (error) {
       setStatus(
         `Failed to process claims: ${error instanceof Error ? error.message : "Unknown error"}`,
       );
-    } finally {
       setIsProcessing(false);
     }
   }
