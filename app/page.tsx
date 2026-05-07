@@ -95,6 +95,7 @@ export default function Home() {
         const response = await fetch("/api/process-claims", {
           method: "POST",
           body: formData,
+          cache: "no-store",
         });
 
         if (!response.body) throw new Error("No response body.");
