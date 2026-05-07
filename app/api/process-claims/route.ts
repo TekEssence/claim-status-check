@@ -255,9 +255,9 @@ export async function POST(req: Request) {
             }
 
             const startDate = new Date(dosDate);
-            startDate.setDate(dosDate.getDate() - 15);
+            startDate.setDate(dosDate.getDate() - 1);
             const endDate = new Date(dosDate);
-            endDate.setDate(dosDate.getDate() + 15);
+            endDate.setDate(dosDate.getDate() + 1);
 
             log(`Processing Row ${i + 1}: Member ${memberPolicyId}, DOS ${formatMmDdYyyy(dosDate)}`);
 
@@ -269,8 +269,21 @@ export async function POST(req: Request) {
               });
 
               await page.locator("input[name='expressionBox']:visible").first().fill(memberPolicyId);
-              await page.locator("div.advanced-search:has-text('Options'):visible").click();
-              await page.getByText(/search by dos/i).click();
+              
+              const optionsBtn = page.locator("div.advanced-search:has-text('Options'):visible");
+              await optionsBtn.click();
+              
+              // Wait for dropdown animation
+              await page.waitForTimeout(500);
+              
+              // Robustly click the checkbox or its label
+              const dosLabel = page.locator("label").filter({ hasText: /search by dos/i });
+              if (await dosLabel.count() > 0) {
+                await dosLabel.first().click();
+              } else {
+                await page.getByText(/search by dos/i).first().click();
+              }
+
               await page.locator("input.min-range:visible, input[ng-model='search.minRange']:visible").first().fill(formatMmDdYyyy(startDate));
               await page.locator("input.max-range:visible, input[ng-model='search.maxRange']:visible").first().fill(formatMmDdYyyy(endDate));
               await page.locator("button.singleSearchButton:visible, button[ng-click='search.submit()']:visible").first().click();
