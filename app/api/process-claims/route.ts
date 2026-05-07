@@ -270,14 +270,13 @@ export async function POST(req: Request) {
 
               await page.locator("input[name='expressionBox']:visible").first().fill(memberPolicyId);
               
-              // Open Options panel
+              // Open Options panel and wait for Angular's post-open reset to settle
               const optionsBtn = page.locator("div.advanced-search:has-text('Options')");
               await optionsBtn.click();
-              await page.waitForTimeout(1000);
+              // Wait long enough for Angular's initialization/reset scripts to finish
+              await page.waitForTimeout(2500);
 
-              // The checkbox uses Angular ng-model="search.advancedFilter" with ng-true-value="'dateRange'"
-              // Standard clicks don't trigger Angular's digest cycle reliably.
-              // Instead, directly set the Angular model via $scope injection.
+              // Set Angular model directly (bypasses click entirely)
               await page.evaluate(() => {
                 const el = document.querySelector("[ng-model='search.advancedFilter']");
                 if (el) {
@@ -286,7 +285,6 @@ export async function POST(req: Request) {
                     scope.search.advancedFilter = 'dateRange';
                     scope.$apply();
                   } else {
-                    // Fallback: native click on the label wrapping the checkbox
                     const label = el.closest("label");
                     if (label instanceof HTMLElement) label.click();
                     else if (el instanceof HTMLElement) el.click();
@@ -294,7 +292,28 @@ export async function POST(req: Request) {
                 }
               });
 
-              await page.waitForTimeout(500);
+              // Wait for Angular to re-render the date fields
+              await page.waitForTimeout(800);
+
+              // Verify the model actually stuck — if not, retry once
+              const modelApplied = await page.evaluate(() => {
+                const el = document.querySelector("[ng-model='search.advancedFilter']");
+                if (!el) return false;
+                const scope = (window as any).angular?.element(el)?.scope();
+                return scope?.search?.advancedFilter === 'dateRange';
+              });
+
+              if (!modelApplied) {
+                // Angular may have reset it again — wait and retry
+                await page.waitForTimeout(1500);
+                await page.evaluate(() => {
+                  const el = document.querySelector("[ng-model='search.advancedFilter']");
+                  if (!el) return;
+                  const scope = (window as any).angular?.element(el)?.scope();
+                  if (scope) { scope.search.advancedFilter = 'dateRange'; scope.$apply(); }
+                });
+                await page.waitForTimeout(800);
+              }
 
               await page.locator("input.min-range:visible, input[ng-model='search.minRange']:visible").first().fill(formatMmDdYyyy(startDate));
               await page.locator("input.max-range:visible, input[ng-model='search.maxRange']:visible").first().fill(formatMmDdYyyy(endDate));
