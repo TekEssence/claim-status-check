@@ -18,34 +18,46 @@ function asText(value: unknown): string {
 }
 
 function parseDateInput(value: unknown): Date | null {
+  // Case 1: Already a JS Date (from SheetJS cellDates:true reading a proper Excel date cell)
   if (value instanceof Date && !Number.isNaN(value.getTime())) {
     return value;
   }
+  // Case 2: Excel date serial number
   if (typeof value === "number") {
     const parsed = XLSX.SSF.parse_date_code(value);
-    if (!parsed) {
-      return null;
-    }
+    if (!parsed) return null;
     return new Date(parsed.y, parsed.m - 1, parsed.d);
   }
+  // Case 3: String date — parse parts manually.
+  // IMPORTANT: Do NOT use new Date(string) — JS assumes mm/dd/yyyy which is wrong
+  // when the Excel sheet stores dates as dd/mm/yyyy text (e.g. "5/2/2026" = Feb 5).
   const dateValue = asText(value);
-  if (!dateValue) {
-    return null;
-  }
-  const directParse = new Date(dateValue);
-  if (!Number.isNaN(directParse.getTime())) {
-    return directParse;
-  }
+  if (!dateValue) return null;
 
   const parts = dateValue.split("/");
-  if (parts.length !== 3) {
-    return null;
+  if (parts.length !== 3) return null;
+
+  const a = Number(parts[0]); // could be day or month
+  const b = Number(parts[1]); // could be month or day
+  const year = Number(parts[2].length === 2 ? `20${parts[2]}` : parts[2]);
+
+  let month: number, day: number;
+
+  if (a > 12) {
+    // a cannot be a month → must be dd/mm/yyyy (e.g. "5/2/2026" where day=5, month=2 ❌ — wait, 5 <= 12)
+    // Actually a > 12 unambiguously means day. e.g. "15/2/2026" → day=15, month=2
+    day = a; month = b;
+  } else if (b > 12) {
+    // b cannot be a month → must be mm/dd/yyyy (e.g. "2/15/2026" → month=2, day=15)
+    month = a; day = b;
+  } else {
+    // Both a and b are <= 12 — ambiguous. The user confirmed their Excel uses dd/mm/yyyy.
+    // e.g. "5/2/2026" → day=5, month=2 → Feb 5
+    day = a; month = b;
   }
-  const month = Number(parts[0]);
-  const day = Number(parts[1]);
-  const year = Number(parts[2]);
-  const manualDate = new Date(year, month - 1, day);
-  return Number.isNaN(manualDate.getTime()) ? null : manualDate;
+
+  const date = new Date(year, month - 1, day);
+  return Number.isNaN(date.getTime()) ? null : date;
 }
 
 function formatMmDdYyyy(date: Date): string {
