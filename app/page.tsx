@@ -128,8 +128,8 @@ export default function Home() {
                 } else if (eventData.type === "row_update") {
                   // Find or create headers
                   const range = XLSX.utils.decode_range(sheet["!ref"] || "A1:A1");
+                  // Find existing bot columns in the header row
                   let detailsCol = -1, statusCol = -1, errorCol = -1;
-                  
                   for (let C = range.s.c; C <= range.e.c; ++C) {
                     const cell = sheet[XLSX.utils.encode_cell({ c: C, r: range.s.r })];
                     if (cell?.v === "BotClaimDetails") detailsCol = C;
@@ -137,9 +137,27 @@ export default function Home() {
                     if (cell?.v === "BotClaimStatusCheckError") errorCol = C;
                   }
 
-                  if (detailsCol === -1) { detailsCol = ++range.e.c; sheet[XLSX.utils.encode_cell({ c: detailsCol, r: range.s.r })] = { t: "s", v: "BotClaimDetails" }; }
-                  if (statusCol === -1) { statusCol = ++range.e.c; sheet[XLSX.utils.encode_cell({ c: statusCol, r: range.s.r })] = { t: "s", v: "BotClaimStatusCheck" }; }
-                  if (errorCol === -1) { errorCol = ++range.e.c; sheet[XLSX.utils.encode_cell({ c: errorCol, r: range.s.r })] = { t: "s", v: "BotClaimStatusCheckError" }; }
+                  // Determine the next available column AFTER all existing data
+                  // (max of current last col and any found bot columns)
+                  const lastExistingCol = Math.max(range.e.c, detailsCol, statusCol, errorCol);
+                  let nextCol = lastExistingCol + 1;
+
+                  // Add any missing bot headers strictly at the END, in order
+                  if (detailsCol === -1) {
+                    detailsCol = nextCol++;
+                    sheet[XLSX.utils.encode_cell({ c: detailsCol, r: range.s.r })] = { t: "s", v: "BotClaimDetails" };
+                  }
+                  if (statusCol === -1) {
+                    statusCol = nextCol++;
+                    sheet[XLSX.utils.encode_cell({ c: statusCol, r: range.s.r })] = { t: "s", v: "BotClaimStatusCheck" };
+                  }
+                  if (errorCol === -1) {
+                    errorCol = nextCol++;
+                    sheet[XLSX.utils.encode_cell({ c: errorCol, r: range.s.r })] = { t: "s", v: "BotClaimStatusCheckError" };
+                  }
+
+                  // Expand sheet range to cover any new columns
+                  range.e.c = Math.max(range.e.c, errorCol);
                   
                   sheet["!ref"] = XLSX.utils.encode_range(range);
 
