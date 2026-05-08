@@ -377,11 +377,11 @@ export async function POST(req: Request) {
               // Falls back to hasText on whole row if column not found.
               const getMatchingRows = () => {
                 if (primaryDosColIndex > 0) {
-                  return page.locator("tr.line-item").filter({
-                    has: page.locator(`td:nth-child(${primaryDosColIndex})`, { hasText: new RegExp(`^\\s*${dosFormatted.replace(/\//g, "\\/")}\\s*$`) })
+                  return page!.locator("tr.line-item").filter({
+                    has: page!.locator(`td:nth-child(${primaryDosColIndex})`, { hasText: new RegExp(`^\\s*${dosFormatted.replace(/\//g, "\\/")}\\s*$`) })
                   });
                 }
-                return page.locator("tr.line-item", { hasText: dosFormatted });
+                return page!.locator("tr.line-item", { hasText: dosFormatted });
               };
 
               while (true) {
