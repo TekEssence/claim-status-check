@@ -147,8 +147,9 @@ export default function Home() {
                   let nextCol = lastCol + 1;
 
                   // Deep-clone a cell's style so it isn't shared by reference
-                  const cloneStyle = (style: ExcelJS.Style): ExcelJS.Style =>
-                    JSON.parse(JSON.stringify(style));
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                  const cloneStyle = (style: any): ExcelJS.Style =>
+                    JSON.parse(JSON.stringify(style ?? {}));
 
                   // Get the style reference cell from the last existing header column
                   const lastHeaderCell = headerRow.getCell(lastCol);
