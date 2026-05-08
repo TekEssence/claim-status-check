@@ -2,6 +2,7 @@
 
 import { FormEvent, useMemo, useState } from "react";
 import * as XLSX from "xlsx";
+import ExcelJS from "exceljs";
 
 export default function Home() {
   const [loginFile, setLoginFile] = useState<File | null>(null);
@@ -71,17 +72,21 @@ export default function Home() {
         }
       }
 
-      // Read the file locally
+      // Read file with SheetJS (fast, for extracting claim data to send to backend)
       const file = await claimFileHandle.getFile();
       const arrayBuffer = await file.arrayBuffer();
-      const workbook = XLSX.read(arrayBuffer, { type: "array", cellDates: true });
-      const sheetName = workbook.SheetNames[0];
-      const sheet = workbook.Sheets[sheetName];
-      const claimRows = XLSX.utils.sheet_to_json(sheet);
+      const xlsxWb = XLSX.read(arrayBuffer, { type: "array", cellDates: true });
+      const sheetName = xlsxWb.SheetNames[0];
+      const claimRows = XLSX.utils.sheet_to_json(xlsxWb.Sheets[sheetName]);
 
       if (claimRows.length === 0) {
         throw new Error("Claim Excel file is empty.");
       }
+
+      // Load with ExcelJS for style-preserving writes
+      const excelWb = new ExcelJS.Workbook();
+      await excelWb.xlsx.load(arrayBuffer);
+      const worksheet = excelWb.getWorksheet(1)!;
 
       const totalRows = claimRows.length;
       setStatus(`Starting process for ${totalRows} rows...`);
@@ -126,59 +131,42 @@ export default function Home() {
                   currentCompleted = eventData.completed;
                   setProgress({ completed: eventData.completed, total: eventData.total });
                 } else if (eventData.type === "row_update") {
-                  // Find or create headers
-                  const range = XLSX.utils.decode_range(sheet["!ref"] || "A1:A1");
-                  // Find existing bot columns in the header row
-                  let detailsCol = -1, statusCol = -1, errorCol = -1;
-                  for (let C = range.s.c; C <= range.e.c; ++C) {
-                    const cell = sheet[XLSX.utils.encode_cell({ c: C, r: range.s.r })];
-                    if (cell?.v === "BotClaimDetails") detailsCol = C;
-                    if (cell?.v === "BotClaimStatusCheck") statusCol = C;
-                    if (cell?.v === "BotClaimStatusCheckError") errorCol = C;
-                  }
+                  // --- ExcelJS: style-preserving cell update ---
+                  const headerRow = worksheet.getRow(1);
+                  let detailsCol = 0, statusCol = 0, errorCol = 0;
 
-                  // Determine the next available column AFTER all existing data
-                  // (max of current last col and any found bot columns)
-                  const lastExistingCol = Math.max(range.e.c, detailsCol, statusCol, errorCol);
-                  let nextCol = lastExistingCol + 1;
+                  // Find existing bot columns by header name (ExcelJS is 1-indexed)
+                  headerRow.eachCell((cell, colNum) => {
+                    if (cell.value === "BotClaimDetails") detailsCol = colNum;
+                    if (cell.value === "BotClaimStatusCheck") statusCol = colNum;
+                    if (cell.value === "BotClaimStatusCheckError") errorCol = colNum;
+                  });
 
-                  // Add any missing bot headers strictly at the END, in order
-                  if (detailsCol === -1) {
-                    detailsCol = nextCol++;
-                    sheet[XLSX.utils.encode_cell({ c: detailsCol, r: range.s.r })] = { t: "s", v: "BotClaimDetails" };
-                  }
-                  if (statusCol === -1) {
-                    statusCol = nextCol++;
-                    sheet[XLSX.utils.encode_cell({ c: statusCol, r: range.s.r })] = { t: "s", v: "BotClaimStatusCheck" };
-                  }
-                  if (errorCol === -1) {
-                    errorCol = nextCol++;
-                    sheet[XLSX.utils.encode_cell({ c: errorCol, r: range.s.r })] = { t: "s", v: "BotClaimStatusCheckError" };
-                  }
+                  // Append missing bot headers strictly at the END
+                  const lastCol = Math.max(
+                    worksheet.columnCount,
+                    detailsCol, statusCol, errorCol
+                  );
+                  let nextCol = lastCol + 1;
+                  if (detailsCol === 0) { detailsCol = nextCol++; headerRow.getCell(detailsCol).value = "BotClaimDetails"; }
+                  if (statusCol === 0) { statusCol = nextCol++; headerRow.getCell(statusCol).value = "BotClaimStatusCheck"; }
+                  if (errorCol === 0) { errorCol = nextCol++; headerRow.getCell(errorCol).value = "BotClaimStatusCheckError"; }
+                  headerRow.commit();
 
-                  // Expand sheet range to cover any new columns
-                  range.e.c = Math.max(range.e.c, errorCol);
-                  
-                  sheet["!ref"] = XLSX.utils.encode_range(range);
+                  // Update data cells (row index + 2: +1 for header, +1 for 1-based)
+                  const dataRow = worksheet.getRow(eventData.index + 2);
+                  if (eventData.update.BotClaimDetails !== undefined)
+                    dataRow.getCell(detailsCol).value = eventData.update.BotClaimDetails;
+                  if (eventData.update.BotClaimStatusCheck !== undefined)
+                    dataRow.getCell(statusCol).value = eventData.update.BotClaimStatusCheck;
+                  if (eventData.update.BotClaimStatusCheckError !== undefined)
+                    dataRow.getCell(errorCol).value = eventData.update.BotClaimStatusCheckError;
+                  dataRow.commit();
 
-                  // Update specific cells
-                  const R = eventData.index + 1; // +1 to skip header row
-                  if (eventData.update.BotClaimDetails !== undefined) {
-                    sheet[XLSX.utils.encode_cell({ c: detailsCol, r: R })] = { t: "s", v: eventData.update.BotClaimDetails };
-                  }
-                  if (eventData.update.BotClaimStatusCheck !== undefined) {
-                    sheet[XLSX.utils.encode_cell({ c: statusCol, r: R })] = { t: "s", v: eventData.update.BotClaimStatusCheck };
-                  }
-                  if (eventData.update.BotClaimStatusCheckError !== undefined) {
-                    sheet[XLSX.utils.encode_cell({ c: errorCol, r: R })] = { t: "s", v: eventData.update.BotClaimStatusCheckError };
-                  }
-
-                  // Write updated workbook
-                  const updatedArrayBuffer = XLSX.write(workbook, { type: "array", bookType: "xlsx" });
-                  
-                  // Write to the original file in place
+                  // Write back with full style preservation
+                  const updatedBuffer = await excelWb.xlsx.writeBuffer();
                   const writable = await claimFileHandle.createWritable();
-                  await writable.write(updatedArrayBuffer);
+                  await writable.write(updatedBuffer);
                   await writable.close();
                 } else if (eventData.type === "error_screenshot") {
                   setErrorScreenshots((prev) => [...prev, { index: eventData.index, image: eventData.image }]);
