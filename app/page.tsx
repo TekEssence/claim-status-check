@@ -142,25 +142,48 @@ export default function Home() {
                     if (cell.value === "BotClaimStatusCheckError") errorCol = colNum;
                   });
 
-                  // Append missing bot headers strictly at the END
-                  const lastCol = Math.max(
-                    worksheet.columnCount,
-                    detailsCol, statusCol, errorCol
-                  );
+                  // Append missing bot headers strictly at the END, cloning style from last existing header
+                  const lastCol = Math.max(worksheet.columnCount, detailsCol, statusCol, errorCol);
                   let nextCol = lastCol + 1;
-                  if (detailsCol === 0) { detailsCol = nextCol++; headerRow.getCell(detailsCol).value = "BotClaimDetails"; }
-                  if (statusCol === 0) { statusCol = nextCol++; headerRow.getCell(statusCol).value = "BotClaimStatusCheck"; }
-                  if (errorCol === 0) { errorCol = nextCol++; headerRow.getCell(errorCol).value = "BotClaimStatusCheckError"; }
+
+                  // Deep-clone a cell's style so it isn't shared by reference
+                  const cloneStyle = (style: ExcelJS.Style): ExcelJS.Style =>
+                    JSON.parse(JSON.stringify(style));
+
+                  // Get the style reference cell from the last existing header column
+                  const lastHeaderCell = headerRow.getCell(lastCol);
+                  const headerStyle = cloneStyle(lastHeaderCell.style);
+
+                  const addHeader = (col: number, label: string) => {
+                    const cell = headerRow.getCell(col);
+                    cell.value = label;
+                    cell.style = cloneStyle(headerStyle);
+                  };
+
+                  if (detailsCol === 0) { detailsCol = nextCol++; addHeader(detailsCol, "BotClaimDetails"); }
+                  if (statusCol === 0)  { statusCol  = nextCol++; addHeader(statusCol,  "BotClaimStatusCheck"); }
+                  if (errorCol === 0)   { errorCol   = nextCol++; addHeader(errorCol,   "BotClaimStatusCheckError"); }
                   headerRow.commit();
 
                   // Update data cells (row index + 2: +1 for header, +1 for 1-based)
                   const dataRow = worksheet.getRow(eventData.index + 2);
+
+                  // Get the style reference from the last existing data cell in this row
+                  const lastDataCell = dataRow.getCell(lastCol);
+                  const dataStyle = cloneStyle(lastDataCell.style);
+
+                  const setDataCell = (col: number, value: string) => {
+                    const cell = dataRow.getCell(col);
+                    cell.value = value;
+                    cell.style = cloneStyle(dataStyle);
+                  };
+
                   if (eventData.update.BotClaimDetails !== undefined)
-                    dataRow.getCell(detailsCol).value = eventData.update.BotClaimDetails;
+                    setDataCell(detailsCol, eventData.update.BotClaimDetails);
                   if (eventData.update.BotClaimStatusCheck !== undefined)
-                    dataRow.getCell(statusCol).value = eventData.update.BotClaimStatusCheck;
+                    setDataCell(statusCol, eventData.update.BotClaimStatusCheck);
                   if (eventData.update.BotClaimStatusCheckError !== undefined)
-                    dataRow.getCell(errorCol).value = eventData.update.BotClaimStatusCheckError;
+                    setDataCell(errorCol, eventData.update.BotClaimStatusCheckError);
                   dataRow.commit();
 
                   // Write back with full style preservation
