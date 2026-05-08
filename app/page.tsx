@@ -75,7 +75,7 @@ export default function Home() {
       // Read file with SheetJS (fast, for extracting claim data to send to backend)
       const file = await claimFileHandle.getFile();
       const arrayBuffer = await file.arrayBuffer();
-      const xlsxWb = XLSX.read(arrayBuffer, { type: "array", cellDates: true });
+      const xlsxWb = XLSX.read(arrayBuffer, { type: "array", cellDates: false });
       const sheetName = xlsxWb.SheetNames[0];
       const claimRows = XLSX.utils.sheet_to_json(xlsxWb.Sheets[sheetName]);
 

@@ -324,12 +324,34 @@ export async function POST(req: Request) {
               let pageNum = 1;
               let foundAny = false;
 
-              // Extract a date from a row's text using MM/DD/YYYY pattern
-              const extractDosFromRow = async (rowLocator: { innerText: () => Promise<string> }): Promise<Date | null> => {
-                const text = await rowLocator.innerText().catch(() => "");
+              // Extract a date from a row — reads only the Primary DOS cell when column index is known
+              const extractDosFromRow = async (rowLocator: { innerText: () => Promise<string>; locator?: (s: string) => { innerText: () => Promise<string> } }, colIdx = -1): Promise<Date | null> => {
+                let text = "";
+                if (colIdx > 0 && "locator" in rowLocator && rowLocator.locator) {
+                  text = await rowLocator.locator(`td:nth-child(${colIdx})`).innerText().catch(() => "");
+                } else {
+                  text = await rowLocator.innerText().catch(() => "");
+                }
                 const match = text.match(/(\d{2}\/\d{2}\/\d{4})/);
-                return match ? new Date(match[1]) : null;
+                if (!match) return null;
+                // Parse as mm/dd/yyyy (website format) using UTC to avoid timezone shifts
+                const [mm, dd, yyyy] = match[1].split("/");
+                return new Date(Date.UTC(Number(yyyy), Number(mm) - 1, Number(dd)));
               };
+
+              // Find the column index of "Primary DOS" in the results table header FIRST
+              // so we ONLY match that column and not the "Received" or other date columns.
+              let primaryDosColIndex = -1;
+              const headerCells = page.locator("tr.header-row th, thead tr th, tr:first-of-type th");
+              const headerCount = await headerCells.count();
+              for (let h = 0; h < headerCount; h++) {
+                const text = (await headerCells.nth(h).innerText()).trim().toLowerCase();
+                if (text.includes("primary dos") || text.includes("primary date")) {
+                  primaryDosColIndex = h + 1; // CSS nth-child is 1-indexed
+                  break;
+                }
+              }
+              await log(`Row ${i + 1}: Primary DOS column index: ${primaryDosColIndex === -1 ? "not found (falling back to row text match)" : primaryDosColIndex}`);
 
               const allRows = page.locator("tr.line-item");
               const totalRows = await allRows.count();
@@ -338,7 +360,7 @@ export async function POST(req: Request) {
               // Scan rows until we find two with DIFFERENT dates to determine sort order
               let firstSeenDate: Date | null = null;
               for (let r = 0; r < totalRows; r++) {
-                const d = await extractDosFromRow(allRows.nth(r));
+                const d = await extractDosFromRow(allRows.nth(r), primaryDosColIndex);
                 if (!d) continue;
                 if (!firstSeenDate) { firstSeenDate = d; continue; }
                 if (d.getTime() !== firstSeenDate.getTime()) {
@@ -351,8 +373,19 @@ export async function POST(req: Request) {
                 await log(`Row ${i + 1}: Could not detect sort order (all visible rows same date) — early-exit disabled.`);
               }
 
+              // Build a locator that matches tr.line-item rows where the Primary DOS td equals dosFormatted.
+              // Falls back to hasText on whole row if column not found.
+              const getMatchingRows = () => {
+                if (primaryDosColIndex > 0) {
+                  return page.locator("tr.line-item").filter({
+                    has: page.locator(`td:nth-child(${primaryDosColIndex})`, { hasText: new RegExp(`^\\s*${dosFormatted.replace(/\//g, "\\/")}\\s*$`) })
+                  });
+                }
+                return page.locator("tr.line-item", { hasText: dosFormatted });
+              };
+
               while (true) {
-                const matchingRows = page.locator("tr.line-item", { hasText: dosFormatted });
+                const matchingRows = getMatchingRows();
                 const count = await matchingRows.count();
 
                 if (count > 0) {
@@ -364,7 +397,8 @@ export async function POST(req: Request) {
                     const currentLineItem = matchingRows.nth(idx);
                     const summaryText = (await currentLineItem.innerText()).replace(/\s+/g, " ").trim();
                     await currentLineItem.click();
-                    const detailsRow = page.locator(`tr.line-item:has-text("${dosFormatted}") ~ tr.details`).nth(idx);
+                    // Use sibling tr.details after the matched line-item
+                    const detailsRow = currentLineItem.locator("~ tr.details").first();
                     const detailsContent = detailsRow.locator('.details-content');
                     await detailsContent.waitFor({ state: "visible", timeout: 10000 });
                     const headerText = await detailsContent.locator('.details-header').innerText();
@@ -398,7 +432,7 @@ export async function POST(req: Request) {
                 // No match on this page.
                 // Early-exit: only if sort order is known — if first row has passed our target, stop.
                 if (sortDescending !== null) {
-                  const firstRowDos = await extractDosFromRow(page.locator("tr.line-item").first());
+                  const firstRowDos = await extractDosFromRow(page.locator("tr.line-item").first(), primaryDosColIndex);
                   if (firstRowDos) {
                     const targetTime = dosDate.getTime();
                     const firstTime = firstRowDos.getTime();
