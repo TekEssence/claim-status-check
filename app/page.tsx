@@ -132,28 +132,31 @@ export default function Home() {
                   setProgress({ completed: eventData.completed, total: eventData.total });
                 } else if (eventData.type === "row_update") {
                   // --- ExcelJS: style-preserving cell update ---
+                  const BOT_HEADERS = new Set(["BotClaimDetails", "BotClaimStatusCheck", "BotClaimStatusCheckError"]);
                   const headerRow = worksheet.getRow(1);
                   let detailsCol = 0, statusCol = 0, errorCol = 0;
+                  let lastOriginalCol = 1; // rightmost non-bot column (for style cloning)
 
-                  // Find existing bot columns by header name (ExcelJS is 1-indexed)
+                  // Scan header row: find bot cols AND the last original (non-bot) column
                   headerRow.eachCell((cell, colNum) => {
-                    if (cell.value === "BotClaimDetails") detailsCol = colNum;
-                    if (cell.value === "BotClaimStatusCheck") statusCol = colNum;
-                    if (cell.value === "BotClaimStatusCheckError") errorCol = colNum;
+                    const v = String(cell.value ?? "");
+                    if (v === "BotClaimDetails") detailsCol = colNum;
+                    else if (v === "BotClaimStatusCheck") statusCol = colNum;
+                    else if (v === "BotClaimStatusCheckError") errorCol = colNum;
+                    else if (!BOT_HEADERS.has(v)) lastOriginalCol = colNum; // last real column
                   });
 
-                  // Append missing bot headers strictly at the END, cloning style from last existing header
-                  const lastCol = Math.max(worksheet.columnCount, detailsCol, statusCol, errorCol);
-                  let nextCol = lastCol + 1;
+                  // Determine where to add new bot columns (after last bot col or last original col)
+                  const lastBotCol = Math.max(detailsCol, statusCol, errorCol);
+                  let nextCol = (lastBotCol > 0 ? lastBotCol : lastOriginalCol) + 1;
 
                   // Deep-clone a cell's style so it isn't shared by reference
                   // eslint-disable-next-line @typescript-eslint/no-explicit-any
                   const cloneStyle = (style: any): ExcelJS.Style =>
                     JSON.parse(JSON.stringify(style ?? {}));
 
-                  // Get the style reference cell from the last existing header column
-                  const lastHeaderCell = headerRow.getCell(lastCol);
-                  const headerStyle = cloneStyle(lastHeaderCell.style);
+                  // Style reference: ALWAYS the last original column, never a bot column
+                  const headerStyle = cloneStyle(headerRow.getCell(lastOriginalCol).style);
 
                   const addHeader = (col: number, label: string) => {
                     const cell = headerRow.getCell(col);
@@ -169,9 +172,8 @@ export default function Home() {
                   // Update data cells (row index + 2: +1 for header, +1 for 1-based)
                   const dataRow = worksheet.getRow(eventData.index + 2);
 
-                  // Get the style reference from the last existing data cell in this row
-                  const lastDataCell = dataRow.getCell(lastCol);
-                  const dataStyle = cloneStyle(lastDataCell.style);
+                  // Style reference from the same row's last original column — never a bot cell
+                  const dataStyle = cloneStyle(dataRow.getCell(lastOriginalCol).style);
 
                   const setDataCell = (col: number, value: string) => {
                     const cell = dataRow.getCell(col);
