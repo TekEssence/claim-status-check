@@ -30,11 +30,18 @@ function parseDateInput(value: unknown): Date | null {
     return new Date(Date.UTC(parsed.y, parsed.m - 1, parsed.d));
   }
   // Case 3: String date — parse parts manually.
-  // IMPORTANT: Do NOT use new Date(string) — JS assumes mm/dd/yyyy which is wrong
-  // when the Excel sheet stores dates in dd/mm/yyyy format (e.g. "5/2/2026" = Feb 5).
   const dateValue = asText(value);
   if (!dateValue) return null;
 
+  // Case 3a: ISO 8601 string produced by JSON.stringify(Date) e.g. "2026-02-04T18:29:50.000Z"
+  // Parse only the date portion from UTC to avoid timezone shifts.
+  const isoMatch = dateValue.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (isoMatch) {
+    const ts = Date.UTC(Number(isoMatch[1]), Number(isoMatch[2]) - 1, Number(isoMatch[3]));
+    return Number.isNaN(ts) ? null : new Date(ts);
+  }
+
+  // Case 3b: Slash-delimited string (dd/mm/yyyy or mm/dd/yyyy from Excel text cells)
   const parts = dateValue.split("/");
   if (parts.length !== 3) return null;
 
