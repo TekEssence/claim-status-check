@@ -18,19 +18,20 @@ function asText(value: unknown): string {
 }
 
 function parseDateInput(value: unknown): Date | null {
-  // Case 1: Already a JS Date (from SheetJS cellDates:true reading a proper Excel date cell)
+  // Case 1: Already a JS Date (SheetJS cellDates:true). Normalise to UTC midnight
+  // to avoid timezone shifts (e.g. IST midnight = previous day in UTC).
   if (value instanceof Date && !Number.isNaN(value.getTime())) {
-    return value;
+    return new Date(Date.UTC(value.getUTCFullYear(), value.getUTCMonth(), value.getUTCDate()));
   }
   // Case 2: Excel date serial number
   if (typeof value === "number") {
     const parsed = XLSX.SSF.parse_date_code(value);
     if (!parsed) return null;
-    return new Date(parsed.y, parsed.m - 1, parsed.d);
+    return new Date(Date.UTC(parsed.y, parsed.m - 1, parsed.d));
   }
   // Case 3: String date — parse parts manually.
   // IMPORTANT: Do NOT use new Date(string) — JS assumes mm/dd/yyyy which is wrong
-  // when the Excel sheet stores dates as dd/mm/yyyy text (e.g. "5/2/2026" = Feb 5).
+  // when the Excel sheet stores dates in dd/mm/yyyy format (e.g. "5/2/2026" = Feb 5).
   const dateValue = asText(value);
   if (!dateValue) return null;
 
@@ -42,28 +43,26 @@ function parseDateInput(value: unknown): Date | null {
   const year = Number(parts[2].length === 2 ? `20${parts[2]}` : parts[2]);
 
   let month: number, day: number;
-
   if (a > 12) {
-    // a cannot be a month → must be dd/mm/yyyy (e.g. "5/2/2026" where day=5, month=2 ❌ — wait, 5 <= 12)
-    // Actually a > 12 unambiguously means day. e.g. "15/2/2026" → day=15, month=2
+    // a > 12 means it can only be a day → dd/mm/yyyy
     day = a; month = b;
   } else if (b > 12) {
-    // b cannot be a month → must be mm/dd/yyyy (e.g. "2/15/2026" → month=2, day=15)
+    // b > 12 means it can only be a day → mm/dd/yyyy
     month = a; day = b;
   } else {
-    // Both a and b are <= 12 — ambiguous. The user confirmed their Excel uses dd/mm/yyyy.
-    // e.g. "5/2/2026" → day=5, month=2 → Feb 5
+    // Ambiguous — user confirmed Excel uses dd/mm/yyyy
     day = a; month = b;
   }
 
-  const date = new Date(year, month - 1, day);
-  return Number.isNaN(date.getTime()) ? null : date;
+  const ts = Date.UTC(year, month - 1, day);
+  return Number.isNaN(ts) ? null : new Date(ts);
 }
 
 function formatMmDdYyyy(date: Date): string {
-  const m = String(date.getMonth() + 1).padStart(2, "0");
-  const d = String(date.getDate()).padStart(2, "0");
-  const y = String(date.getFullYear());
+  // Use UTC getters to avoid timezone-driven day shifts
+  const m = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const d = String(date.getUTCDate()).padStart(2, "0");
+  const y = String(date.getUTCFullYear());
   return `${m}/${d}/${y}`;
 }
 
@@ -267,9 +266,9 @@ export async function POST(req: Request) {
             }
 
             const startDate = new Date(dosDate);
-            startDate.setDate(dosDate.getDate() - 1);
+            startDate.setUTCDate(dosDate.getUTCDate() - 1);
             const endDate = new Date(dosDate);
-            endDate.setDate(dosDate.getDate() + 1);
+            endDate.setUTCDate(dosDate.getUTCDate() + 1);
 
             log(`Processing Row ${i + 1}: Member ${memberPolicyId}, DOS ${formatMmDdYyyy(dosDate)}`);
 
