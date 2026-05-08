@@ -41,7 +41,7 @@ function parseDateInput(value: unknown): Date | null {
     return Number.isNaN(ts) ? null : new Date(ts);
   }
 
-  // Case 3b: Slash-delimited string (dd/mm/yyyy or mm/dd/yyyy from Excel text cells)
+  // Case 3b: Slash-delimited string (mm/dd/yyyy from Excel — standard US date format)
   const parts = dateValue.split("/");
   if (parts.length !== 3) return null;
 
@@ -51,14 +51,14 @@ function parseDateInput(value: unknown): Date | null {
 
   let month: number, day: number;
   if (a > 12) {
-    // a > 12 means it can only be a day → dd/mm/yyyy
+    // a > 12 — can only be a day → must be dd/mm/yyyy (e.g. "15/2/2026")
     day = a; month = b;
   } else if (b > 12) {
-    // b > 12 means it can only be a day → mm/dd/yyyy
+    // b > 12 — can only be a day → mm/dd/yyyy (e.g. "2/15/2026")
     month = a; day = b;
   } else {
-    // Ambiguous — user confirmed Excel uses dd/mm/yyyy
-    day = a; month = b;
+    // Ambiguous — default to mm/dd/yyyy (US format, matches the website)
+    month = a; day = b;
   }
 
   const ts = Date.UTC(year, month - 1, day);
