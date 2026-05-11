@@ -139,6 +139,13 @@ export async function POST(req: Request) {
         }
 
         const loginUrl = rawUrl.startsWith("http") ? rawUrl : `https://${rawUrl}`;
+        const claimStatusUrl = asText(firstLoginRow["Claim Status URL"] ?? firstLoginRow["claim status url"] ?? firstLoginRow["claimUrl"]);
+        const finalClaimStatusUrl = claimStatusUrl || "https://providers.iehp.org/claims/status";
+
+        if (!claimStatusUrl) {
+          await log("Warning: Claim Status URL not found in Excel. Using default fallback.");
+        }
+
         const claimRows = JSON.parse(claimRowsJson) as GenericRow[];
 
         if (startIndex > 0) {
@@ -281,7 +288,7 @@ export async function POST(req: Request) {
 
             try {
               log(`Row ${i + 1}: Navigating to Claims Status...`);
-              await page.goto("https://providers.iehp.org/claims/status", {
+              await page.goto(finalClaimStatusUrl, {
                 waitUntil: "networkidle",
                 timeout: 60000,
               });
