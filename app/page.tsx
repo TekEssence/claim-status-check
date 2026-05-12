@@ -174,9 +174,9 @@ export default function Home() {
                     if (!text) return [];
                     const blocks = text.split(/(?=Summary: \[)/).filter(Boolean);
                     return blocks.map(block => {
-                      const summaryMatch = block.match(/Summary: \[(.*?)\]/);
-                      const detailsMatch = block.match(/Details: \[(.*?)\]/);
-                      const statusMatch = block.match(/Status Info: \[(.*?)\]/);
+                      const summaryMatch = block.match(/Summary: \[(.*?)\]\s*\|/);
+                      const detailsMatch = block.match(/Details: \[(.*?)\]\s*\|/);
+                      const statusMatch = block.match(/Status Info: \[(.*?)\]\s*$/);
                       const summaryText = summaryMatch ? summaryMatch[1] : "";
                       const detailsText = detailsMatch ? detailsMatch[1] : "";
                       const statusText = statusMatch ? statusMatch[1] : "";
@@ -221,10 +221,24 @@ export default function Home() {
                     });
                     
                     if (existingCol === 0) {
+                      // Skip any columns already occupied by existing headers
+                      while (true) {
+                        let occupied = false;
+                        headerRow.eachCell((cell, colNum) => {
+                          if (colNum === currentNextCol && String(cell.value).trim() !== "") {
+                            occupied = true;
+                          }
+                        });
+                        if (!occupied) break;
+                        currentNextCol++;
+                      }
                       existingCol = currentNextCol++;
                       const cell = headerRow.getCell(existingCol);
                       cell.value = col.label;
                       cell.style = cloneStyle(headerStyle);
+                    } else {
+                      // Skip ahead past this existing column so nextNewCol stays correct
+                      if (currentNextCol <= existingCol) currentNextCol = existingCol + 1;
                     }
                     colMap[col.key] = existingCol;
                   });
