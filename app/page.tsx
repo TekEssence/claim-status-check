@@ -174,8 +174,11 @@ export default function Home() {
                     if (!text) return [];
                     const blocks = text.split(/(?=Summary: \[)/).filter(Boolean);
                     return blocks.map(block => {
-                      const summaryMatch = block.match(/Summary: \[(.*?)\]\s*\|/);
-                      const detailsMatch = block.match(/Details: \[(.*?)\]\s*\|/);
+                      // Use bracket-aware pattern to handle one level of nesting
+                      // e.g. Details: [Check #: [12345]] - must capture the full outer [ ... ]
+                      const BRACKET_ONE_LEVEL = String.raw`(?:[^\[\]]|\[^\[\]])*`;
+                      const summaryMatch = block.match(new RegExp(`Summary: \[(${BRACKET_ONE_LEVEL})\]\s*\|`));
+                      const detailsMatch = block.match(new RegExp(`Details: \[(${BRACKET_ONE_LEVEL})\]\s*\|`));
                       const statusMatch = block.match(/Status Info: \[(.*?)\]\s*$/);
                       const summaryText = summaryMatch ? summaryMatch[1] : "";
                       const detailsText = detailsMatch ? detailsMatch[1] : "";
@@ -247,16 +250,15 @@ export default function Home() {
                   const originalRowIndex = eventData.index + 2;
                   const originalRow = worksheet.getRow(originalRowIndex);
                   
-                  parsedRecords.forEach((record, idx) => {
+                  // Insert rows from last to first so each insert pushes already-processed rows
+                  // further down, not the rows we still need to write to.
+                  [...parsedRecords].reverse().forEach((record, reverseIdx) => {
+                    const idx = parsedRecords.length - 1 - reverseIdx; // original index
                     const targetRowIndex = originalRowIndex + idx;
                     let targetRow = worksheet.getRow(targetRowIndex);
                     
                     if (idx > 0) {
                       worksheet.insertRow(targetRowIndex, originalRow.values);
-                      targetRow = worksheet.getRow(targetRowIndex);
-                      originalRow.eachCell((cell, colNum) => {
-                        targetRow.getCell(colNum).style = cloneStyle(cell.style);
-                      });
                     }
 
                     const dataStyle = cloneStyle(targetRow.getCell(lastOriginalCol).style);
