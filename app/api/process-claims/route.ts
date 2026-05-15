@@ -3,75 +3,22 @@ import path from "node:path";
 import chromium from "@sparticuz/chromium";
 import { chromium as playwright, type BrowserContext, type Page } from "playwright-core";
 import * as XLSX from "xlsx";
+import {
+  asText,
+  exactMmDdYyyyPattern,
+  formatMmDdYyyy,
+  getDosSearchRange,
+  getPrimaryDosColumnIndex,
+  parseDateInput,
+  parseWebsiteMmDdYyyy,
+} from "@/lib/claim-dates";
 
 type GenericRow = Record<string, unknown>;
+type StreamEvent = Record<string, unknown>;
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 300; // 5 minutes on Vercel Pro
-
-function asText(value: unknown): string {
-  if (value === null || value === undefined) {
-    return "";
-  }
-  return String(value).trim();
-}
-
-function parseDateInput(value: unknown): Date | null {
-  // Case 1: Already a JS Date (SheetJS cellDates:true). Normalise to UTC midnight
-  // to avoid timezone shifts (e.g. IST midnight = previous day in UTC).
-  if (value instanceof Date && !Number.isNaN(value.getTime())) {
-    return new Date(Date.UTC(value.getUTCFullYear(), value.getUTCMonth(), value.getUTCDate()));
-  }
-  // Case 2: Excel date serial number
-  if (typeof value === "number") {
-    const parsed = XLSX.SSF.parse_date_code(value);
-    if (!parsed) return null;
-    return new Date(Date.UTC(parsed.y, parsed.m - 1, parsed.d));
-  }
-  // Case 3: String date — parse parts manually.
-  const dateValue = asText(value);
-  if (!dateValue) return null;
-
-  // Case 3a: ISO 8601 string produced by JSON.stringify(Date) e.g. "2026-02-04T18:29:50.000Z"
-  // Parse only the date portion from UTC to avoid timezone shifts.
-  const isoMatch = dateValue.match(/^(\d{4})-(\d{2})-(\d{2})/);
-  if (isoMatch) {
-    const ts = Date.UTC(Number(isoMatch[1]), Number(isoMatch[2]) - 1, Number(isoMatch[3]));
-    return Number.isNaN(ts) ? null : new Date(ts);
-  }
-
-  // Case 3b: Slash-delimited string (mm/dd/yyyy from Excel — standard US date format)
-  const parts = dateValue.split("/");
-  if (parts.length !== 3) return null;
-
-  const a = Number(parts[0]); // could be day or month
-  const b = Number(parts[1]); // could be month or day
-  const year = Number(parts[2].length === 2 ? `20${parts[2]}` : parts[2]);
-
-  let month: number, day: number;
-  if (a > 12) {
-    // a > 12 — can only be a day → must be dd/mm/yyyy (e.g. "15/2/2026")
-    day = a; month = b;
-  } else if (b > 12) {
-    // b > 12 — can only be a day → mm/dd/yyyy (e.g. "2/15/2026")
-    month = a; day = b;
-  } else {
-    // Ambiguous — default to mm/dd/yyyy (US format, matches the website)
-    month = a; day = b;
-  }
-
-  const ts = Date.UTC(year, month - 1, day);
-  return Number.isNaN(ts) ? null : new Date(ts);
-}
-
-function formatMmDdYyyy(date: Date): string {
-  // Use UTC getters to avoid timezone-driven day shifts
-  const m = String(date.getUTCMonth() + 1).padStart(2, "0");
-  const d = String(date.getUTCDate()).padStart(2, "0");
-  const y = String(date.getUTCFullYear());
-  return `${m}/${d}/${y}`;
-}
 
 export async function POST(req: Request) {
   const encoder = new TextEncoder();
@@ -86,7 +33,7 @@ export async function POST(req: Request) {
         }
       }, 1000);
 
-      const sendEvent = async (data: any) => {
+      const sendEvent = async (data: StreamEvent) => {
         try {
           controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
           // Yield to event loop to allow Node.js to flush the socket
@@ -279,10 +226,7 @@ export async function POST(req: Request) {
               continue;
             }
 
-            const startDate = new Date(dosDate);
-            startDate.setUTCDate(dosDate.getUTCDate() - 1);
-            const endDate = new Date(dosDate);
-            endDate.setUTCDate(dosDate.getUTCDate() + 1);
+            const { startDate, endDate } = getDosSearchRange(dosDate);
 
             log(`Processing Row ${i + 1}: Member ${memberPolicyId}, DOS ${formatMmDdYyyy(dosDate)}`);
 
@@ -339,25 +283,18 @@ export async function POST(req: Request) {
                 } else {
                   text = await rowLocator.innerText().catch(() => "");
                 }
-                const match = text.match(/(\d{2}\/\d{2}\/\d{4})/);
-                if (!match) return null;
-                // Parse as mm/dd/yyyy (website format) using UTC to avoid timezone shifts
-                const [mm, dd, yyyy] = match[1].split("/");
-                return new Date(Date.UTC(Number(yyyy), Number(mm) - 1, Number(dd)));
+                return parseWebsiteMmDdYyyy(text);
               };
 
               // Find the column index of "Primary DOS" in the results table header FIRST
               // so we ONLY match that column and not the "Received" or other date columns.
-              let primaryDosColIndex = -1;
               const headerCells = page.locator("tr.header-row th, thead tr th, tr:first-of-type th");
               const headerCount = await headerCells.count();
+              const headerTexts: string[] = [];
               for (let h = 0; h < headerCount; h++) {
-                const text = (await headerCells.nth(h).innerText()).trim().toLowerCase();
-                if (text.includes("primary dos") || text.includes("primary date")) {
-                  primaryDosColIndex = h + 1; // CSS nth-child is 1-indexed
-                  break;
-                }
+                headerTexts.push(await headerCells.nth(h).innerText());
               }
+              const primaryDosColIndex = getPrimaryDosColumnIndex(headerTexts);
               await log(`Row ${i + 1}: Primary DOS column index: ${primaryDosColIndex === -1 ? "not found (falling back to row text match)" : primaryDosColIndex}`);
 
               const allRows = page.locator("tr.line-item");
@@ -385,7 +322,7 @@ export async function POST(req: Request) {
               const getMatchingRows = () => {
                 if (primaryDosColIndex > 0) {
                   return page!.locator("tr.line-item").filter({
-                    has: page!.locator(`td:nth-child(${primaryDosColIndex})`, { hasText: new RegExp(`^\\s*${dosFormatted.replace(/\//g, "\\/")}\\s*$`) })
+                    has: page!.locator(`td:nth-child(${primaryDosColIndex})`, { hasText: exactMmDdYyyyPattern(dosFormatted) })
                   });
                 }
                 return page!.locator("tr.line-item", { hasText: dosFormatted });
@@ -500,7 +437,7 @@ export async function POST(req: Request) {
                 
                 const html = await page.evaluate(() => document.documentElement.outerHTML);
                 await sendEvent({ type: "debug_html", index: i, html: html });
-              } catch (screenshotError) {
+              } catch {
                 await log("Failed to capture row error diagnostics.");
               }
 

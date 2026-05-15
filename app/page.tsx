@@ -3,6 +3,7 @@
 import { FormEvent, useMemo, useState } from "react";
 import * as XLSX from "xlsx";
 import ExcelJS from "exceljs";
+import { applyClaimRowUpdateToWorksheet } from "@/lib/claim-workbook";
 
 export default function Home() {
   const [loginFile, setLoginFile] = useState<File | null>(null);
@@ -90,6 +91,7 @@ export default function Home() {
 
       const totalRows = claimRows.length;
       setStatus(`Starting process for ${totalRows} rows...`);
+      let insertedRowOffset = 0;
 
       const processChunk = async (startIndex: number) => {
         const formData = new FormData();
@@ -131,148 +133,10 @@ export default function Home() {
                   currentCompleted = eventData.completed;
                   setProgress({ completed: eventData.completed, total: eventData.total });
                 } else if (eventData.type === "row_update") {
-                  // --- ExcelJS: style-preserving cell update ---
-                  const BOT_HEADERS = new Set(["BotClaimDetails", "BotClaimStatusCheck", "BotClaimStatusCheckError"]);
-                  const headerRow = worksheet.getRow(1);
-                  let detailsCol = 0, statusCol = 0, errorCol = 0;
-                  let lastOriginalCol = 1; // rightmost non-bot column (for style cloning)
-
-                  // Scan header row: find bot cols AND the last original (non-bot) column
-                  headerRow.eachCell((cell, colNum) => {
-                    const v = String(cell.value ?? "");
-                    if (v === "BotClaimDetails") detailsCol = colNum;
-                    else if (v === "BotClaimStatusCheck") statusCol = colNum;
-                    else if (v === "BotClaimStatusCheckError") errorCol = colNum;
-                    else if (!BOT_HEADERS.has(v)) lastOriginalCol = colNum; // last real column
+                  const result = applyClaimRowUpdateToWorksheet(worksheet, eventData, {
+                    rowOffset: insertedRowOffset,
                   });
-
-                  // Determine where to add new bot columns (after last bot col or last original col)
-                  const lastBotCol = Math.max(detailsCol, statusCol, errorCol);
-                  let nextCol = (lastBotCol > 0 ? lastBotCol : lastOriginalCol) + 1;
-
-                  // Deep-clone a cell's style so it isn't shared by reference
-                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                  const cloneStyle = (style: any): ExcelJS.Style =>
-                    JSON.parse(JSON.stringify(style ?? {}));
-
-                  // Style reference: ALWAYS the last original column, never a bot column
-                  const headerStyle = cloneStyle(headerRow.getCell(lastOriginalCol).style);
-
-                  const addHeader = (col: number, label: string) => {
-                    const cell = headerRow.getCell(col);
-                    cell.value = label;
-                    cell.style = cloneStyle(headerStyle);
-                  };
-
-                  if (detailsCol === 0) { detailsCol = nextCol++; addHeader(detailsCol, "BotClaimDetails"); }
-                  if (statusCol === 0)  { statusCol  = nextCol++; addHeader(statusCol,  "BotClaimStatusCheck"); }
-                  if (errorCol === 0)   { errorCol   = nextCol++; addHeader(errorCol,   "BotClaimStatusCheckError"); }
-                  headerRow.commit();
-
-                  // --- Parsing Logic for Column Splitting ---
-                  const parseBotClaimDetails = (text: string) => {
-                    if (!text) return [];
-                    const blocks = text.split(/(?=Summary: \[)/).filter(Boolean);
-                    return blocks.map(block => {
-                      // Use bracket-aware pattern to handle one level of nesting
-                      // e.g. Details: [Check #: [12345]] - must capture the full outer [ ... ]
-                      const BRACKET_ONE_LEVEL = String.raw`(?:[^\[\]]|\[^\[\]])*`;
-                      const summaryMatch = block.match(new RegExp(`Summary: \[(${BRACKET_ONE_LEVEL})\]\s*\|`));
-                      const detailsMatch = block.match(new RegExp(`Details: \[(${BRACKET_ONE_LEVEL})\]\s*\|`));
-                      const statusMatch = block.match(/Status Info: \[(.*?)\]\s*$/);
-                      const summaryText = summaryMatch ? summaryMatch[1] : "";
-                      const detailsText = detailsMatch ? detailsMatch[1] : "";
-                      const statusText = statusMatch ? statusMatch[1] : "";
-                      const dateMatches = summaryText.match(/\d{2}\/\d{2}\/\d{4}/g) || [];
-                      const amountMatch = summaryText.match(/\$\d+(?:\.\d{2})?/);
-                      const getDetailValue = (label: string) => {
-                        const regex = new RegExp(`${label}\\s*:\\s*([^\\n|]+)`);
-                        const match = detailsText.match(regex);
-                        return match ? match[1].trim() : "";
-                      };
-                      return {
-                        SummaryBlockDOS: dateMatches[0] || "",
-                        SummaryBlockDate: dateMatches[1] || "",
-                        CheckNumber: getDetailValue("Check #"),
-                        ReceivedDate: getDetailValue("Received Date"),
-                        CheckDate: getDetailValue("Check Date"),
-                        CheckAmount: amountMatch ? amountMatch[0] : "",
-                        OtherDetails: statusText
-                      };
-                    });
-                  };
-
-                  const parsedRecords = parseBotClaimDetails(eventData.update.BotClaimDetails || "");
-                  
-                  const TARGET_COLS = [
-                    { label: "SummaryBlockDOS", key: "SummaryBlockDOS" },
-                    { label: "SummaryBlockDate", key: "SummaryBlockDate" },
-                    { label: "Check Number", key: "CheckNumber" },
-                    { label: "Received Date", key: "ReceivedDate" },
-                    { label: "Check Date", key: "CheckDate" },
-                    { label: "Check Amount", key: "CheckAmount" },
-                    { label: "Other related payment details", key: "OtherDetails" },
-                  ];
-
-                  let currentNextCol = nextCol;
-                  const colMap: Record<string, number> = {};
-                  
-                  TARGET_COLS.forEach(col => {
-                    let existingCol = 0;
-                    headerRow.eachCell((cell, colNum) => {
-                      if (String(cell.value) === col.label) existingCol = colNum;
-                    });
-                    
-                    if (existingCol === 0) {
-                      // Skip any columns already occupied by existing headers
-                      while (true) {
-                        let occupied = false;
-                        headerRow.eachCell((cell, colNum) => {
-                          if (colNum === currentNextCol && String(cell.value).trim() !== "") {
-                            occupied = true;
-                          }
-                        });
-                        if (!occupied) break;
-                        currentNextCol++;
-                      }
-                      existingCol = currentNextCol++;
-                      const cell = headerRow.getCell(existingCol);
-                      cell.value = col.label;
-                      cell.style = cloneStyle(headerStyle);
-                    } else {
-                      // Skip ahead past this existing column so nextNewCol stays correct
-                      if (currentNextCol <= existingCol) currentNextCol = existingCol + 1;
-                    }
-                    colMap[col.key] = existingCol;
-                  });
-                  headerRow.commit();
-
-                  const originalRowIndex = eventData.index + 2;
-                  const originalRow = worksheet.getRow(originalRowIndex);
-                  
-                  // Insert rows from last to first so each insert pushes already-processed rows
-                  // further down, not the rows we still need to write to.
-                  [...parsedRecords].reverse().forEach((record, reverseIdx) => {
-                    const idx = parsedRecords.length - 1 - reverseIdx; // original index
-                    const targetRowIndex = originalRowIndex + idx;
-                    let targetRow = worksheet.getRow(targetRowIndex);
-                    
-                    if (idx > 0) {
-                      worksheet.insertRow(targetRowIndex, originalRow.values);
-                    }
-
-                    const dataStyle = cloneStyle(targetRow.getCell(lastOriginalCol).style);
-                    
-                    Object.entries(record).forEach(([key, value]) => {
-                      const colNum = colMap[key];
-                      if (colNum) {
-                        const cell = targetRow.getCell(colNum);
-                        cell.value = value;
-                        cell.style = cloneStyle(dataStyle);
-                      }
-                    });
-                    targetRow.commit();
-                  });
+                  insertedRowOffset += result.insertedRowCount;
 
                   // Write back with full style preservation
                   const updatedBuffer = await excelWb.xlsx.writeBuffer();
@@ -406,6 +270,7 @@ export default function Home() {
                 <h2 className="mb-2 text-sm font-semibold text-red-700">
                   {err.index === -1 ? "Login Error Screenshot" : `Error Screenshot for Row ${err.index + 1}`}
                 </h2>
+                {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img 
                   src={`data:image/jpeg;base64,${err.image}`} 
                   alt="Browser state on error" 
@@ -421,7 +286,6 @@ export default function Home() {
             <h2 className="mb-2 text-sm font-semibold">Live Processing Logs</h2>
             <ul className="max-h-64 list-disc space-y-1 overflow-auto pl-5 text-xs text-slate-700">
               {logs.map((line, idx) => (
-                // eslint-disable-next-line react/no-array-index-key
                 <li key={idx}>{line}</li>
               ))}
             </ul>

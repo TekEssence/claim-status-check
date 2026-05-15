@@ -4,7 +4,8 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "test": "tsx --test tests/**/*.test.ts",
+    "build": "npm test && next build",
     "start": "next start",
     "lint": "eslint"
   },
@@ -26,6 +27,7 @@
     "eslint-config-next": "16.2.4",
     "playwright": "^1.59.1",
     "tailwindcss": "^4",
+    "tsx": "^4.22.0",
     "typescript": "^5"
   }
 }
