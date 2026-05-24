@@ -12,6 +12,7 @@ import {
   parseDateInput,
   parseWebsiteMmDdYyyy,
 } from "@/lib/claim-dates";
+import { getFormattedTimestamp } from "@/lib/claim-workbook";
 
 type GenericRow = Record<string, unknown>;
 type StreamEvent = Record<string, unknown>;
@@ -102,88 +103,95 @@ export async function POST(req: Request) {
         }
         await sendEvent({ type: "progress", completed: startIndex, total: claimRows.length });
 
-        log("Launching browser environment...");
-        const isVercel = process.env.VERCEL === "1" || !!process.env.VERCEL_ENV;
-        const USE_CHROME_PROFILE = false;
-
         let browser;
         let context: BrowserContext | undefined;
         let page: Page | undefined;
+        let isBrowserLaunched = false;
 
         try {
-          if (isVercel) {
-            log("Attempting @sparticuz/chromium browser launch for Vercel.");
-            browser = await playwright.launch({
-              args: chromium.args,
-              executablePath: await chromium.executablePath(),
-              headless: true,
-            });
-            context = await browser.newContext({
-              viewport: { width: 1280, height: 800 },
-              userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            });
-          } else {
-            log("Attempting local Chromium launch.");
-            if (USE_CHROME_PROFILE) {
-              const profilePath = path.join(os.homedir(), "Library/Application Support/Google/Chrome");
-              try {
-                log(`Attempting persistent Chrome profile launch: ${profilePath}`);
-                context = await playwright.launchPersistentContext(profilePath, {
-                  channel: "chrome",
-                  headless: false,
-                  viewport: null,
-                });
-                browser = context.browser();
-              } catch (e) {
-                log(`Persistent profile launch failed, falling back: ${(e as Error).message}`);
+          const launchBrowserIfNeeded = async () => {
+            if (isBrowserLaunched) return;
+
+            log("Launching browser environment...");
+            const isVercel = process.env.VERCEL === "1" || !!process.env.VERCEL_ENV;
+            const USE_CHROME_PROFILE = false;
+
+            if (isVercel) {
+              log("Attempting @sparticuz/chromium browser launch for Vercel.");
+              browser = await playwright.launch({
+                args: chromium.args,
+                executablePath: await chromium.executablePath(),
+                headless: true,
+              });
+              context = await browser.newContext({
+                viewport: { width: 1280, height: 800 },
+                userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+              });
+            } else {
+              log("Attempting local Chromium launch.");
+              if (USE_CHROME_PROFILE) {
+                const profilePath = path.join(os.homedir(), "Library/Application Support/Google/Chrome");
+                try {
+                  log(`Attempting persistent Chrome profile launch: ${profilePath}`);
+                  context = await playwright.launchPersistentContext(profilePath, {
+                    channel: "chrome",
+                    headless: false,
+                    viewport: null,
+                  });
+                  browser = context.browser();
+                } catch (e) {
+                  log(`Persistent profile launch failed, falling back: ${(e as Error).message}`);
+                  browser = await playwright.launch({ headless: true });
+                  context = await browser.newContext();
+                }
+              } else {
                 browser = await playwright.launch({ headless: true });
                 context = await browser.newContext();
               }
-            } else {
-              browser = await playwright.launch({ headless: true });
-              context = await browser.newContext();
             }
-          }
 
-          if (!browser || !context) {
-            throw new Error("Failed to initialize browser instance.");
-          }
+            if (!browser || !context) {
+              throw new Error("Failed to initialize browser instance.");
+            }
 
-          page = await context.newPage();
-          page.setDefaultTimeout(30000);
+            page = await context.newPage();
+            page.setDefaultTimeout(30000);
 
-          log(`Navigating to login URL: ${loginUrl}`);
-          await page.goto(loginUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
-          await page.waitForLoadState("networkidle", { timeout: 30000 });
+            log(`Navigating to login URL: ${loginUrl}`);
+            await page.goto(loginUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
+            await page.waitForLoadState("networkidle", { timeout: 30000 });
 
-          const loggedInIndicator = page.locator("a[href*='logout'], button[title*='logout'], text='Log Out', text='Sign Out', .user-profile").first();
-          
-          let isLoggedIn = false;
-          try {
-            await loggedInIndicator.waitFor({ state: "visible", timeout: 5000 });
-            isLoggedIn = true;
-            log("Already logged in (session persisted).");
-          } catch {
-            log("Not logged in. Proceeding with authentication...");
-          }
-
-          if (!isLoggedIn) {
-            await page.locator("input[type='email']:visible, input[name*='user']:visible, input[id*='user']:visible").first().fill(userName);
-            await page.locator("input[type='password']:visible, input[name*='pass']:visible, input[id*='pass']:visible").first().fill(password);
+            const loggedInIndicator = page.locator("a[href*='logout'], button[title*='logout'], text='Log Out', text='Sign Out', .user-profile").first();
             
-            const submitButton = page.locator("button[type='submit']:visible, input[type='submit']:visible, button:has-text('Sign In'):visible, button:has-text('Log In'):visible").first();
-            await submitButton.click();
-            
-            log("Waiting for navigation after login...");
-            await page.waitForNavigation({ waitUntil: "networkidle", timeout: 15000 }).catch(() => log("waitForNavigation timeout, continuing..."));
-            
+            let isLoggedIn = false;
             try {
               await loggedInIndicator.waitFor({ state: "visible", timeout: 5000 });
-              log("Login verification successful (indicator found).");
+              isLoggedIn = true;
+              log("Already logged in (session persisted).");
             } catch {
-              log("Warning: Could not find strict logout indicator. Proceeding assuming login was successful...");
+              log("Not logged in. Proceeding with authentication...");
             }
-          }
+
+            if (!isLoggedIn) {
+              await page.locator("input[type='email']:visible, input[name*='user']:visible, input[id*='user']:visible").first().fill(userName);
+              await page.locator("input[type='password']:visible, input[name*='pass']:visible, input[id*='pass']:visible").first().fill(password);
+              
+              const submitButton = page.locator("button[type='submit']:visible, input[type='submit']:visible, button:has-text('Sign In'):visible, button:has-text('Log In'):visible").first();
+              await submitButton.click();
+              
+              log("Waiting for navigation after login...");
+              await page.waitForNavigation({ waitUntil: "networkidle", timeout: 15000 }).catch(() => log("waitForNavigation timeout, continuing..."));
+              
+              try {
+                await loggedInIndicator.waitFor({ state: "visible", timeout: 5000 });
+                log("Login verification successful (indicator found).");
+              } catch {
+                log("Warning: Could not find strict logout indicator. Proceeding assuming login was successful...");
+              }
+            }
+
+            isBrowserLaunched = true;
+          };
 
           const processStartTime = Date.now();
           const MAX_EXECUTION_TIME_MS = 4 * 60 * 1000; // 4 minutes
@@ -198,6 +206,25 @@ export async function POST(req: Request) {
             }
 
             const row = claimRows[i];
+
+            // Check if already successfully processed in a previous run (pre-automation check)
+            const existingStatus = asText(row["BotClaimStatusCheck"] ?? row["botClaimStatusCheck"] ?? row["Bot Claim Status Check"]);
+            const existingUpdateTime = row["BotUpdateTime"] ?? row["botUpdateTime"] ?? row["Bot Update Time"];
+
+            if (existingUpdateTime && existingStatus === "Success") {
+              await log(`Row ${i + 1}: Already successfully processed. Skipping automation, updating BotUpdateTime.`);
+              sendEvent({
+                type: "row_update",
+                index: i,
+                update: {
+                  BotClaimStatusCheck: "Success",
+                  BotUpdateTime: getFormattedTimestamp(),
+                }
+              });
+              sendEvent({ type: "progress", completed: i + 1, total: claimRows.length });
+              continue;
+            }
+
             const memberPolicyId = asText(row["Member Policy ID"] ?? row["member policy id"] ?? row["Member ID"]);
             const dosValue = row["Date Of Service"] ?? row["DOS"] ?? row["date of service"];
             
@@ -227,6 +254,9 @@ export async function POST(req: Request) {
             }
 
             const { startDate, endDate } = getDosSearchRange(dosDate);
+
+            // Lazily launch/login browser environment before running Playwright actions
+            await launchBrowserIfNeeded();
 
             log(`Processing Row ${i + 1}: Member ${memberPolicyId}, DOS ${formatMmDdYyyy(dosDate)}`);
 
