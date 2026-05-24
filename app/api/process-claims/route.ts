@@ -12,6 +12,7 @@ import {
   parseDateInput,
   parseWebsiteMmDdYyyy,
 } from "@/lib/claim-dates";
+import { getFormattedTimestamp } from "@/lib/claim-workbook";
 
 type GenericRow = Record<string, unknown>;
 type StreamEvent = Record<string, unknown>;
@@ -198,6 +199,26 @@ export async function POST(req: Request) {
             }
 
             const row = claimRows[i];
+
+            // If the row was already successfully processed in a previous run, skip it
+            // but still update the BotUpdateTime to the current time of this new run
+            const existingStatus = asText(row["BotClaimStatusCheck"] ?? row["botClaimStatusCheck"] ?? row["Bot Claim Status Check"]);
+            const existingUpdateTime = row["BotUpdateTime"] ?? row["botUpdateTime"] ?? row["Bot Update Time"];
+
+            if (existingUpdateTime && existingStatus === "Success") {
+              await log(`Row ${i + 1}: Already successfully processed. Skipping automation, updating BotUpdateTime.`);
+              sendEvent({
+                type: "row_update",
+                index: i,
+                update: {
+                  BotClaimStatusCheck: "Success",
+                  BotUpdateTime: getFormattedTimestamp(),
+                }
+              });
+              sendEvent({ type: "progress", completed: i + 1, total: claimRows.length });
+              continue;
+            }
+
             const memberPolicyId = asText(row["Member Policy ID"] ?? row["member policy id"] ?? row["Member ID"]);
             const dosValue = row["Date Of Service"] ?? row["DOS"] ?? row["date of service"];
             
