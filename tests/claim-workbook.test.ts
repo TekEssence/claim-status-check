@@ -70,8 +70,8 @@ test("writes bot status and split detail columns without overwriting existing co
   assert.equal(worksheet.getRow(3).getCell(headers["BotClaimStatusCheck"]).value, "Success");
   assert.equal(worksheet.getRow(2).getCell(headers["SummaryBlockDOS"]).value, "02/05/2026");
   assert.equal(worksheet.getRow(3).getCell(headers["Check Number"]).value, "[222]");
-  assert.equal(worksheet.getRow(2).getCell(headers["Check Amount"]).value, "$10.00");
-  assert.equal(worksheet.getRow(3).getCell(headers["Check Amount"]).value, "$20.00");
+  assert.equal(worksheet.getRow(2).getCell(headers["Check Amount"]).value, 10);
+  assert.equal(worksheet.getRow(3).getCell(headers["Check Amount"]).value, 20);
   assert.equal(worksheet.getRow(2).getCell(headers["Manual Review"]).value, "manual-a");
   assert.equal(worksheet.getRow(3).getCell(headers["Manual Review"]).value, "manual-a");
   assert.equal(worksheet.getRow(4).getCell(headers["Member Policy ID"]).value, "member-b");

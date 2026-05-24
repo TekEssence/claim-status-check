@@ -262,13 +262,28 @@ export function applyClaimRowUpdateToWorksheet(
       : worksheet.getRow(targetRowIndex);
     
     if (idx > 0) {
-      originalRow.eachCell({ includeEmpty: true }, (cell, colNum) => {
+      if (originalRow.height !== undefined) {
+        targetRow.height = originalRow.height;
+      }
+      if (originalRow.style) {
+        targetRow.style = cloneStyle(originalRow.style);
+      }
+      const maxCol = Math.max(worksheet.columnCount, originalRow.cellCount || 0);
+      for (let colNum = 1; colNum <= maxCol; colNum++) {
+        const cell = originalRow.getCell(colNum);
         const targetCell = targetRow.getCell(colNum);
         targetCell.style = cloneStyle(cell.style);
-      });
+      }
     }
 
     const dataStyle = cloneStyle(targetRow.getCell(columns.lastOriginalCol).style);
+    delete dataStyle.numFmt; // Prevent text columns from inheriting date/numeric formats of the last original column
+
+    const dateStyle = cloneStyle(dataStyle);
+    dateStyle.numFmt = "mm-dd-yy";
+
+    const currencyStyle = cloneStyle(dataStyle);
+    currencyStyle.numFmt = "$#,##0.00";
 
     const setDataCell = (col: number, value: string | undefined) => {
       if (value === undefined) return;
@@ -287,8 +302,26 @@ export function applyClaimRowUpdateToWorksheet(
         const colNum = colMap[key as keyof ParsedClaimDetailRecord];
         if (colNum) {
           const cell = targetRow.getCell(colNum);
-          cell.value = value;
-          cell.style = cloneStyle(dataStyle);
+          
+          if (["SummaryBlockDOS", "SummaryBlockDate", "ReceivedDate", "CheckDate"].includes(key)) {
+            cell.value = value;
+            cell.style = cloneStyle(dateStyle);
+          } else if (key === "CheckAmount") {
+            if (typeof value === "string") {
+              const numVal = parseFloat(value.replace(/[^0-9.-]/g, ""));
+              if (!isNaN(numVal)) {
+                cell.value = numVal;
+              } else {
+                cell.value = value;
+              }
+            } else {
+              cell.value = value;
+            }
+            cell.style = cloneStyle(currencyStyle);
+          } else {
+            cell.value = value;
+            cell.style = cloneStyle(dataStyle);
+          }
         }
       });
     }
