@@ -265,8 +265,10 @@ export function applyClaimRowUpdateToWorksheet(
       if (originalRow.height !== undefined) {
         targetRow.height = originalRow.height;
       }
-      if (originalRow.style) {
-        targetRow.style = cloneStyle(originalRow.style);
+      const origRowAny = originalRow as any;
+      const targetRowAny = targetRow as any;
+      if (origRowAny.style) {
+        targetRowAny.style = cloneStyle(origRowAny.style);
       }
       const maxCol = Math.max(worksheet.columnCount, originalRow.cellCount || 0);
       for (let colNum = 1; colNum <= maxCol; colNum++) {
@@ -277,7 +279,7 @@ export function applyClaimRowUpdateToWorksheet(
     }
 
     const dataStyle = cloneStyle(targetRow.getCell(columns.lastOriginalCol).style);
-    delete dataStyle.numFmt; // Prevent text columns from inheriting date/numeric formats of the last original column
+    delete (dataStyle as any).numFmt; // Prevent text columns from inheriting date/numeric formats of the last original column
 
     const dateStyle = cloneStyle(dataStyle);
     dateStyle.numFmt = "mm-dd-yy";
