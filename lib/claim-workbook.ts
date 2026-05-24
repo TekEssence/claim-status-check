@@ -29,7 +29,19 @@ export type ParsedClaimDetailRecord = {
   OtherDetails: string;
 };
 
-const BOT_HEADERS = new Set(["BotClaimDetails", "BotClaimStatusCheck", "BotClaimStatusCheckError"]);
+const BOT_HEADERS = new Set([
+  "BotClaimDetails",
+  "BotClaimStatusCheck",
+  "BotClaimStatusCheckError",
+  "BotUpdateTime",
+  "SummaryBlockDOS",
+  "SummaryBlockDate",
+  "Check Number",
+  "Received Date",
+  "Check Date",
+  "Check Amount",
+  "Other related payment details",
+]);
 
 const TARGET_COLS: Array<{ label: string; key: keyof ParsedClaimDetailRecord }> = [
   { label: "SummaryBlockDOS", key: "SummaryBlockDOS" },
@@ -42,7 +54,27 @@ const TARGET_COLS: Array<{ label: string; key: keyof ParsedClaimDetailRecord }> 
 ];
 
 function cloneStyle(style: Partial<ExcelJS.Style> | undefined): ExcelJS.Style {
-  return JSON.parse(JSON.stringify(style ?? {}));
+  if (!style) return {} as ExcelJS.Style;
+  const cloned: Partial<ExcelJS.Style> = {};
+  if (style.numFmt !== undefined) cloned.numFmt = style.numFmt;
+  if (style.font) cloned.font = JSON.parse(JSON.stringify(style.font));
+  if (style.fill) cloned.fill = JSON.parse(JSON.stringify(style.fill));
+  if (style.border) cloned.border = JSON.parse(JSON.stringify(style.border));
+  if (style.alignment) cloned.alignment = JSON.parse(JSON.stringify(style.alignment));
+  if (style.protection) cloned.protection = JSON.parse(JSON.stringify(style.protection));
+  return cloned as ExcelJS.Style;
+}
+
+function getFormattedTimestamp(): string {
+  const now = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const month = pad(now.getMonth() + 1);
+  const day = pad(now.getDate());
+  const year = now.getFullYear();
+  const hours = pad(now.getHours());
+  const minutes = pad(now.getMinutes());
+  const seconds = pad(now.getSeconds());
+  return `${month}/${day}/${year} ${hours}:${minutes}:${seconds}`;
 }
 
 function getBracketedSection(block: string, label: string): string {
@@ -84,7 +116,11 @@ export function parseBotClaimDetails(text: string): ParsedClaimDetailRecord[] {
     const dateMatches = summaryText.match(/\d{2}\/\d{2}\/\d{4}/g) || [];
     const amountMatch = summaryText.match(/\$\d+(?:,\d{3})*(?:\.\d{2})?/);
     const getDetailValue = (label: string) => {
-      const regex = new RegExp(`${label}\\s*:\\s*([^\\n|]+)`);
+      const escapedLabel = label.replace(/[-\/\\^$*+?.()|[\]{}]/g, "\\$&");
+      const regex = new RegExp(
+        `${escapedLabel}\\s*:\\s*([^|\\n]+?)(?=\\s*(?:Check\\s*#|Received\\s*Date|Check\\s*Date|Patient\\s*Name|Claim\\s*#|Status|Summary|Details|Status\\s*Info)\\s*:|$)`,
+        "i"
+      );
       const match = detailsText.match(regex);
       return match ? match[1].trim() : "";
     };
@@ -105,6 +141,7 @@ function findColumns(headerRow: ExcelJS.Row) {
   let detailsCol = 0;
   let statusCol = 0;
   let errorCol = 0;
+  let updateTimeCol = 0;
   let lastOriginalCol = 1;
 
   headerRow.eachCell((cell, colNum) => {
@@ -112,10 +149,11 @@ function findColumns(headerRow: ExcelJS.Row) {
     if (v === "BotClaimDetails") detailsCol = colNum;
     else if (v === "BotClaimStatusCheck") statusCol = colNum;
     else if (v === "BotClaimStatusCheckError") errorCol = colNum;
+    else if (v === "BotUpdateTime") updateTimeCol = colNum;
     else if (!BOT_HEADERS.has(v)) lastOriginalCol = colNum;
   });
 
-  return { detailsCol, statusCol, errorCol, lastOriginalCol };
+  return { detailsCol, statusCol, errorCol, updateTimeCol, lastOriginalCol };
 }
 
 function addHeader(headerRow: ExcelJS.Row, col: number, label: string, headerStyle: ExcelJS.Style) {
@@ -132,20 +170,44 @@ export function applyClaimRowUpdateToWorksheet(
   const headerRow = worksheet.getRow(1);
   const columns = findColumns(headerRow);
   const headerStyle = cloneStyle(headerRow.getCell(columns.lastOriginalCol).style);
-  const lastBotCol = Math.max(columns.detailsCol, columns.statusCol, columns.errorCol);
+  const lastBotCol = Math.max(
+    columns.detailsCol,
+    columns.statusCol,
+    columns.errorCol,
+    columns.updateTimeCol
+  );
   let nextCol = (lastBotCol > 0 ? lastBotCol : columns.lastOriginalCol) + 1;
 
+  const getNextAvailableCol = (start: number): number => {
+    let col = start;
+    while (true) {
+      const cellValue = String(headerRow.getCell(col).value ?? "").trim();
+      if (cellValue === "") {
+        return col;
+      }
+      col++;
+    }
+  };
+
   if (columns.detailsCol === 0) {
+    nextCol = getNextAvailableCol(nextCol);
     columns.detailsCol = nextCol++;
     addHeader(headerRow, columns.detailsCol, "BotClaimDetails", headerStyle);
   }
   if (columns.statusCol === 0) {
+    nextCol = getNextAvailableCol(nextCol);
     columns.statusCol = nextCol++;
     addHeader(headerRow, columns.statusCol, "BotClaimStatusCheck", headerStyle);
   }
   if (columns.errorCol === 0) {
+    nextCol = getNextAvailableCol(nextCol);
     columns.errorCol = nextCol++;
     addHeader(headerRow, columns.errorCol, "BotClaimStatusCheckError", headerStyle);
+  }
+  if (columns.updateTimeCol === 0) {
+    nextCol = getNextAvailableCol(nextCol);
+    columns.updateTimeCol = nextCol++;
+    addHeader(headerRow, columns.updateTimeCol, "BotUpdateTime", headerStyle);
   }
   headerRow.commit();
 
@@ -198,6 +260,14 @@ export function applyClaimRowUpdateToWorksheet(
     const targetRow = idx > 0
       ? worksheet.insertRow(targetRowIndex, originalRow.values)
       : worksheet.getRow(targetRowIndex);
+    
+    if (idx > 0) {
+      originalRow.eachCell({ includeEmpty: true }, (cell, colNum) => {
+        const targetCell = targetRow.getCell(colNum);
+        targetCell.style = cloneStyle(cell.style);
+      });
+    }
+
     const dataStyle = cloneStyle(targetRow.getCell(columns.lastOriginalCol).style);
 
     const setDataCell = (col: number, value: string | undefined) => {
@@ -210,6 +280,7 @@ export function applyClaimRowUpdateToWorksheet(
     setDataCell(columns.detailsCol, eventData.update.BotClaimDetails);
     setDataCell(columns.statusCol, eventData.update.BotClaimStatusCheck);
     setDataCell(columns.errorCol, eventData.update.BotClaimStatusCheckError);
+    setDataCell(columns.updateTimeCol, getFormattedTimestamp());
 
     if (record) {
       Object.entries(record).forEach(([key, value]) => {
