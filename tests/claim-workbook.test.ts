@@ -253,21 +253,3 @@ test("preserves styles on new columns and inserted rows cell-by-cell", () => {
   assert.equal(row2.getCell(headers["Check Number"]).style.fill?.fgColor?.argb, "FFFFE0E0");
   assert.equal(row3.getCell(headers["Check Number"]).style.fill?.fgColor?.argb, "FFFFE0E0");
 });
-
-test("uses custom BotUpdateTime if passed inside update object", () => {
-  const workbook = new ExcelJS.Workbook();
-  const worksheet = workbook.addWorksheet("Claims");
-  worksheet.addRow(["Member Policy ID", "Date Of Service"]);
-  worksheet.addRow(["member-a", "02/05/2026"]);
-
-  applyClaimRowUpdateToWorksheet(worksheet, {
-    index: 0,
-    update: {
-      BotClaimStatusCheck: "Success",
-      BotUpdateTime: "05/24/2026 12:00:00",
-    },
-  });
-
-  const headers = headerMap(worksheet);
-  assert.equal(worksheet.getRow(2).getCell(headers["BotUpdateTime"]).value, "05/24/2026 12:00:00");
-});

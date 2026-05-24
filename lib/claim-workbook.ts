@@ -4,7 +4,6 @@ type ClaimUpdate = {
   BotClaimDetails?: string;
   BotClaimStatusCheck?: string;
   BotClaimStatusCheckError?: string;
-  BotUpdateTime?: string;
 };
 
 export type ClaimRowUpdateEvent = {
@@ -72,7 +71,7 @@ function cloneStyle(style: Partial<ExcelJS.Style> | undefined): ExcelJS.Style {
   return cloned as ExcelJS.Style;
 }
 
-export function getFormattedTimestamp(): string {
+function getFormattedTimestamp(): string {
   const now = new Date();
   const pad = (n: number) => String(n).padStart(2, "0");
   const month = pad(now.getMonth() + 1);
@@ -311,7 +310,7 @@ export function applyClaimRowUpdateToWorksheet(
     setDataCell(columns.detailsCol, eventData.update.BotClaimDetails);
     setDataCell(columns.statusCol, eventData.update.BotClaimStatusCheck);
     setDataCell(columns.errorCol, eventData.update.BotClaimStatusCheckError);
-    setDataCell(columns.updateTimeCol, eventData.update.BotUpdateTime || getFormattedTimestamp());
+    setDataCell(columns.updateTimeCol, getFormattedTimestamp());
 
     if (record) {
       Object.entries(record).forEach(([key, value]) => {
