@@ -11,12 +11,16 @@ function headerMap(worksheet: ExcelJS.Worksheet) {
   return headers;
 }
 
-function detailsText(records: Array<{ dos: string; received: string; check: string; amount: string }>) {
-  return records.map((record) =>
-    `Summary: [${record.dos} ${record.received} ${record.amount}] | Details: [Check #: [${record.check}]
-Received Date: ${record.received}
-Check Date: ${record.received}] | Status Info: [Paid in full]`
-  ).join(" | ");
+function detailsText(
+  records: Array<{ dos: string; received: string; check: string; amount: string; cin?: string; plan?: string }>
+) {
+  return records.map((record) => {
+    let details = `Check #: [${record.check}]\nReceived Date: ${record.received}\nCheck Date: ${record.received}`;
+    if (record.cin) details += `\nCIN: ${record.cin}`;
+    if (record.plan) details += `\nPlan Type: ${record.plan}`;
+    
+    return `Summary: [${record.dos} ${record.received} ${record.amount}] | Details: [${details}] | Status Info: [Paid in full]`;
+  }).join(" | ");
 }
 
 test("parses detail blocks with nested bracket values", () => {
@@ -32,7 +36,50 @@ test("parses detail blocks with nested bracket values", () => {
     CheckDate: "02/06/2026",
     CheckAmount: "$42.50",
     OtherDetails: "Paid in full",
+    BotCIN: "",
+    BotPlanType: "",
   });
+});
+
+test("parses CIN and Plan Type correctly", () => {
+  const [record] = parseBotClaimDetails(detailsText([
+    { dos: "02/05/2026", received: "02/06/2026", check: "12345", amount: "$42.50", cin: "98765432B", plan: "Medi-Cal" },
+  ]));
+
+  assert.equal(record.BotCIN, "98765432B");
+  assert.equal(record.BotPlanType, "Medi-Cal");
+});
+
+test("writes Bot CIN and Bot Plan Type columns correctly", () => {
+  const workbook = new ExcelJS.Workbook();
+  const worksheet = workbook.addWorksheet("Claims");
+  worksheet.addRow(["Member Policy ID", "Date Of Service"]);
+  worksheet.addRow(["member-a", "02/05/2026"]);
+
+  applyClaimRowUpdateToWorksheet(worksheet, {
+    index: 0,
+    update: {
+      BotClaimDetails: detailsText([
+        { dos: "02/05/2026", received: "02/06/2026", check: "111", amount: "$10.00", cin: "12345678A", plan: "IEHP Medi-Cal" },
+      ]),
+      BotClaimStatusCheck: "Success",
+      BotClaimStatusCheckError: "",
+    },
+  });
+
+  const headers = headerMap(worksheet);
+  assert.ok(headers["Bot CIN"]);
+  assert.ok(headers["Bot Plan Type"]);
+
+  // Verify the exact column ordering requested:
+  // - Bot CIN should be after Check Number
+  // - Bot Plan Type should be after Check Date
+  assert.equal(headers["Bot CIN"], headers["Check Number"] + 1);
+  assert.equal(headers["Bot Plan Type"], headers["Check Date"] + 1);
+
+  const dataRow = worksheet.getRow(2);
+  assert.equal(dataRow.getCell(headers["Bot CIN"]).value, "12345678A");
+  assert.equal(dataRow.getCell(headers["Bot Plan Type"]).value, "IEHP Medi-Cal");
 });
 
 test("writes bot status and split detail columns without overwriting existing columns", () => {
@@ -156,6 +203,8 @@ test("parses space-separated detail blocks correctly (regex lookahead check)", (
     CheckDate: "02/06/2026",
     CheckAmount: "$42.50",
     OtherDetails: "Paid in full",
+    BotCIN: "",
+    BotPlanType: "",
   });
 });
 

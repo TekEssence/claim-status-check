@@ -27,6 +27,8 @@ export type ParsedClaimDetailRecord = {
   CheckDate: string;
   CheckAmount: string;
   OtherDetails: string;
+  BotCIN: string;
+  BotPlanType: string;
 };
 
 const BOT_HEADERS = new Set([
@@ -41,14 +43,18 @@ const BOT_HEADERS = new Set([
   "Check Date",
   "Check Amount",
   "Other related payment details",
+  "Bot CIN",
+  "Bot Plan Type",
 ]);
 
 const TARGET_COLS: Array<{ label: string; key: keyof ParsedClaimDetailRecord }> = [
   { label: "SummaryBlockDOS", key: "SummaryBlockDOS" },
   { label: "SummaryBlockDate", key: "SummaryBlockDate" },
   { label: "Check Number", key: "CheckNumber" },
+  { label: "Bot CIN", key: "BotCIN" },
   { label: "Received Date", key: "ReceivedDate" },
   { label: "Check Date", key: "CheckDate" },
+  { label: "Bot Plan Type", key: "BotPlanType" },
   { label: "Check Amount", key: "CheckAmount" },
   { label: "Other related payment details", key: "OtherDetails" },
 ];
@@ -118,12 +124,15 @@ export function parseBotClaimDetails(text: string): ParsedClaimDetailRecord[] {
     const getDetailValue = (label: string) => {
       const escapedLabel = label.replace(/[-\/\\^$*+?.()|[\]{}]/g, "\\$&");
       const regex = new RegExp(
-        `${escapedLabel}\\s*:\\s*([^|\\n]+?)(?=\\s*(?:Check\\s*#|Received\\s*Date|Check\\s*Date|Patient\\s*Name|Claim\\s*#|Status|Summary|Details|Status\\s*Info)\\s*:|$)`,
+        `${escapedLabel}\\s*:\\s*([^|\\n]+?)(?=\\s*(?:Check\\s*#|Received\\s*Date|Check\\s*Date|Patient\\s*Name|Claim\\s*#|Status|Summary|Details|Status\\s*Info|CIN|Plan\\s*Type)\\s*:|$)`,
         "i"
       );
       const match = detailsText.match(regex);
       return match ? match[1].trim() : "";
     };
+
+    const botCin = getDetailValue("CIN");
+    const botPlanType = getDetailValue("Plan Type");
 
     return {
       SummaryBlockDOS: dateMatches[0] || "",
@@ -133,6 +142,8 @@ export function parseBotClaimDetails(text: string): ParsedClaimDetailRecord[] {
       CheckDate: getDetailValue("Check Date"),
       CheckAmount: amountMatch ? amountMatch[0] : "",
       OtherDetails: statusText,
+      BotCIN: botCin,
+      BotPlanType: botPlanType,
     };
   });
 }
@@ -219,6 +230,8 @@ export function applyClaimRowUpdateToWorksheet(
     CheckDate: 0,
     CheckAmount: 0,
     OtherDetails: 0,
+    BotCIN: 0,
+    BotPlanType: 0,
   };
 
   let currentNextCol = nextCol;
