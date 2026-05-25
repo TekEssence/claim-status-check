@@ -262,19 +262,62 @@ export function applyClaimRowUpdateToWorksheet(
   });
   headerRow.commit();
 
+  const isDuplicateRow = (row1: ExcelJS.Row, row2: ExcelJS.Row): boolean => {
+    if (row2.number > worksheet.actualRowCount) return false;
+    const maxCol = Math.max(row1.cellCount || 0, row2.cellCount || 0);
+    for (let colNum = 1; colNum <= maxCol; colNum++) {
+      const headerValue = String(headerRow.getCell(colNum).value ?? "");
+      if (!BOT_HEADERS.has(headerValue)) {
+        const val1 = String(row1.getCell(colNum).value ?? "").trim();
+        const val2 = String(row2.getCell(colNum).value ?? "").trim();
+        if (val1 !== val2) {
+          return false;
+        }
+      }
+    }
+    return true;
+  };
+
   const parsedRecords = parseBotClaimDetails(eventData.update.BotClaimDetails || "");
   const recordsToWrite = parsedRecords.length > 0 ? parsedRecords : [null];
   const originalRowIndex = eventData.index + 2 + (options.rowOffset ?? 0);
   const originalRow = worksheet.getRow(originalRowIndex);
 
-  [...recordsToWrite].reverse().forEach((record, reverseIdx) => {
-    const idx = recordsToWrite.length - 1 - reverseIdx;
+  // Count existing duplicate rows directly below originalRowIndex
+  let existingDuplicateCount = 0;
+  while (true) {
+    const nextRow = worksheet.getRow(originalRowIndex + existingDuplicateCount + 1);
+    if (isDuplicateRow(originalRow, nextRow)) {
+      existingDuplicateCount++;
+    } else {
+      break;
+    }
+  }
+
+  const existingTotalRows = existingDuplicateCount + 1;
+  const neededTotalRows = recordsToWrite.length;
+  let insertedRowCount = 0;
+
+  if (neededTotalRows < existingTotalRows) {
+    const extraRows = existingTotalRows - neededTotalRows;
+    for (let d = 0; d < extraRows; d++) {
+      worksheet.spliceRows(originalRowIndex + neededTotalRows, 1);
+    }
+    insertedRowCount = -extraRows;
+  } else if (neededTotalRows > existingTotalRows) {
+    const newRowsCount = neededTotalRows - existingTotalRows;
+    for (let k = 0; k < newRowsCount; k++) {
+      const insertAt = originalRowIndex + existingTotalRows + k;
+      worksheet.insertRow(insertAt, originalRow.values);
+    }
+    insertedRowCount = newRowsCount;
+  }
+
+  recordsToWrite.forEach((record, idx) => {
     const targetRowIndex = originalRowIndex + idx;
-    const targetRow = idx > 0
-      ? worksheet.insertRow(targetRowIndex, originalRow.values)
-      : worksheet.getRow(targetRowIndex);
+    const targetRow = worksheet.getRow(targetRowIndex);
     
-    if (idx > 0) {
+    if (idx > existingDuplicateCount) {
       if (originalRow.height !== undefined) {
         targetRow.height = originalRow.height;
       }

@@ -253,3 +253,60 @@ test("preserves styles on new columns and inserted rows cell-by-cell", () => {
   assert.equal(row2.getCell(headers["Check Number"]).style.fill?.fgColor?.argb, "FFFFE0E0");
   assert.equal(row3.getCell(headers["Check Number"]).style.fill?.fgColor?.argb, "FFFFE0E0");
 });
+
+test("overwrites existing duplicate rows and deletes extra duplicate rows when fewer records are written", () => {
+  const workbook = new ExcelJS.Workbook();
+  const worksheet = workbook.addWorksheet("Claims");
+  worksheet.addRow(["Member Policy ID", "Date Of Service", "Check Number"]);
+  worksheet.addRow(["member-a", "02/05/2026", "original-check"]);
+  worksheet.addRow(["member-a", "02/05/2026", "dup-1"]);
+  worksheet.addRow(["member-a", "02/05/2026", "dup-2"]);
+  worksheet.addRow(["member-b", "02/08/2026", "other-member"]);
+
+  applyClaimRowUpdateToWorksheet(worksheet, {
+    index: 0,
+    update: {
+      BotClaimDetails: detailsText([
+        { dos: "02/05/2026", received: "02/06/2026", check: "new-check", amount: "$10.00" },
+      ]),
+      BotClaimStatusCheck: "Success",
+      BotClaimStatusCheckError: "",
+    },
+  });
+
+  const headers = headerMap(worksheet);
+  assert.equal(worksheet.getRow(2).getCell(headers["Check Number"]).value, "[new-check]");
+  assert.equal(worksheet.getRow(3).getCell(headers["Member Policy ID"]).value, "member-b");
+  assert.equal(worksheet.getRow(3).getCell(headers["Check Number"]).value, "other-member");
+  assert.equal(worksheet.actualRowCount, 3);
+});
+
+test("overwrites existing duplicate rows and inserts new duplicate rows when more records are written", () => {
+  const workbook = new ExcelJS.Workbook();
+  const worksheet = workbook.addWorksheet("Claims");
+  worksheet.addRow(["Member Policy ID", "Date Of Service", "Check Number"]);
+  worksheet.addRow(["member-a", "02/05/2026", "original-check"]);
+  worksheet.addRow(["member-a", "02/05/2026", "dup-1"]);
+  worksheet.addRow(["member-b", "02/08/2026", "other-member"]);
+
+  applyClaimRowUpdateToWorksheet(worksheet, {
+    index: 0,
+    update: {
+      BotClaimDetails: detailsText([
+        { dos: "02/05/2026", received: "02/06/2026", check: "check-1", amount: "$10.00" },
+        { dos: "02/05/2026", received: "02/06/2026", check: "check-2", amount: "$20.00" },
+        { dos: "02/05/2026", received: "02/06/2026", check: "check-3", amount: "$30.00" },
+      ]),
+      BotClaimStatusCheck: "Success",
+      BotClaimStatusCheckError: "",
+    },
+  });
+
+  const headers = headerMap(worksheet);
+  assert.equal(worksheet.getRow(2).getCell(headers["Check Number"]).value, "[check-1]");
+  assert.equal(worksheet.getRow(3).getCell(headers["Check Number"]).value, "[check-2]");
+  assert.equal(worksheet.getRow(4).getCell(headers["Check Number"]).value, "[check-3]");
+  assert.equal(worksheet.getRow(5).getCell(headers["Member Policy ID"]).value, "member-b");
+  assert.equal(worksheet.getRow(5).getCell(headers["Check Number"]).value, "other-member");
+  assert.equal(worksheet.actualRowCount, 5);
+});
