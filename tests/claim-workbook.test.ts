@@ -275,3 +275,152 @@ test("preserves styles on new columns and inserted rows cell-by-cell during post
   assert.equal(row2.getCell(headers["Check Number"]).style.fill?.fgColor?.argb, "FFFFE0E0");
   assert.equal(row3.getCell(headers["Check Number"]).style.fill?.fgColor?.argb, "FFFFE0E0");
 });
+
+test("postProcessWorksheet handles empty, null, or missing claim details gracefully", () => {
+  const workbook = new ExcelJS.Workbook();
+  const worksheet = workbook.addWorksheet("Claims");
+  worksheet.addRow(["Member Policy ID", "Date Of Service"]);
+  worksheet.addRow(["member-a", "02/05/2026"]);
+  worksheet.addRow(["member-b", "02/06/2026"]);
+
+  // Set first row to Success but no claim details
+  applyClaimRowUpdateToWorksheet(worksheet, {
+    index: 0,
+    update: {
+      BotClaimDetails: "",
+      BotClaimStatusCheck: "Success",
+      BotClaimStatusCheckError: "",
+    },
+  });
+
+  // Second row is un-run (no details, no status)
+  
+  postProcessWorksheet(worksheet);
+
+  // Assert row count is still exactly 3 (1 header, 2 data rows)
+  assert.equal(worksheet.actualRowCount, 3);
+});
+
+test("postProcessWorksheet processes mixed rows with different record counts correctly (stress index and pointer shift)", () => {
+  const workbook = new ExcelJS.Workbook();
+  const worksheet = workbook.addWorksheet("Claims");
+  worksheet.addRow(["Member Policy ID", "Date Of Service"]);
+  
+  // 4 rows originally
+  worksheet.addRow(["member-1", "02/05/2026"]);
+  worksheet.addRow(["member-2", "02/06/2026"]);
+  worksheet.addRow(["member-3", "02/07/2026"]);
+  worksheet.addRow(["member-4", "02/08/2026"]);
+
+  // Row 1 (member-1): 3 records
+  applyClaimRowUpdateToWorksheet(worksheet, {
+    index: 0,
+    update: {
+      BotClaimDetails: detailsText([
+        { dos: "02/05/2026", received: "02/06/2026", check: "c1-1", amount: "$10.00" },
+        { dos: "02/05/2026", received: "02/06/2026", check: "c1-2", amount: "$20.00" },
+        { dos: "02/05/2026", received: "02/06/2026", check: "c1-3", amount: "$30.00" },
+      ]),
+      BotClaimStatusCheck: "Success",
+    },
+  });
+
+  // Row 2 (member-2): 0 records (Failed)
+  applyClaimRowUpdateToWorksheet(worksheet, {
+    index: 1,
+    update: {
+      BotClaimDetails: "",
+      BotClaimStatusCheck: "Failed",
+      BotClaimStatusCheckError: "Not found",
+    },
+  });
+
+  // Row 3 (member-3): 2 records
+  applyClaimRowUpdateToWorksheet(worksheet, {
+    index: 2,
+    update: {
+      BotClaimDetails: detailsText([
+        { dos: "02/07/2026", received: "02/08/2026", check: "c3-1", amount: "$100.00" },
+        { dos: "02/07/2026", received: "02/08/2026", check: "c3-2", amount: "$200.00" },
+      ]),
+      BotClaimStatusCheck: "Success",
+    },
+  });
+
+  // Row 4 (member-4): 1 record
+  applyClaimRowUpdateToWorksheet(worksheet, {
+    index: 3,
+    update: {
+      BotClaimDetails: detailsText([
+        { dos: "02/08/2026", received: "02/09/2026", check: "c4-1", amount: "$1000.00" },
+      ]),
+      BotClaimStatusCheck: "Success",
+    },
+  });
+
+  postProcessWorksheet(worksheet);
+
+  // original 4 rows -> becomes:
+  // Row 1 (member-1) duplicates into 3 rows
+  // Row 2 (member-2) remains 1 row
+  // Row 3 (member-3) duplicates into 2 rows
+  // Row 4 (member-4) remains 1 row
+  // Total expected data rows = 3 + 1 + 2 + 1 = 7 data rows. Total actual rows = 8 (including header).
+  assert.equal(worksheet.actualRowCount, 8);
+
+  const headers = headerMap(worksheet);
+
+  // Verify member-1 rows
+  assert.equal(worksheet.getRow(2).getCell(headers["Member Policy ID"]).value, "member-1");
+  assert.equal(worksheet.getRow(2).getCell(headers["Check Number"]).value, "[c1-1]");
+  assert.equal(worksheet.getRow(3).getCell(headers["Member Policy ID"]).value, "member-1");
+  assert.equal(worksheet.getRow(3).getCell(headers["Check Number"]).value, "[c1-2]");
+  assert.equal(worksheet.getRow(4).getCell(headers["Member Policy ID"]).value, "member-1");
+  assert.equal(worksheet.getRow(4).getCell(headers["Check Number"]).value, "[c1-3]");
+
+  // Verify member-2 row
+  assert.equal(worksheet.getRow(5).getCell(headers["Member Policy ID"]).value, "member-2");
+  assert.equal(worksheet.getRow(5).getCell(headers["BotClaimStatusCheck"]).value, "Failed");
+
+  // Verify member-3 rows
+  assert.equal(worksheet.getRow(6).getCell(headers["Member Policy ID"]).value, "member-3");
+  assert.equal(worksheet.getRow(6).getCell(headers["Check Number"]).value, "[c3-1]");
+  assert.equal(worksheet.getRow(7).getCell(headers["Member Policy ID"]).value, "member-3");
+  assert.equal(worksheet.getRow(7).getCell(headers["Check Number"]).value, "[c3-2]");
+
+  // Verify member-4 row
+  assert.equal(worksheet.getRow(8).getCell(headers["Member Policy ID"]).value, "member-4");
+  assert.equal(worksheet.getRow(8).getCell(headers["Check Number"]).value, "[c4-1]");
+});
+
+test("postProcessWorksheet preserves correct data types (Dates and Numbers)", () => {
+  const workbook = new ExcelJS.Workbook();
+  const worksheet = workbook.addWorksheet("Claims");
+  worksheet.addRow(["Member Policy ID", "Date Of Service"]);
+  worksheet.addRow(["member-a", "02/05/2026"]);
+
+  applyClaimRowUpdateToWorksheet(worksheet, {
+    index: 0,
+    update: {
+      BotClaimDetails: detailsText([
+        { dos: "02/05/2026", received: "02/06/2026", check: "12345", amount: "$150.75" },
+      ]),
+      BotClaimStatusCheck: "Success",
+    },
+  });
+
+  postProcessWorksheet(worksheet);
+
+  const headers = headerMap(worksheet);
+  const row2 = worksheet.getRow(2);
+
+  // Check Amount should be written as numeric 150.75 (not a string!)
+  const amtCell = row2.getCell(headers["Check Amount"]);
+  assert.equal(typeof amtCell.value, "number");
+  assert.equal(amtCell.value, 150.75);
+  assert.equal(amtCell.style.numFmt, "$#,##0.00");
+
+  // Date columns should have correct formatting
+  const dosCell = row2.getCell(headers["SummaryBlockDOS"]);
+  assert.equal(dosCell.style.numFmt, "mm-dd-yy");
+});
