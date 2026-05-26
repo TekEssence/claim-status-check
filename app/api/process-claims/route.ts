@@ -198,6 +198,7 @@ export async function POST(req: Request) {
             }
 
             const row = claimRows[i];
+            const rowIndex = typeof (row as any).__original_index === "number" ? (row as any).__original_index : i;
             const memberPolicyId = asText(row["Member Policy ID"] ?? row["member policy id"] ?? row["Member ID"]);
             const dosValue = row["Date Of Service"] ?? row["DOS"] ?? row["date of service"];
 
@@ -223,7 +224,7 @@ export async function POST(req: Request) {
               log(`Row ${i + 1}: ${msg}`);
               sendEvent({
                 type: "row_update",
-                index: i,
+                index: rowIndex,
                 update: { BotClaimStatusCheck: "Skipped", BotClaimStatusCheckError: msg }
               });
               sendEvent({ type: "progress", completed: i + 1, total: claimRows.length });
@@ -236,7 +237,7 @@ export async function POST(req: Request) {
               log(`Row ${i + 1}: ${msg}`);
               sendEvent({
                 type: "row_update",
-                index: i,
+                index: rowIndex,
                 update: { BotClaimStatusCheck: "Skipped", BotClaimStatusCheckError: msg }
               });
               sendEvent({ type: "progress", completed: i + 1, total: claimRows.length });
@@ -423,13 +424,13 @@ export async function POST(req: Request) {
                 log(`Row ${i + 1}: Failed. ${msg}`);
                 try {
                   const screenshot = await page.screenshot({ type: "jpeg", quality: 60 });
-                  await sendEvent({ type: "error_screenshot", index: i, image: screenshot.toString("base64") });
+                  await sendEvent({ type: "error_screenshot", index: rowIndex, image: screenshot.toString("base64") });
                   const html = await page.evaluate(() => document.documentElement.outerHTML);
-                  await sendEvent({ type: "debug_html", index: i, html });
+                  await sendEvent({ type: "debug_html", index: rowIndex, html });
                 } catch { /* ignore */ }
                 await sendEvent({
                   type: "row_update",
-                  index: i,
+                  index: rowIndex,
                   update: { BotClaimDetails: "No matching rows found for DOS.", BotClaimStatusCheck: "Failed", BotClaimStatusCheckError: msg }
                 });
                 await sendEvent({ type: "progress", completed: i + 1, total: claimRows.length });
@@ -439,7 +440,7 @@ export async function POST(req: Request) {
               await log(`Row ${i + 1}: Success (${details.length} total matching rows across ${pageNum} page(s)).`);
               await sendEvent({
                 type: "row_update",
-                index: i,
+                index: rowIndex,
                 update: { BotClaimDetails: details.join(" | "), BotClaimStatusCheck: "Success", BotClaimStatusCheckError: "" }
               });
               await sendEvent({ type: "progress", completed: i + 1, total: claimRows.length });
@@ -450,17 +451,17 @@ export async function POST(req: Request) {
               // Capture screenshot and HTML on row failure
               try {
                 const screenshot = await page.screenshot({ type: "jpeg", quality: 60 });
-                await sendEvent({ type: "error_screenshot", index: i, image: screenshot.toString("base64") });
+                await sendEvent({ type: "error_screenshot", index: rowIndex, image: screenshot.toString("base64") });
                 
                 const html = await page.evaluate(() => document.documentElement.outerHTML);
-                await sendEvent({ type: "debug_html", index: i, html: html });
+                await sendEvent({ type: "debug_html", index: rowIndex, html: html });
               } catch {
                 await log("Failed to capture row error diagnostics.");
               }
 
               await sendEvent({
                 type: "row_update",
-                index: i,
+                index: rowIndex,
                 update: { BotClaimStatusCheck: "Failed", BotClaimStatusCheckError: msg }
               });
               await sendEvent({ type: "progress", completed: i + 1, total: claimRows.length });

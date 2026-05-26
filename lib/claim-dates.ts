@@ -8,8 +8,10 @@ export function asText(value: unknown): string {
 }
 
 export function parseDateInput(value: unknown): Date | null {
-  if (value instanceof Date && !Number.isNaN(value.getTime())) {
-    return new Date(Date.UTC(value.getUTCFullYear(), value.getUTCMonth(), value.getUTCDate()));
+  const isDate = value instanceof Date || (value && typeof value === "object" && Object.prototype.toString.call(value) === "[object Date]");
+  if (isDate && !Number.isNaN((value as Date).getTime())) {
+    const d = value as Date;
+    return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
   }
 
   if (typeof value === "number") {
