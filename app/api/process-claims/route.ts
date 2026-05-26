@@ -202,22 +202,7 @@ export async function POST(req: Request) {
             const memberPolicyId = asText(row["Member Policy ID"] ?? row["member policy id"] ?? row["Member ID"]);
             const dosValue = row["Date Of Service"] ?? row["DOS"] ?? row["date of service"];
 
-            // Skip duplicate rows (from previous runs' split rows)
-            if (i > 0) {
-              const prevRow = claimRows[i - 1];
-              const prevId = asText(prevRow["Member Policy ID"] ?? prevRow["member policy id"] ?? prevRow["Member ID"]);
-              const prevDos = prevRow["Date Of Service"] ?? prevRow["DOS"] ?? prevRow["date of service"];
-              
-              if (memberPolicyId === prevId) {
-                const d1 = parseDateInput(dosValue);
-                const d2 = parseDateInput(prevDos);
-                if (d1 && d2 && d1.getTime() === d2.getTime()) {
-                  await log(`Row ${i + 1}: Skipping duplicate row (already processed during original row lookup).`);
-                  sendEvent({ type: "progress", completed: i + 1, total: claimRows.length });
-                  continue;
-                }
-              }
-            }
+
             
             if (!memberPolicyId || !dosValue) {
               const msg = "Skipped: Missing Member ID or Date of Service.";

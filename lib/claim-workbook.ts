@@ -223,6 +223,53 @@ export function applyClaimRowUpdateToWorksheet(
   }
   headerRow.commit();
 
+  const targetRowIndex = eventData.index + 2;
+  const targetRow = worksheet.getRow(targetRowIndex);
+
+  const dataStyle = cloneStyle(targetRow.getCell(columns.lastOriginalCol).style);
+  delete (dataStyle as any).numFmt;
+
+  const setDataCell = (col: number, value: string | undefined) => {
+    if (value === undefined) return;
+    const cell = targetRow.getCell(col);
+    cell.value = value;
+    cell.style = cloneStyle(dataStyle);
+  };
+
+  setDataCell(columns.detailsCol, eventData.update.BotClaimDetails);
+  setDataCell(columns.statusCol, eventData.update.BotClaimStatusCheck);
+  setDataCell(columns.errorCol, eventData.update.BotClaimStatusCheckError);
+  setDataCell(columns.updateTimeCol, getFormattedTimestamp());
+
+  targetRow.commit();
+
+  return { insertedRowCount: 0 };
+}
+
+export function postProcessWorksheet(worksheet: ExcelJS.Worksheet): void {
+  const headerRow = worksheet.getRow(1);
+  const columns = findColumns(headerRow);
+  const headerStyle = cloneStyle(headerRow.getCell(columns.lastOriginalCol).style);
+
+  const lastBotCol = Math.max(
+    columns.detailsCol,
+    columns.statusCol,
+    columns.errorCol,
+    columns.updateTimeCol
+  );
+  let nextCol = (lastBotCol > 0 ? lastBotCol : columns.lastOriginalCol) + 1;
+
+  const getNextAvailableCol = (start: number): number => {
+    let col = start;
+    while (true) {
+      const cellValue = String(headerRow.getCell(col).value ?? "").trim();
+      if (cellValue === "") {
+        return col;
+      }
+      col++;
+    }
+  };
+
   const colMap: Record<keyof ParsedClaimDetailRecord, number> = {
     SummaryBlockDOS: 0,
     SummaryBlockDate: 0,
@@ -263,120 +310,65 @@ export function applyClaimRowUpdateToWorksheet(
   });
   headerRow.commit();
 
-  let memberIdCol = 0;
-  let dosCol = 0;
-  headerRow.eachCell((cell, colNum) => {
-    const v = String(cell.value ?? "").trim().toLowerCase();
-    if (v === "member policy id" || v === "member id") memberIdCol = colNum;
-    else if (v === "date of service" || v === "dos") dosCol = colNum;
-  });
+  let r = 2;
+  while (r <= worksheet.actualRowCount) {
+    const row = worksheet.getRow(r);
+    const detailsVal = columns.detailsCol > 0 ? String(row.getCell(columns.detailsCol).value ?? "").trim() : "";
 
-  const isDuplicateRow = (row1: ExcelJS.Row, row2: ExcelJS.Row): boolean => {
-    if (row2.number > worksheet.actualRowCount) return false;
-    if (memberIdCol > 0 && dosCol > 0) {
-      const id1 = String(row1.getCell(memberIdCol).value ?? "").trim().toLowerCase();
-      const id2 = String(row2.getCell(memberIdCol).value ?? "").trim().toLowerCase();
-      if (id1 !== id2 || id1 === "") return false;
-
-      const rawDos1 = row1.getCell(dosCol).value;
-      const rawDos2 = row2.getCell(dosCol).value;
-
-      const dosVal1 = rawDos1 && typeof rawDos1 === "object" && "result" in rawDos1 ? rawDos1.result : rawDos1;
-      const dosVal2 = rawDos2 && typeof rawDos2 === "object" && "result" in rawDos2 ? rawDos2.result : rawDos2;
-
-      const d1 = parseDateInput(dosVal1);
-      const d2 = parseDateInput(dosVal2);
-
-      if (d1 && d2) {
-        return d1.getTime() === d2.getTime();
-      }
+    if (!detailsVal) {
+      r++;
+      continue;
     }
-    return false;
-  };
 
-  const parsedRecords = parseBotClaimDetails(eventData.update.BotClaimDetails || "");
-  const recordsToWrite = parsedRecords.length > 0 ? parsedRecords : [null];
-  const originalRowIndex = eventData.index + 2 + (options.rowOffset ?? 0);
-  const originalRow = worksheet.getRow(originalRowIndex);
-
-  // Count existing duplicate rows directly below originalRowIndex
-  let existingDuplicateCount = 0;
-  while (true) {
-    const nextRow = worksheet.getRow(originalRowIndex + existingDuplicateCount + 1);
-    if (isDuplicateRow(originalRow, nextRow)) {
-      existingDuplicateCount++;
-    } else {
-      break;
+    const parsedRecords = parseBotClaimDetails(detailsVal);
+    const N = parsedRecords.length;
+    if (N === 0) {
+      r++;
+      continue;
     }
-  }
 
-  const existingTotalRows = existingDuplicateCount + 1;
-  const neededTotalRows = recordsToWrite.length;
-  let insertedRowCount = 0;
+    // If N > 1, duplicate this row N - 1 times below r
+    if (N > 1) {
+      for (let k = 1; k < N; k++) {
+        const insertAt = r + k;
+        worksheet.insertRow(insertAt, row.values);
 
-  if (neededTotalRows < existingTotalRows) {
-    const extraRows = existingTotalRows - neededTotalRows;
-    for (let d = 0; d < extraRows; d++) {
-      worksheet.spliceRows(originalRowIndex + neededTotalRows, 1);
-    }
-    insertedRowCount = -extraRows;
-  } else if (neededTotalRows > existingTotalRows) {
-    const newRowsCount = neededTotalRows - existingTotalRows;
-    for (let k = 0; k < newRowsCount; k++) {
-      const insertAt = originalRowIndex + existingTotalRows + k;
-      worksheet.insertRow(insertAt, originalRow.values);
-    }
-    insertedRowCount = newRowsCount;
-  }
-
-  recordsToWrite.forEach((record, idx) => {
-    const targetRowIndex = originalRowIndex + idx;
-    const targetRow = worksheet.getRow(targetRowIndex);
-    
-    if (idx > existingDuplicateCount) {
-      if (originalRow.height !== undefined) {
-        targetRow.height = originalRow.height;
-      }
-      const origRowAny = originalRow as any;
-      const targetRowAny = targetRow as any;
-      if (origRowAny.style) {
-        targetRowAny.style = cloneStyle(origRowAny.style);
-      }
-      const maxCol = Math.max(worksheet.columnCount, originalRow.cellCount || 0);
-      for (let colNum = 1; colNum <= maxCol; colNum++) {
-        const cell = originalRow.getCell(colNum);
-        const targetCell = targetRow.getCell(colNum);
-        targetCell.style = cloneStyle(cell.style);
+        const newRow = worksheet.getRow(insertAt);
+        if (row.height !== undefined) {
+          newRow.height = row.height;
+        }
+        const rowAny = row as any;
+        const newRowAny = newRow as any;
+        if (rowAny.style) {
+          newRowAny.style = cloneStyle(rowAny.style);
+        }
+        const maxCol = Math.max(worksheet.columnCount, row.cellCount || 0);
+        for (let colNum = 1; colNum <= maxCol; colNum++) {
+          const cell = row.getCell(colNum);
+          const targetCell = newRow.getCell(colNum);
+          targetCell.style = cloneStyle(cell.style);
+        }
       }
     }
 
-    const dataStyle = cloneStyle(targetRow.getCell(columns.lastOriginalCol).style);
-    delete (dataStyle as any).numFmt; // Prevent text columns from inheriting date/numeric formats of the last original column
+    // Populate parsed records for all N rows (r to r + N - 1)
+    for (let k = 0; k < N; k++) {
+      const targetRow = worksheet.getRow(r + k);
+      const record = parsedRecords[k];
 
-    const dateStyle = cloneStyle(dataStyle);
-    dateStyle.numFmt = "mm-dd-yy";
+      const dataStyle = cloneStyle(targetRow.getCell(columns.lastOriginalCol).style);
+      delete (dataStyle as any).numFmt;
 
-    const currencyStyle = cloneStyle(dataStyle);
-    currencyStyle.numFmt = "$#,##0.00";
+      const dateStyle = cloneStyle(dataStyle);
+      dateStyle.numFmt = "mm-dd-yy";
 
-    const setDataCell = (col: number, value: string | undefined) => {
-      if (value === undefined) return;
-      const cell = targetRow.getCell(col);
-      cell.value = value;
-      cell.style = cloneStyle(dataStyle);
-    };
+      const currencyStyle = cloneStyle(dataStyle);
+      currencyStyle.numFmt = "$#,##0.00";
 
-    setDataCell(columns.detailsCol, eventData.update.BotClaimDetails);
-    setDataCell(columns.statusCol, eventData.update.BotClaimStatusCheck);
-    setDataCell(columns.errorCol, eventData.update.BotClaimStatusCheckError);
-    setDataCell(columns.updateTimeCol, getFormattedTimestamp());
-
-    if (record) {
       Object.entries(record).forEach(([key, value]) => {
         const colNum = colMap[key as keyof ParsedClaimDetailRecord];
         if (colNum) {
           const cell = targetRow.getCell(colNum);
-          
           if (["SummaryBlockDOS", "SummaryBlockDate", "ReceivedDate", "CheckDate"].includes(key)) {
             cell.value = value;
             cell.style = cloneStyle(dateStyle);
@@ -398,10 +390,9 @@ export function applyClaimRowUpdateToWorksheet(
           }
         }
       });
+      targetRow.commit();
     }
 
-    targetRow.commit();
-  });
-
-  return { insertedRowCount: Math.max(recordsToWrite.length - 1, 0) };
+    r += N;
+  }
 }

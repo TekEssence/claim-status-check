@@ -3,7 +3,7 @@
 import { FormEvent, useMemo, useState } from "react";
 import * as XLSX from "xlsx";
 import ExcelJS from "exceljs";
-import { applyClaimRowUpdateToWorksheet } from "@/lib/claim-workbook";
+import { applyClaimRowUpdateToWorksheet, postProcessWorksheet } from "@/lib/claim-workbook";
 
 export default function Home() {
   const [loginFile, setLoginFile] = useState<File | null>(null);
@@ -99,7 +99,6 @@ export default function Home() {
 
       const totalRows = claimRows.length;
       setStatus(`Starting process for ${totalRows} rows...`);
-      let insertedRowOffset = 0;
 
       const processChunk = async (startIndex: number) => {
         const formData = new FormData();
@@ -141,10 +140,7 @@ export default function Home() {
                   currentCompleted = eventData.completed;
                   setProgress({ completed: eventData.completed, total: eventData.total });
                 } else if (eventData.type === "row_update") {
-                  const result = applyClaimRowUpdateToWorksheet(worksheet, eventData, {
-                    rowOffset: insertedRowOffset,
-                  });
-                  insertedRowOffset += result.insertedRowCount;
+                  applyClaimRowUpdateToWorksheet(worksheet, eventData);
 
                   // Write back with full style preservation
                   const updatedBuffer = await excelWb.xlsx.writeBuffer();
@@ -184,8 +180,23 @@ export default function Home() {
           setStatus(`Auto-resuming from row ${currentCompleted + 1}...`);
           await processChunk(currentCompleted);
         } else {
-          setStatus("Processing completed!");
-          setIsProcessing(false);
+          try {
+            setStatus("Running post-processing (generating summary columns & duplicating rows)...");
+            postProcessWorksheet(worksheet);
+
+            // Write back with full style preservation
+            const updatedBuffer = await excelWb.xlsx.writeBuffer();
+            const writable = await claimFileHandle.createWritable();
+            await writable.write(updatedBuffer);
+            await writable.close();
+
+            setStatus("Processing completed!");
+          } catch (postError) {
+            console.error("Post-processing failed", postError);
+            setStatus(`Processing succeeded but post-processing failed: ${postError instanceof Error ? postError.message : String(postError)}`);
+          } finally {
+            setIsProcessing(false);
+          }
         }
       };
 
