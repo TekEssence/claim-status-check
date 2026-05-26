@@ -262,20 +262,24 @@ export function applyClaimRowUpdateToWorksheet(
   });
   headerRow.commit();
 
+  let memberIdCol = 0;
+  let dosCol = 0;
+  headerRow.eachCell((cell, colNum) => {
+    const v = String(cell.value ?? "").trim().toLowerCase();
+    if (v === "member policy id" || v === "member id") memberIdCol = colNum;
+    else if (v === "date of service" || v === "dos") dosCol = colNum;
+  });
+
   const isDuplicateRow = (row1: ExcelJS.Row, row2: ExcelJS.Row): boolean => {
     if (row2.number > worksheet.actualRowCount) return false;
-    const maxCol = Math.max(row1.cellCount || 0, row2.cellCount || 0);
-    for (let colNum = 1; colNum <= maxCol; colNum++) {
-      const headerValue = String(headerRow.getCell(colNum).value ?? "");
-      if (!BOT_HEADERS.has(headerValue)) {
-        const val1 = String(row1.getCell(colNum).value ?? "").trim();
-        const val2 = String(row2.getCell(colNum).value ?? "").trim();
-        if (val1 !== val2) {
-          return false;
-        }
-      }
+    if (memberIdCol > 0 && dosCol > 0) {
+      const id1 = String(row1.getCell(memberIdCol).value ?? "").trim().toLowerCase();
+      const id2 = String(row2.getCell(memberIdCol).value ?? "").trim().toLowerCase();
+      const dos1 = String(row1.getCell(dosCol).value ?? "").trim().toLowerCase();
+      const dos2 = String(row2.getCell(dosCol).value ?? "").trim().toLowerCase();
+      return id1 === id2 && dos1 === dos2 && id1 !== "";
     }
-    return true;
+    return false;
   };
 
   const parsedRecords = parseBotClaimDetails(eventData.update.BotClaimDetails || "");
