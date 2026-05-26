@@ -207,10 +207,14 @@ export async function POST(req: Request) {
               const prevId = asText(prevRow["Member Policy ID"] ?? prevRow["member policy id"] ?? prevRow["Member ID"]);
               const prevDos = prevRow["Date Of Service"] ?? prevRow["DOS"] ?? prevRow["date of service"];
               
-              if (memberPolicyId === prevId && dosValue === prevDos) {
-                await log(`Row ${i + 1}: Skipping duplicate row (already processed during original row lookup).`);
-                sendEvent({ type: "progress", completed: i + 1, total: claimRows.length });
-                continue;
+              if (memberPolicyId === prevId) {
+                const d1 = parseDateInput(dosValue);
+                const d2 = parseDateInput(prevDos);
+                if (d1 && d2 && d1.getTime() === d2.getTime()) {
+                  await log(`Row ${i + 1}: Skipping duplicate row (already processed during original row lookup).`);
+                  sendEvent({ type: "progress", completed: i + 1, total: claimRows.length });
+                  continue;
+                }
               }
             }
             

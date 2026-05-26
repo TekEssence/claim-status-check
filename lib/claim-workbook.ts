@@ -1,4 +1,5 @@
 import type ExcelJS from "exceljs";
+import { parseDateInput } from "./claim-dates";
 
 type ClaimUpdate = {
   BotClaimDetails?: string;
@@ -275,9 +276,20 @@ export function applyClaimRowUpdateToWorksheet(
     if (memberIdCol > 0 && dosCol > 0) {
       const id1 = String(row1.getCell(memberIdCol).value ?? "").trim().toLowerCase();
       const id2 = String(row2.getCell(memberIdCol).value ?? "").trim().toLowerCase();
-      const dos1 = String(row1.getCell(dosCol).value ?? "").trim().toLowerCase();
-      const dos2 = String(row2.getCell(dosCol).value ?? "").trim().toLowerCase();
-      return id1 === id2 && dos1 === dos2 && id1 !== "";
+      if (id1 !== id2 || id1 === "") return false;
+
+      const rawDos1 = row1.getCell(dosCol).value;
+      const rawDos2 = row2.getCell(dosCol).value;
+
+      const dosVal1 = rawDos1 && typeof rawDos1 === "object" && "result" in rawDos1 ? rawDos1.result : rawDos1;
+      const dosVal2 = rawDos2 && typeof rawDos2 === "object" && "result" in rawDos2 ? rawDos2.result : rawDos2;
+
+      const d1 = parseDateInput(dosVal1);
+      const d2 = parseDateInput(dosVal2);
+
+      if (d1 && d2) {
+        return d1.getTime() === d2.getTime();
+      }
     }
     return false;
   };
