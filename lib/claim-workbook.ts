@@ -5,6 +5,7 @@ type ClaimUpdate = {
   BotClaimDetails?: string;
   BotClaimStatusCheck?: string;
   BotClaimStatusCheckError?: string;
+  BotReferRA?: string;
 };
 
 export type ClaimRowUpdateEvent = {
@@ -37,6 +38,7 @@ const BOT_HEADERS = new Set([
   "BotClaimStatusCheck",
   "BotClaimStatusCheckError",
   "BotUpdateTime",
+  "BotReferRA",
   "SummaryBlockDOS",
   "SummaryBlockDate",
   "Check Number",
@@ -154,6 +156,7 @@ function findColumns(headerRow: ExcelJS.Row) {
   let statusCol = 0;
   let errorCol = 0;
   let updateTimeCol = 0;
+  let referRaCol = 0;
   let lastOriginalCol = 1;
 
   headerRow.eachCell((cell, colNum) => {
@@ -162,10 +165,11 @@ function findColumns(headerRow: ExcelJS.Row) {
     else if (v === "BotClaimStatusCheck") statusCol = colNum;
     else if (v === "BotClaimStatusCheckError") errorCol = colNum;
     else if (v === "BotUpdateTime") updateTimeCol = colNum;
+    else if (v === "BotReferRA") referRaCol = colNum;
     else if (!BOT_HEADERS.has(v)) lastOriginalCol = colNum;
   });
 
-  return { detailsCol, statusCol, errorCol, updateTimeCol, lastOriginalCol };
+  return { detailsCol, statusCol, errorCol, updateTimeCol, referRaCol, lastOriginalCol };
 }
 
 function addHeader(headerRow: ExcelJS.Row, col: number, label: string, headerStyle: ExcelJS.Style) {
@@ -186,7 +190,8 @@ export function applyClaimRowUpdateToWorksheet(
     columns.detailsCol,
     columns.statusCol,
     columns.errorCol,
-    columns.updateTimeCol
+    columns.updateTimeCol,
+    columns.referRaCol
   );
   let nextCol = (lastBotCol > 0 ? lastBotCol : columns.lastOriginalCol) + 1;
 
@@ -221,6 +226,11 @@ export function applyClaimRowUpdateToWorksheet(
     columns.updateTimeCol = nextCol++;
     addHeader(headerRow, columns.updateTimeCol, "BotUpdateTime", headerStyle);
   }
+  if (columns.referRaCol === 0) {
+    nextCol = getNextAvailableCol(nextCol);
+    columns.referRaCol = nextCol++;
+    addHeader(headerRow, columns.referRaCol, "BotReferRA", headerStyle);
+  }
   headerRow.commit();
 
   const targetRowIndex = eventData.index + 2;
@@ -240,6 +250,7 @@ export function applyClaimRowUpdateToWorksheet(
   setDataCell(columns.statusCol, eventData.update.BotClaimStatusCheck);
   setDataCell(columns.errorCol, eventData.update.BotClaimStatusCheckError);
   setDataCell(columns.updateTimeCol, getFormattedTimestamp());
+  setDataCell(columns.referRaCol, eventData.update.BotReferRA);
 
   targetRow.commit();
 

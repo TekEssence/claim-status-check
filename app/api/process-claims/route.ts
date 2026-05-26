@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import chromium from "@sparticuz/chromium";
@@ -12,6 +13,7 @@ import {
   parseDateInput,
   parseWebsiteMmDdYyyy,
 } from "@/lib/claim-dates";
+import { extractTextFromPdf } from "@/lib/claim-pdf";
 
 type GenericRow = Record<string, unknown>;
 type StreamEvent = Record<string, unknown>;
@@ -275,6 +277,7 @@ export async function POST(req: Request) {
               // --- Detect sort order by comparing first two result rows ---
               const dosFormatted = formatMmDdYyyy(dosDate);
               const details: string[] = [];
+              const referRaDetails: string[] = [];
               let pageNum = 1;
               let foundAny = false;
 
@@ -350,7 +353,117 @@ export async function POST(req: Request) {
                     await detailsContent.waitFor({ state: "visible", timeout: 10000 });
                     const headerText = await detailsContent.locator('.details-header').innerText();
                     const tableText = await detailsContent.locator('table.table-condensed').innerText();
-                    details.push(`Summary: [${summaryText}] | Details: [${headerText.replace(/\s+/g, " ")}] | Status Info: [${tableText.replace(/\s+/g, " ")}]`);
+
+                    // --- Click RA Link if status is 'Refer to your RA' ---
+                    const hasRaText = /Refer to (your )?RA/i.test(summaryText);
+                    let raDetail = "";
+                    if (hasRaText && context) {
+                      const raLink = currentLineItem.locator("a").filter({ hasText: /Refer to (your )?RA|RA/i }).first();
+                      if (await raLink.count() > 0) {
+                        try {
+                          await log(`Row ${i + 1}: Found 'Refer to your RA' link. Clicking it...`);
+                          // Listen for popup / new tab
+                          const [newPage] = await Promise.all([
+                            context.waitForEvent("page", { timeout: 15000 }).catch(() => null),
+                            raLink.click()
+                          ]);
+
+                          const pdfSource = newPage || page;
+                          if (newPage) {
+                            await newPage.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
+                            const newUrl = newPage.url();
+                            await log(`Row ${i + 1}: RA link opened new page: ${newUrl}`);
+                          }
+
+                          // Search for the PDF download link
+                          const pdfLink = pdfSource.locator("a[href*='.pdf'], a[href*='pdf'], a[href*='Download'], a:has-text('PDF'), a:has-text('Download'), button:has-text('PDF'), button:has-text('Download')").first();
+                          if (await pdfLink.count() > 0) {
+                            await log(`Row ${i + 1}: Found PDF download link. Triggering download...`);
+                            
+                            const [download] = await Promise.all([
+                              pdfSource.waitForEvent("download", { timeout: 25000 }).catch(() => null),
+                              pdfLink.click({ force: true })
+                            ]);
+
+                            if (download) {
+                              const downloadsDir = path.join(process.cwd(), "downloads");
+                              if (!fs.existsSync(downloadsDir)) {
+                                fs.mkdirSync(downloadsDir, { recursive: true });
+                              }
+
+                              const cleanDos = formatMmDdYyyy(dosDate).replace(/\//g, "-");
+                              const pdfFileName = `${rowIndex + 2}_${memberPolicyId}_${cleanDos}.pdf`;
+                              const pdfPath = path.join(downloadsDir, pdfFileName);
+                              await download.saveAs(pdfPath);
+                              await log(`Row ${i + 1}: Saved PDF to ${pdfPath}`);
+
+                              // Read and parse PDF text
+                              const pdfBuffer = fs.readFileSync(pdfPath);
+                              const pdfText = extractTextFromPdf(pdfBuffer);
+                              const pdfLines = pdfText.split("\n").map(l => l.trim()).filter(Boolean);
+
+                              const dosStr = formatMmDdYyyy(dosDate);
+                              // Look for line containing member ID and DOS
+                              const matchingLine = pdfLines.find(line => 
+                                line.includes(memberPolicyId) && line.includes(dosStr)
+                              );
+
+                              if (matchingLine) {
+                                await log(`Row ${i + 1}: Extracted claim line from PDF: ${matchingLine}`);
+                                raDetail = matchingLine;
+                              } else {
+                                await log(`Row ${i + 1}: Could not find claim details matching Member ID ${memberPolicyId} and DOS ${dosStr} inside PDF.`);
+                                raDetail = "No matching claim details found in PDF";
+                              }
+                            } else {
+                              await log(`Row ${i + 1}: PDF download timed out or failed.`);
+                              raDetail = "Error: PDF download failed";
+                            }
+                          } else {
+                            await log(`Row ${i + 1}: Could not find PDF download link on details page/modal.`);
+                            raDetail = "Error: PDF download link not found";
+                          }
+
+                          // Clean up: close new page if it was opened
+                          if (newPage) {
+                            await newPage.close().catch(() => {});
+                          } else {
+                            // Check if an inline modal popped up and close it
+                            const modal = page.locator(".modal-content, .modal-dialog, [role='dialog']").first();
+                            if (await modal.count() > 0 && await modal.isVisible()) {
+                              const closeBtn = modal.locator("button:has-text('Close'), button[aria-label='Close'], .close, [ng-click*='close']").first();
+                              if (await closeBtn.count() > 0) {
+                                await closeBtn.click();
+                                await page.waitForTimeout(500);
+                              }
+                            } else {
+                              // If it navigated the current page, navigate back
+                              const currentUrl = page.url();
+                              if (currentUrl !== finalClaimStatusUrl) {
+                                await log(`Row ${i + 1}: Navigating back to Claims Status...`);
+                                await page.goBack({ waitUntil: "networkidle" }).catch(() => {});
+                              }
+                            }
+                          }
+                        } catch (err) {
+                          await log(`Row ${i + 1}: Error handling RA link click: ${(err as Error).message}`);
+                          raDetail = `Error: ${(err as Error).message}`;
+                        }
+                      } else {
+                        await log(`Row ${i + 1}: 'Refer to your RA' text found in row, but no matching link element was found.`);
+                        raDetail = "Error: RA link element not found";
+                      }
+
+                      // Save extracted detail line or error message
+                      referRaDetails.push(raDetail);
+                    }
+
+                    let statusInfoText = tableText.replace(/\s+/g, " ");
+                    if (raDetail) {
+                      statusInfoText += ` | RA Info: ${raDetail}`;
+                    }
+
+                    details.push(`Summary: [${summaryText}] | Details: [${headerText.replace(/\s+/g, " ")}] | Status Info: [${statusInfoText}]`);
                   }
 
                   // Check if the last matching row is also the last row on this page.
@@ -426,7 +539,12 @@ export async function POST(req: Request) {
               await sendEvent({
                 type: "row_update",
                 index: rowIndex,
-                update: { BotClaimDetails: details.join(" | "), BotClaimStatusCheck: "Success", BotClaimStatusCheckError: "" }
+                update: { 
+                  BotClaimDetails: details.join(" | "), 
+                  BotClaimStatusCheck: "Success", 
+                  BotClaimStatusCheckError: "",
+                  BotReferRA: referRaDetails.length > 0 ? referRaDetails.join(" | ") : ""
+                }
               });
               await sendEvent({ type: "progress", completed: i + 1, total: claimRows.length });
             } catch (rowError) {
