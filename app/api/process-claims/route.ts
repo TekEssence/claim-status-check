@@ -379,9 +379,10 @@ export async function POST(req: Request) {
                             await log(`Row ${i + 1}: RA link opened new page: ${newUrl}`);
                           }
 
-                          // Search for the PDF download link using comprehensive selectors
-                          const pdfLink = pdfSource.locator([
+                          // Search for the PDF download link prioritizing exact matches first
+                          const pdfSelectors = [
                             "div[ng-click*='GetRaPdfDownload']",
+                            "div[uib-popover*='download Claim PDF']",
                             ".fa-arrow-circle-down",
                             "a[href*='.pdf']",
                             "a[href*='pdf']",
@@ -397,9 +398,18 @@ export async function POST(req: Request) {
                             "img[src*='PDF']",
                             "a:has(img[src*='pdf'])",
                             "a:has(img[src*='PDF'])"
-                          ].join(", ")).first();
+                          ];
 
-                          if (await pdfLink.count() > 0) {
+                          let pdfLink = null;
+                          for (const sel of pdfSelectors) {
+                            const loc = pdfSource.locator(sel).first();
+                            if (await loc.count() > 0) {
+                              pdfLink = loc;
+                              break;
+                            }
+                          }
+
+                          if (pdfLink) {
                             await log(`Row ${i + 1}: Found PDF download link. Triggering download...`);
                             
                             const [download] = await Promise.all([
