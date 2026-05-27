@@ -447,14 +447,22 @@ export async function POST(req: Request) {
                               
                               let matchingLine = "";
                               // Look for line containing member ID. Since PDF tables can split across lines,
-                              // check up to 3 lines ahead for the matching DOS.
+                              // check up to 10 lines ahead for the specific matching claim row.
                               for (let j = 0; j < pdfLines.length; j++) {
                                 if (pdfLines[j].includes(memberPolicyId)) {
-                                  for (let k = 0; k <= 3; k++) {
-                                    if (j + k < pdfLines.length && pdfLines[j + k].includes(dosStr)) {
-                                      // Concatenate the lines together to form the full claim row
-                                      matchingLine = pdfLines.slice(j, j + k + 1).join(" ");
-                                      break;
+                                  for (let k = 0; k <= 10; k++) {
+                                    const checkIdx = j + k;
+                                    if (checkIdx < pdfLines.length) {
+                                      const lineText = pdfLines[checkIdx];
+                                      if (lineText.includes(dosStr)) {
+                                        // Extract dates to ensure we match the 'From Date' (the second date)
+                                        const dates = lineText.match(/\d{2}\/\d{2}\/\d{4}/g);
+                                        if (dates && dates.length >= 2 && dates[1] === dosStr) {
+                                          // Combine the member row and this specific claim row
+                                          matchingLine = k === 0 ? lineText : `${pdfLines[j]} ${lineText}`;
+                                          break;
+                                        }
+                                      }
                                     }
                                   }
                                 }
