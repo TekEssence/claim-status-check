@@ -354,15 +354,18 @@ export async function POST(req: Request) {
                     const headerText = await detailsContent.locator('.details-header').innerText();
                     const tableText = await detailsContent.locator('table.table-condensed').innerText();
 
+                    let statusInfoText = tableText.replace(/\s+/g, " ");
+
                     // --- Click RA Link if status is 'Refer to your RA' ---
-                    await log(`Row ${i + 1}: Matching row text: "${summaryText}"`);
-                    const hasRaText = /Refer/i.test(summaryText);
+                    // Search in the details tableText for the "Refer to your RA" status
+                    const hasRaText = /Refer/i.test(statusInfoText);
                     let raDetail = "";
                     if (hasRaText && context) {
-                      const raLink = currentLineItem.locator("a").filter({ hasText: /Refer|RA|Remittance|R\.?A\.?/i }).first();
+                      // Look for the exact link text inside the detailsRow, NOT the summary row
+                      const raLink = detailsRow.locator("a").filter({ hasText: /Refer to your RA/i }).first();
                       if (await raLink.count() > 0) {
                         try {
-                          await log(`Row ${i + 1}: Found 'Refer to your RA' link. Clicking it...`);
+                          await log(`Row ${i + 1}: Found exact 'Refer to your RA' link in details. Clicking it...`);
                           // Listen for popup / new tab
                           const [newPage] = await Promise.all([
                             context.waitForEvent("page", { timeout: 15000 }).catch(() => null),
@@ -376,7 +379,7 @@ export async function POST(req: Request) {
                             await log(`Row ${i + 1}: RA link opened new page: ${newUrl}`);
                           }
 
-                          // Search for the PDF download link using highly comprehensive selectors
+                          // Search for the PDF download link using comprehensive selectors
                           const pdfLink = pdfSource.locator([
                             "a[href*='.pdf']",
                             "a[href*='pdf']",
@@ -467,7 +470,7 @@ export async function POST(req: Request) {
                           raDetail = `Error: ${(err as Error).message}`;
                         }
                       } else {
-                        await log(`Row ${i + 1}: 'Refer to your RA' text found in row, but no matching link element was found.`);
+                        await log(`Row ${i + 1}: 'Refer to your RA' text found in details, but no exact matching link element was found.`);
                         raDetail = "Error: RA link element not found";
                       }
 
@@ -475,7 +478,6 @@ export async function POST(req: Request) {
                       referRaDetails.push(raDetail);
                     }
 
-                    let statusInfoText = tableText.replace(/\s+/g, " ");
                     if (raDetail) {
                       statusInfoText += ` | RA Info: ${raDetail}`;
                     }

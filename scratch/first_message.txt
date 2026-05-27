@@ -1,0 +1,46 @@
+<USER_REQUEST>
+
+Refer to your RA enhancement:
+
+There are certain entries where the Status is Refer to your RA.
+In the case we need to click the link.
+
+
+
+<div class="body-content" bis_skin_checked="1">
+        
+
+
+
+
+
+
+
+<div id="idxContainer" class="row" bis_skin_checked="1">
+    <!-- uiView:  --><div id="idxContent" class="col-xs-12" ui-view="" bis_skin_checked="1" style=""><div class="row contentContainer" bis_skin_checked="1">
+    <div class="col-lg-9 col-md-9 col-xs-12 col-md-push-3 col-print-push-0 float-none-print" bis_skin_checked="1">
+        <div class="content-pane white" ng-class="{'fullscreen':fullscreen}" bis_skin_checked="1">	
+            <!-- uiView: content --><div ui-view="content" bis_skin_checked="1"><div class="contentPanel1 contentRight" id="claims-status" ng-show="showStatus" bis_skin_checked="1">
+    <div class="form  ofl-visible" bis_skin_checked="1">
+        <div class="form panel" bis_skin_checked="1">
+            <h1 class="pageTitle"> Claims Status</h1>
+            <div class="pageIntro" bis_skin_checked="1">
+                <div class="vision-alert ng-hide" style="margin-bottom:15px" ng-hide="pastTargetDate" bis_skin_checked="1">
+                    <div class="glyphicon glyphicon-exclamation-sign vision-alert-icon" aria-hidden="true" bis_skin_checked="1"></div>
+                    <p class="vision-donot" style="margin-bottom: 5px">
+                        Service Degradation Notice: <span style="font-weight: 500">
+                            Claims Status search index is undergoing prolonged system maintenance
+                            and may not display all claims on the Provider Portal until <b>01/01/2024</b>.
+                            This partial data outage only affects the online portal, and all other claims
+                            processing systems/features are functioning normally.
+                        </span>
+                    </p>
+
+                </div>
+                <intro-alert><div class="vision-alert" bis_skin_checked="1">
+    <div class="glyphicon glyphi
+<truncated 45216 bytes>
+ber + '/' + item) || !isSelectableDate(monthNumber, year, item)}" class="_720kb-datepicker-calendar-day">6</a><!-- end ngRepeat: item in days --><a href="javascript:void(0)" ng-repeat="item in days" ng-click="setDatepickerDay(item)" ng-class="{'_720kb-datepicker-active': day === item, '_720kb-datepicker-disabled': !isSelectableMinDate(year + '/' + monthNumber + '/' + item ) || !isSelectableMaxDate(year + '/' + monthNumber + '/' + item) || !isSelectableDate(monthNumber, year, item)}" class="_720kb-datepicker-calendar-day">7</a><!-- end ngRepeat: item in days --><a href="javascript:void(0)" ng-repeat="item in days" ng-click="setDatepickerDay(item)" ng-class="{'_720kb-datepicker-active': day === item, '_720kb-datepicker-disabled': !isSelectableMinDate(year + '/' + monthNumber + '/' + item ) || !isSelectableMaxDate(year + '/' + monthNumber + '/' + item) || !isSelectableDate(monthNumber, year, item)}" class="_720kb-datepicker-calendar-day">8</a><!-- end ngRepeat: item in days --><a href="javascript:void(0)" ng-repeat="item in days" ng-click="setDatepickerDay(item)" ng-class="{'_720kb-datepicker-active': day === item, '_720kb-datepicker-disabled': !isSelectableMinDate(year + '/' + monthNumber + '/' + item ) || !isSelectableMaxDate(year + '/' + monthNumber + '/' + item) || !isSelectableDate(monthNumber, year, item)}" class="_720kb-datepicker-calendar-day">9</a><!-- end ngRepeat: item in days --><a href="javascript:void(0)" ng-repeat="item in days" ng-click="setDatepickerDay(item)" ng-class="{'_720kb-datepicker-active': day === item, '_720kb-datepicker-disabled': !isSelectableMinDate(year + '/' + monthNumber + '/' + item ) || !isSelectableMaxDate(year + '/' + monthNumber + '/' + item) || !isSelectableDate(monthNumber, year, item)}" class="_720kb-datepicker-calendar-day">10</a><!-- end ngRepeat: item in days --><a href="javascript:void(0)" ng-repeat="item in days" 
+<truncated 163240 bytes>
+
+NOTE: The output was truncated because it was too long. Use a more targeted query or a smaller range to get the information you need.
