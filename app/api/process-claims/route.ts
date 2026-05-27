@@ -355,10 +355,11 @@ export async function POST(req: Request) {
                     const tableText = await detailsContent.locator('table.table-condensed').innerText();
 
                     // --- Click RA Link if status is 'Refer to your RA' ---
-                    const hasRaText = /Refer to (your )?RA/i.test(summaryText);
+                    await log(`Row ${i + 1}: Matching row text: "${summaryText}"`);
+                    const hasRaText = /Refer/i.test(summaryText);
                     let raDetail = "";
                     if (hasRaText && context) {
-                      const raLink = currentLineItem.locator("a").filter({ hasText: /Refer to (your )?RA|RA/i }).first();
+                      const raLink = currentLineItem.locator("a").filter({ hasText: /Refer|RA|Remittance|R\.?A\.?/i }).first();
                       if (await raLink.count() > 0) {
                         try {
                           await log(`Row ${i + 1}: Found 'Refer to your RA' link. Clicking it...`);
@@ -375,8 +376,24 @@ export async function POST(req: Request) {
                             await log(`Row ${i + 1}: RA link opened new page: ${newUrl}`);
                           }
 
-                          // Search for the PDF download link
-                          const pdfLink = pdfSource.locator("a[href*='.pdf'], a[href*='pdf'], a[href*='Download'], a:has-text('PDF'), a:has-text('Download'), button:has-text('PDF'), button:has-text('Download')").first();
+                          // Search for the PDF download link using highly comprehensive selectors
+                          const pdfLink = pdfSource.locator([
+                            "a[href*='.pdf']",
+                            "a[href*='pdf']",
+                            "a[href*='Download']",
+                            "a[href*='download']",
+                            "a:has-text('PDF')",
+                            "a:has-text('Download')",
+                            "button:has-text('PDF')",
+                            "button:has-text('Download')",
+                            "[class*='download']",
+                            "[id*='download']",
+                            "img[src*='pdf']",
+                            "img[src*='PDF']",
+                            "a:has(img[src*='pdf'])",
+                            "a:has(img[src*='PDF'])"
+                          ].join(", ")).first();
+
                           if (await pdfLink.count() > 0) {
                             await log(`Row ${i + 1}: Found PDF download link. Triggering download...`);
                             
