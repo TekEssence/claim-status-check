@@ -408,7 +408,7 @@ export async function POST(req: Request) {
                             ]);
 
                             if (download) {
-                              const downloadsDir = path.join(process.cwd(), "downloads");
+                              const downloadsDir = path.join(os.tmpdir(), "downloads");
                               if (!fs.existsSync(downloadsDir)) {
                                 fs.mkdirSync(downloadsDir, { recursive: true });
                               }
@@ -417,10 +417,19 @@ export async function POST(req: Request) {
                               const pdfFileName = `${rowIndex + 2}_${memberPolicyId}_${cleanDos}.pdf`;
                               const pdfPath = path.join(downloadsDir, pdfFileName);
                               await download.saveAs(pdfPath);
-                              await log(`Row ${i + 1}: Saved PDF to ${pdfPath}`);
+                              await log(`Row ${i + 1}: Saved PDF temporarily.`);
 
-                              // Read and parse PDF text
+                              // Read PDF bytes
                               const pdfBuffer = fs.readFileSync(pdfPath);
+                              
+                              // Send the PDF buffer to the frontend for actual local download
+                              await sendEvent({
+                                type: "pdf_download",
+                                filename: pdfFileName,
+                                base64: pdfBuffer.toString("base64")
+                              });
+
+                              // Extract text from the PDF
                               const pdfText = extractTextFromPdf(pdfBuffer);
                               const pdfLines = pdfText.split("\n").map(l => l.trim()).filter(Boolean);
 

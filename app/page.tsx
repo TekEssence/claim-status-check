@@ -160,6 +160,27 @@ export default function Home() {
                   a.click();
                   document.body.removeChild(a);
                   URL.revokeObjectURL(url);
+                } else if (eventData.type === "pdf_download") {
+                  try {
+                    // Convert base64 back to binary data
+                    const binaryString = window.atob(eventData.base64);
+                    const bytes = new Uint8Array(binaryString.length);
+                    for (let i = 0; i < binaryString.length; i++) {
+                      bytes[i] = binaryString.charCodeAt(i);
+                    }
+                    // Trigger download in the user's browser
+                    const blob = new Blob([bytes], { type: "application/pdf" });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement("a");
+                    a.href = url;
+                    a.download = eventData.filename;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(url);
+                  } catch (err) {
+                    console.error("Failed to process pdf_download event", err);
+                  }
                 } else if (eventData.type === "done") {
                   // Handled below loop
                 } else if (eventData.type === "error") {
