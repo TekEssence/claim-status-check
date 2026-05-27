@@ -444,10 +444,22 @@ export async function POST(req: Request) {
                               const pdfLines = pdfText.split("\n").map(l => l.trim()).filter(Boolean);
 
                               const dosStr = formatMmDdYyyy(dosDate);
-                              // Look for line containing member ID and DOS
-                              const matchingLine = pdfLines.find(line => 
-                                line.includes(memberPolicyId) && line.includes(dosStr)
-                              );
+                              
+                              let matchingLine = "";
+                              // Look for line containing member ID. Since PDF tables can split across lines,
+                              // check up to 3 lines ahead for the matching DOS.
+                              for (let j = 0; j < pdfLines.length; j++) {
+                                if (pdfLines[j].includes(memberPolicyId)) {
+                                  for (let k = 0; k <= 3; k++) {
+                                    if (j + k < pdfLines.length && pdfLines[j + k].includes(dosStr)) {
+                                      // Concatenate the lines together to form the full claim row
+                                      matchingLine = pdfLines.slice(j, j + k + 1).join(" ");
+                                      break;
+                                    }
+                                  }
+                                }
+                                if (matchingLine) break;
+                              }
 
                               if (matchingLine) {
                                 await log(`Row ${i + 1}: Extracted claim line from PDF: ${matchingLine}`);
