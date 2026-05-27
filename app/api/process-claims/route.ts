@@ -344,9 +344,10 @@ export async function POST(req: Request) {
 
                   // Collect details for each matching row on this page
                   for (let idx = 0; idx < count; idx++) {
-                    const currentLineItem = matchingRows.nth(idx);
-                    const summaryText = (await currentLineItem.innerText()).replace(/\s+/g, " ").trim();
-                    await currentLineItem.click();
+                    try {
+                      const currentLineItem = matchingRows.nth(idx);
+                      const summaryText = (await currentLineItem.innerText({ timeout: 5000 })).replace(/\s+/g, " ").trim();
+                      await currentLineItem.click({ timeout: 5000 });
                     // Use sibling tr.details after the matched line-item
                     const detailsRow = currentLineItem.locator("~ tr.details").first();
                     const detailsContent = detailsRow.locator('.details-content');
@@ -446,27 +447,20 @@ export async function POST(req: Request) {
                               const dosStr = formatMmDdYyyy(dosDate);
                               
                               let matchingLine = "";
-                              // Look for line containing member ID. Since PDF tables can split across lines,
-                              // check up to 10 lines ahead for the specific matching claim row.
+                              // Collect all lines for this member ID up to the next member ID or max 50 lines.
                               for (let j = 0; j < pdfLines.length; j++) {
                                 if (pdfLines[j].includes(memberPolicyId)) {
-                                  for (let k = 0; k <= 10; k++) {
-                                    const checkIdx = j + k;
-                                    if (checkIdx < pdfLines.length) {
-                                      const lineText = pdfLines[checkIdx];
-                                      if (lineText.includes(dosStr)) {
-                                        // Extract dates to ensure we match the 'From Date' (the second date)
-                                        const dates = lineText.match(/\d{2}\/\d{2}\/\d{4}/g);
-                                        if (dates && dates.length >= 2 && dates[1] === dosStr) {
-                                          // Combine the member row and this specific claim row
-                                          matchingLine = k === 0 ? lineText : `${pdfLines[j]} ${lineText}`;
-                                          break;
-                                        }
-                                      }
-                                    }
+                                  let end = j + 1;
+                                  while (end < pdfLines.length && end - j < 50) {
+                                    if (/^\d{14}$/.test(pdfLines[end])) break; // another member id
+                                    end++;
+                                  }
+                                  const block = pdfLines.slice(j, end);
+                                  if (block.some(l => l.includes(dosStr))) {
+                                    matchingLine = block.join(" ");
+                                    break;
                                   }
                                 }
-                                if (matchingLine) break;
                               }
 
                               if (matchingLine) {
@@ -514,17 +508,20 @@ export async function POST(req: Request) {
                         await log(`Row ${i + 1}: 'Refer to your RA' text found in details, but no exact matching link element was found.`);
                         raDetail = "Error: RA link element not found";
                       }
-
-                      // Save extracted detail line or error message
-                      referRaDetails.push(raDetail);
                     }
 
+                    // Save extracted detail line or error message
                     if (raDetail) {
                       statusInfoText += ` | RA Info: ${raDetail}`;
                     }
+                    referRaDetails.push(raDetail);
 
                     details.push(`Summary: [${summaryText}] | Details: [${headerText.replace(/\s+/g, " ")}] | Status Info: [${statusInfoText}]`);
+                  } catch (innerError) {
+                    await log(`Row ${i + 1}: Warning: Could not process remaining matching rows on this page (likely due to DOM reset after navigating back). Skipping remaining matches on page.`);
+                    break;
                   }
+                }
 
                   // Check if the last matching row is also the last row on this page.
                   // If so, the DOS might continue on the next page.
