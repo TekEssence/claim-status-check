@@ -361,8 +361,8 @@ export async function POST(req: Request) {
                     const hasRaText = /Refer/i.test(statusInfoText);
                     let raDetail = "";
                     if (hasRaText && context) {
-                      // Look for the exact link text inside the detailsRow, NOT the summary row
-                      const raLink = detailsRow.locator("a").filter({ hasText: /Refer to your RA/i }).first();
+                      // Look for the exact link text inside the detailsRow, searching spans and links
+                      const raLink = detailsRow.locator("span, a").filter({ hasText: /Refer to your RA/i }).first();
                       if (await raLink.count() > 0) {
                         try {
                           await log(`Row ${i + 1}: Found exact 'Refer to your RA' link in details. Clicking it...`);
@@ -381,6 +381,8 @@ export async function POST(req: Request) {
 
                           // Search for the PDF download link using comprehensive selectors
                           const pdfLink = pdfSource.locator([
+                            "div[ng-click*='GetRaPdfDownload']",
+                            ".fa-arrow-circle-down",
                             "a[href*='.pdf']",
                             "a[href*='pdf']",
                             "a[href*='Download']",
