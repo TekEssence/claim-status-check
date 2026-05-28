@@ -363,7 +363,8 @@ export async function POST(req: Request) {
                     // --- Collect Check Numbers if status is 'Refer to your RA' ---
                     const hasRaText = /Refer/i.test(statusInfoText);
                     if (hasRaText && context) {
-                      const chkMatch = statusInfoText.match(/Check Number.*?(\b\d{9,15}\b)/i);
+                      const fullDetailsText = (headerText + " " + statusInfoText).replace(/\s+/g, " ");
+                      const chkMatch = fullDetailsText.match(/Check\s*(?:#|Number)\s*:?\s*([A-Z0-9\-]{5,20})/i);
                       if (chkMatch) {
                         const cn = chkMatch[1];
                         checkNumbersToDownload.push(cn);
