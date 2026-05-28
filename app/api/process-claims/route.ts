@@ -206,9 +206,9 @@ export async function POST(req: Request) {
 
 
             
-            if (!memberPolicyId || !dosValue) {
-              const msg = "Skipped: Missing Member ID or Date of Service.";
-              log(`Row ${i + 1}: ${msg}`);
+            if (!memberPolicyId || !dosValue || memberPolicyId === "NaN" || dosValue === "NaN") {
+              const msg = "Skipped: Missing or Invalid Member ID / Date of Service.";
+              await log(`Row ${i + 1}: ${msg}`);
               sendEvent({
                 type: "row_update",
                 index: rowIndex,
