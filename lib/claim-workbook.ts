@@ -227,6 +227,19 @@ export function applyClaimRowUpdateToWorksheet(
     addHeader(headerRow, columns.updateTimeCol, "BotUpdateTime", headerStyle);
   }
   if (columns.referRaCol === 0) {
+    // Pre-allocate all post-processing target columns first so BotReferRA comes after them
+    TARGET_COLS.forEach((col) => {
+      let existingCol = 0;
+      headerRow.eachCell((cell, colNum) => {
+        if (String(cell.value) === col.label) existingCol = colNum;
+      });
+      if (existingCol === 0) {
+        nextCol = getNextAvailableCol(nextCol);
+        addHeader(headerRow, nextCol, col.label, headerStyle);
+        nextCol++;
+      }
+    });
+
     nextCol = getNextAvailableCol(nextCol);
     columns.referRaCol = nextCol++;
     addHeader(headerRow, columns.referRaCol, "BotReferRA", headerStyle);
