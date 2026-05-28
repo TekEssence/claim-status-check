@@ -486,26 +486,27 @@ export async function POST(req: Request) {
                     
                     const searchInput = pdfSource.locator("input#search, input[placeholder*='Check Number']").first();
                     await searchInput.fill(chk);
-                    await searchInput.press("Enter");
+                    
+                    const searchBtn = pdfSource.locator(".singleSearchButton, button[type='submit']").first();
+                    if (await searchBtn.count() > 0 && await searchBtn.isVisible()) {
+                      await searchBtn.click();
+                    } else {
+                      await searchInput.press("Enter");
+                    }
                     
                     await pdfSource.locator('div[full-screen-ajax-loader] .full-screen-bg').waitFor({ state: "hidden", timeout: 30000 }).catch(() => {});
                     await pdfSource.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
 
-                    const pdfSelectors = [
+                    const combinedPdfSelector = [
                       "div[ng-click*='GetRaPdfDownload']",
                       "div[uib-popover*='download Claim PDF']",
                       ".fa-arrow-circle-down"
-                    ];
-                    let pdfLink = null;
-                    for (const sel of pdfSelectors) {
-                      const loc = pdfSource.locator(sel).first();
-                      if (await loc.count() > 0 && await loc.isVisible()) {
-                        pdfLink = loc;
-                        break;
-                      }
-                    }
+                    ].join(", ");
+                    
+                    const pdfLink = pdfSource.locator(combinedPdfSelector).first();
+                    await pdfLink.waitFor({ state: "visible", timeout: 15000 }).catch(() => {});
 
-                    if (pdfLink) {
+                    if (await pdfLink.isVisible()) {
                       const [download] = await Promise.all([
                         pdfSource.waitForEvent("download", { timeout: 25000 }).catch(() => null),
                         pdfLink.click({ force: true })
