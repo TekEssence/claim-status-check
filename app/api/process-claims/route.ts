@@ -486,13 +486,7 @@ export async function POST(req: Request) {
                     
                     const searchInput = pdfSource.locator("input#search, input[placeholder*='Check Number']").first();
                     await searchInput.fill(chk);
-                    
-                    const form = searchInput.locator("xpath=ancestor::form").first();
-                    if (await form.count() > 0) {
-                      await form.evaluate((f: any) => f.submit());
-                    } else {
-                      await searchInput.press("Enter");
-                    }
+                    await searchInput.press("Enter");
                     
                     await pdfSource.locator('div[full-screen-ajax-loader] .full-screen-bg').waitFor({ state: "hidden", timeout: 30000 }).catch(() => {});
                     await pdfSource.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
