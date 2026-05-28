@@ -457,48 +457,45 @@ export async function POST(req: Request) {
               // -------------------------------------------------------------
               // BATCH DOWNLOAD REFER TO YOUR RA PDFs FOR THIS ROW
               // -------------------------------------------------------------
-              if (checkNumbersToDownload.length > 0 && raLinkToClick) {
+              if (checkNumbersToDownload.length > 0) {
                 const uniqueChecks = Array.from(new Set(checkNumbersToDownload));
                 await log(`Row ${i + 1}: Downloading RAs sequentially for Check Numbers: ${uniqueChecks.join(", ")}`);
 
                 try {
-                  // Navigate to RA page once
-                  const [newPage] = await Promise.all([
-                    context.waitForEvent("page", { timeout: 15000 }).catch(() => null),
-                    raLinkToClick.click()
-                  ]);
-
-                  const pdfSource = newPage || page;
-                  if (newPage) {
-                    await newPage.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
-                  } else {
-                    await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
-                  }
+                  // Navigate to RA page directly using Angular UI-Router to avoid stale locator timeouts
+                  await page.evaluate(() => {
+                    const injector = (window as any).angular && (window as any).angular.element(document.body).injector();
+                    if (injector) {
+                      injector.get('$state').go('finance.remittance');
+                    } else {
+                      window.location.hash = '/finance/remittance-advice';
+                    }
+                  });
+                  await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
                   
+                  const pdfSource = page;
                   for (let cIdx = 0; cIdx < uniqueChecks.length; cIdx++) {
                     const chk = uniqueChecks[cIdx];
                     await log(`Row ${i + 1}: Processing RA for Check Number ${chk} (${cIdx + 1}/${uniqueChecks.length})...`);
                     
-                    if (cIdx > 0) {
-                      const searchAgainBtn = pdfSource.locator(".accordionPane:has(.search-again), h2.search-again").first();
-                      if (await searchAgainBtn.count() > 0 && await searchAgainBtn.isVisible()) {
-                         await searchAgainBtn.click({ timeout: 5000 });
-                         await pdfSource.waitForTimeout(500); 
-                      }
-                      
-                      const searchInput = pdfSource.locator("input#search, input[placeholder*='Check Number']").first();
-                      await searchInput.fill(chk);
-                      
-                      const form = searchInput.locator("xpath=ancestor::form").first();
-                      if (await form.count() > 0) {
-                        await form.evaluate((f: any) => f.submit());
-                      } else {
-                        await searchInput.press("Enter");
-                      }
-                      
-                      await pdfSource.locator('div[full-screen-ajax-loader] .full-screen-bg').waitFor({ state: "hidden", timeout: 30000 }).catch(() => {});
-                      await pdfSource.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
+                    const searchAgainBtn = pdfSource.locator(".accordionPane:has(.search-again), h2.search-again").first();
+                    if (await searchAgainBtn.count() > 0 && await searchAgainBtn.isVisible()) {
+                       await searchAgainBtn.click({ timeout: 5000 });
+                       await pdfSource.waitForTimeout(500); 
                     }
+                    
+                    const searchInput = pdfSource.locator("input#search, input[placeholder*='Check Number']").first();
+                    await searchInput.fill(chk);
+                    
+                    const form = searchInput.locator("xpath=ancestor::form").first();
+                    if (await form.count() > 0) {
+                      await form.evaluate((f: any) => f.submit());
+                    } else {
+                      await searchInput.press("Enter");
+                    }
+                    
+                    await pdfSource.locator('div[full-screen-ajax-loader] .full-screen-bg').waitFor({ state: "hidden", timeout: 30000 }).catch(() => {});
+                    await pdfSource.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
 
                     const pdfSelectors = [
                       "div[ng-click*='GetRaPdfDownload']",
@@ -562,7 +559,6 @@ export async function POST(req: Request) {
                     }
                   }
 
-                  if (newPage) await newPage.close().catch(() => {});
                 } catch (err) {
                    await log(`Row ${i + 1}: Error handling RA batch download: ${(err as Error).message}`);
                    referRaDetails.push(`Error: ${(err as Error).message}`);
