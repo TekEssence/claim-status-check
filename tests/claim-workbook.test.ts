@@ -238,8 +238,8 @@ test("preserves styles on new columns and inserted rows cell-by-cell during post
   headerRow.getCell(2).style = { font: { bold: true, color: { argb: "FFFF0000" } } };
 
   const dataRow = worksheet.addRow(["member-a", "02/05/2026"]);
-  dataRow.getCell(1).style = { fill: { type: "solid", fgColor: { argb: "FFFFE0E0" } } };
-  dataRow.getCell(2).style = { fill: { type: "solid", fgColor: { argb: "FFFFE0E0" } } };
+  dataRow.getCell(1).style = { fill: { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFE0E0" } } };
+  dataRow.getCell(2).style = { fill: { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFE0E0" } } };
 
   applyClaimRowUpdateToWorksheet(worksheet, {
     index: 0,
@@ -265,15 +265,15 @@ test("preserves styles on new columns and inserted rows cell-by-cell during post
   const row2 = worksheet.getRow(2); // Original row
   const row3 = worksheet.getRow(3); // Inserted row
 
-  assert.equal(row2.getCell(headers["Member Policy ID"]).style.fill?.type, "solid");
-  assert.equal(row2.getCell(headers["Member Policy ID"]).style.fill?.fgColor?.argb, "FFFFE0E0");
+  assert.equal(row2.getCell(headers["Member Policy ID"]).style.fill?.type, "pattern");
+  assert.equal((row2.getCell(headers["Member Policy ID"]).style.fill as ExcelJS.FillPattern)?.fgColor?.argb, "FFFFE0E0");
 
-  assert.equal(row3.getCell(headers["Member Policy ID"]).style.fill?.type, "solid");
-  assert.equal(row3.getCell(headers["Member Policy ID"]).style.fill?.fgColor?.argb, "FFFFE0E0");
+  assert.equal(row3.getCell(headers["Member Policy ID"]).style.fill?.type, "pattern");
+  assert.equal((row3.getCell(headers["Member Policy ID"]).style.fill as ExcelJS.FillPattern)?.fgColor?.argb, "FFFFE0E0");
   
   // Assert newly created columns also got the styled details
-  assert.equal(row2.getCell(headers["Check Number"]).style.fill?.fgColor?.argb, "FFFFE0E0");
-  assert.equal(row3.getCell(headers["Check Number"]).style.fill?.fgColor?.argb, "FFFFE0E0");
+  assert.equal((row2.getCell(headers["Check Number"]).style.fill as ExcelJS.FillPattern)?.fgColor?.argb, "FFFFE0E0");
+  assert.equal((row3.getCell(headers["Check Number"]).style.fill as ExcelJS.FillPattern)?.fgColor?.argb, "FFFFE0E0");
 });
 
 test("postProcessWorksheet handles empty, null, or missing claim details gracefully", () => {

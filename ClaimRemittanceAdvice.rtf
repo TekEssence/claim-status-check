@@ -1,0 +1,923 @@
+{\rtf1\ansi\ansicpg1252\cocoartf2868
+\cocoatextscaling0\cocoaplatform0{\fonttbl\f0\fswiss\fcharset0 Helvetica;}
+{\colortbl;\red255\green255\blue255;}
+{\*\expandedcolortbl;;}
+\paperw11900\paperh16840\margl1440\margr1440\vieww34360\viewh18740\viewkind0
+\pard\tx720\tx1440\tx2160\tx2880\tx3600\tx4320\tx5040\tx5760\tx6480\tx7200\tx7920\tx8640\pardirnatural\partightenfactor0
+
+\f0\fs24 \cf0 <div data-role="page" data-url="/claims/status" tabindex="0" class="ui-page ui-page-theme-a ui-page-active" style="" bis_skin_checked="1">\
+\
+    <!--- Modals-->\
+    <div class="modalBackground" id="bakModal" onclick="closeModal('modalContainerGeneral');closeModal('modalFrameContainerGeneral');" bis_skin_checked="1"></div>\
+    <div id="modalContainerGeneral" bis_skin_checked="1">\
+        <div class="modalContainer" bis_skin_checked="1">\
+            <img class="modalCloseButton non-printable" onclick="closeModal('modalContainerGeneral')" src="Content/Images/btn_close.png" alt="close">\
+            <!-- uiView: modalDetails --><div class="modalContent" ui-view="modalDetails" bis_skin_checked="1">\
+            </div>\
+        </div>\
+    </div>\
+\
+    <div id="modalFrameContainerGeneral" bis_skin_checked="1">\
+        <div class="modalFrameContainer non-printable" bis_skin_checked="1">\
+            <img class="modalCloseButton non-printable" onclick="closeModal('modalFrameContainerGeneral');" src="Content/Images/btn_close.png" alt="close">\
+            <iframe class="modalFrame" id="frmModalFrame" src=""></iframe>\
+        </div>\
+    </div>\
+    <!--- Modals-->\
+\
+    \
+    <header>\
+        <div class="main-header" bis_skin_checked="1">\
+            <div class="row" bis_skin_checked="1">\
+                <nav class="navbar navbar-default" role="navigation">\
+                    <div class="navbar-header" bis_skin_checked="1">\
+                        <button class="navbar-toggle ui-btn ui-shadow ui-corner-all" data-target="#navbarCollapse" data-toggle="collapse" id="topNavBtn" type="button">\
+                            <span class="sr-only">Toggle navigation</span>\
+                            <span class="icon-bar"></span>\
+                            <span class="icon-bar"></span>\
+                            <span class="icon-bar"></span>\
+                        </button>\
+                        <a class="navbar-brand non-printable ui-link" href="App/Home" bis_skin_checked="1">\
+                            <img id="imgLogo" src="/Content/Images/Logo11.png" alt="IEHP Provider Portal" title="IEHP Provider Portal">\
+                            <h1 class="headerProvPort">Provider Portal</h1>\
+                        </a>\
+                    </div>\
+                    <!-- Collection of nav links and other content for toggling -->\
+                    <div class="collapse navbar-collapse" id="navbarCollapse" bis_skin_checked="1">\
+                        <div class="non-printable" id="loginCont" bis_skin_checked="1">\
+                            <!---- Will place in Directive-> Consume Language Service -->\
+                            <div data-ng-controller="Ctrl" id="langCont" bis_skin_checked="1" style="display: block;">\
+                            </div>\
+                        </div>\
+                        <login-partial><div class="fixed-loader" show="loading" simple-ajax-loader="" bis_skin_checked="1"><div class="loader-wrapper no-print ng-hide" ng-class="\{\}" ng-show="show" bis_skin_checked="1"><div class="loader" ng-class="\{'loading':show\}" bis_skin_checked="1"></div></div></div>\
+\
+<div class="non-printable" id="divSignInSignOut" bis_skin_checked="1" style="display: block;">\
+  <div class="SignInOutCont ng-hide" ng-click="logIn()" ng-hide="isAuth" bis_skin_checked="1"></div>\
+\
+  <div class="SignInOutCont" ng-show="isAuth" bis_skin_checked="1">\
+    <ul class="nav navbar-nav navbar-right" ng-controller="fontSizeController">\
+      <li>\
+        <span class="glyphicon glyphicon-user"> </span>\
+        Welcome  NEPHROLOGY ASSOCIATES OF UPLAND AND POMONA\
+      </li>\
+\
+      <li class="hidden-xs">\
+        <div class="headerbtn headerTopNav" id="btnFontSize_small" ng-class="\{'active':isActive[0]\}" ng-click="setActive(0);" bis_skin_checked="1"></div>\
+      </li>\
+      <li class="hidden-xs">\
+        <div class="headerbtn headerTopNav active" id="btnFontSize_normal" ng-class="\{'active':isActive[1]\}" ng-click="setActive(1)" bis_skin_checked="1"></div>\
+      </li>\
+      <li class="hidden-xs">\
+        <div class="headerbtn headerTopNav" id="btnFontSize_large" ng-class="\{'active':isActive[2]\}" ng-click="setActive(2)" bis_skin_checked="1"></div>\
+      </li>\
+      <li ui-sref="my-account" id="myAccount" href="/account/my-account">\
+        <span class="btn btn-primary header-btn headerTopNav">\
+          <span class="glyphicon glyphicon-cog"></span>\
+          My Account\
+        </span>\
+      </li>\
+      <li>\
+        <div class="inbox-icon-group" bis_skin_checked="1">\
+          <div title="Messages" class="inbox-icon" ui-sref="portal-inbox(\{messageState: 'all'\})" href="/portal-inbox?messageState=all" bis_skin_checked="1">\
+            <a class="count-icon">\
+              <img src="Content/Images/icons-png/mail-white.png" alt="Ask IEHP" width="24" height="24">\
+            </a>\
+            <!-- ngIf: memberDataService.unreadCount > 0 -->\
+          </div>\
+          <!-- <div class="inbox-icon" ui-sref="portal-inbox(\{messageState: 'important'\})">\
+            <a class="count-icon">\
+              <img src="Content/Images/portal-inbox/warning_white.svg" alt="Ask IEHP" width="24" height="24" />\
+            </a>\
+            <span class="message-count">\{\{memberDataService.importantcount\}\}</span>\
+          </div>\
+          <div title="Needs More Info Messages" class="inbox-icon"\
+            ui-sref="portal-inbox(\{messageState: 'needsMoreInfo'\})">\
+            <a class="count-icon">\
+              <img src="Content/Images/portal-inbox/reply_white.svg" alt="Ask IEHP" width="24" height="24" />\
+            </a>\
+            <span class="message-count">\{\{memberDataService.needsMoreInfoCount\}\}</span>\
+          </div> -->\
+        </div>\
+      </li>\
+      <!-- <li>\
+        <user-actions></user-actions>\
+      </li> -->\
+      <!-- <button class="btn btn-alerts btn-primary" id="btn-append-to-single-button" type="button">-->\
+      <!-- <span class="badge">0</span>-->\
+      <!-- Actions-->\
+      <!-- </button>-->\
+      <li ng-click="logOut()">\
+        <span class="btn btn-primary header-btn headerTopNav signout">\
+          <!-- <span class="glyphicon glyphicon-log-out"></span> -->\
+          Sign Out\
+        </span>\
+      </li>\
+    </ul>\
+  </div>\
+</div></login-partial>\
+                    </div>\
+                </nav>\
+            </div>\
+        </div>\
+    </header>\
+\
+\
+    <div class="body-content" bis_skin_checked="1">\
+        \
+\
+\
+\
+\
+\
+\
+\
+<div id="idxContainer" class="row" bis_skin_checked="1">\
+    <!-- uiView:  --><div id="idxContent" class="col-xs-12" ui-view="" style="" bis_skin_checked="1"><div class="row contentContainer" bis_skin_checked="1">\
+    <div class="col-lg-9 col-md-9 col-xs-12 col-md-push-3 col-print-push-0 float-none-print" bis_skin_checked="1">\
+        <div class="content-pane white" ng-class="\{'fullscreen':fullscreen\}" bis_skin_checked="1">	\
+            <!-- uiView: content --><div ui-view="content" bis_skin_checked="1"><div class="contentPanel1 contentRight " id="claims-status" bis_skin_checked="1">\
+    <div class="form ofl-visible" bis_skin_checked="1">\
+        <div class="form panel" bis_skin_checked="1">\
+            <!-- ngIf: !ClaimTypeCCA --><h1 ng-if="!ClaimTypeCCA" class="pageTitle">Claims Remittance Advice</h1><!-- end ngIf: !ClaimTypeCCA -->\
+            <!-- ngIf: ClaimTypeCCA -->\
+        </div>\
+\
+        <!-- IEHP Covered (CCA) RAs Download Availability Banner  -->\
+        <!-- ngIf: ClaimTypeCCA -->\
+\
+        <alert remote-config-key="claims-ra"><!-- ngIf: showAlert -->\
+<style>\
+    /* Default styling, could be overridden by the firebase remote config */\
+    .alert-message \{\
+        text-align: center;\
+        line-height: 30px;\
+        margin-bottom: 20px;\
+    \}\
+        .alert-message .title \{\
+            padding: 10px 10px;\
+            background: #ffd400;\
+	        font-size: larger;\
+        \}\
+            .alert-message .title h2 \{\
+                margin: initial;\
+                color: inherit;\
+            \}\
+        .alert-message .body \{\
+	        padding: 0 10px 10px 10px;\
+            background: #ffd400;\
+            color: #01213e;\
+        \}\
+</style></alert>\
+\
+\
+        <div class="Claims-Remittance col-xs-12" bis_skin_checked="1">\
+            <div class="accordion-pane" bis_skin_checked="1">\
+                <pp-search-type class="block clearfix" label="Search By Check Number"><!-- ngIf: search.inputCollapsed --><div ng-if="search.inputCollapsed" class="" bis_skin_checked="1" style="">\
+	<div class="accordionPane" ng-click="search.inputCollapsed = false" bis_skin_checked="1">\
+		<h2 class="search-again">Search Again</h2>\
+		<span class="glyphicon rounded-arrow"><img src="./Content/Images/Dark.png"></span>\
+	</div>\
+</div><!-- end ngIf: search.inputCollapsed -->\
+<form id="search-type" class="form-horizontal ng-pristine ng-valid collapse ng-valid-maxlength ng-valid-required" ng-submit="search.submit()" uib-collapse="search.inputCollapsed" autocomplete="off" style="height: 0px;">\
+	<div class="searchbox-container block clearfix col-md-push-1 nurse-search-box" bis_skin_checked="1">\
+		<div class="nurse-advise-search" bis_skin_checked="1">\
+		<input class="form-control ng-pristine ng-untouched ng-valid valid-value ng-valid-maxlength" ng-model="search.query" ng-click="search.clickInput()" ng-change="search.updateType()" ng-blur="search.onLeaveMemberIdInput()" maxlength="15" ng-class="search.state.validated() ? 'valid-value' : 'eligInvalidValue'" type="text" id="search" placeholder="Search By Check Number" tabindex="1" style="">\
+        <!-- ngIf: search.type.string -->\
+       \
+		<div class="row text-danger float-left" style="font-size: 0.8rem" bis_skin_checked="1"></div>\
+        <!-- ngIf: parentId === 'ROST.AER' && search.type.string == 'Last Name' -->\
+		<div class="close-btn before-margin-left-0" uib-popover="Reset search" popover-append-to-body="true " popover-trigger="'mouseenter'" ng-click="search.clear()" bis_skin_checked="1">\
+			<img src="./Content/Images/refresh-ico.png" class="refresh-img">\
+		</div>\
+	</div>\
+	<div class="nurse-advice-more-option" bis_skin_checked="1">		\
+		<!-- ngIf: search.status === 3 && !search.state.validated() -->\
+		<!-- ngIf: enableAdvancedOptions --><div ng-if="enableAdvancedOptions" ng-click="search.advancedPane = !search.advancedPane" uib-popover="Search using additional options" popover-append-to-body="true " popover-trigger="'mouseenter'" class="advanced-search" bis_skin_checked="1" style="">\
+			<span class="glyphicon glyphicon-cog"></span>	<!-- ngIf: search.advancedPane -->\
+			<!-- ngIf: !search.advancedPane --><span ng-if="!search.advancedPane">More</span><!-- end ngIf: !search.advancedPane --> Options\
+\
+		</div><!-- end ngIf: enableAdvancedOptions -->\
+	</div>\
+</div>\
+	<!-- ngIf: enableAdvancedOptions --><div ng-if="enableAdvancedOptions" ng-show="search.advancedPane" class="ng-hide" bis_skin_checked="1" style="">\
+		<div class="form-group advanced-searchpane nurse-more-box" ng-class="\{'ofl-visible': !search.inputCollapsed\}" bis_skin_checked="1">\
+			<div ng-transclude="" bis_skin_checked="1">\
+                    <div class="filter" bis_skin_checked="1">\
+                        <div class="col-md-12 col-sm-12 input-row text-center claims-ra-row valid" ng-class="\{'active':search.advancedFilter === 'dateRangeParam', 'valid': search.validateRange() === true\}" bis_skin_checked="1">\
+                            <div class="col-lg-5 col-md-5 col-sm-5 col-xs-12" bis_skin_checked="1">\
+                                <div class="row margin-0" bis_skin_checked="1">\
+                                    <label class="checkbox date-search-check">\
+                                        <input ng-checked="search.advancedFilter === 'dateRangeParam'" ng-model="search.advancedFilter" ng-click="search.status=0;search.query = '';search.updateType()" ng-true-value="'dateRangeParam'" type="checkbox" class="ng-pristine ng-untouched ng-valid">\
+                                        <span class="checkbox-material"><span class="check"></span></span>\
+                                    </label>\
+                                    <label class="col-md-11 col-sm-11 control-label label-date-by-range" for="formGroupInputLarge" ng-click="search.advancedFilter = search.advancedFilter === '' ? 'dateRangeParam' : '';search.status=0;search.query = '';search.updateType()">Search by Date Range<br> (max 120 days)</label>\
+                                </div>\
+                            </div>\
+                            <div class="col-lg-7 col-md-7 col-sm-8 col-xs-12" bis_skin_checked="1">\
+                                <div class="row" bis_skin_checked="1">\
+                                    <div class="col-md-5 col-sm-5 date-top-margin explicit-date-range padding-left-0" bis_skin_checked="1">\
+                                        <div class="datepicker" date-format="MM/dd/yyyy" date-max-limit="05/28/2026" date-min-limit="01/01/2014" date-typer="true" selector="min-range" bis_skin_checked="1">\
+                                            <button class="icon input" type="button">\
+                                                <i class="glyphicon glyphicon-calendar"></i>\
+                                            </button>\
+                                            <input class="form-control min-range ng-pristine ng-untouched ng-valid ng-valid-required" ng-change="search.validateRange()" ng-class="\{'invalid':  !search.validateRange(search.minRange) \}" ng-click="search.advancedFilter ='dateRangeParam';search.query = '';search.updateType()" ;="" ng-model="search.minRange" type="text" required=""><div class="_720kb-datepicker-calendar  " ng-class="\{'_720kb-datepicker-forced-to-open': checkVisibility()\}" ng-blur="hideCalendar()" bis_skin_checked="1"><div class="_720kb-datepicker-calendar-header" bis_skin_checked="1"><div class="_720kb-datepicker-calendar-header-left" bis_skin_checked="1"><a class="_720kb-datepicker-calendar-month-button" href="javascript:void(0)" ng-class="\{'_720kb-datepicker-item-hidden': !willPrevMonthBeSelectable()\}" ng-click="prevMonth()" title="Prev"><b class="_720kb-datepicker-default-button">\uc0\u10216 </b></a></div><div class="_720kb-datepicker-calendar-header-middle _720kb-datepicker-calendar-month" bis_skin_checked="1">May&nbsp;<a href="javascript:void(0)" ng-click="paginateYears(year); showYearsPagination = !showYearsPagination;"><span>2026<i ng-class="\{'_720kb-datepicker-calendar-header-closed-pagination': !showYearsPagination, '_720kb-datepicker-calendar-header-opened-pagination': showYearsPagination\}" class="_720kb-datepicker-calendar-header-closed-pagination"></i></span></a></div><div class="_720kb-datepicker-calendar-header-right" bis_skin_checked="1"><a class="_720kb-datepicker-calendar-month-button _720kb-datepicker-item-hidden" ng-class="\{'_720kb-datepicker-item-hidden': !willNextMonthBeSelectable()\}" href="javascript:void(0)" ng-click="nextMonth()" title="Next"><b class="_720kb-datepicker-default-button">\u10217 </b></a></div></div><div class="_720kb-datepicker-calendar-header ng-hide" ng-show="showYearsPagination" bis_skin_checked="1"><div class="_720kb-datepicker-calendar-years-pagination" bis_skin_checked="1"><!-- ngRepeat: y in paginationYears track by $index --><a ng-class="\{'_720kb-datepicker-active': y === year, '_720kb-datepicker-disabled': !isSelectableMaxYear(y) || !isSelectableMinYear(y)\}" href="javascript:void(0)" ng-click="setNewYear(y)" ng-repeat="y in paginationYears track by $index">2016</a><!-- end ngRepeat: y in paginationYears track by $index --><a ng-class="\{'_720kb-datepicker-active': y === year, '_720kb-datepicker-disabled': !isSelectableMaxYear(y) || !isSelectableMinYear(y)\}" href="javascript:void(0)" ng-click="setNewYear(y)" ng-repeat="y in paginationYears track by $index">2017</a><!-- end ngRepeat: y in paginationYears track by $index --><a ng-class="\{'_720kb-datepicker-active': y === year, '_720kb-datepicker-disabled': !isSelectableMaxYear(y) || !isSelectableMinYear(y)\}" href="javascript:void(0)" ng-click="setNewYear(y)" ng-repeat="y in paginationYears track by $index">2018</a><!-- end ngRepeat: y in paginationYears track by $index --><a ng-class="\{'_720kb-datepicker-active': y === year, '_720kb-datepicker-disabled': !isSelectableMaxYear(y) || !isSelectableMinYear(y)\}" href="javascript:void(0)" ng-click="setNewYear(y)" ng-repeat="y in paginationYears track by $index">2019</a><!-- end ngRepeat: y in paginationYears track by $index --><a ng-class="\{'_720kb-datepicker-active': y === year, '_720kb-datepicker-disabled': !isSelectableMaxYear(y) || !isSelectableMinYear(y)\}" href="javascript:void(0)" ng-click="setNewYear(y)" ng-repeat="y in paginationYears track by $index">2020</a><!-- end ngRepeat: y in paginationYears track by $index --><a ng-class="\{'_720kb-datepicker-active': y === year, '_720kb-datepicker-disabled': !isSelectableMaxYear(y) || !isSelectableMinYear(y)\}" href="javascript:void(0)" ng-click="setNewYear(y)" ng-repeat="y in paginationYears track by $index">2021</a><!-- end ngRepeat: y in paginationYears track by $index --><a ng-class="\{'_720kb-datepicker-active': y === year, '_720kb-datepicker-disabled': !isSelectableMaxYear(y) || !isSelectableMinYear(y)\}" href="javascript:void(0)" ng-click="setNewYear(y)" ng-repeat="y in paginationYears track by $index">2022</a><!-- end ngRepeat: y in paginationYears track by $index --><a ng-class="\{'_720kb-datepicker-active': y === year, '_720kb-datepicker-disabled': !isSelectableMaxYear(y) || !isSelectableMinYear(y)\}" href="javascript:void(0)" ng-click="setNewYear(y)" ng-repeat="y in paginationYears track by $index">2023</a><!-- end ngRepeat: y in paginationYears track by $index --><a ng-class="\{'_720kb-datepicker-active': y === year, '_720kb-datepicker-disabled': !isSelectableMaxYear(y) || !isSelectableMinYear(y)\}" href="javascript:void(0)" ng-click="setNewYear(y)" ng-repeat="y in paginationYears track by $index">2024</a><!-- end ngRepeat: y in paginationYears track by $index --><a ng-class="\{'_720kb-datepicker-active': y === year, '_720kb-datepicker-disabled': !isSelectableMaxYear(y) || !isSelectableMinYear(y)\}" href="javascript:void(0)" ng-click="setNewYear(y)" ng-repeat="y in paginationYears track by $index">2025</a><!-- end ngRepeat: y in paginationYears track by $index --><a ng-class="\{'_720kb-datepicker-active': y === year, '_720kb-datepicker-disabled': !isSelectableMaxYear(y) || !isSelectableMinYear(y)\}" href="javascript:void(0)" ng-click="setNewYear(y)" ng-repeat="y in paginationYears track by $index" class="_720kb-datepicker-active">2026</a><!-- end ngRepeat: y in paginationYears track by $index --><a ng-class="\{'_720kb-datepicker-active': y === year, '_720kb-datepicker-disabled': !isSelectableMaxYear(y) || !isSelectableMinYear(y)\}" href="javascript:void(0)" ng-click="setNewYear(y)" ng-repeat="y in paginationYears track by $index" class="_720kb-datepicker-disabled">2027</a><!-- end ngRepeat: y in paginationYears track by $index --><a ng-class="\{'_720kb-datepicker-active': y === year, '_720kb-datepicker-disabled': !isSelectableMaxYear(y) || !isSelectableMinYear(y)\}" href="javascript:void(0)" ng-click="setNewYear(y)" ng-repeat="y in paginationYears track by $index" class="_720kb-datepicker-disabled">2028</a><!-- end ngRepeat: y in paginationYears track by $index --><a ng-class="\{'_720kb-datepicker-active': y === year, '_720kb-datepicker-disabled': !isSelectableMaxYear(y) || !isSelectableMinYear(y)\}" href="javascript:void(0)" ng-click="setNewYear(y)" ng-repeat="y in paginationYears track by $index" class="_720kb-datepicker-disabled">2029</a><!-- end ngRepeat: y in paginationYears track by $index --><a ng-class="\{'_720kb-datepicker-active': y === year, '_720kb-datepicker-disabled': !isSelectableMaxYear(y) || !isSelectableMinYear(y)\}" href="javascript:void(0)" ng-click="setNewYear(y)" ng-repeat="y in paginationYears track by $index" class="_720kb-datepicker-disabled">2030</a><!-- end ngRepeat: y in paginationYears track by $index --><a ng-class="\{'_720kb-datepicker-active': y === year, '_720kb-datepicker-disabled': !isSelectableMaxYear(y) || !isSelectableMinYear(y)\}" href="javascript:void(0)" ng-click="setNewYear(y)" ng-repeat="y in paginationYears track by $index" class="_720kb-datepicker-disabled">2031</a><!-- end ngRepeat: y in paginationYears track by $index --><a ng-class="\{'_720kb-datepicker-active': y === year, '_720kb-datepicker-disabled': !isSelectableMaxYear(y) || !isSelectableMinYear(y)\}" href="javascript:void(0)" ng-click="setNewYear(y)" ng-repeat="y in paginationYears track by $index" class="_720kb-datepicker-disabled">2032</a><!-- end ngRepeat: y in paginationYears track by $index --><a ng-class="\{'_720kb-datepicker-active': y === year, '_720kb-datepicker-disabled': !isSelectableMaxYear(y) || !isSelectableMinYear(y)\}" href="javascript:void(0)" ng-click="setNewYear(y)" ng-repeat="y in paginationYears track by $index" class="_720kb-datepicker-disabled">2033</a><!-- end ngRepeat: y in paginationYears track by $index --><a ng-class="\{'_720kb-datepicker-active': y === year, '_720kb-datepicker-disabled': !isSelectableMaxYear(y) || !isSelectableMinYear(y)\}" href="javascript:void(0)" ng-click="setNewYear(y)" ng-repeat="y in paginationYears track by $index" class="_720kb-datepicker-disabled">2034</a><!-- end ngRepeat: y in paginationYears track by $index --><a ng-class="\{'_720kb-datepicker-active': y === year, '_720kb-datepicker-disabled': !isSelectableMaxYear(y) || !isSelectableMinYear(y)\}" href="javascript:void(0)" ng-click="setNewYear(y)" ng-repeat="y in paginationYears track by $index" class="_720kb-datepicker-disabled">2035</a><!-- end ngRepeat: y in paginationYears track by $index --></div><div class="_720kb-datepicker-calendar-years-pagination-pages" bis_skin_checked="1"><a href="javascript:void(0)" ng-click="paginateYears(paginationYears[0])" ng-class="\{'_720kb-datepicker-item-hidden': paginationYearsPrevDisabled\}"><b class="_720kb-datepicker-default-button">\u10216 </b></a><a href="javascript:void(0)" ng-click="paginateYears(paginationYears[paginationYears.length -1 ])" ng-class="\{'_720kb-datepicker-item-hidden': paginationYearsNextDisabled\}" class="_720kb-datepicker-item-hidden"><b class="_720kb-datepicker-default-button">\u10217 </b></a></div></div><div class="_720kb-datepicker-calendar-days-header" bis_skin_checked="1"><!-- ngRepeat: d in daysInString --><div ng-repeat="d in daysInString" bis_skin_checked="1">Sun</div><!-- end ngRepeat: d in daysInString --><div ng-repeat="d in daysInString" bis_skin_checked="1">Mon</div><!-- end ngRepeat: d in daysInString --><div ng-repeat="d in daysInString" bis_skin_checked="1">Tue</div><!-- end ngRepeat: d in daysInString --><div ng-repeat="d in daysInString" bis_skin_checked="1">Wed</div><!-- end ngRepeat: d in daysInString --><div ng-repeat="d in daysInString" bis_skin_checked="1">Thu</div><!-- end ngRepeat: d in daysInString --><div ng-repeat="d in daysInString" bis_skin_checked="1">Fri</div><!-- end ngRepeat: d in daysInString --><div ng-repeat="d in daysInString" bis_skin_checked="1">Sat</div><!-- end ngRepeat: d in daysInString --></div><div class="_720kb-datepicker-calendar-body" bis_skin_checked="1"><!-- ngRepeat: px in prevMonthDays --><a href="javascript:void(0)" ng-repeat="px in prevMonthDays" class="_720kb-datepicker-calendar-day _720kb-datepicker-disabled">26</a><!-- end ngRepeat: px in prevMonthDays --><a href="javascript:void(0)" ng-repeat="px in prevMonthDays" class="_720kb-datepicker-calendar-day _720kb-datepicker-disabled">27</a><!-- end ngRepeat: px in prevMonthDays --><a href="javascript:void(0)" ng-repeat="px in prevMonthDays" class="_720kb-datepicker-calendar-day _720kb-datepicker-disabled">28</a><!-- end ngRepeat: px in prevMonthDays --><a href="javascript:void(0)" ng-repeat="px in prevMonthDays" class="_720kb-datepicker-calendar-day _720kb-datepicker-disabled">29</a><!-- end ngRepeat: px in prevMonthDays --><a href="javascript:void(0)" ng-repeat="px in prevMonthDays" class="_720kb-datepicker-calendar-day _720kb-datepicker-disabled">30</a><!-- end ngRepeat: px in prevMonthDays --><!-- ngRepeat: item in days --><a href="javascript:void(0)" ng-repeat="item in days" ng-click="setDatepickerDay(item)" ng-class="\{'_720kb-datepicker-active': day === item, '_720kb-datepicker-disabled': !isSelectableMinDate(year + '/' + monthNumber + '/' + item ) || !isSelectableMaxDate(year + '/' + monthNumber + '/' + item) || !isSelectableDate(monthNumber, year, item)\}" class="_720kb-datepicker-calendar-day">1</a><!-- end ngRepeat: item in days --><a href="javascript:void(0)" ng-repeat="item in days" ng-click="setDatepickerDay(item)" ng-class="\{'_720kb-datepicker-active': day === item, '_720kb-datepicker-disabled': !isSelectableMinDate(year + '/' + monthNumber + '/' + item ) || !isSelectableMaxDate(year + '/' + monthNumber + '/' + item) || !isSelectableDate(monthNumber, year, item)\}" class="_720kb-datepicker-calendar-day">2</a><!-- end ngRepeat: item in days --><a href="javascript:void(0)" ng-repeat="item in days" ng-click="setDatepickerDay(item)" ng-class="\{'_720kb-datepicker-active': day === item, '_720kb-datepicker-disabled': !isSelectableMinDate(year + '/' + monthNumber + '/' + item ) || !isSelectableMaxDate(year + '/' + monthNumber + '/' + item) || !isSelectableDate(monthNumber, year, item)\}" class="_720kb-datepicker-calendar-day">3</a><!-- end ngRepeat: item in days --><a href="javascript:void(0)" ng-repeat="item in days" ng-click="setDatepickerDay(item)" ng-class="\{'_720kb-datepicker-active': day === item, '_720kb-datepicker-disabled': !isSelectableMinDate(year + '/' + monthNumber + '/' + item ) || !isSelectableMaxDate(year + '/' + monthNumber + '/' + item) || !isSelectableDate(monthNumber, year, item)\}" class="_720kb-datepicker-calendar-day">4</a><!-- end ngRepeat: item in days --><a href="javascript:void(0)" ng-repeat="item in days" ng-click="setDatepickerDay(item)" ng-class="\{'_720kb-datepicker-active': day === item, '_720kb-datepicker-disabled': !isSelectableMinDate(year + '/' + monthNumber + '/' + item ) || !isSelectableMaxDate(year + '/' + monthNumber + '/' + item) || !isSelectableDate(monthNumber, year, item)\}" class="_720kb-datepicker-calendar-day">5</a><!-- end ngRepeat: item in days --><a href="javascript:void(0)" ng-repeat="item in days" ng-click="setDatepickerDay(item)" ng-class="\{'_720kb-datepicker-active': day === item, '_720kb-datepicker-disabled': !isSelectableMinDate(year + '/' + monthNumber + '/' + item ) || !isSelectableMaxDate(year + '/' + monthNumber + '/' + item) || !isSelectableDate(monthNumber, year, item)\}" class="_720kb-datepicker-calendar-day">6</a><!-- end ngRepeat: item in days --><a href="javascript:void(0)" ng-repeat="item in days" ng-click="setDatepickerDay(item)" ng-class="\{'_720kb-datepicker-active': day === item, '_720kb-datepicker-disabled': !isSelectableMinDate(year + '/' + monthNumber + '/' + item ) || !isSelectableMaxDate(year + '/' + monthNumber + '/' + item) || !isSelectableDate(monthNumber, year, item)\}" class="_720kb-datepicker-calendar-day">7</a><!-- end ngRepeat: item in days --><a href="javascript:void(0)" ng-repeat="item in days" ng-click="setDatepickerDay(item)" ng-class="\{'_720kb-datepicker-active': day === item, '_720kb-datepicker-disabled': !isSelectableMinDate(year + '/' + monthNumber + '/' + item ) || !isSelectableMaxDate(year + '/' + monthNumber + '/' + item) || !isSelectableDate(monthNumber, year, item)\}" class="_720kb-datepicker-calendar-day">8</a><!-- end ngRepeat: item in days --><a href="javascript:void(0)" ng-repeat="item in days" ng-click="setDatepickerDay(item)" ng-class="\{'_720kb-datepicker-active': day === item, '_720kb-datepicker-disabled': !isSelectableMinDate(year + '/' + monthNumber + '/' + item ) || !isSelectableMaxDate(year + '/' + monthNumber + '/' + item) || !isSelectableDate(monthNumber, year, item)\}" class="_720kb-datepicker-calendar-day">9</a><!-- end ngRepeat: item in days --><a href="javascript:void(0)" ng-repeat="item in days" ng-click="setDatepickerDay(item)" ng-class="\{'_720kb-datepicker-active': day === item, '_720kb-datepicker-disabled': !isSelectableMinDate(year + '/' + monthNumber + '/' + item ) || !isSelectableMaxDate(year + '/' + monthNumber + '/' + item) || !isSelectableDate(monthNumber, year, item)\}" class="_720kb-datepicker-calendar-day">10</a><!-- end ngRepeat: item in days --><a href="javascript:void(0)" ng-repeat="item in days" ng-click="setDatepickerDay(item)" ng-class="\{'_720kb-datepicker-active': day === item, '_720kb-datepicker-disabled': !isSelectableMinDate(year + '/' + monthNumber + '/' + item ) || !isSelectableMaxDate(year + '/' + monthNumber + '/' + item) || !isSelectableDate(monthNumber, year, item)\}" class="_720kb-datepicker-calendar-day">11</a><!-- end ngRepeat: item in days --><a href="javascript:void(0)" ng-repeat="item in days" ng-click="setDatepickerDay(item)" ng-class="\{'_720kb-datepicker-active': day === item, '_720kb-datepicker-disabled': !isSelectableMinDate(year + '/' + monthNumber + '/' + item ) || !isSelectableMaxDate(year + '/' + monthNumber + '/' + item) || !isSelectableDate(monthNumber, year, item)\}" class="_720kb-datepicker-calendar-day">12</a><!-- end ngRepeat: item in days --><a href="javascript:void(0)" ng-repeat="item in days" ng-click="setDatepickerDay(item)" ng-class="\{'_720kb-datepicker-active': day === item, '_720kb-datepicker-disabled': !isSelectableMinDate(year + '/' + monthNumber + '/' + item ) || !isSelectableMaxDate(year + '/' + monthNumber + '/' + item) || !isSelectableDate(monthNumber, year, item)\}" class="_720kb-datepicker-calendar-day">13</a><!-- end ngRepeat: item in days --><a href="javascript:void(0)" ng-repeat="item in days" ng-click="setDatepickerDay(item)" ng-class="\{'_720kb-datepicker-active': day === item, '_720kb-datepicker-disabled': !isSelectableMinDate(year + '/' + monthNumber + '/' + item ) || !isSelectableMaxDate(year + '/' + monthNumber + '/' + item) || !isSelectableDate(monthNumber, year, item)\}" class="_720kb-datepicker-calendar-day">14</a><!-- end ngRepeat: item in days --><a href="javascript:void(0)" ng-repeat="item in days" ng-click="setDatepickerDay(item)" ng-class="\{'_720kb-datepicker-active': day === item, '_720kb-datepicker-disabled': !isSelectableMinDate(year + '/' + monthNumber + '/' + item ) || !isSelectableMaxDate(year + '/' + monthNumber + '/' + item) || !isSelectableDate(monthNumber, year, item)\}" class="_720kb-datepicker-calendar-day">15</a><!-- end ngRepeat: item in days --><a href="javascript:void(0)" ng-repeat="item in days" ng-click="setDatepickerDay(item)" ng-class="\{'_720kb-datepicker-active': day === item, '_720kb-datepicker-disabled': !isSelectableMinDate(year + '/' + monthNumber + '/' + item ) || !isSelectableMaxDate(year + '/' + monthNumber + '/' + item) || !isSelectableDate(monthNumber, year, item)\}" class="_720kb-datepicker-calendar-day">16</a><!-- end ngRepeat: item in days --><a href="javascript:void(0)" ng-repeat="item in days" ng-click="setDatepickerDay(item)" ng-class="\{'_720kb-datepicker-active': day === item, '_720kb-datepicker-disabled': !isSelectableMinDate(year + '/' + monthNumber + '/' + item ) || !isSelectableMaxDate(year + '/' + monthNumber + '/' + item) || !isSelectableDate(monthNumber, year, item)\}" class="_720kb-datepicker-calendar-day">17</a><!-- end ngRepeat: item in days --><a href="javascript:void(0)" ng-repeat="item in days" ng-click="setDatepickerDay(item)" ng-class="\{'_720kb-datepicker-active': day === item, '_720kb-datepicker-disabled': !isSelectableMinDate(year + '/' + monthNumber + '/' + item ) || !isSelectableMaxDate(year + '/' + monthNumber + '/' + item) || !isSelectableDate(monthNumber, year, item)\}" class="_720kb-datepicker-calendar-day">18</a><!-- end ngRepeat: item in days --><a href="javascript:void(0)" ng-repeat="item in days" ng-click="setDatepickerDay(item)" ng-class="\{'_720kb-datepicker-active': day === item, '_720kb-datepicker-disabled': !isSelectableMinDate(year + '/' + monthNumber + '/' + item ) || !isSelectableMaxDate(year + '/' + monthNumber + '/' + item) || !isSelectableDate(monthNumber, year, item)\}" class="_720kb-datepicker-calendar-day">19</a><!-- end ngRepeat: item in days --><a href="javascript:void(0)" ng-repeat="item in days" ng-click="setDatepickerDay(item)" ng-class="\{'_720kb-datepicker-active': day === item, '_720kb-datepicker-disabled': !isSelectableMinDate(year + '/' + monthNumber + '/' + item ) || !isSelectableMaxDate(year + '/' + monthNumber + '/' + item) || !isSelectableDate(monthNumber, year, item)\}" class="_720kb-datepicker-calendar-day">20</a><!-- end ngRepeat: item in days --><a href="javascript:void(0)" ng-repeat="item in days" ng-click="setDatepickerDay(item)" ng-class="\{'_720kb-datepicker-active': day === item, '_720kb-datepicker-disabled': !isSelectableMinDate(year + '/' + monthNumber + '/' + item ) || !isSelectableMaxDate(year + '/' + monthNumber + '/' + item) || !isSelectableDate(monthNumber, year, item)\}" class="_720kb-datepicker-calendar-day">21</a><!-- end ngRepeat: item in days --><a href="javascript:void(0)" ng-repeat="item in days" ng-click="setDatepickerDay(item)" ng-class="\{'_720kb-datepicker-active': day === item, '_720kb-datepicker-disabled': !isSelectableMinDate(year + '/' + monthNumber + '/' + item ) || !isSelectableMaxDate(year + '/' + monthNumber + '/' + item) || !isSelectableDate(monthNumber, year, item)\}" class="_720kb-datepicker-calendar-day">22</a><!-- end ngRepeat: item in days --><a href="javascript:void(0)" ng-repeat="item in days" ng-click="setDatepickerDay(item)" ng-class="\{'_720kb-datepicker-active': day === item, '_720kb-datepicker-disabled': !isSelectableMinDate(year + '/' + monthNumber + '/' + item ) || !isSelectableMaxDate(year + '/' + monthNumber + '/' + item) || !isSelectableDate(monthNumber, year, item)\}" class="_720kb-datepicker-calendar-day">23</a><!-- end ngRepeat: item in days --><a href="javascript:void(0)" ng-repeat="item in days" ng-click="setDatepickerDay(item)" ng-class="\{'_720kb-datepicker-active': day === item, '_720kb-datepicker-disabled': !isSelectableMinDate(year + '/' + monthNumber + '/' + item ) || !isSelectableMaxDate(year + '/' + monthNumber + '/' + item) || !isSelectableDate(monthNumber, year, item)\}" class="_720kb-datepicker-calendar-day">24</a><!-- end ngRepeat: item in days --><a href="javascript:void(0)" ng-repeat="item in days" ng-click="setDatepickerDay(item)" ng-class="\{'_720kb-datepicker-active': day === item, '_720kb-datepicker-disabled': !isSelectableMinDate(year + '/' + monthNumber + '/' + item ) || !isSelectableMaxDate(year + '/' + monthNumber + '/' + item) || !isSelectableDate(monthNumber, year, item)\}" class="_720kb-datepicker-calendar-day">25</a><!-- end ngRepeat: item in days --><a href="javascript:void(0)" ng-repeat="item in days" ng-click="setDatepickerDay(item)" ng-class="\{'_720kb-datepicker-active': day === item, '_720kb-datepicker-disabled': !isSelectableMinDate(year + '/' + monthNumber + '/' + item ) || !isSelectableMaxDate(year + '/' + monthNumber + '/' + item) || !isSelectableDate(monthNumber, year, item)\}" class="_720kb-datepicker-calendar-day">26</a><!-- end ngRepeat: item in days --><a href="javascript:void(0)" ng-repeat="item in days" ng-click="setDatepickerDay(item)" ng-class="\{'_720kb-datepicker-active': day === item, '_720kb-datepicker-disabled': !isSelectableMinDate(year + '/' + monthNumber + '/' + item ) || !isSelectableMaxDate(year + '/' + monthNumber + '/' + item) || !isSelectableDate(monthNumber, year, item)\}" class="_720kb-datepicker-calendar-day">27</a><!-- end ngRepeat: item in days --><a href="javascript:void(0)" ng-repeat="item in days" ng-click="setDatepickerDay(item)" ng-class="\{'_720kb-datepicker-active': day === item, '_720kb-datepicker-disabled': !isSelectableMinDate(year + '/' + monthNumber + '/' + item ) || !isSelectableMaxDate(year + '/' + monthNumber + '/' + item) || !isSelectableDate(monthNumber, year, item)\}" class="_720kb-datepicker-calendar-day _720kb-datepicker-active">28</a><!-- end ngRepeat: item in days --><a href="javascript:void(0)" ng-repeat="item in days" ng-click="setDatepickerDay(item)" ng-class="\{'_720kb-datepicker-active': day === item, '_720kb-datepicker-disabled': !isSelectableMinDate(year + '/' + monthNumber + '/' + item ) || !isSelectableMaxDate(year + '/' + monthNumber + '/' + item) || !isSelectableDate(monthNumber, year, item)\}" class="_720kb-datepicker-calendar-day _720kb-datepicker-disabled">29</a><!-- end ngRepeat: item in days --><a href="javascript:void(0)" ng-repeat="item in days" ng-click="setDatepickerDay(item)" ng-class="\{'_720kb-datepicker-active': day === item, '_720kb-datepicker-disabled': !isSelectableMinDate(year + '/' + monthNumber + '/' + item ) || !isSelectableMaxDate(year + '/' + monthNumber + '/' + item) || !isSelectableDate(monthNumber, year, item)\}" class="_720kb-datepicker-calendar-day _720kb-datepicker-disabled">30</a><!-- end ngRepeat: item in days --><a href="javascript:void(0)" ng-repeat="item in days" ng-click="setDatepickerDay(item)" ng-class="\{'_720kb-datepicker-active': day === item, '_720kb-datepicker-disabled': !isSelectableMinDate(year + '/' + monthNumber + '/' + item ) || !isSelectableMaxDate(year + '/' + monthNumber + '/' + item) || !isSelectableDate(monthNumber, year, item)\}" class="_720kb-datepicker-calendar-day _720kb-datepicker-disabled">31</a><!-- end ngRepeat: item in days --><!-- ngRepeat: nx in nextMonthDays --><a href="javascript:void(0)" ng-repeat="nx in nextMonthDays" class="_720kb-datepicker-calendar-day _720kb-datepicker-disabled">1</a><!-- end ngRepeat: nx in nextMonthDays --><a href="javascript:void(0)" ng-repeat="nx in nextMonthDays" class="_720kb-datepicker-calendar-day _720kb-datepicker-disabled">2</a><!-- end ngRepeat: nx in nextMonthDays --><a href="javascript:void(0)" ng-repeat="nx in nextMonthDays" class="_720kb-datepicker-calendar-day _720kb-datepicker-disabled">3</a><!-- end ngRepeat: nx in nextMonthDays --><a href="javascript:void(0)" ng-repeat="nx in nextMonthDays" class="_720kb-datepicker-calendar-day _720kb-datepicker-disabled">4</a><!-- end ngRepeat: nx in nextMonthDays --><a href="javascript:void(0)" ng-repeat="nx in nextMonthDays" class="_720kb-datepicker-calendar-day _720kb-datepicker-disabled">5</a><!-- end ngRepeat: nx in nextMonthDays --><a href="javascript:void(0)" ng-repeat="nx in nextMonthDays" class="_720kb-datepicker-calendar-day _720kb-datepicker-disabled">6</a><!-- end ngRepeat: nx in nextMonthDays --></div></div>\
+                                        </div>\
+                                    </div>\
+                                    <div class="to-text1" bis_skin_checked="1">to</div>\
+                                    <div class="col-md-5 col-sm-5 date-top-margin explicit-date-range padd-right-0" bis_skin_checked="1">\
+                                        <div class="datepicker" date-format="MM/dd/yyyy" date-max-limit="05/28/2026" date-typer="true" selector="max-range" bis_skin_checked="1">\
+                                            <input class="form-control max-range ng-pristine ng-untouched ng-valid ng-valid-required" ng-change="search.validateRange()" ng-class="\{'invalid':  !search.validateRange(search.maxRange) \}" ng-click="search.advancedFilter = 'dateRangeParam';search.query = '';search.updateType();" ng-model="search.maxRange" type="text" required=""><div class="_720kb-datepicker-calendar  " ng-class="\{'_720kb-datepicker-forced-to-open': checkVisibility()\}" ng-blur="hideCalendar()" bis_skin_checked="1"><div class="_720kb-datepicker-calendar-header" bis_skin_checked="1"><div class="_720kb-datepicker-calendar-header-left" bis_skin_checked="1"><a class="_720kb-datepicker-calendar-month-button" href="javascript:void(0)" ng-class="\{'_720kb-datepicker-item-hidden': !willPrevMonthBeSelectable()\}" ng-click="prevMonth()" title="Prev"><b class="_720kb-datepicker-default-button">\uc0\u10216 </b></a></div><div class="_720kb-datepicker-calendar-header-middle _720kb-datepicker-calendar-month" bis_skin_checked="1">May&nbsp;<a href="javascript:void(0)" ng-click="paginateYears(year); showYearsPagination = !showYearsPagination;"><span>2026<i ng-class="\{'_720kb-datepicker-calendar-header-closed-pagination': !showYearsPagination, '_720kb-datepicker-calendar-header-opened-pagination': showYearsPagination\}" class="_720kb-datepicker-calendar-header-closed-pagination"></i></span></a></div><div class="_720kb-datepicker-calendar-header-right" bis_skin_checked="1"><a class="_720kb-datepicker-calendar-month-button _720kb-datepicker-item-hidden" ng-class="\{'_720kb-datepicker-item-hidden': !willNextMonthBeSelectable()\}" href="javascript:void(0)" ng-click="nextMonth()" title="Next"><b class="_720kb-datepicker-default-button">\u10217 </b></a></div></div><div class="_720kb-datepicker-calendar-header ng-hide" ng-show="showYearsPagination" bis_skin_checked="1"><div class="_720kb-datepicker-calendar-years-pagination" bis_skin_checked="1"><!-- ngRepeat: y in paginationYears track by $index --><a ng-class="\{'_720kb-datepicker-active': y === year, '_720kb-datepicker-disabled': !isSelectableMaxYear(y) || !isSelectableMinYear(y)\}" href="javascript:void(0)" ng-click="setNewYear(y)" ng-repeat="y in paginationYears track by $index">2016</a><!-- end ngRepeat: y in paginationYears track by $index --><a ng-class="\{'_720kb-datepicker-active': y === year, '_720kb-datepicker-disabled': !isSelectableMaxYear(y) || !isSelectableMinYear(y)\}" href="javascript:void(0)" ng-click="setNewYear(y)" ng-repeat="y in paginationYears track by $index">2017</a><!-- end ngRepeat: y in paginationYears track by $index --><a ng-class="\{'_720kb-datepicker-active': y === year, '_720kb-datepicker-disabled': !isSelectableMaxYear(y) || !isSelectableMinYear(y)\}" href="javascript:void(0)" ng-click="setNewYear(y)" ng-repeat="y in paginationYears track by $index">2018</a><!-- end ngRepeat: y in paginationYears track by $index --><a ng-class="\{'_720kb-datepicker-active': y === year, '_720kb-datepicker-disabled': !isSelectableMaxYear(y) || !isSelectableMinYear(y)\}" href="javascript:void(0)" ng-click="setNewYear(y)" ng-repeat="y in paginationYears track by $index">2019</a><!-- end ngRepeat: y in paginationYears track by $index --><a ng-class="\{'_720kb-datepicker-active': y === year, '_720kb-datepicker-disabled': !isSelectableMaxYear(y) || !isSelectableMinYear(y)\}" href="javascript:void(0)" ng-click="setNewYear(y)" ng-repeat="y in paginationYears track by $index">2020</a><!-- end ngRepeat: y in paginationYears track by $index --><a ng-class="\{'_720kb-datepicker-active': y === year, '_720kb-datepicker-disabled': !isSelectableMaxYear(y) || !isSelectableMinYear(y)\}" href="javascript:void(0)" ng-click="setNewYear(y)" ng-repeat="y in paginationYears track by $index">2021</a><!-- end ngRepeat: y in paginationYears track by $index --><a ng-class="\{'_720kb-datepicker-active': y === year, '_720kb-datepicker-disabled': !isSelectableMaxYear(y) || !isSelectableMinYear(y)\}" href="javascript:void(0)" ng-click="setNewYear(y)" ng-repeat="y in paginationYears track by $index">2022</a><!-- end ngRepeat: y in paginationYears track by $index --><a ng-class="\{'_720kb-datepicker-active': y === year, '_720kb-datepicker-disabled': !isSelectableMaxYear(y) || !isSelectableMinYear(y)\}" href="javascript:void(0)" ng-click="setNewYear(y)" ng-repeat="y in paginationYears track by $index">2023</a><!-- end ngRepeat: y in paginationYears track by $index --><a ng-class="\{'_720kb-datepicker-active': y === year, '_720kb-datepicker-disabled': !isSelectableMaxYear(y) || !isSelectableMinYear(y)\}" href="javascript:void(0)" ng-click="setNewYear(y)" ng-repeat="y in paginationYears track by $index">2024</a><!-- end ngRepeat: y in paginationYears track by $index --><a ng-class="\{'_720kb-datepicker-active': y === year, '_720kb-datepicker-disabled': !isSelectableMaxYear(y) || !isSelectableMinYear(y)\}" href="javascript:void(0)" ng-click="setNewYear(y)" ng-repeat="y in paginationYears track by $index">2025</a><!-- end ngRepeat: y in paginationYears track by $index --><a ng-class="\{'_720kb-datepicker-active': y === year, '_720kb-datepicker-disabled': !isSelectableMaxYear(y) || !isSelectableMinYear(y)\}" href="javascript:void(0)" ng-click="setNewYear(y)" ng-repeat="y in paginationYears track by $index" class="_720kb-datepicker-active">2026</a><!-- end ngRepeat: y in paginationYears track by $index --><a ng-class="\{'_720kb-datepicker-active': y === year, '_720kb-datepicker-disabled': !isSelectableMaxYear(y) || !isSelectableMinYear(y)\}" href="javascript:void(0)" ng-click="setNewYear(y)" ng-repeat="y in paginationYears track by $index" class="_720kb-datepicker-disabled">2027</a><!-- end ngRepeat: y in paginationYears track by $index --><a ng-class="\{'_720kb-datepicker-active': y === year, '_720kb-datepicker-disabled': !isSelectableMaxYear(y) || !isSelectableMinYear(y)\}" href="javascript:void(0)" ng-click="setNewYear(y)" ng-repeat="y in paginationYears track by $index" class="_720kb-datepicker-disabled">2028</a><!-- end ngRepeat: y in paginationYears track by $index --><a ng-class="\{'_720kb-datepicker-active': y === year, '_720kb-datepicker-disabled': !isSelectableMaxYear(y) || !isSelectableMinYear(y)\}" href="javascript:void(0)" ng-click="setNewYear(y)" ng-repeat="y in paginationYears track by $index" class="_720kb-datepicker-disabled">2029</a><!-- end ngRepeat: y in paginationYears track by $index --><a ng-class="\{'_720kb-datepicker-active': y === year, '_720kb-datepicker-disabled': !isSelectableMaxYear(y) || !isSelectableMinYear(y)\}" href="javascript:void(0)" ng-click="setNewYear(y)" ng-repeat="y in paginationYears track by $index" class="_720kb-datepicker-disabled">2030</a><!-- end ngRepeat: y in paginationYears track by $index --><a ng-class="\{'_720kb-datepicker-active': y === year, '_720kb-datepicker-disabled': !isSelectableMaxYear(y) || !isSelectableMinYear(y)\}" href="javascript:void(0)" ng-click="setNewYear(y)" ng-repeat="y in paginationYears track by $index" class="_720kb-datepicker-disabled">2031</a><!-- end ngRepeat: y in paginationYears track by $index --><a ng-class="\{'_720kb-datepicker-active': y === year, '_720kb-datepicker-disabled': !isSelectableMaxYear(y) || !isSelectableMinYear(y)\}" href="javascript:void(0)" ng-click="setNewYear(y)" ng-repeat="y in paginationYears track by $index" class="_720kb-datepicker-disabled">2032</a><!-- end ngRepeat: y in paginationYears track by $index --><a ng-class="\{'_720kb-datepicker-active': y === year, '_720kb-datepicker-disabled': !isSelectableMaxYear(y) || !isSelectableMinYear(y)\}" href="javascript:void(0)" ng-click="setNewYear(y)" ng-repeat="y in paginationYears track by $index" class="_720kb-datepicker-disabled">2033</a><!-- end ngRepeat: y in paginationYears track by $index --><a ng-class="\{'_720kb-datepicker-active': y === year, '_720kb-datepicker-disabled': !isSelectableMaxYear(y) || !isSelectableMinYear(y)\}" href="javascript:void(0)" ng-click="setNewYear(y)" ng-repeat="y in paginationYears track by $index" class="_720kb-datepicker-disabled">2034</a><!-- end ngRepeat: y in paginationYears track by $index --><a ng-class="\{'_720kb-datepicker-active': y === year, '_720kb-datepicker-disabled': !isSelectableMaxYear(y) || !isSelectableMinYear(y)\}" href="javascript:void(0)" ng-click="setNewYear(y)" ng-repeat="y in paginationYears track by $index" class="_720kb-datepicker-disabled">2035</a><!-- end ngRepeat: y in paginationYears track by $index --></div><div class="_720kb-datepicker-calendar-years-pagination-pages" bis_skin_checked="1"><a href="javascript:void(0)" ng-click="paginateYears(paginationYears[0])" ng-class="\{'_720kb-datepicker-item-hidden': paginationYearsPrevDisabled\}"><b class="_720kb-datepicker-default-button">\u10216 </b></a><a href="javascript:void(0)" ng-click="paginateYears(paginationYears[paginationYears.length -1 ])" ng-class="\{'_720kb-datepicker-item-hidden': paginationYearsNextDisabled\}" class="_720kb-datepicker-item-hidden"><b class="_720kb-datepicker-default-button">\u10217 </b></a></div></div><div class="_720kb-datepicker-calendar-days-header" bis_skin_checked="1"><!-- ngRepeat: d in daysInString --><div ng-repeat="d in daysInString" bis_skin_checked="1">Sun</div><!-- end ngRepeat: d in daysInString --><div ng-repeat="d in daysInString" bis_skin_checked="1">Mon</div><!-- end ngRepeat: d in daysInString --><div ng-repeat="d in daysInString" bis_skin_checked="1">Tue</div><!-- end ngRepeat: d in daysInString --><div ng-repeat="d in daysInString" bis_skin_checked="1">Wed</div><!-- end ngRepeat: d in daysInString --><div ng-repeat="d in daysInString" bis_skin_checked="1">Thu</div><!-- end ngRepeat: d in daysInString --><div ng-repeat="d in daysInString" bis_skin_checked="1">Fri</div><!-- end ngRepeat: d in daysInString --><div ng-repeat="d in daysInString" bis_skin_checked="1">Sat</div><!-- end ngRepeat: d in daysInString --></div><div class="_720kb-datepicker-calendar-body" bis_skin_checked="1"><!-- ngRepeat: px in prevMonthDays --><a href="javascript:void(0)" ng-repeat="px in prevMonthDays" class="_720kb-datepicker-calendar-day _720kb-datepicker-disabled">26</a><!-- end ngRepeat: px in prevMonthDays --><a href="javascript:void(0)" ng-repeat="px in prevMonthDays" class="_720kb-datepicker-calendar-day _720kb-datepicker-disabled">27</a><!-- end ngRepeat: px in prevMonthDays --><a href="javascript:void(0)" ng-repeat="px in prevMonthDays" class="_720kb-datepicker-calendar-day _720kb-datepicker-disabled">28</a><!-- end ngRepeat: px in prevMonthDays --><a href="javascript:void(0)" ng-repeat="px in prevMonthDays" class="_720kb-datepicker-calendar-day _720kb-datepicker-disabled">29</a><!-- end ngRepeat: px in prevMonthDays --><a href="javascript:void(0)" ng-repeat="px in prevMonthDays" class="_720kb-datepicker-calendar-day _720kb-datepicker-disabled">30</a><!-- end ngRepeat: px in prevMonthDays --><!-- ngRepeat: item in days --><a href="javascript:void(0)" ng-repeat="item in days" ng-click="setDatepickerDay(item)" ng-class="\{'_720kb-datepicker-active': day === item, '_720kb-datepicker-disabled': !isSelectableMinDate(year + '/' + monthNumber + '/' + item ) || !isSelectableMaxDate(year + '/' + monthNumber + '/' + item) || !isSelectableDate(monthNumber, year, item)\}" class="_720kb-datepicker-calendar-day">1</a><!-- end ngRepeat: item in days --><a href="javascript:void(0)" ng-repeat="item in days" ng-click="setDatepickerDay(item)" ng-class="\{'_720kb-datepicker-active': day === item, '_720kb-datepicker-disabled': !isSelectableMinDate(year + '/' + monthNumber + '/' + item ) || !isSelectableMaxDate(year + '/' + monthNumber + '/' + item) || !isSelectableDate(monthNumber, year, item)\}" class="_720kb-datepicker-calendar-day">2</a><!-- end ngRepeat: item in days --><a href="javascript:void(0)" ng-repeat="item in days" ng-click="setDatepickerDay(item)" ng-class="\{'_720kb-datepicker-active': day === item, '_720kb-datepicker-disabled': !isSelectableMinDate(year + '/' + monthNumber + '/' + item ) || !isSelectableMaxDate(year + '/' + monthNumber + '/' + item) || !isSelectableDate(monthNumber, year, item)\}" class="_720kb-datepicker-calendar-day">3</a><!-- end ngRepeat: item in days --><a href="javascript:void(0)" ng-repeat="item in days" ng-click="setDatepickerDay(item)" ng-class="\{'_720kb-datepicker-active': day === item, '_720kb-datepicker-disabled': !isSelectableMinDate(year + '/' + monthNumber + '/' + item ) || !isSelectableMaxDate(year + '/' + monthNumber + '/' + item) || !isSelectableDate(monthNumber, year, item)\}" class="_720kb-datepicker-calendar-day">4</a><!-- end ngRepeat: item in days --><a href="javascript:void(0)" ng-repeat="item in days" ng-click="setDatepickerDay(item)" ng-class="\{'_720kb-datepicker-active': day === item, '_720kb-datepicker-disabled': !isSelectableMinDate(year + '/' + monthNumber + '/' + item ) || !isSelectableMaxDate(year + '/' + monthNumber + '/' + item) || !isSelectableDate(monthNumber, year, item)\}" class="_720kb-datepicker-calendar-day">5</a><!-- end ngRepeat: item in days --><a href="javascript:void(0)" ng-repeat="item in days" ng-click="setDatepickerDay(item)" ng-class="\{'_720kb-datepicker-active': day === item, '_720kb-datepicker-disabled': !isSelectableMinDate(year + '/' + monthNumber + '/' + item ) || !isSelectableMaxDate(year + '/' + monthNumber + '/' + item) || !isSelectableDate(monthNumber, year, item)\}" class="_720kb-datepicker-calendar-day">6</a><!-- end ngRepeat: item in days --><a href="javascript:void(0)" ng-repeat="item in days" ng-click="setDatepickerDay(item)" ng-class="\{'_720kb-datepicker-active': day === item, '_720kb-datepicker-disabled': !isSelectableMinDate(year + '/' + monthNumber + '/' + item ) || !isSelectableMaxDate(year + '/' + monthNumber + '/' + item) || !isSelectableDate(monthNumber, year, item)\}" class="_720kb-datepicker-calendar-day">7</a><!-- end ngRepeat: item in days --><a href="javascript:void(0)" ng-repeat="item in days" ng-click="setDatepickerDay(item)" ng-class="\{'_720kb-datepicker-active': day === item, '_720kb-datepicker-disabled': !isSelectableMinDate(year + '/' + monthNumber + '/' + item ) || !isSelectableMaxDate(year + '/' + monthNumber + '/' + item) || !isSelectableDate(monthNumber, year, item)\}" class="_720kb-datepicker-calendar-day">8</a><!-- end ngRepeat: item in days --><a href="javascript:void(0)" ng-repeat="item in days" ng-click="setDatepickerDay(item)" ng-class="\{'_720kb-datepicker-active': day === item, '_720kb-datepicker-disabled': !isSelectableMinDate(year + '/' + monthNumber + '/' + item ) || !isSelectableMaxDate(year + '/' + monthNumber + '/' + item) || !isSelectableDate(monthNumber, year, item)\}" class="_720kb-datepicker-calendar-day">9</a><!-- end ngRepeat: item in days --><a href="javascript:void(0)" ng-repeat="item in days" ng-click="setDatepickerDay(item)" ng-class="\{'_720kb-datepicker-active': day === item, '_720kb-datepicker-disabled': !isSelectableMinDate(year + '/' + monthNumber + '/' + item ) || !isSelectableMaxDate(year + '/' + monthNumber + '/' + item) || !isSelectableDate(monthNumber, year, item)\}" class="_720kb-datepicker-calendar-day">10</a><!-- end ngRepeat: item in days --><a href="javascript:void(0)" ng-repeat="item in days" ng-click="setDatepickerDay(item)" ng-class="\{'_720kb-datepicker-active': day === item, '_720kb-datepicker-disabled': !isSelectableMinDate(year + '/' + monthNumber + '/' + item ) || !isSelectableMaxDate(year + '/' + monthNumber + '/' + item) || !isSelectableDate(monthNumber, year, item)\}" class="_720kb-datepicker-calendar-day">11</a><!-- end ngRepeat: item in days --><a href="javascript:void(0)" ng-repeat="item in days" ng-click="setDatepickerDay(item)" ng-class="\{'_720kb-datepicker-active': day === item, '_720kb-datepicker-disabled': !isSelectableMinDate(year + '/' + monthNumber + '/' + item ) || !isSelectableMaxDate(year + '/' + monthNumber + '/' + item) || !isSelectableDate(monthNumber, year, item)\}" class="_720kb-datepicker-calendar-day">12</a><!-- end ngRepeat: item in days --><a href="javascript:void(0)" ng-repeat="item in days" ng-click="setDatepickerDay(item)" ng-class="\{'_720kb-datepicker-active': day === item, '_720kb-datepicker-disabled': !isSelectableMinDate(year + '/' + monthNumber + '/' + item ) || !isSelectableMaxDate(year + '/' + monthNumber + '/' + item) || !isSelectableDate(monthNumber, year, item)\}" class="_720kb-datepicker-calendar-day">13</a><!-- end ngRepeat: item in days --><a href="javascript:void(0)" ng-repeat="item in days" ng-click="setDatepickerDay(item)" ng-class="\{'_720kb-datepicker-active': day === item, '_720kb-datepicker-disabled': !isSelectableMinDate(year + '/' + monthNumber + '/' + item ) || !isSelectableMaxDate(year + '/' + monthNumber + '/' + item) || !isSelectableDate(monthNumber, year, item)\}" class="_720kb-datepicker-calendar-day">14</a><!-- end ngRepeat: item in days --><a href="javascript:void(0)" ng-repeat="item in days" ng-click="setDatepickerDay(item)" ng-class="\{'_720kb-datepicker-active': day === item, '_720kb-datepicker-disabled': !isSelectableMinDate(year + '/' + monthNumber + '/' + item ) || !isSelectableMaxDate(year + '/' + monthNumber + '/' + item) || !isSelectableDate(monthNumber, year, item)\}" class="_720kb-datepicker-calendar-day">15</a><!-- end ngRepeat: item in days --><a href="javascript:void(0)" ng-repeat="item in days" ng-click="setDatepickerDay(item)" ng-class="\{'_720kb-datepicker-active': day === item, '_720kb-datepicker-disabled': !isSelectableMinDate(year + '/' + monthNumber + '/' + item ) || !isSelectableMaxDate(year + '/' + monthNumber + '/' + item) || !isSelectableDate(monthNumber, year, item)\}" class="_720kb-datepicker-calendar-day">16</a><!-- end ngRepeat: item in days --><a href="javascript:void(0)" ng-repeat="item in days" ng-click="setDatepickerDay(item)" ng-class="\{'_720kb-datepicker-active': day === item, '_720kb-datepicker-disabled': !isSelectableMinDate(year + '/' + monthNumber + '/' + item ) || !isSelectableMaxDate(year + '/' + monthNumber + '/' + item) || !isSelectableDate(monthNumber, year, item)\}" class="_720kb-datepicker-calendar-day">17</a><!-- end ngRepeat: item in days --><a href="javascript:void(0)" ng-repeat="item in days" ng-click="setDatepickerDay(item)" ng-class="\{'_720kb-datepicker-active': day === item, '_720kb-datepicker-disabled': !isSelectableMinDate(year + '/' + monthNumber + '/' + item ) || !isSelectableMaxDate(year + '/' + monthNumber + '/' + item) || !isSelectableDate(monthNumber, year, item)\}" class="_720kb-datepicker-calendar-day">18</a><!-- end ngRepeat: item in days --><a href="javascript:void(0)" ng-repeat="item in days" ng-click="setDatepickerDay(item)" ng-class="\{'_720kb-datepicker-active': day === item, '_720kb-datepicker-disabled': !isSelectableMinDate(year + '/' + monthNumber + '/' + item ) || !isSelectableMaxDate(year + '/' + monthNumber + '/' + item) || !isSelectableDate(monthNumber, year, item)\}" class="_720kb-datepicker-calendar-day">19</a><!-- end ngRepeat: item in days --><a href="javascript:void(0)" ng-repeat="item in days" ng-click="setDatepickerDay(item)" ng-class="\{'_720kb-datepicker-active': day === item, '_720kb-datepicker-disabled': !isSelectableMinDate(year + '/' + monthNumber + '/' + item ) || !isSelectableMaxDate(year + '/' + monthNumber + '/' + item) || !isSelectableDate(monthNumber, year, item)\}" class="_720kb-datepicker-calendar-day">20</a><!-- end ngRepeat: item in days --><a href="javascript:void(0)" ng-repeat="item in days" ng-click="setDatepickerDay(item)" ng-class="\{'_720kb-datepicker-active': day === item, '_720kb-datepicker-disabled': !isSelectableMinDate(year + '/' + monthNumber + '/' + item ) || !isSelectableMaxDate(year + '/' + monthNumber + '/' + item) || !isSelectableDate(monthNumber, year, item)\}" class="_720kb-datepicker-calendar-day">21</a><!-- end ngRepeat: item in days --><a href="javascript:void(0)" ng-repeat="item in days" ng-click="setDatepickerDay(item)" ng-class="\{'_720kb-datepicker-active': day === item, '_720kb-datepicker-disabled': !isSelectableMinDate(year + '/' + monthNumber + '/' + item ) || !isSelectableMaxDate(year + '/' + monthNumber + '/' + item) || !isSelectableDate(monthNumber, year, item)\}" class="_720kb-datepicker-calendar-day">22</a><!-- end ngRepeat: item in days --><a href="javascript:void(0)" ng-repeat="item in days" ng-click="setDatepickerDay(item)" ng-class="\{'_720kb-datepicker-active': day === item, '_720kb-datepicker-disabled': !isSelectableMinDate(year + '/' + monthNumber + '/' + item ) || !isSelectableMaxDate(year + '/' + monthNumber + '/' + item) || !isSelectableDate(monthNumber, year, item)\}" class="_720kb-datepicker-calendar-day">23</a><!-- end ngRepeat: item in days --><a href="javascript:void(0)" ng-repeat="item in days" ng-click="setDatepickerDay(item)" ng-class="\{'_720kb-datepicker-active': day === item, '_720kb-datepicker-disabled': !isSelectableMinDate(year + '/' + monthNumber + '/' + item ) || !isSelectableMaxDate(year + '/' + monthNumber + '/' + item) || !isSelectableDate(monthNumber, year, item)\}" class="_720kb-datepicker-calendar-day">24</a><!-- end ngRepeat: item in days --><a href="javascript:void(0)" ng-repeat="item in days" ng-click="setDatepickerDay(item)" ng-class="\{'_720kb-datepicker-active': day === item, '_720kb-datepicker-disabled': !isSelectableMinDate(year + '/' + monthNumber + '/' + item ) || !isSelectableMaxDate(year + '/' + monthNumber + '/' + item) || !isSelectableDate(monthNumber, year, item)\}" class="_720kb-datepicker-calendar-day">25</a><!-- end ngRepeat: item in days --><a href="javascript:void(0)" ng-repeat="item in days" ng-click="setDatepickerDay(item)" ng-class="\{'_720kb-datepicker-active': day === item, '_720kb-datepicker-disabled': !isSelectableMinDate(year + '/' + monthNumber + '/' + item ) || !isSelectableMaxDate(year + '/' + monthNumber + '/' + item) || !isSelectableDate(monthNumber, year, item)\}" class="_720kb-datepicker-calendar-day">26</a><!-- end ngRepeat: item in days --><a href="javascript:void(0)" ng-repeat="item in days" ng-click="setDatepickerDay(item)" ng-class="\{'_720kb-datepicker-active': day === item, '_720kb-datepicker-disabled': !isSelectableMinDate(year + '/' + monthNumber + '/' + item ) || !isSelectableMaxDate(year + '/' + monthNumber + '/' + item) || !isSelectableDate(monthNumber, year, item)\}" class="_720kb-datepicker-calendar-day">27</a><!-- end ngRepeat: item in days --><a href="javascript:void(0)" ng-repeat="item in days" ng-click="setDatepickerDay(item)" ng-class="\{'_720kb-datepicker-active': day === item, '_720kb-datepicker-disabled': !isSelectableMinDate(year + '/' + monthNumber + '/' + item ) || !isSelectableMaxDate(year + '/' + monthNumber + '/' + item) || !isSelectableDate(monthNumber, year, item)\}" class="_720kb-datepicker-calendar-day _720kb-datepicker-active">28</a><!-- end ngRepeat: item in days --><a href="javascript:void(0)" ng-repeat="item in days" ng-click="setDatepickerDay(item)" ng-class="\{'_720kb-datepicker-active': day === item, '_720kb-datepicker-disabled': !isSelectableMinDate(year + '/' + monthNumber + '/' + item ) || !isSelectableMaxDate(year + '/' + monthNumber + '/' + item) || !isSelectableDate(monthNumber, year, item)\}" class="_720kb-datepicker-calendar-day _720kb-datepicker-disabled">29</a><!-- end ngRepeat: item in days --><a href="javascript:void(0)" ng-repeat="item in days" ng-click="setDatepickerDay(item)" ng-class="\{'_720kb-datepicker-active': day === item, '_720kb-datepicker-disabled': !isSelectableMinDate(year + '/' + monthNumber + '/' + item ) || !isSelectableMaxDate(year + '/' + monthNumber + '/' + item) || !isSelectableDate(monthNumber, year, item)\}" class="_720kb-datepicker-calendar-day _720kb-datepicker-disabled">30</a><!-- end ngRepeat: item in days --><a href="javascript:void(0)" ng-repeat="item in days" ng-click="setDatepickerDay(item)" ng-class="\{'_720kb-datepicker-active': day === item, '_720kb-datepicker-disabled': !isSelectableMinDate(year + '/' + monthNumber + '/' + item ) || !isSelectableMaxDate(year + '/' + monthNumber + '/' + item) || !isSelectableDate(monthNumber, year, item)\}" class="_720kb-datepicker-calendar-day _720kb-datepicker-disabled">31</a><!-- end ngRepeat: item in days --><!-- ngRepeat: nx in nextMonthDays --><a href="javascript:void(0)" ng-repeat="nx in nextMonthDays" class="_720kb-datepicker-calendar-day _720kb-datepicker-disabled">1</a><!-- end ngRepeat: nx in nextMonthDays --><a href="javascript:void(0)" ng-repeat="nx in nextMonthDays" class="_720kb-datepicker-calendar-day _720kb-datepicker-disabled">2</a><!-- end ngRepeat: nx in nextMonthDays --><a href="javascript:void(0)" ng-repeat="nx in nextMonthDays" class="_720kb-datepicker-calendar-day _720kb-datepicker-disabled">3</a><!-- end ngRepeat: nx in nextMonthDays --><a href="javascript:void(0)" ng-repeat="nx in nextMonthDays" class="_720kb-datepicker-calendar-day _720kb-datepicker-disabled">4</a><!-- end ngRepeat: nx in nextMonthDays --><a href="javascript:void(0)" ng-repeat="nx in nextMonthDays" class="_720kb-datepicker-calendar-day _720kb-datepicker-disabled">5</a><!-- end ngRepeat: nx in nextMonthDays --><a href="javascript:void(0)" ng-repeat="nx in nextMonthDays" class="_720kb-datepicker-calendar-day _720kb-datepicker-disabled">6</a><!-- end ngRepeat: nx in nextMonthDays --></div></div>\
+                                            <button class="icon input" type="button">\
+                                                <i class="glyphicon glyphicon-calendar"></i>\
+                                            </button>\
+                                        </div>\
+                                    </div>\
+                                </div>\
+                            </div>\
+                            <div class="help-block invalid-text ng-hide" ng-hide="search.validateRange() === true" bis_skin_checked="1">true</div>\
+                        </div>\
+                    </div>\
+                </div>\
+		</div>\
+\
+	</div><!-- end ngIf: enableAdvancedOptions -->\
+	<button type="submit" class="singleSearchButton button.icon row btn block" style="position: relative; width: 150px;" tabindex="50">\
+		Search\
+		<div class="icon" bis_skin_checked="1">\
+			<i class="fa fa-search" aria-hidden="true"></i>\
+		</div>\
+	</button>\
+</form></pp-search-type>\
+            </div>\
+        </div>\
+\
+        <div bis_skin_checked="1">\
+            <div class="row margin-top-10" bis_skin_checked="1">\
+                <div class="col-sm-6 margin-top--20 padding-left-20" bis_skin_checked="1">\
+                    <a href="/Content/pdfs/IEHP_RA_Guide_FINAL.pdf" target="_blank" class="smallText custom-blue">\
+                        [Remittance Advice Guide]\
+                    </a>\
+                </div>\
+\
+                <div class="col-sm-6 text-right margin-top--20 padding-right-20" bis_skin_checked="1">\
+                    <a href="/Content/pdfs/ExampleRA-Final.pdf" target="_blank" class="smallText custom-blue">\
+                        [Example Remittance Advice]\
+                    </a>\
+                </div>\
+            </div>\
+\
+            <!--<div show="search.status === 1" simple-ajax-loader></div>-->\
+            <div class="search-filters" bis_skin_checked="1">\
+                <div class="pull-left claim-filter results-row" ng-show="search.status === 2" bis_skin_checked="1" style="">\
+                    <strong class="">\
+                        Search By:\
+                        <!-- ngIf: search.cachedParam.checkNumber.length && search.cachedParam.advancedFilter !== 'dateRangeParam' --><div class="label label-warning" ng-if="search.cachedParam.checkNumber.length &amp;&amp; search.cachedParam.advancedFilter !== 'dateRangeParam'" bis_skin_checked="1">\
+                            EFT-3208208\
+                            <!--<span class="glyphicon remove-filter" ng-click="search.updateFilters('checkNumber')"></span>-->\
+                        </div><!-- end ngIf: search.cachedParam.checkNumber.length && search.cachedParam.advancedFilter !== 'dateRangeParam' -->\
+\
+                        <!-- ngIf: !search.cachedParam.checkNumber.length || search.cachedParam.advancedFilter === 'dateRangeParam' -->\
+                    </strong>\
+                </div>\
+            </div>\
+\
+            <!--1/22/2018 TL:  Fixed loading overlapping issue-->\
+            <!-- ngIf: search.status === 1 -->\
+\
+            <!-- ngIf: search.status !== 3 && !errorMessage --><pp-remittance-advice-table ng-if="search.status !== 3 &amp;&amp; !errorMessage" results="search.results" type="ClaimTypeCCA"><div simple-ajax-loader="" class="fixed-loader" show="raPdfShowLoader" bis_skin_checked="1"><div class="loader-wrapper no-print ng-hide" ng-class="\{\}" ng-show="show" bis_skin_checked="1" style=""><div class="loader" ng-class="\{'loading':show\}" bis_skin_checked="1"></div></div></div><danger-box message=""><div class="danger bg-danger alert alert-danger ng-hide" ng-show="message != ''" bis_skin_checked="1" style=""></div></danger-box><!-- ngIf: tableResults[0].VendorName1 || tableResults[0].VendorName --><table class="col-sm-12 roster table table-sortable remittance-advice-table margin-top-10" ng-if="tableResults[0].VendorName1 || tableResults[0].VendorName" style="">\
+    <thead>\
+        <tr class="header sorting">\
+            <th ng-class="\{active: search.predicate === modifier\}" pp-sortable-table-header="CheckDate">\
+	<span ng-transclude=""><span>Check Date</span></span>\
+    <span class="sorting-modifiers">\
+        <span ng-class="\{'glyphicon glyphicon-arrow-down predicate':search.predicate === modifier,\
+                         'reverse': !search.reverse &amp;&amp; search.predicate === modifier\}"></span>\
+     </span>\
+\
+</th>\
+            <th ng-class="\{active: search.predicate === modifier\}" pp-sortable-table-header="VendorName" class="active">\
+	<span ng-transclude=""><span>Vendor</span></span>\
+    <span class="sorting-modifiers">\
+        <span ng-class="\{'glyphicon glyphicon-arrow-down predicate':search.predicate === modifier,\
+                         'reverse': !search.reverse &amp;&amp; search.predicate === modifier\}" class="glyphicon glyphicon-arrow-down predicate reverse"></span>\
+     </span>\
+\
+</th>\
+            <th ng-class="\{active: search.predicate === modifier\}" pp-sortable-table-header="CheckNumber">\
+	<span ng-transclude=""><span>Check Number</span></span>\
+    <span class="sorting-modifiers">\
+        <span ng-class="\{'glyphicon glyphicon-arrow-down predicate':search.predicate === modifier,\
+                         'reverse': !search.reverse &amp;&amp; search.predicate === modifier\}"></span>\
+     </span>\
+\
+</th>\
+            <th ng-class="\{active: search.predicate === modifier\}" pp-sortable-table-header="TotalAmount">\
+	<span ng-transclude=""><span>Check Amount</span></span>\
+    <span class="sorting-modifiers">\
+        <span ng-class="\{'glyphicon glyphicon-arrow-down predicate':search.predicate === modifier,\
+                         'reverse': !search.reverse &amp;&amp; search.predicate === modifier\}"></span>\
+     </span>\
+\
+</th>\
+            <!-- ngIf: tableName -->\
+            <!-- ngIf: !tableName --><th ng-if="!tableName" class="text-center">View / Download</th><!-- end ngIf: !tableName -->\
+        </tr>\
+    </thead>\
+    <tbody>\
+\
+        <!-- ngRepeat: item in tableResults --><tr class="line-item" ng-repeat="item in tableResults">\
+            <td>02/24/2026</td>\
+            <td>NEPHROLOGY ASSOCIATES OF UPLAND AND POMONA  </td>\
+            <td>\
+                <span>EFT-3208208</span>\
+            </td>\
+\
+            <td align="right">$16,747.29</td>\
+            <!-- ngIf: tableName -->\
+            <!-- ngIf: !tableName --><td ng-if="!tableName" class="text-center">\
+                <!-- IEHP COVERED CCA Claims Download Logic -->\
+                <!-- ngIf: isCcaRAs -->\
+                <!-- Other Claims Download Logic -->\
+                <!-- ngIf: !isCcaRAs --><div ng-if="!isCcaRAs" bis_skin_checked="1">\
+                    <div uib-popover="Click to view Claim" popover-trigger="'mouseenter'" popover-append-to-body="true" class="btn-link inline-block" style="width: 40%; text-align: center;" ng-click="GetRaPdf(item)" bis_skin_checked="1">\
+\
+                        <span class="fa-stack fa-lg">\
+                            <i class="fa fa-file-o fa-stack-1x" style="color: #01213e; font-size: 1.375rem; margin-top: -6px;" aria-hidden="true"></i>\
+                            <i class="fa fa-eye fa-stack-1x" style="color: #01213e; font-size: 12px; margin-top: -4px;" aria-hidden="true"></i>\
+                        </span>\
+\
+                    </div>\
+\
+                    <div uib-popover="Click to download Claim PDF" popover-trigger="'mouseenter'" popover-append-to-body="true" class="inline-block btn-link " style="text-align: center; width: 40%;" ng-click="GetRaPdfDownload(item)" bis_skin_checked="1">\
+\
+                        <span class="fa-stack fa-lg">\
+                            <i class="fa fa-file-o fa-stack-1x" style="color: #01213e; font-size: 1.375rem; margin-top: -6px;" aria-hidden="true"></i>\
+                            <i class="fa fa-arrow-circle-down fa-stack-1x" style="color: #01213e; font-size: 12px; margin-top: -4px;" aria-hidden="true"></i>\
+                        </span>\
+                    </div>\
+                </div><!-- end ngIf: !isCcaRAs -->\
+            </td><!-- end ngIf: !tableName -->\
+        </tr><!-- end ngRepeat: item in tableResults -->   \
+\
+    </tbody>\
+    \
+    \
+</table><!-- end ngIf: tableResults[0].VendorName1 || tableResults[0].VendorName -->\
+</pp-remittance-advice-table><!-- end ngIf: search.status !== 3 && !errorMessage -->\
+\
+            <danger-box message=""><div class="danger bg-danger alert alert-danger ng-hide" ng-show="message != ''" bis_skin_checked="1"></div></danger-box>\
+\
+            <uib-alert ng-show="search.status === 3" type="warning" class="text-center ng-hide">Please enter a search parameter.</uib-alert>\
+\
+            <!-- ngIf: (!search.results[0].RenderingProvider) && alreadySearched && search.status !== 3 && !isBeforeAllowedDate -->\
+\
+            <!-- ngIf: isBeforeAllowedDate && alreadySearched && search.status !== 3 -->\
+        </div>\
+    </div>\
+</div>\
+\
+<div class="modal fade" id="RaProcessessingModal" data-backdrop="static" data-keyboard="false" tabindex="-1" role="dialog" bis_skin_checked="1">\
+    <div class="modal-dialog" role="document" style="margin-top: 15%;" bis_skin_checked="1">\
+        <div class="modal-content" bis_skin_checked="1">\
+            <div class="modal-body" bis_skin_checked="1">\
+                <h4 style="margin: 20px 0 20px 0;">\
+                    The PDF for the selected claim is being generated.\
+                    This may take a couple of minutes. Please click \'91Close\'92 to continue navigating the site.\
+                </h4>\
+\
+                <div class="modal-footer" bis_skin_checked="1">\
+                    <button type="submit" class="btn btn-primary" data-dismiss="modal">Close</button>\
+                </div>\
+            </div>\
+        </div>\
+    </div>\
+</div>\
+\
+<div class="modal fade" id="RaProcessessingModalError" data-backdrop="static" data-keyboard="false" tabindex="-1" role="dialog" bis_skin_checked="1">\
+    <div class="modal-dialog" role="document" style="margin-top: 15%;" bis_skin_checked="1">\
+        <div class="modal-content" bis_skin_checked="1">\
+            <div class="modal-body" bis_skin_checked="1">\
+                <h4 style="margin-top: 20px; color: red;">An error occurred generating claim pdf.</h4>\
+                <br>\
+\
+\
+                <div class="modal-footer" bis_skin_checked="1">\
+                    <button type="submit" class="btn btn-primary" data-dismiss="modal">Close</button>\
+                </div>\
+            </div>\
+        </div>\
+    </div>\
+</div></div>\
+        </div>\
+    </div>\
+\
+    <div id="nav-col" class="col-md-3 col-xs-12 col-md-pull-9 col-xs-pull-0 col-print-pull-0" bis_skin_checked="1">\
+        <!-- uiView: navigation --><div ui-view="navigation" bis_skin_checked="1"><div class="non-printable side-navigation-container" left-navigation="" bis_skin_checked="1">\
+\
+    <nav class="side-navigation">\
+        <a ui-sref="home" ui-sref-active="active" href="/">Home</a>\
+\
+        <!-- ngIf: vm.siteItem['NAV.DSHBRD'] -->\
+\
+        <!-- ngIf: vm.siteItem['NAV.HOSPP4P'] -->\
+        <!-- ngIf: vm.siteItem['NAV.FACPF'] && vm.hospitalProfileLinkStatus === true -->\
+        <!-- ngIf: vm.siteItem['NAV.ELIG'] --><a ng-if="vm.siteItem['NAV.ELIG']" ui-sref="eligibility" ui-sref-active="active" ui-sref-opts="\{reload: true\}" href="/eligibility">Eligibility</a><!-- end ngIf: vm.siteItem['NAV.ELIG'] -->\
+\
+        <!-- ngIf: vm.siteItem['NAV.CMNGMT'] -->\
+        <!-- ngIf: vm.siteItem['NAV.ROST'] --><div class="nav-folder" ng-if="vm.siteItem['NAV.ROST']" bis_skin_checked="1">\
+            <a ng-click="vm.toggle.RS=!vm.toggle.RS" ng-class="false" ui-sref-active="active"><pp-chevron-toggle state="vm.toggle.RS"><span class="accordion-icon glyphicon glyphicon-chevron-down" ng-class="state ? 'active' : ''"></span>																	 </pp-chevron-toggle>Rosters</a>\
+            <div id="NAV.RS" class="sub-section collapse" uib-collapse="!vm.toggle.RS" style="height: 0px;" bis_skin_checked="1">\
+                <!-- ngIf: vm.siteItem['ROST.INOV'] -->\
+                <!-- ngIf: vm.siteItem['ROST.AL'] -->\
+                <!-- ngIf: vm.siteItem['ROST.AER'] -->\
+                <!-- ngIf: vm.siteItem['ROST.ANC'] -->\
+                <!-- ngIf: vm.siteItem['ROST.AR'] -->\
+                <!-- ngIf: vm.siteItem['ROST.CCMPR'] -->\
+                <!-- ngIf: vm.siteItem['ROST.CCS'] -->\
+                <!-- ngIf: vm.siteItem['ROST.COVID19'] -->\
+                <!-- ngIf: vm.siteItem['ROST.COVID19VAC'] -->                \
+                <!-- ngIf: vm.siteItem['ROST.MDL'] -->\
+                <!-- ngIf: vm.siteItem['ROST.PCE'] -->\
+                <!-- ngIf: vm.siteItem['ROST.EA'] -->\
+                <!-- ngIf: vm.siteItem['ROST.HCC'] -->\
+                <!-- ngIf: vm.siteItem['ROST.HM'] -->\
+                <!-- ngIf: vm.siteItem['ROST.IHA'] -->\
+                <!-- =======================================================================\
+            == Both Inpatient discharges and admissions have the same site code. ==\
+            ======================================================================= -->\
+                <!-- ngIf: vm.siteItem['ROST.IR'] -->\
+                <!-- ngIf: vm.siteItem['ROST.IR'] -->\
+                <!-- ngIf: vm.siteItem['ROST.LTSS'] -->\
+\
+\
+                <!-- ngIf: vm.siteItem['ROST.MCR'] -->\
+                <!-- ngIf: vm.siteItem['ROST.NEMT'] --><a ng-if="vm.siteItem['ROST.NEMT']" ui-sref="rosters.NEMT" ui-sref-active="active" ui-sref-opts="\{reload: true\}" href="/rosters/nemt-pcs-rosters">NEMT PCS Roster</a><!-- end ngIf: vm.siteItem['ROST.NEMT'] -->\
+                <!-- ngIf: vm.siteItem['ROST.NA'] -->\
+            </div>\
+        </div><!-- end ngIf: vm.siteItem['NAV.ROST'] -->\
+\
+        <!-- ngIf: vm.siteItem['NAV.PN'] -->\
+\
+        <!-- ngIf: vm.siteItem['NAV.CS'] -->\
+\
+        <!-- ngIf: vm.siteItem['NAV.CHW'] -->\
+\
+        <!-- ngIf: vm.siteItem['NAV.DOULA'] -->\
+\
+        <!-- ngIf: vm.siteItem['NAV.ENC'] -->\
+\
+        <!-- ngIf: vm.siteItem['NAV.ICFDD'] -->\
+\
+        <!-- ngIf: vm.siteItem['NAV.TRF'] --><div ng-if="vm.siteItem['NAV.TRF']" bis_skin_checked="1">\
+            <a ng-click="vm.toggle.TRF=!vm.toggle.TRF" ng-class="false" ui-sref-active="active">\
+                <pp-chevron-toggle state="vm.toggle.TRF"><span class="accordion-icon glyphicon glyphicon-chevron-down" ng-class="state ? 'active' : ''"></span>																	 </pp-chevron-toggle>Transportation\
+            </a>\
+            <div class="sub-section collapse" uib-collapse="!vm.toggle.TRF" style="height: 0px;" bis_skin_checked="1">\
+                <!-- ngIf: vm.siteItem['TRF.REQ'] --><a ng-if="vm.siteItem['TRF.REQ'] " ui-sref="transportation.request-form" ui-sref-active="active" ui-sref-opts="\{reload: true\}" href="/transportation/request-form"> Request</a><!-- end ngIf: vm.siteItem['TRF.REQ'] -->\
+            </div>\
+        </div><!-- end ngIf: vm.siteItem['NAV.TRF'] -->\
+\
+        <!-- ngIf: vm.siteItem['NAV.ECM'] -->\
+\
+        <!-- ngIf: vm.siteItem['NAV.VSN'] -->\
+\
+        <!-- ngIf: vm.siteItem['NAV.RX'] --><div ng-if="vm.siteItem['NAV.RX']" bis_skin_checked="1">\
+            <a ng-click="vm.toggle.RX=!vm.toggle.RX" ng-class="false" ui-sref-active="active">\
+                <pp-chevron-toggle state="vm.toggle.RX"><span class="accordion-icon glyphicon glyphicon-chevron-down" ng-class="state ? 'active' : ''"></span>																	 </pp-chevron-toggle>Pharmacy\
+            </a>\
+            <div id="NAV.RX" class="sub-section collapse" uib-collapse="!vm.toggle.RX" style="height: 0px;" bis_skin_checked="1">\
+                <!-- ngIf: vm.isCcaAffiliated --><div ng-if="vm.isCcaAffiliated" bis_skin_checked="1">\
+                    <a ng-click="vm.toggle.RxCca=!vm.toggle.RxCca" ng-class="false" ng-style="\{'font-weight': vm.toggle.RxCca? 600: 100\}" ui-sref-active="active" style="font-weight: 100;">\
+                        <pp-chevron-toggle state="vm.toggle.RxCca"><span class="accordion-icon glyphicon glyphicon-chevron-down" ng-class="state ? 'active' : ''"></span>																	 </pp-chevron-toggle>IEHP Covered\
+                    </a>\
+                    <div class="sub-section collapse" uib-collapse="!vm.toggle.RxCca" style="height: 0px;" bis_skin_checked="1">\
+                        <a ui-sref="pharmacy.cca.pac" ui-sref-active="active" ui-sref-opts="\{reload: true\}" href="/pharmacy/cca/pac">\
+                            Prior Authorization Forms and ePA Submission\
+                        </a>\
+                        <a ui-sref="pharmacy.cca.formulary" ui-sref-active="active" ui-sref-opts="\{reload: true\}" href="/pharmacy/cca/cca">\
+                            Formulary\
+                        </a>\
+                    </div>\
+                </div><!-- end ngIf: vm.isCcaAffiliated -->\
+\
+                <!-- ngIf: vm.isMcrAffiliated --><div ng-if="vm.isMcrAffiliated" bis_skin_checked="1">\
+                    <a ng-click="vm.toggle.RxDualChoice=!vm.toggle.RxDualChoice" ng-class="false" ng-style="\{'font-weight': vm.toggle.RxDualChoice? 600: 100\}" ui-sref-active="active" style="font-weight: 100;">\
+                        <pp-chevron-toggle state="vm.toggle.RxDualChoice"><span class="accordion-icon glyphicon glyphicon-chevron-down" ng-class="state ? 'active' : ''"></span>																	 </pp-chevron-toggle>IEHP DualChoice\
+                    </a>\
+                    <div class="sub-section collapse" uib-collapse="!vm.toggle.RxDualChoice" style="height: 0px;" bis_skin_checked="1">\
+                        <a ui-sref="pharmacy.dualchoice.UPA" ui-sref-active="active" ui-sref-opts="\{reload: true\}" href="/pharmacy/dualchoice/universal-pharmacy-authorization">\
+                            Coverage Determination Request\
+                        </a>\
+                        <!-- ngIf: vm.siteItem['RX.CMC'] --><div ng-if="vm.siteItem['RX.CMC']" bis_skin_checked="1">\
+                            <a ui-sref="pharmacy.dualchoice.formulary" ui-sref-active="active" ui-sref-opts="\{reload: true\}" href="/pharmacy/dualchoice/dsnp">\
+                                Formulary\
+                            </a>\
+                        </div><!-- end ngIf: vm.siteItem['RX.CMC'] -->\
+                    </div>\
+                </div><!-- end ngIf: vm.isMcrAffiliated -->\
+\
+                <!-- ngIf: vm.isMedAffiliated --><div ng-if="vm.isMedAffiliated" bis_skin_checked="1">\
+                    <a ng-click="vm.toggle.RxMediCal=!vm.toggle.RxMediCal" ng-class="false" ng-style="\{'font-weight': vm.toggle.RxMediCal? 600: 100\}" ui-sref-active="active" style="font-weight: 100;">\
+                        <pp-chevron-toggle state="vm.toggle.RxMediCal"><span class="accordion-icon glyphicon glyphicon-chevron-down" ng-class="state ? 'active' : ''"></span>																	 </pp-chevron-toggle>Medi-Cal\
+                    </a>\
+                    <div class="sub-section collapse" uib-collapse="!vm.toggle.RxMediCal" style="height: 0px;" bis_skin_checked="1">\
+                        <a ui-sref="pharmacy.medical.PAC" ui-sref-active="active" ui-sref-opts="\{reload: true\}" href="/pharmacy/medical/priorauthorizationcriteria">\
+                            Prior Authorization Criteria\
+                        </a>\
+                        <a ui-sref-active="active" title="this is an external link" href="https://www.iehp.org/en/providers/pharmacy-services" target="_blank">\
+                            Pharmaceutical Services <i class="fa service-icon" aria-hidden="true"></i>\
+                        </a>\
+                    </div>\
+                </div><!-- end ngIf: vm.isMedAffiliated -->\
+            </div>\
+        </div><!-- end ngIf: vm.siteItem['NAV.RX'] -->\
+\
+        <!-- ngIf: vm.siteItem['NAV.CLARA'] --><a ng-if="vm.siteItem['NAV.CLARA']" ui-sref="claims.status" ui-sref-active="active" ui-sref-opts="\{reload: true\}" href="/claims/status">Claims Status</a><!-- end ngIf: vm.siteItem['NAV.CLARA'] -->\
+\
+\
+        <!-- ngIf: vm.siteItem['PDR.FEAT'] --><a ng-if="vm.siteItem['PDR.FEAT']" ui-sref="claims.disputes-status" ui-sref-active="active" ui-sref-opts="\{reload: true\}" href="/claims/disputes-status">Claim Disputes Status</a><!-- end ngIf: vm.siteItem['PDR.FEAT'] -->\
+\
+        <!-- ngIf: vm.siteItem['NAV.BEH'] -->\
+        <!--QHN: Quality Hospice Network, defined in Rule Per Account-->\
+        <!-- ngIf: vm.siteItem['NAV.HSPICE'] || vm.siteItem['HSPICE.QHN'] -->\
+        <!-- ngIf: vm.siteItem['NAV.AUTR'] || vm.siteItem['BEH.INIT'] --><div ng-if="vm.siteItem['NAV.AUTR'] || vm.siteItem['BEH.INIT']" bis_skin_checked="1">\
+            <a ng-click="vm.toggle.AUTR=!vm.toggle.AUTR" ng-class="false" ui-sref-active="active">\
+                <pp-chevron-toggle state="vm.toggle.AUTR"><span class="accordion-icon glyphicon glyphicon-chevron-down" ng-class="state ? 'active' : ''"></span>																	 </pp-chevron-toggle>Referrals\
+            </a>\
+            <div class="sub-section collapse" uib-collapse="!vm.toggle.AUTR" style="height: 0px;" bis_skin_checked="1">\
+                <!-- ngIf: vm.siteItem['AUTR.STAT'] --><a ng-if="vm.siteItem['AUTR.STAT']" ui-sref="authorizations.status" ui-sref-active="active" href="/referrals/status">Status</a><!-- end ngIf: vm.siteItem['AUTR.STAT'] -->\
+                <!-- ngIf: vm.siteItem['AUTR.REQ'] || vm.siteItem['BEH.INIT'] --><a ng-if="vm.siteItem['AUTR.REQ'] || vm.siteItem['BEH.INIT']" ui-sref="authorizations.request" ui-sref-active="active" ui-sref-opts="\{reload: true\}" href="/referrals/request">Request</a><!-- end ngIf: vm.siteItem['AUTR.REQ'] || vm.siteItem['BEH.INIT'] -->\
+                <!--Added this duplicate tab as part of Hospice Enhancement BRD 305667. To avoid confusing non QHN providers-->\
+                <!-- ngIf: vm.siteItem['HSPICE.STATUS'] && !vm.siteItem['HSPICE.QHN'] --><a ng-if="vm.siteItem['HSPICE.STATUS'] &amp;&amp; !vm.siteItem['HSPICE.QHN']" ui-sref="hospice.status(\{type: 'hospice'\})" ui-sref-active="active" ui-sref-opts="\{reload: true\}" href="/hospice/status?type=hospice">Hospice Status</a><!-- end ngIf: vm.siteItem['HSPICE.STATUS'] && !vm.siteItem['HSPICE.QHN'] -->\
+            </div>\
+        </div><!-- end ngIf: vm.siteItem['NAV.AUTR'] || vm.siteItem['BEH.INIT'] -->\
+\
+        <!-- ngIf: vm.siteItem['ROST.GRVNC'] --><a ng-if="vm.siteItem['ROST.GRVNC']" ui-sref="rosters.grievances" ui-sref-active="active" ui-sref-opts="\{reload: true\}" href="/rosters/grievances">Grievances</a><!-- end ngIf: vm.siteItem['ROST.GRVNC'] -->\
+\
+        <!-- ngIf: vm.siteItem['NAV.FIN'] --><div ng-if="vm.siteItem['NAV.FIN']" bis_skin_checked="1">\
+            <a ng-click="vm.toggle.FIN=!vm.toggle.FIN" ng-class="true" ui-sref-active="active">\
+                <pp-chevron-toggle state="vm.toggle.FIN"><span class="accordion-icon glyphicon glyphicon-chevron-down active" ng-class="state ? 'active' : ''"></span>																	 </pp-chevron-toggle>Finance\
+            </a>\
+\
+            <div class="sub-section in collapse" uib-collapse="!vm.toggle.FIN" aria-expanded="true" aria-hidden="false" bis_skin_checked="1">\
+                <!-- ngIf: vm.siteItem['FIN.CAP'] -->\
+                <!-- ngIf: vm.siteItem['FIN.REMCCA'] --><a ng-if="vm.siteItem['FIN.REMCCA']" ui-sref="finance.covered" ui-sref-active="active" ui-sref-opts="\{reload: true\}" href="/finance/cca-remittance-advice">IEHP Covered RAs</a><!-- end ngIf: vm.siteItem['FIN.REMCCA'] -->\
+                <!-- ngIf: vm.siteItem['FIN.REM'] --><a ng-if="vm.siteItem['FIN.REM']" ui-sref="finance.remittance" ui-sref-active="active" ui-sref-opts="\{reload: true\}" href="/finance/remittance-advice" class="active">Claims RAs</a><!-- end ngIf: vm.siteItem['FIN.REM'] -->\
+                <!-- ngIf: vm.siteItem['FIN.GQPMPM'] -->\
+                <!-- ngIf: vm.siteItem['FIN.HOSPRA'] -->\
+                <!-- ngIf: vm.siteItem['FIN.P4PRA'] -->\
+                <!-- ngIf: vm.siteItem['FIN.PROP56'] --><a ng-if="vm.siteItem['FIN.PROP56']" ui-sref="finance.prop56Ra" ui-sref-active="active" ui-sref-opts="\{reload: true\}" href="/finance/prop56">Prop 56 RAs</a><!-- end ngIf: vm.siteItem['FIN.PROP56'] -->\
+                <!-- ngIf: vm.siteItem['FIN.TRI'] --><a ng-if="vm.siteItem['FIN.TRI']" ui-sref="finance.tri" ui-sref-active="active" ui-sref-opts="\{reload: true\}" href="/finance/tri">Targeted Rate Increase RAs</a><!-- end ngIf: vm.siteItem['FIN.TRI'] -->\
+                <!-- ngIf: vm.siteItem['FIN.GQRA'] -->\
+                <!-- ngIf: vm.siteItem['FIN.UCWRA'] -->\
+                <!-- ngIf: vm.siteItem['FIN.OBRA'] -->\
+                <!-- ngIf: vm.siteItem['FIN.MOC'] -->\
+                <!-- ngIf: vm.siteItem['FIN.DSP4PRA'] -->\
+            </div>\
+        </div><!-- end ngIf: vm.siteItem['NAV.FIN'] -->\
+\
+        <!-- ngIf: vm.siteItem['NAV.CEN'] -->\
+\
+        <!-- ngIf: vm.siteItem['NAV.P4P'] --><div ng-if="vm.siteItem['NAV.P4P']" bis_skin_checked="1">\
+            <a ng-click="vm.toggle.P4P=!vm.toggle.P4P" ng-class="false" ui-sref-active="active">\
+                <pp-chevron-toggle state="vm.toggle.P4P"><span class="accordion-icon glyphicon glyphicon-chevron-down" ng-class="state ? 'active' : ''"></span>																	 </pp-chevron-toggle>P4P\
+            </a>\
+\
+            <div class="sub-section collapse" uib-collapse="!vm.toggle.P4P" style="height: 0px;" bis_skin_checked="1">\
+                <!-- ngIf: vm.siteItem['P4P.Entry'] -->\
+\
+                <!-- ngIf: vm.siteItem['P4P.Status'] -->\
+\
+                <!-- ngIf: vm.siteItem['P4P.RES'] --><a ng-if="vm.siteItem['P4P.RES']" ui-sref="P4P.Resources" ui-sref-active="active" ui-sref-opts="\{reload: true\}" href="/p4p/resources"> P4P Resources </a><!-- end ngIf: vm.siteItem['P4P.RES'] -->\
+\
+                <!-- ngIf: vm.siteItem['P4P.DCIR'] -->\
+            </div>\
+        </div><!-- end ngIf: vm.siteItem['NAV.P4P'] -->\
+\
+        <!-- ngIf: vm.siteItem['NAV.INTER'] --><div ng-if="vm.siteItem['NAV.INTER']" bis_skin_checked="1">\
+            <a ng-click="vm.toggle.INTER=!vm.toggle.INTER" ng-class="false" ui-sref-active="active">\
+                <pp-chevron-toggle state="vm.toggle.INTER"><span class="accordion-icon glyphicon glyphicon-chevron-down" ng-class="state ? 'active' : ''"></span>																	 </pp-chevron-toggle>Interpreter Request\
+            </a>\
+            <!-- ngIf: vm.siteItem['INTER.STATUS'] --><div class="sub-section collapse" uib-collapse="!vm.toggle.INTER" ng-if="vm.siteItem['INTER.STATUS']" style="height: 0px;" bis_skin_checked="1">\
+                <a ui-sref="INTER.STATUS" ui-sref-active="active" ui-sref-opts="\{reload: true\}" href="/interpreter/status">Status</a>\
+            </div><!-- end ngIf: vm.siteItem['INTER.STATUS'] -->\
+            <!-- ngIf: vm.siteItem['INTER.FORM'] --><div class="sub-section collapse" uib-collapse="!vm.toggle.INTER" ng-if="vm.siteItem['INTER.FORM']" style="height: 0px;" bis_skin_checked="1">\
+                <a ui-sref="INTER.FORM" ui-sref-active="active" ui-sref-opts="\{reload: true\}" href="/interpreter/interpreter-request">Request</a>\
+            </div><!-- end ngIf: vm.siteItem['INTER.FORM'] -->\
+             <!-- ngIf: vm.siteItem['INTER.FILE'] -->\
+        </div><!-- end ngIf: vm.siteItem['NAV.INTER'] -->\
+\
+        <!-- ngIf: vm.siteItem['NAV.HED'] --><div ng-if="vm.siteItem['NAV.HED']" bis_skin_checked="1">\
+            <a ng-click="vm.toggle.HED=!vm.toggle.HED" ui-sref-active="active">\
+                <pp-chevron-toggle state="vm.toggle.HED"><span class="accordion-icon glyphicon glyphicon-chevron-down" ng-class="state ? 'active' : ''"></span>																	 </pp-chevron-toggle>Health &amp; Wellness\
+            </a>\
+            <div class="sub-section collapse" uib-collapse="!vm.toggle.HED" style="height: 0px;" bis_skin_checked="1">\
+                <!-- ngIf: vm.siteItem['HED.REF'] --><a ng-if="vm.siteItem['HED.REF']" ui-sref="healthEducation.referrals" ui-sref-active="active" ui-sref-opts="\{reload: true\}" href="/health-education/referrals">Health Education Request</a><!-- end ngIf: vm.siteItem['HED.REF'] -->\
+\
+\
+                <!-- ngIf: vm.siteItem['HED.REF'] --><a ng-if="vm.siteItem['HED.REF']" ui-sref="healthEducation.requests" ui-sref-active="active" ui-sref-opts="\{reload: true\}" href="/health-education/appraisal">Health Appraisal Results</a><!-- end ngIf: vm.siteItem['HED.REF'] -->\
+            </div>\
+        </div><!-- end ngIf: vm.siteItem['NAV.HED'] -->\
+\
+        <!-- ngIf: vm.siteItem['NAV.WDI'] -->\
+\
+        <a ui-sref="quality-clinical-resources" ui-sref-active="active" ui-sref-opts="\{reload: true\}" href="/quality-clinical-resources">Clinical Resources and Tools</a>\
+\
+        <a ui-sref="provider-training-materials" ui-sref-active="active" ui-sref-opts="\{reload: true\}" href="/provider-training-materials">Provider Training Materials</a>\
+\
+        <!-- ngIf: vm.siteItem['PBI'] -->\
+    </nav>\
+\
+\
+    <div aria-hidden="true" class="fade modal" id="thirdPartyModal" role="dialog" tabindex="-1" bis_skin_checked="1">\
+        <div class="modal-dialog attenation-dialog" bis_skin_checked="1">\
+            <div class="modal-content" bis_skin_checked="1">\
+                <div class="modal-header SectionHeader" bis_skin_checked="1">\
+                    <button class="close" data-dismiss="modal" title="Close" type="button">\
+                        <span aria-hidden="true">\'d7</span>\
+                        <span class="sr-only">Close</span>\
+                    </button>\
+                    <h4>Attention</h4>\
+                </div>\
+                <div class="modal-body" bis_skin_checked="1">\
+                    <h4>You are leaving IEHP Provider Portal</h4>\
+                    <hr>\
+\
+                    <h4></h4>\
+                    <p></p>\
+                    <p> \
+                        Please be aware that the external site policies may differ from our website terms\
+                        and conditions and privacy policy.\
+                    </p>\
+\
+                    <p>The next website will open in a new browser window or tab.</p>\
+\
+                    <p class="do-not-show-again" style="text-align: left">\
+                        <label class="checkbox-label" for="checkbox-do-not-show" style="padding-left:0px">\
+                            <input type="checkbox" id="checkbox-do-not-show" class="checkbox-input ng-pristine ng-untouched ng-valid" ng-model="vm.notShowRedirect" style="margin-right: 5px; margin-top:7px">\
+                        </label> Do not show again\
+                    </p>\
+                </div>\
+                <div class="modal-footer" style="padding: 10px 14px 14px 24px" bis_skin_checked="1">\
+                    <button type="button" class="btn btn-primary Annual-button" ng-click="vm.thirdPartyRedirect(vm.linkType)">\
+                        Proceed\
+                    </button>\
+                    <button type="button" class="btn clear-btn btn-secondary Annual-button" data-dismiss="modal" ng-click="vm.resetDoNotShow()">\
+                        Cancel\
+                    </button>\
+                </div>\
+            </div>\
+        </div>\
+    </div>\
+</div></div>\
+    </div>\
+</div></div>\
+</div>\
+<keep-alive><div class="keepAliveBackdrop ng-hide" ng-show="vm.showActivityPrompt" bis_skin_checked="1"><div style="position:relative;height:100%;width:100%;" bis_skin_checked="1"><div style="position:fixed;width:100%;top:45%;" bis_skin_checked="1"><div class="keepAliveContainer" bis_skin_checked="1"><danger-box message=""><div class="danger bg-danger alert alert-danger ng-hide" ng-show="message != ''" bis_skin_checked="1"></div></danger-box><p>Are you still there?</p><p>You will be automatically logged out in<br>  second(s)</p><p><button class="btn btn-primary" ng-click="vm.iAmStillHere()">Continue</button><button class="btn btn-primary" ng-click="vm.LogOut()">Log Out</button></p></div></div></div></div></keep-alive>\
+    </div>\
+\
+    <div class="footer-container" bis_skin_checked="1">\
+        <footer>\
+            <section>\
+                <p>\
+                    \'a9 <span id="year">2026</span> IEHP, All Rights Reserved.\
+                </p>\
+            </section>\
+        </footer>\
+    </div>\
+\
+    <script src="/bundles/lib?v=TKVkiLoHXOUyAZdJ-hNdaGUeS3LEpY_3OnIFX2uPgsw1"></script>\
+\
+    <script src="/bundles/app?v=HaU1cipZy6tSmUx2S5tW9ugaAlr7I2J0UjySiq9b-g41"></script>\
+\
+    \
+\
+    <script src="/Scripts/fontawesome.js"></script>\
+\
+    <script>\
+        document.getElementById("year").innerHTML = new Date().getFullYear();\
+        function testModal() \{\
+            $('#bakModal').fadeIn('slow');\
+            $('.modalContent').empty();\
+            setTimeout(function () \{\
+                $('#modalContainerGeneral')\
+                    .addClass('modalAssignedPCPDetail')\
+                    .attr('modalClass', 'modalAssignedPCPDetail')\
+                    .fadeIn('fast');\
+                const a = $('#ppMemberPCPContainer').clone();\
+                $(a).appendTo('#modalContainerGeneral .modalContent');\
+                //keep modal in parent element $('#modalContainerGeneral').appendTo('#eligRes');\
+\
+                $('#modalContainerGeneral .modalContent #ppMemberPCPContainer').show();\
+                $('.modalContainer').show();\
+            \},\
+                500);\
+        \}\
+\
+        var log = Function.prototype.bind.call(console.log, console);\
+\
+        var viewOrientation = '';\
+\
+        function closeModal(modalID) \{\
+\
+            console.log('closingModal > ' + modalID);\
+            $('#' + modalID).fadeOut('fast');\
+            $('#bakModal').fadeOut(1000);\
+            const _modalClass = $('.modalFrameContainer').attr('modalClass');\
+\
+            if (_modalClass !== '') \{\
+                console.log('...CLOSING IFRAME ' + $('#' + modalID).attr('modalClass'));\
+                $('.modalFrameContainer .modalFrame').removeClass('ppIframe_' + _modalClass);\
+\
+                $('.modalFrameContainer').removeClass(_modalClass).attr('modalClass', '');\
+            \}\
+        \}\
+\
+        function redirectPage(url) \{\
+            window.location.href = url;\
+        \}\
+\
+        //====== LANGUAGE TOGGLE/ SWAP\
+        $('.lang')\
+            .click(function () \{\
+                $('.lang').each(function () \{\
+                    $(this).removeClass('langItemSelected');\
+                \});\
+\
+                $(this).addClass('langItemSelected');\
+            \});\
+\
+\
+        function toggleBubble(msgBoxID) \{\
+\
+            if ($('#' + msgBoxID).css('display') === 'none') \{\
+                $('#' + msgBoxID).fadeIn();\
+            \}\
+            else \{\
+                $('#' + msgBoxID).fadeOut();\
+            \}\
+        \};\
+\
+\
+        //===== SUBNAV FADEOUT\
+        $('.submenuContainer')\
+            .on("mouseleave",\
+                (function (event) \{\
+                    event.stopPropagation();\
+                    $(this).fadeOut(1000, function () \{ $('.navItemSelected').removeClass('navItemSelected'); \});\
+                \}));\
+\
+        var islessThan1KWidth = window.screen.width <= 1024 ? true : false;\
+        var isMobile = \{\
+            Android: function () \{\
+                return navigator.userAgent.match(/Android/i);\
+            \},\
+            BlackBerry: function () \{\
+                return navigator.userAgent.match(/BlackBerry/i);\
+            \},\
+            iOS: function () \{\
+                return navigator.userAgent.match(/iPhone|iPad|iPod/i);\
+            \},\
+            Opera: function () \{\
+                return navigator.userAgent.match(/Opera Mini/i);\
+            \},\
+            Windows: function () \{\
+                return navigator.userAgent.match(/IEMobile/i);\
+            \},\
+            any: function () \{\
+                return (isMobile.Android() ||\
+                    isMobile.BlackBerry() ||\
+                    isMobile.iOS() ||\
+                    isMobile.Opera() ||\
+                    isMobile.Windows());\
+            \}\
+        \};\
+\
+        //Initial layout; check if in Landscape\
+        if (window.screen.width > window.screen.height) \{\
+            viewOrientation = "Landscape";\
+\
+            $('.buttonNav').addClass('landscapeNav');\
+        \}\
+        else \{\
+            viewOrientation = "Portrait";\
+        \}\
+\
+        //Check for device rotation\
+        $(window).orientationchange();\
+\
+        $(window)\
+            .on("orientationchange",\
+                function (event) \{\
+                    if (event.orientation == 'landscape') \{\
+                        //console.log("IN LANDSCAPE");\
+                        $('.buttonNav').addClass('landscapeNav');\
+                    \} else \{\
+                        console.log("IN PORTRAIT");\
+                        $('.buttonNav').removeClass('landscapeNav');\
+                        //showModalDialog('To have a better experience with this screen, please rotate your phone to landscape mode.');\
+                    \}\
+                \});\
+\
+        $(document)\
+            .ready(function () \{\
+\
+                if (isMobile.any()) \{\
+                    //console.log('This is a Mobile Device!');\
+                    $('body').addClass('mobile');\
+                    $('#mainNavBarContainer').addClass('mainNavBarMobile');\
+                    //$('#loginCont').addClass('mobStrong');\
+\
+                    if (islessThan1KWidth) \{\
+                        //console.log('width < 1K :' + window.screen.width);\
+                        $('body').addClass('mobileLT1K');\
+                        if (window.screen.width < 500) \{\
+                            //console.log(' width < 500 : ' + window.screen.width);\
+                            $('body').addClass('mobileLT500');\
+                        \} else \{\
+                            //console.log(' 500 > width < 1K : ' + window.screen.width);\
+                            $('body').addClass('mobileGT500LT1K');\
+                        \}\
+                        $('#mainNavBar .computer').removeClass('computer').addClass('btnNavCont_mobileLT1K');\
+                    \} else \{\
+                        //console.log('width > 1K : ' + window.screen.width);\
+                        $('body').addClass('mobileGT1K');\
+                        $('#mainNavBar .computer').removeClass('computer').addClass('btnNavCont_mobileGT1K');\
+                    \}\
+                \} else \{\
+                    //console.log('This is NOT a Mobile Device!')\
+                    $('body').addClass('computer');\
+                \}\
+\
+                //Add to NavigationApp.js\
+                $('.subNavItem').click(function () \{ $('.submenuContainer').fadeOut(500); \});\
+\
+            \});\
+\
+        //clear current selected nav item\
+        $('#imgLogo')\
+            .click(function () \{\
+                $('.lang')\
+                    .each(function () \{\
+                        $(this).removeClass('langItemSelected');\
+                    \});\
+            \});\
+\
+        // Fixes issue where _Layout.cshtml is duplicated on browser Back/Forward button press\
+        jQuery(document)\
+            .ready(function ($) \{\
+\
+                if (window.history && window.history.pushState) \{\
+\
+                    $(window)\
+                        .on('popstate',\
+                            function () \{\
+                                location.reload();\
+                            \});\
+\
+                \}\
+            \});\
+        if (document.domain === 'providers.iehp.org' || document.domain === 'ewebapp.iehp.org') \{\
+            console.log = function () \{ \}\
+        \}\
+\
+    </script>\
+\
+    \
+    <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyCmId7HsQ6zFuSBSH4iBRT7RZWFlRBSRq4&amp;libraries=places" async="" defer="">\
+\
+        </script>\
+\
+    <script>\
+        // disable backspace button\
+        $(document).unbind('keydown').bind('keydown', function (event) \{\
+            if (event.keyCode === 8) \{\
+                let doPrevent = true;\
+                const d = $(event.srcElement || event.target);\
+                const disabled = d.prop("readonly") || d.prop("disabled");\
+                if (!disabled) \{\
+                    if (d[0].isContentEditable) \{\
+                        doPrevent = false;\
+                    \} else if (d.is("input")) \{\
+                        let type = d.attr("type");\
+                        if (type) \{\
+                            type = type.toLowerCase();\
+                        \}\
+                        const types = ["text", "password", "file", "search", "email", "number", "date", "color", "datetime", "datetime-local", "month", "range", "search", "tel", "time", "url", "week"];\
+                        if (types.indexOf(type) > -1) \{\
+                            doPrevent = false;\
+                        \}\
+                    \} else if (d.is("textarea")) \{\
+                        doPrevent = false;\
+                    \}\
+                \}\
+                if (doPrevent) \{\
+                    event.preventDefault();\
+                    return false;\
+                \}\
+            \}\
+        \});\
+    </script>\
+\
+\
+</div>}

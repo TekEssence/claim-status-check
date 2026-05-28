@@ -334,6 +334,9 @@ export async function POST(req: Request) {
                 return page!.locator("tr.line-item", { hasText: dosFormatted });
               };
 
+              const checkNumbersToDownload: string[] = [];
+              let raLinkToClick: any = null;
+
               while (true) {
                 const matchingRows = getMatchingRows();
                 const count = await matchingRows.count();
@@ -357,164 +360,22 @@ export async function POST(req: Request) {
 
                     let statusInfoText = tableText.replace(/\s+/g, " ");
 
-                    // --- Click RA Link if status is 'Refer to your RA' ---
-                    // Search in the details tableText for the "Refer to your RA" status
+                    // --- Collect Check Numbers if status is 'Refer to your RA' ---
                     const hasRaText = /Refer/i.test(statusInfoText);
-                    let raDetail = "";
                     if (hasRaText && context) {
-                      // Look for the exact link text inside the detailsRow, searching spans and links
-                      const raLink = detailsRow.locator("span, a").filter({ hasText: /Refer to your RA/i }).first();
-                      if (await raLink.count() > 0) {
-                        try {
-                          await log(`Row ${i + 1}: Found exact 'Refer to your RA' link in details. Clicking it...`);
-                          // Listen for popup / new tab
-                          const [newPage] = await Promise.all([
-                            context.waitForEvent("page", { timeout: 15000 }).catch(() => null),
-                            raLink.click()
-                          ]);
-
-                          const pdfSource = newPage || page;
-                          if (newPage) {
-                            await newPage.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
-                            const newUrl = newPage.url();
-                            await log(`Row ${i + 1}: RA link opened new page: ${newUrl}`);
-                          }
-
-                          // Search for the PDF download link prioritizing exact matches first
-                          const pdfSelectors = [
-                            "div[ng-click*='GetRaPdfDownload']",
-                            "div[uib-popover*='download Claim PDF']",
-                            ".fa-arrow-circle-down",
-                            "a[href*='.pdf']",
-                            "a[href*='pdf']",
-                            "a[href*='Download']",
-                            "a[href*='download']",
-                            "a:has-text('PDF')",
-                            "a:has-text('Download')",
-                            "button:has-text('PDF')",
-                            "button:has-text('Download')",
-                            "[class*='download']",
-                            "[id*='download']",
-                            "img[src*='pdf']",
-                            "img[src*='PDF']",
-                            "a:has(img[src*='pdf'])",
-                            "a:has(img[src*='PDF'])"
-                          ];
-
-                          let pdfLink = null;
-                          for (const sel of pdfSelectors) {
-                            const loc = pdfSource.locator(sel).first();
-                            if (await loc.count() > 0) {
-                              pdfLink = loc;
-                              break;
-                            }
-                          }
-
-                          if (pdfLink) {
-                            await log(`Row ${i + 1}: Found PDF download link. Triggering download...`);
-                            
-                            const [download] = await Promise.all([
-                              pdfSource.waitForEvent("download", { timeout: 25000 }).catch(() => null),
-                              pdfLink.click({ force: true })
-                            ]);
-
-                            if (download) {
-                              const downloadsDir = path.join(os.tmpdir(), "downloads");
-                              if (!fs.existsSync(downloadsDir)) {
-                                fs.mkdirSync(downloadsDir, { recursive: true });
-                              }
-
-                              const cleanDos = formatMmDdYyyy(dosDate).replace(/\//g, "-");
-                              const pdfFileName = `${rowIndex + 2}_${memberPolicyId}_${cleanDos}.pdf`;
-                              const pdfPath = path.join(downloadsDir, pdfFileName);
-                              await download.saveAs(pdfPath);
-                              await log(`Row ${i + 1}: Saved PDF temporarily.`);
-
-                              // Read PDF bytes
-                              const pdfBuffer = fs.readFileSync(pdfPath);
-                              
-                              // Send the PDF buffer to the frontend for actual local download
-                              await sendEvent({
-                                type: "pdf_download",
-                                filename: pdfFileName,
-                                base64: pdfBuffer.toString("base64")
-                              });
-
-                              // Extract text from the PDF
-                              const pdfText = extractTextFromPdf(pdfBuffer);
-                              const pdfLines = pdfText.split("\n").map(l => l.trim()).filter(Boolean);
-
-                              const dosStr = formatMmDdYyyy(dosDate);
-                              
-                              let matchingLine = "";
-                              // Collect all lines for this member ID up to the next member ID or max 50 lines.
-                              for (let j = 0; j < pdfLines.length; j++) {
-                                if (pdfLines[j].includes(memberPolicyId)) {
-                                  let end = j + 1;
-                                  while (end < pdfLines.length && end - j < 50) {
-                                    if (/^\d{14}$/.test(pdfLines[end])) break; // another member id
-                                    end++;
-                                  }
-                                  const block = pdfLines.slice(j, end);
-                                  if (block.some(l => l.includes(dosStr))) {
-                                    matchingLine = block.join(" ");
-                                    break;
-                                  }
-                                }
-                              }
-
-                              if (matchingLine) {
-                                await log(`Row ${i + 1}: Extracted claim line from PDF: ${matchingLine}`);
-                                raDetail = matchingLine;
-                              } else {
-                                await log(`Row ${i + 1}: Could not find claim details matching Member ID ${memberPolicyId} and DOS ${dosStr} inside PDF.`);
-                                raDetail = "No matching claim details found in PDF";
-                              }
-                            } else {
-                              await log(`Row ${i + 1}: PDF download timed out or failed.`);
-                              raDetail = "Error: PDF download failed";
-                            }
-                          } else {
-                            await log(`Row ${i + 1}: Could not find PDF download link on details page/modal.`);
-                            raDetail = "Error: PDF download link not found";
-                          }
-
-                          // Clean up: close new page if it was opened
-                          if (newPage) {
-                            await newPage.close().catch(() => {});
-                          } else {
-                            // Check if an inline modal popped up and close it
-                            const modal = page.locator(".modal-content, .modal-dialog, [role='dialog']").first();
-                            if (await modal.count() > 0 && await modal.isVisible()) {
-                              const closeBtn = modal.locator("button:has-text('Close'), button[aria-label='Close'], .close, [ng-click*='close']").first();
-                              if (await closeBtn.count() > 0) {
-                                await closeBtn.click();
-                                await page.waitForTimeout(500);
-                              }
-                            } else {
-                              // If it navigated the current page, navigate back
-                              const currentUrl = page.url();
-                              if (currentUrl !== finalClaimStatusUrl) {
-                                await log(`Row ${i + 1}: Navigating back to Claims Status...`);
-                                await page.goBack({ waitUntil: "networkidle" }).catch(() => {});
-                              }
-                            }
-                          }
-                        } catch (err) {
-                          await log(`Row ${i + 1}: Error handling RA link click: ${(err as Error).message}`);
-                          raDetail = `Error: ${(err as Error).message}`;
+                      const chkMatch = statusInfoText.match(/Check Number.*?(\b\d{9,15}\b)/i);
+                      if (chkMatch) {
+                        const cn = chkMatch[1];
+                        checkNumbersToDownload.push(cn);
+                        await log(`Row ${i + 1}: Found Check Number ${cn} requiring RA download.`);
+                        if (!raLinkToClick) {
+                          const raLink = detailsRow.locator("span, a").filter({ hasText: /Refer to your RA/i }).first();
+                          if (await raLink.count() > 0) raLinkToClick = raLink;
                         }
                       } else {
-                        await log(`Row ${i + 1}: 'Refer to your RA' text found in details, but no exact matching link element was found.`);
-                        raDetail = "Error: RA link element not found";
+                        await log(`Row ${i + 1}: 'Refer to your RA' text found, but could not extract Check Number from details text.`);
                       }
                     }
-
-                    // Save extracted detail line or error message
-                    if (raDetail) {
-                      statusInfoText += ` | RA Info: ${raDetail}`;
-                    }
-                    referRaDetails.push(raDetail);
 
                     details.push(`Summary: [${summaryText}] | Details: [${headerText.replace(/\s+/g, " ")}] | Status Info: [${statusInfoText}]`);
                   } catch (innerError) {
@@ -590,6 +451,121 @@ export async function POST(req: Request) {
                 });
                 await sendEvent({ type: "progress", completed: i + 1, total: claimRows.length });
                 continue;
+              }
+
+              // -------------------------------------------------------------
+              // BATCH DOWNLOAD REFER TO YOUR RA PDFs FOR THIS ROW
+              // -------------------------------------------------------------
+              if (checkNumbersToDownload.length > 0 && raLinkToClick) {
+                const uniqueChecks = Array.from(new Set(checkNumbersToDownload));
+                await log(`Row ${i + 1}: Downloading RAs sequentially for Check Numbers: ${uniqueChecks.join(", ")}`);
+
+                try {
+                  // Navigate to RA page once
+                  const [newPage] = await Promise.all([
+                    context.waitForEvent("page", { timeout: 15000 }).catch(() => null),
+                    raLinkToClick.click()
+                  ]);
+
+                  const pdfSource = newPage || page;
+                  if (newPage) {
+                    await newPage.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
+                  } else {
+                    await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
+                  }
+                  
+                  for (let cIdx = 0; cIdx < uniqueChecks.length; cIdx++) {
+                    const chk = uniqueChecks[cIdx];
+                    await log(`Row ${i + 1}: Processing RA for Check Number ${chk} (${cIdx + 1}/${uniqueChecks.length})...`);
+                    
+                    if (cIdx > 0) {
+                      const searchAgainBtn = pdfSource.locator(".accordionPane:has(.search-again), h2.search-again").first();
+                      if (await searchAgainBtn.count() > 0 && await searchAgainBtn.isVisible()) {
+                         await searchAgainBtn.click({ timeout: 5000 });
+                         await pdfSource.waitForTimeout(500); 
+                      }
+                      
+                      const searchInput = pdfSource.locator("input#search, input[placeholder*='Check Number']").first();
+                      await searchInput.fill(chk);
+                      
+                      const form = searchInput.locator("xpath=ancestor::form").first();
+                      if (await form.count() > 0) {
+                        await form.evaluate((f: any) => f.submit());
+                      } else {
+                        await searchInput.press("Enter");
+                      }
+                      
+                      await pdfSource.locator('div[full-screen-ajax-loader] .full-screen-bg').waitFor({ state: "hidden", timeout: 30000 }).catch(() => {});
+                      await pdfSource.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
+                    }
+
+                    const pdfSelectors = [
+                      "div[ng-click*='GetRaPdfDownload']",
+                      "div[uib-popover*='download Claim PDF']",
+                      ".fa-arrow-circle-down"
+                    ];
+                    let pdfLink = null;
+                    for (const sel of pdfSelectors) {
+                      const loc = pdfSource.locator(sel).first();
+                      if (await loc.count() > 0 && await loc.isVisible()) {
+                        pdfLink = loc;
+                        break;
+                      }
+                    }
+
+                    if (pdfLink) {
+                      const [download] = await Promise.all([
+                        pdfSource.waitForEvent("download", { timeout: 25000 }).catch(() => null),
+                        pdfLink.click({ force: true })
+                      ]);
+
+                      if (download) {
+                        const downloadsDir = path.join(os.tmpdir(), "downloads");
+                        if (!fs.existsSync(downloadsDir)) fs.mkdirSync(downloadsDir, { recursive: true });
+                        const cleanDos = formatMmDdYyyy(dosDate).replace(/\//g, "-");
+                        const pdfFileName = `${rowIndex + 2}_${memberPolicyId}_${cleanDos}_${chk}.pdf`;
+                        const pdfPath = path.join(downloadsDir, pdfFileName);
+                        await download.saveAs(pdfPath);
+
+                        const pdfBuffer = fs.readFileSync(pdfPath);
+                        await sendEvent({ type: "pdf_download", filename: pdfFileName, base64: pdfBuffer.toString("base64") });
+
+                        const pdfText = extractTextFromPdf(pdfBuffer);
+                        const pdfLines = pdfText.split("\n").map(l => l.trim()).filter(Boolean);
+                        const dosStr = formatMmDdYyyy(dosDate);
+                        let matchingLine = "";
+                        for (let j = 0; j < pdfLines.length; j++) {
+                          if (pdfLines[j].includes(memberPolicyId)) {
+                            let end = j + 1;
+                            while (end < pdfLines.length && end - j < 50) {
+                              if (/^\d{14}$/.test(pdfLines[end])) break; 
+                              end++;
+                            }
+                            const block = pdfLines.slice(j, end);
+                            if (block.some(l => l.includes(dosStr))) {
+                              matchingLine = block.join(" ");
+                              break;
+                            }
+                          }
+                        }
+                        if (matchingLine) {
+                          referRaDetails.push(matchingLine);
+                        } else {
+                          referRaDetails.push(`Check ${chk}: No matching claim details found in PDF`);
+                        }
+                      } else {
+                        referRaDetails.push(`Check ${chk}: Error PDF download failed`);
+                      }
+                    } else {
+                      referRaDetails.push(`Check ${chk}: Error PDF download link not found`);
+                    }
+                  }
+
+                  if (newPage) await newPage.close().catch(() => {});
+                } catch (err) {
+                   await log(`Row ${i + 1}: Error handling RA batch download: ${(err as Error).message}`);
+                   referRaDetails.push(`Error: ${(err as Error).message}`);
+                }
               }
 
               await log(`Row ${i + 1}: Success (${details.length} total matching rows across ${pageNum} page(s)).`);
