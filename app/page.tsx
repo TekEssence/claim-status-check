@@ -148,88 +148,38 @@ export default function Home() {
                   await writable.write(updatedBuffer);
                   await writable.close();
                 } else if (eventData.type === "error_screenshot") {
-                  // Fetch screenshot from blob store to keep SSE stream lean
-                  if (eventData.blobKey) {
-                    fetch(`/api/blob/${eventData.blobKey}`)
-                      .then(r => r.blob())
-                      .then(blob => {
-                        const reader = new FileReader();
-                        reader.onload = () => {
-                          const base64 = (reader.result as string).split(",")[1];
-                          setErrorScreenshots((prev) => [...prev, { index: eventData.index, image: base64 }]);
-                        };
-                        reader.readAsDataURL(blob);
-                      })
-                      .catch(err => console.error("Failed to fetch error screenshot", err));
-                  } else if (eventData.image) {
-                    // Fallback for legacy inline base64
-                    setErrorScreenshots((prev) => [...prev, { index: eventData.index, image: eventData.image }]);
-                  }
+                  setErrorScreenshots((prev) => [...prev, { index: eventData.index, image: eventData.image }]);
                 } else if (eventData.type === "debug_html") {
-                  // Fetch debug HTML from blob store
-                  if (eventData.blobKey) {
-                    fetch(`/api/blob/${eventData.blobKey}`)
-                      .then(r => r.text())
-                      .then(html => {
-                        const blob = new Blob([html], { type: "text/html" });
-                        const url = URL.createObjectURL(blob);
-                        const a = document.createElement("a");
-                        a.href = url;
-                        a.download = `debug_dom_row_${eventData.index + 1}.html`;
-                        document.body.appendChild(a);
-                        a.click();
-                        document.body.removeChild(a);
-                        URL.revokeObjectURL(url);
-                      })
-                      .catch(err => console.error("Failed to fetch debug HTML", err));
-                  } else if (eventData.html) {
-                    // Fallback for legacy inline HTML
-                    const blob = new Blob([eventData.html], { type: "text/html" });
+                  // Automatically trigger a file download for the debug HTML
+                  const blob = new Blob([eventData.html], { type: "text/html" });
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement("a");
+                  a.href = url;
+                  a.download = `debug_dom_row_${eventData.index + 1}.html`;
+                  document.body.appendChild(a);
+                  a.click();
+                  document.body.removeChild(a);
+                  URL.revokeObjectURL(url);
+                } else if (eventData.type === "pdf_download") {
+                  try {
+                    // Convert base64 back to binary data
+                    const binaryString = window.atob(eventData.base64);
+                    const bytes = new Uint8Array(binaryString.length);
+                    for (let i = 0; i < binaryString.length; i++) {
+                      bytes[i] = binaryString.charCodeAt(i);
+                    }
+                    // Trigger download in the user's browser
+                    const blob = new Blob([bytes], { type: "application/pdf" });
                     const url = URL.createObjectURL(blob);
                     const a = document.createElement("a");
                     a.href = url;
-                    a.download = `debug_dom_row_${eventData.index + 1}.html`;
+                    a.download = eventData.filename;
                     document.body.appendChild(a);
                     a.click();
                     document.body.removeChild(a);
                     URL.revokeObjectURL(url);
-                  }
-                } else if (eventData.type === "pdf_download") {
-                  // Fetch PDF from blob store
-                  if (eventData.blobKey) {
-                    fetch(`/api/blob/${eventData.blobKey}`)
-                      .then(r => r.blob())
-                      .then(blob => {
-                        const url = URL.createObjectURL(blob);
-                        const a = document.createElement("a");
-                        a.href = url;
-                        a.download = eventData.filename;
-                        document.body.appendChild(a);
-                        a.click();
-                        document.body.removeChild(a);
-                        URL.revokeObjectURL(url);
-                      })
-                      .catch(err => console.error("Failed to fetch PDF", err));
-                  } else if (eventData.base64) {
-                    // Fallback for legacy inline base64
-                    try {
-                      const binaryString = window.atob(eventData.base64);
-                      const bytes = new Uint8Array(binaryString.length);
-                      for (let i = 0; i < binaryString.length; i++) {
-                        bytes[i] = binaryString.charCodeAt(i);
-                      }
-                      const blob = new Blob([bytes], { type: "application/pdf" });
-                      const url = URL.createObjectURL(blob);
-                      const a = document.createElement("a");
-                      a.href = url;
-                      a.download = eventData.filename;
-                      document.body.appendChild(a);
-                      a.click();
-                      document.body.removeChild(a);
-                      URL.revokeObjectURL(url);
-                    } catch (err) {
-                      console.error("Failed to process pdf_download event", err);
-                    }
+                  } catch (err) {
+                    console.error("Failed to process pdf_download event", err);
                   }
                 } else if (eventData.type === "done") {
                   // Handled below loop

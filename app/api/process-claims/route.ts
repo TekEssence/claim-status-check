@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import { putBlob } from "@/lib/blob-store";
 import os from "node:os";
 import path from "node:path";
 import chromium from "@sparticuz/chromium";
@@ -25,44 +24,52 @@ export const maxDuration = 300; // 5 minutes on Vercel Pro
 
 export async function POST(req: Request) {
   const encoder = new TextEncoder();
-  const stream = new ReadableStream({
-    async start(controller) {
-      // Keep-alive ping to prevent Vercel from buffering or dropping the connection
-      // Padded to ~1KB to help trigger proxy buffer flushes
-      const keepAliveInterval = setInterval(() => {
-        try {
-          controller.enqueue(encoder.encode(`: ${"ping".repeat(256)}\n\n`));
-        } catch {
-          clearInterval(keepAliveInterval);
-        }
-      }, 500);
 
-      const sendEvent = async (data: StreamEvent) => {
-        try {
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
-          // Yield to microtask queue — near-zero delay but still allows Node.js to flush
-          await new Promise(resolve => queueMicrotask(() => resolve(undefined)));
-        } catch {
-          // Stream closed
-        }
-      };
+  // Use TransformStream so we can return the Response IMMEDIATELY.
+  // This is critical on Vercel: returning early "unlocks" the HTTP
+  // connection and lets chunks flow to the client in real-time instead
+  // of being buffered until the function completes.
+  const { readable, writable } = new TransformStream();
+  const writer = writable.getWriter();
 
-      // Pad the start to bypass Vercel/Cloudflare buffering limits (16KB+)
-      await sendEvent({ type: "padding", payload: "x".repeat(16384) });
+  // Parse form data BEFORE returning the response (must read request body first)
+  const formData = await req.formData();
+
+  // --- Background streaming work (NOT awaited) ---
+  (async () => {
+    // Keep-alive ping to prevent Vercel from buffering or dropping the connection
+    // Padded to ~1KB to help trigger proxy buffer flushes
+    const keepAliveInterval = setInterval(() => {
+      try {
+        writer.write(encoder.encode(`: ${"ping".repeat(256)}\n\n`)).catch(() => {});
+      } catch {
+        clearInterval(keepAliveInterval);
+      }
+    }, 500);
+
+    const sendEvent = async (data: StreamEvent) => {
+      try {
+        await writer.write(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
+      } catch {
+        // Stream closed
+      }
+    };
+
+    // Pad the start to bypass proxy buffering limits (16KB+)
+    await sendEvent({ type: "padding", payload: "x".repeat(16384) });
 
       const log = async (message: string) => {
         await sendEvent({ type: "log", message });
       };
 
-      try {
-        const formData = await req.formData();
+    try {
         const loginExcelFile = formData.get("loginExcel") as File | null;
         const claimRowsJson = formData.get("claimRows") as string | null;
         const startIndex = parseInt(formData.get("startIndex") as string || "0", 10);
 
         if (!loginExcelFile || !(loginExcelFile instanceof File) || !claimRowsJson) {
           await sendEvent({ type: "error", message: "Missing login Excel file or claim rows." });
-          controller.close();
+          await writer.close();
           return;
         }
 
@@ -74,7 +81,7 @@ export async function POST(req: Request) {
 
         if (loginRows.length === 0) {
           await sendEvent({ type: "error", message: "Login Excel file is empty." });
-          controller.close();
+          await writer.close();
           return;
         }
 
@@ -85,7 +92,7 @@ export async function POST(req: Request) {
 
         if (!rawUrl || !userName || !password) {
           await sendEvent({ type: "error", message: "Invalid login credentials format." });
-          controller.close();
+          await writer.close();
           return;
         }
 
@@ -443,11 +450,9 @@ export async function POST(req: Request) {
                 log(`Row ${i + 1}: Failed. ${msg}`);
                 try {
                   const screenshot = await page.screenshot({ type: "jpeg", quality: 60 });
-                  const screenshotKey = putBlob(screenshot, "image/jpeg");
-                  await sendEvent({ type: "error_screenshot", index: rowIndex, blobKey: screenshotKey });
+                  await sendEvent({ type: "error_screenshot", index: rowIndex, image: screenshot.toString("base64") });
                   const html = await page.evaluate(() => document.documentElement.outerHTML);
-                  const htmlKey = putBlob(html, "text/html");
-                  await sendEvent({ type: "debug_html", index: rowIndex, blobKey: htmlKey });
+                  await sendEvent({ type: "debug_html", index: rowIndex, html });
                 } catch { /* ignore */ }
                 await sendEvent({
                   type: "row_update",
@@ -565,8 +570,7 @@ export async function POST(req: Request) {
                         await download.saveAs(pdfPath);
 
                         const pdfBuffer = fs.readFileSync(pdfPath);
-                        const pdfKey = putBlob(pdfBuffer, "application/pdf");
-                        await sendEvent({ type: "pdf_download", filename: pdfFileName, blobKey: pdfKey });
+                        await sendEvent({ type: "pdf_download", filename: pdfFileName, base64: pdfBuffer.toString("base64") });
 
                         const pdfText = await extractTextFromPdf(pdfBuffer);
                         const pdfLines = pdfText.split("\n").map(l => l.trim()).filter(Boolean);
@@ -624,12 +628,10 @@ export async function POST(req: Request) {
               // Capture screenshot and HTML on row failure
               try {
                 const screenshot = await page.screenshot({ type: "jpeg", quality: 60 });
-                const screenshotKey = putBlob(screenshot, "image/jpeg");
-                await sendEvent({ type: "error_screenshot", index: rowIndex, blobKey: screenshotKey });
+                await sendEvent({ type: "error_screenshot", index: rowIndex, image: screenshot.toString("base64") });
                 
                 const html = await page.evaluate(() => document.documentElement.outerHTML);
-                const htmlKey = putBlob(html, "text/html");
-                await sendEvent({ type: "debug_html", index: rowIndex, blobKey: htmlKey });
+                await sendEvent({ type: "debug_html", index: rowIndex, html });
               } catch {
                 await log("Failed to capture row error diagnostics.");
               }
@@ -653,22 +655,21 @@ export async function POST(req: Request) {
         const msg = globalError instanceof Error ? globalError.message : "Unexpected automation error.";
         await log(`Global automation error: ${msg}`);
         await sendEvent({ type: "error", message: msg });
-      } finally {
-        clearInterval(keepAliveInterval);
-        await sendEvent({ type: "done" });
-        controller.close();
-      }
+    } finally {
+      clearInterval(keepAliveInterval);
+      await sendEvent({ type: "done" });
+      await writer.close().catch(() => {});
     }
-  });
+  })(); // Fire-and-forget: do NOT await this IIFE
 
-  return new Response(stream, {
+  // Return the response IMMEDIATELY to unlock the HTTP connection.
+  // The background IIFE above will continue writing to the stream.
+  return new Response(readable, {
     headers: {
       "Content-Type": "text/event-stream; charset=utf-8",
       "Cache-Control": "no-cache, no-transform",
       "Connection": "keep-alive",
-      "Transfer-Encoding": "chunked",
       "X-Accel-Buffering": "no",
-      "Content-Encoding": "none",
     },
   });
 }

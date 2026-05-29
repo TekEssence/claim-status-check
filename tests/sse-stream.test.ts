@@ -74,9 +74,7 @@ test("SSE response headers include all required anti-buffering headers", () => {
     "Content-Type": "text/event-stream; charset=utf-8",
     "Cache-Control": "no-cache, no-transform",
     "Connection": "keep-alive",
-    "Transfer-Encoding": "chunked",
     "X-Accel-Buffering": "no",
-    "Content-Encoding": "none",
   };
 
   // Verify all required headers are present
@@ -88,86 +86,62 @@ test("SSE response headers include all required anti-buffering headers", () => {
   // Specific anti-buffering checks
   assert.equal(expectedHeaders["X-Accel-Buffering"], "no",
     "X-Accel-Buffering: no disables nginx/reverse-proxy buffering");
-  assert.equal(expectedHeaders["Content-Encoding"], "none",
-    "Content-Encoding: none prevents gzip compression which causes buffering");
-  assert.equal(expectedHeaders["Transfer-Encoding"], "chunked",
-    "Transfer-Encoding: chunked signals streaming to intermediary proxies");
   assert.ok(expectedHeaders["Cache-Control"].includes("no-transform"),
     "no-transform prevents CDN from modifying the response");
+
+  // These headers should NOT be present (they cause issues on HTTP/2)
+  assert.equal(expectedHeaders["Transfer-Encoding"], undefined,
+    "Transfer-Encoding should not be set (invalid in HTTP/2)");
+  assert.equal(expectedHeaders["Content-Encoding"], undefined,
+    "Content-Encoding should not be set");
 });
 
 // -----------------------------------------------------------------------
 // Blob-Based Event Payloads (vs inline base64)
 // -----------------------------------------------------------------------
 
-test("blob-based error_screenshot event is much smaller than inline base64", () => {
-  // Old approach: inline base64 (~200KB for a JPEG screenshot)
+test("error_screenshot events use inline base64 for serverless compatibility", () => {
+  // On Vercel serverless, each API route runs in a separate Lambda.
+  // Inline base64 is the only way to pass data from the streaming function.
   const fakeBase64 = "A".repeat(200 * 1024);
-  const oldEvent = JSON.stringify({
+  const event = JSON.stringify({
     type: "error_screenshot",
     index: 0,
     image: fakeBase64,
   });
 
-  // New approach: blob key reference (~80 bytes)
-  const newEvent = JSON.stringify({
-    type: "error_screenshot",
-    index: 0,
-    blobKey: "550e8400-e29b-41d4-a716-446655440000",
-  });
-
-  assert.ok(
-    newEvent.length < 200,
-    `blob event should be < 200 bytes, got ${newEvent.length}`,
-  );
-  assert.ok(
-    oldEvent.length > 100_000,
-    `inline event should be > 100KB, got ${oldEvent.length}`,
-  );
-
-  // The reduction factor should be > 1000x
-  const reduction = oldEvent.length / newEvent.length;
-  assert.ok(reduction > 1000, `reduction factor should be > 1000x, got ${reduction.toFixed(0)}x`);
+  const parsed = JSON.parse(event);
+  assert.equal(parsed.type, "error_screenshot");
+  assert.equal(parsed.index, 0);
+  assert.equal(parsed.image.length, 200 * 1024);
 });
 
-test("blob-based pdf_download event is much smaller than inline base64", () => {
-  // Old approach: inline base64 (~500KB for a PDF)
+test("pdf_download events use inline base64 for serverless compatibility", () => {
   const fakeBase64 = "B".repeat(500 * 1024);
-  const oldEvent = JSON.stringify({
+  const event = JSON.stringify({
     type: "pdf_download",
     filename: "claim_001.pdf",
     base64: fakeBase64,
   });
 
-  // New approach: blob key reference
-  const newEvent = JSON.stringify({
-    type: "pdf_download",
-    filename: "claim_001.pdf",
-    blobKey: "550e8400-e29b-41d4-a716-446655440000",
-  });
-
-  assert.ok(newEvent.length < 200);
-  assert.ok(oldEvent.length > 400_000);
+  const parsed = JSON.parse(event);
+  assert.equal(parsed.type, "pdf_download");
+  assert.equal(parsed.filename, "claim_001.pdf");
+  assert.equal(parsed.base64.length, 500 * 1024);
 });
 
-test("blob-based debug_html event is much smaller than inline HTML", () => {
-  // Old approach: full DOM HTML (~100KB)
+test("debug_html events use inline HTML for serverless compatibility", () => {
   const fakeHtml = "<html>" + "x".repeat(100 * 1024) + "</html>";
-  const oldEvent = JSON.stringify({
+  const event = JSON.stringify({
     type: "debug_html",
     index: 5,
     html: fakeHtml,
   });
 
-  // New approach: blob key reference
-  const newEvent = JSON.stringify({
-    type: "debug_html",
-    index: 5,
-    blobKey: "550e8400-e29b-41d4-a716-446655440000",
-  });
-
-  assert.ok(newEvent.length < 200);
-  assert.ok(oldEvent.length > 50_000);
+  const parsed = JSON.parse(event);
+  assert.equal(parsed.type, "debug_html");
+  assert.equal(parsed.index, 5);
+  assert.ok(parsed.html.startsWith("<html>"));
 });
 
 // -----------------------------------------------------------------------
@@ -298,9 +272,9 @@ test("all SSE event types can be serialized and deserialized correctly", () => {
       BotClaimStatusCheckError: "",
       BotReferRA: "Check 12345: claim details line"
     }},
-    { type: "error_screenshot", index: 2, blobKey: "abc-123" },
-    { type: "debug_html", index: 2, blobKey: "def-456" },
-    { type: "pdf_download", filename: "claim.pdf", blobKey: "ghi-789" },
+    { type: "error_screenshot", index: 2, image: "base64data" },
+    { type: "debug_html", index: 2, html: "<html>...</html>" },
+    { type: "pdf_download", filename: "claim.pdf", base64: "base64data" },
     { type: "error", message: "Browser crashed" },
     { type: "done" },
   ];
