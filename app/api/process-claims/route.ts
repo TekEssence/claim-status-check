@@ -563,7 +563,7 @@ export async function POST(req: Request) {
                         const pdfBuffer = fs.readFileSync(pdfPath);
                         await sendEvent({ type: "pdf_download", filename: pdfFileName, base64: pdfBuffer.toString("base64") });
 
-                        const pdfText = extractTextFromPdf(pdfBuffer);
+                        const pdfText = await extractTextFromPdf(pdfBuffer);
                         const pdfLines = pdfText.split("\n").map(l => l.trim()).filter(Boolean);
                         const dosStr = formatMmDdYyyy(dosDate);
                         let matchingLine = "";
