@@ -1,6 +1,11 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  // Disable Next.js built-in gzip compression. With compress enabled (default),
+  // Next.js buffers the ENTIRE streaming response to compress it before sending,
+  // which completely defeats SSE real-time delivery. Vercel's edge handles
+  // compression separately, so this is safe to disable.
+  compress: false,
   serverExternalPackages: ["@sparticuz/chromium"],
   outputFileTracingIncludes: {
     "/api/process-claims": ["node_modules/@sparticuz/chromium/bin/**/*"],
