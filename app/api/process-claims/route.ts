@@ -571,7 +571,7 @@ export async function POST(req: Request) {
                           if (pdfLines[j].includes(memberPolicyId)) {
                             let end = j + 1;
                             while (end < pdfLines.length && end - j < 50) {
-                              if (/^\d{14}$/.test(pdfLines[end])) break; 
+                              if (/^\d{14}\b/.test(pdfLines[end])) break; 
                               end++;
                             }
                             const block = pdfLines.slice(j, end);

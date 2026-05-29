@@ -2,7 +2,7 @@ import fs from 'fs';
 import { extractTextFromPdf } from '../lib/claim-pdf';
 
 async function run() {
-  const buf = fs.readFileSync('downloads/13768222683_RA.pdf');
+  const buf = fs.readFileSync('7_40000018584200_02-09-2026 (3).pdf');
   const txt = await extractTextFromPdf(buf);
   const pdfLines = txt.split("\n").map((l: string) => l.trim()).filter(Boolean);
   
@@ -15,7 +15,7 @@ async function run() {
     if (pdfLines[j].includes(memberPolicyId)) {
       let end = j + 1;
       while (end < pdfLines.length && end - j < 50) {
-        if (/^\d{14}$/.test(pdfLines[end])) break; 
+        if (/^\d{14}\b/.test(pdfLines[end])) break; 
         end++;
       }
       const block = pdfLines.slice(j, end);
