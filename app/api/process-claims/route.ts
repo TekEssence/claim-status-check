@@ -486,11 +486,27 @@ export async function POST(req: Request) {
                     
                     const searchInput = pdfSource.locator("input#search, input[placeholder*='Check Number']").first();
                     await searchInput.fill(chk);
+                    await pdfSource.waitForTimeout(500); // Allow Angular model to digest the fill
                     
                     const searchBtn = pdfSource.locator(".singleSearchButton, button[type='submit']").first();
                     if (await searchBtn.count() > 0 && await searchBtn.isVisible()) {
                       await searchBtn.click();
                     } else {
+                      // Try executing Angular's submit function directly on the scope
+                      await searchInput.evaluate((el: HTMLInputElement) => {
+                        try {
+                          const ng = (window as any).angular;
+                          if (ng) {
+                            const scope = ng.element(el).scope();
+                            if (scope && scope.search && typeof scope.search.submit === 'function') {
+                              scope.search.submit();
+                              if (!scope.$$phase && !scope.$root.$$phase) scope.$apply();
+                            }
+                          }
+                        } catch (err) {}
+                      }).catch(() => {});
+                      
+                      // Fallback just in case
                       await searchInput.press("Enter");
                     }
                     
