@@ -114,12 +114,22 @@ export default function Home() {
 
         if (!response.body) throw new Error("No response body.");
 
-        // Open the Edge relay for real-time progress/log updates.
-        // The relay runs in the nearest Vercel region (e.g. Mumbai) so
-        // it streams to the India browser with near-zero buffering.
+        // ── Flag-based stream switching ──────────────────────────────
+        // The direct SSE stream (US→India) is buffered by Vercel's edge
+        // proxy. Events arrive in bursts at the end of each batch.
+        // The Edge relay (Mumbai→India) bypasses this via Redis and
+        // delivers events in real-time.
+        //
+        // Strategy:
+        //   relayConnected = false → direct stream is source of truth
+        //   relayConnected = true  → relay is source of truth
+        //   Direct stream ALWAYS tracks currentCompleted for auto-resume.
+        let relayConnected = false;
+
         const jobId = response.headers.get("X-Job-Id");
         let progressController: AbortController | null = null;
         if (jobId) {
+          console.log(`[SSE] Job ${jobId}: opening Edge relay at /api/progress`);
           progressController = new AbortController();
           // Fire-and-forget — runs concurrently with the main reader below
           (async () => {
@@ -128,7 +138,10 @@ export default function Home() {
                 signal: progressController!.signal,
                 cache: "no-store",
               });
-              if (!progressRes.body) return;
+              if (!progressRes.body) {
+                console.warn("[SSE] Edge relay returned no body — falling back to direct stream");
+                return;
+              }
               const progressReader = progressRes.body.getReader();
               const progressDecoder = new TextDecoder();
               let progressBuffer = "";
@@ -142,26 +155,32 @@ export default function Home() {
                   if (!part.startsWith("data: ")) continue;
                   try {
                     const ev = JSON.parse(part.substring(6));
-                    if (ev.type === "progress") {
-                      // Edge relay provides faster progress updates from a
-                      // closer region. Direct stream also updates progress
-                      // as a fallback — both calling setProgress is safe
-                      // (idempotent, last update wins for the UI).
-                      setProgress({ completed: ev.completed, total: ev.total });
+                    if (ev.type === "padding") continue; // Skip relay padding
+
+                    // First real event from relay — take over from direct stream
+                    if (!relayConnected) {
+                      relayConnected = true;
+                      console.log("[SSE] Edge relay connected — relay is now source of truth for progress/logs");
                     }
-                    // Logs are handled exclusively by the direct SSE stream
-                    // to avoid duplication. The Edge relay only accelerates
-                    // progress bar updates.
+
+                    if (ev.type === "progress") {
+                      setProgress({ completed: ev.completed, total: ev.total });
+                    } else if (ev.type === "log") {
+                      setLogs((prev) => [...prev, ev.message]);
+                    }
+                    // row_done, done, error — no extra UI action needed
                   } catch { /* ignore parse errors */ }
                 }
               }
             } catch (err: unknown) {
-              // AbortError is expected when we clean up — ignore it
               if (err instanceof Error && err.name !== "AbortError") {
-                console.error("[progress relay] stream error", err);
+                console.error("[SSE] Edge relay error — falling back to direct stream:", err);
+                relayConnected = false; // Fall back to direct stream
               }
             }
           })();
+        } else {
+          console.warn("[SSE] No X-Job-Id header — Edge relay unavailable, using direct stream only");
         }
 
         const reader = response.body.getReader();
@@ -185,14 +204,17 @@ export default function Home() {
                 const eventData = JSON.parse(dataStr);
 
                 if (eventData.type === "progress") {
+                  // ALWAYS track for auto-resume logic (regardless of relay)
                   currentCompleted = eventData.completed;
-                  // Always update progress from direct stream (baseline).
-                  // The Edge relay may also update it (faster), but the
-                  // direct stream ensures it works even if the relay fails.
-                  setProgress({ completed: eventData.completed, total: eventData.total });
+                  // Only update UI if relay hasn't taken over
+                  if (!relayConnected) {
+                    setProgress({ completed: eventData.completed, total: eventData.total });
+                  }
                 } else if (eventData.type === "log") {
-                  // Always update logs from direct stream (baseline).
-                  setLogs((prev) => [...prev, eventData.message]);
+                  // Only update UI if relay hasn't taken over
+                  if (!relayConnected) {
+                    setLogs((prev) => [...prev, eventData.message]);
+                  }
                 } else if (eventData.type === "row_update") {
                   applyClaimRowUpdateToWorksheet(worksheet, eventData);
 
