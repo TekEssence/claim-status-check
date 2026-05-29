@@ -513,6 +513,24 @@ export async function POST(req: Request) {
                     await pdfSource.locator('div[full-screen-ajax-loader] .full-screen-bg').waitFor({ state: "hidden", timeout: 30000 }).catch(() => {});
                     await pdfSource.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
 
+                    // Add logical retry to ensure the EFT in the row matches the searched chk
+                    let eftMatches = false;
+                    for (let retry = 0; retry < 15; retry++) {
+                      const rowEftLocator = pdfSource.locator('tr.line-item td:nth-child(3)').first();
+                      if (await rowEftLocator.count() > 0 && await rowEftLocator.isVisible()) {
+                        const rowEftText = await rowEftLocator.innerText();
+                        if (rowEftText && rowEftText.includes(chk)) {
+                          eftMatches = true;
+                          break;
+                        }
+                      }
+                      await pdfSource.waitForTimeout(1000); // Wait 1s before checking again
+                    }
+
+                    if (!eftMatches) {
+                      throw new Error(`PDF download link not found for ${chk}: Search result EFT mismatch or page did not load.`);
+                    }
+
                     const combinedPdfSelector = [
                       "div[ng-click*='GetRaPdfDownload']",
                       "div[uib-popover*='download Claim PDF']",
