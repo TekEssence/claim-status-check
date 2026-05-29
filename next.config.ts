@@ -1,7 +1,7 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  serverExternalPackages: ["@sparticuz/chromium"],
+  serverExternalPackages: ["@sparticuz/chromium", "pdf-parse"],
   outputFileTracingIncludes: {
     "/api/process-claims": ["node_modules/@sparticuz/chromium/bin/**/*"],
   },
