@@ -11,8 +11,12 @@ if (typeof global !== "undefined") {
  * This guarantees correct visual top-to-bottom, left-to-right ordering.
  */
 export async function extractTextFromPdf(pdfBuffer: Buffer): Promise<string> {
-  const pdfParseModule = require("pdf-parse");
-  const pdfParse = typeof pdfParseModule === 'function' ? pdfParseModule : pdfParseModule.default;
+  // Use eval('require') to bypass Webpack/Turbopack AST analysis.
+  // This guarantees we get the raw Node.js module export, preventing
+  // minification bugs like "r is not a function" or "a is not a function".
+  const nodeRequire = eval('require');
+  const pdfParse = nodeRequire("pdf-parse");
+  
   const data = await pdfParse(pdfBuffer);
   return data.text;
 }
