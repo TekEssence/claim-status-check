@@ -143,11 +143,15 @@ export default function Home() {
                   try {
                     const ev = JSON.parse(part.substring(6));
                     if (ev.type === "progress") {
+                      // Edge relay provides faster progress updates from a
+                      // closer region. Direct stream also updates progress
+                      // as a fallback — both calling setProgress is safe
+                      // (idempotent, last update wins for the UI).
                       setProgress({ completed: ev.completed, total: ev.total });
-                    } else if (ev.type === "log") {
-                      setLogs((prev) => [...prev, ev.message]);
                     }
-                    // row_done, done, error — no extra UI action needed here
+                    // Logs are handled exclusively by the direct SSE stream
+                    // to avoid duplication. The Edge relay only accelerates
+                    // progress bar updates.
                   } catch { /* ignore parse errors */ }
                 }
               }
@@ -181,11 +185,14 @@ export default function Home() {
                 const eventData = JSON.parse(dataStr);
 
                 if (eventData.type === "progress") {
-                  // Track currentCompleted for auto-resume logic.
-                  // UI progress bar update is handled by the Edge relay above.
                   currentCompleted = eventData.completed;
+                  // Always update progress from direct stream (baseline).
+                  // The Edge relay may also update it (faster), but the
+                  // direct stream ensures it works even if the relay fails.
+                  setProgress({ completed: eventData.completed, total: eventData.total });
                 } else if (eventData.type === "log") {
-                  // Log display is handled by the Edge relay above — skip here.
+                  // Always update logs from direct stream (baseline).
+                  setLogs((prev) => [...prev, eventData.message]);
                 } else if (eventData.type === "row_update") {
                   applyClaimRowUpdateToWorksheet(worksheet, eventData);
 
