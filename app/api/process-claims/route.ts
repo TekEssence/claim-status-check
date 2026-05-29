@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { putBlob } from "@/lib/blob-store";
 import os from "node:os";
 import path from "node:path";
 import chromium from "@sparticuz/chromium";
@@ -27,26 +28,27 @@ export async function POST(req: Request) {
   const stream = new ReadableStream({
     async start(controller) {
       // Keep-alive ping to prevent Vercel from buffering or dropping the connection
+      // Padded to ~1KB to help trigger proxy buffer flushes
       const keepAliveInterval = setInterval(() => {
         try {
-          controller.enqueue(encoder.encode(`: ping\n\n`));
+          controller.enqueue(encoder.encode(`: ${"ping".repeat(256)}\n\n`));
         } catch {
           clearInterval(keepAliveInterval);
         }
-      }, 1000);
+      }, 500);
 
       const sendEvent = async (data: StreamEvent) => {
         try {
           controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
-          // Yield to event loop to allow Node.js to flush the socket
-          await new Promise(resolve => setTimeout(resolve, 50));
+          // Yield to microtask queue — near-zero delay but still allows Node.js to flush
+          await new Promise(resolve => queueMicrotask(() => resolve(undefined)));
         } catch {
           // Stream closed
         }
       };
 
-      // Pad the start to bypass Vercel/Cloudflare buffering limits (8KB)
-      await sendEvent({ type: "padding", payload: "x".repeat(8192) });
+      // Pad the start to bypass Vercel/Cloudflare buffering limits (16KB+)
+      await sendEvent({ type: "padding", payload: "x".repeat(16384) });
 
       const log = async (message: string) => {
         await sendEvent({ type: "log", message });
@@ -441,9 +443,11 @@ export async function POST(req: Request) {
                 log(`Row ${i + 1}: Failed. ${msg}`);
                 try {
                   const screenshot = await page.screenshot({ type: "jpeg", quality: 60 });
-                  await sendEvent({ type: "error_screenshot", index: rowIndex, image: screenshot.toString("base64") });
+                  const screenshotKey = putBlob(screenshot, "image/jpeg");
+                  await sendEvent({ type: "error_screenshot", index: rowIndex, blobKey: screenshotKey });
                   const html = await page.evaluate(() => document.documentElement.outerHTML);
-                  await sendEvent({ type: "debug_html", index: rowIndex, html });
+                  const htmlKey = putBlob(html, "text/html");
+                  await sendEvent({ type: "debug_html", index: rowIndex, blobKey: htmlKey });
                 } catch { /* ignore */ }
                 await sendEvent({
                   type: "row_update",
@@ -561,7 +565,8 @@ export async function POST(req: Request) {
                         await download.saveAs(pdfPath);
 
                         const pdfBuffer = fs.readFileSync(pdfPath);
-                        await sendEvent({ type: "pdf_download", filename: pdfFileName, base64: pdfBuffer.toString("base64") });
+                        const pdfKey = putBlob(pdfBuffer, "application/pdf");
+                        await sendEvent({ type: "pdf_download", filename: pdfFileName, blobKey: pdfKey });
 
                         const pdfText = await extractTextFromPdf(pdfBuffer);
                         const pdfLines = pdfText.split("\n").map(l => l.trim()).filter(Boolean);
@@ -619,10 +624,12 @@ export async function POST(req: Request) {
               // Capture screenshot and HTML on row failure
               try {
                 const screenshot = await page.screenshot({ type: "jpeg", quality: 60 });
-                await sendEvent({ type: "error_screenshot", index: rowIndex, image: screenshot.toString("base64") });
+                const screenshotKey = putBlob(screenshot, "image/jpeg");
+                await sendEvent({ type: "error_screenshot", index: rowIndex, blobKey: screenshotKey });
                 
                 const html = await page.evaluate(() => document.documentElement.outerHTML);
-                await sendEvent({ type: "debug_html", index: rowIndex, html: html });
+                const htmlKey = putBlob(html, "text/html");
+                await sendEvent({ type: "debug_html", index: rowIndex, blobKey: htmlKey });
               } catch {
                 await log("Failed to capture row error diagnostics.");
               }
@@ -659,6 +666,7 @@ export async function POST(req: Request) {
       "Content-Type": "text/event-stream; charset=utf-8",
       "Cache-Control": "no-cache, no-transform",
       "Connection": "keep-alive",
+      "Transfer-Encoding": "chunked",
       "X-Accel-Buffering": "no",
       "Content-Encoding": "none",
     },
