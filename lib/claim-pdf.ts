@@ -11,7 +11,8 @@ if (typeof global !== "undefined") {
  * This guarantees correct visual top-to-bottom, left-to-right ordering.
  */
 export async function extractTextFromPdf(pdfBuffer: Buffer): Promise<string> {
-  const pdfParse = require("pdf-parse");
+  const pdfParseModule = require("pdf-parse");
+  const pdfParse = typeof pdfParseModule === 'function' ? pdfParseModule : pdfParseModule.default;
   const data = await pdfParse(pdfBuffer);
   return data.text;
 }
