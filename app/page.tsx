@@ -114,6 +114,52 @@ export default function Home() {
 
         if (!response.body) throw new Error("No response body.");
 
+        // Open the Edge relay for real-time progress/log updates.
+        // The relay runs in the nearest Vercel region (e.g. Mumbai) so
+        // it streams to the India browser with near-zero buffering.
+        const jobId = response.headers.get("X-Job-Id");
+        let progressController: AbortController | null = null;
+        if (jobId) {
+          progressController = new AbortController();
+          // Fire-and-forget — runs concurrently with the main reader below
+          (async () => {
+            try {
+              const progressRes = await fetch(`/api/progress?jobId=${jobId}`, {
+                signal: progressController!.signal,
+                cache: "no-store",
+              });
+              if (!progressRes.body) return;
+              const progressReader = progressRes.body.getReader();
+              const progressDecoder = new TextDecoder();
+              let progressBuffer = "";
+              while (true) {
+                const { done, value } = await progressReader.read();
+                if (done) break;
+                progressBuffer += progressDecoder.decode(value, { stream: true });
+                const parts = progressBuffer.split("\n\n");
+                progressBuffer = parts.pop() || "";
+                for (const part of parts) {
+                  if (!part.startsWith("data: ")) continue;
+                  try {
+                    const ev = JSON.parse(part.substring(6));
+                    if (ev.type === "progress") {
+                      setProgress({ completed: ev.completed, total: ev.total });
+                    } else if (ev.type === "log") {
+                      setLogs((prev) => [...prev, ev.message]);
+                    }
+                    // row_done, done, error — no extra UI action needed here
+                  } catch { /* ignore parse errors */ }
+                }
+              }
+            } catch (err: unknown) {
+              // AbortError is expected when we clean up — ignore it
+              if (err instanceof Error && err.name !== "AbortError") {
+                console.error("[progress relay] stream error", err);
+              }
+            }
+          })();
+        }
+
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let buffer = "";
@@ -133,12 +179,13 @@ export default function Home() {
               const dataStr = line.substring(6);
               try {
                 const eventData = JSON.parse(dataStr);
-                
-                if (eventData.type === "log") {
-                  setLogs((prev) => [...prev, eventData.message]);
-                } else if (eventData.type === "progress") {
+
+                if (eventData.type === "progress") {
+                  // Track currentCompleted for auto-resume logic.
+                  // UI progress bar update is handled by the Edge relay above.
                   currentCompleted = eventData.completed;
-                  setProgress({ completed: eventData.completed, total: eventData.total });
+                } else if (eventData.type === "log") {
+                  // Log display is handled by the Edge relay above — skip here.
                 } else if (eventData.type === "row_update") {
                   applyClaimRowUpdateToWorksheet(worksheet, eventData);
 
@@ -193,6 +240,9 @@ export default function Home() {
             }
           }
         }
+
+        // Clean up the Edge relay connection
+        progressController?.abort();
 
         // Stream closed. Check if we need to auto-resume
         if (chunkHasError) {

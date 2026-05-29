@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import chromium from "@sparticuz/chromium";
@@ -14,6 +15,7 @@ import {
   parseWebsiteMmDdYyyy,
 } from "@/lib/claim-dates";
 import { extractTextFromPdf } from "@/lib/claim-pdf";
+import { pushSignal } from "@/lib/redis-signals";
 
 type GenericRow = Record<string, unknown>;
 type StreamEvent = Record<string, unknown>;
@@ -24,6 +26,10 @@ export const maxDuration = 300; // 5 minutes on Vercel Pro
 
 export async function POST(req: Request) {
   const encoder = new TextEncoder();
+
+  // Unique job ID — returned in X-Job-Id header so the browser can
+  // open the Edge relay at GET /api/progress?jobId=<id>
+  const jobId = crypto.randomUUID();
 
   // Use TransformStream so we can return the Response IMMEDIATELY.
   // This is critical on Vercel: returning early "unlocks" the HTTP
@@ -53,6 +59,21 @@ export async function POST(req: Request) {
       } catch {
         // Stream closed
       }
+      // Mirror non-PHI events to Redis for the Edge relay (fire-and-forget)
+      const type = data.type as string;
+      if (type === "progress") {
+        pushSignal(jobId, { t: "p", c: data.completed as number, tot: data.total as number }).catch(() => {});
+      } else if (type === "log") {
+        pushSignal(jobId, { t: "l", msg: data.message as string }).catch(() => {});
+      } else if (type === "row_done") {
+        pushSignal(jobId, { t: "rd", idx: data.rowIndex as number }).catch(() => {});
+      } else if (type === "done") {
+        pushSignal(jobId, { t: "done" }).catch(() => {});
+      } else if (type === "error") {
+        pushSignal(jobId, { t: "err", msg: data.message as string }).catch(() => {});
+      }
+      // PHI events (row_update, error_screenshot, debug_html, pdf_download)
+      // are NOT mirrored to Redis — they only flow on the direct SSE stream.
     };
 
     // Pad the start to bypass proxy buffering limits (16KB+)
@@ -670,6 +691,10 @@ export async function POST(req: Request) {
       "Cache-Control": "no-cache, no-transform",
       "Connection": "keep-alive",
       "X-Accel-Buffering": "no",
+      // Job ID so the browser can subscribe to the Edge relay
+      "X-Job-Id": jobId,
+      // Expose X-Job-Id to browser JS (CORS preflight)
+      "Access-Control-Expose-Headers": "X-Job-Id",
     },
   });
 }
