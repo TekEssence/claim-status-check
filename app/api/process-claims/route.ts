@@ -478,57 +478,63 @@ export async function POST(req: Request) {
                     const chk = uniqueChecks[cIdx];
                     await log(`Row ${i + 1}: Processing RA for Check Number ${chk} (${cIdx + 1}/${uniqueChecks.length})...`);
                     
-                    const searchAgainBtn = pdfSource.locator(".accordionPane:has(.search-again), h2.search-again").first();
-                    if (await searchAgainBtn.count() > 0 && await searchAgainBtn.isVisible()) {
-                       await searchAgainBtn.click({ timeout: 5000 });
-                       await pdfSource.waitForTimeout(500); 
-                    }
-                    
-                    const searchInput = pdfSource.locator("input#search, input[placeholder*='Check Number']").first();
-                    await searchInput.fill(chk);
-                    await pdfSource.waitForTimeout(500); // Allow Angular model to digest the fill
-                    
-                    const searchBtn = pdfSource.locator(".singleSearchButton, button[type='submit']").first();
-                    if (await searchBtn.count() > 0 && await searchBtn.isVisible()) {
-                      await searchBtn.click();
-                    } else {
-                      // Try executing Angular's submit function directly on the scope
-                      await searchInput.evaluate((el: HTMLInputElement) => {
-                        try {
-                          const ng = (window as any).angular;
-                          if (ng) {
-                            const scope = ng.element(el).scope();
-                            if (scope && scope.search && typeof scope.search.submit === 'function') {
-                              scope.search.submit();
-                              if (!scope.$$phase && !scope.$root.$$phase) scope.$apply();
-                            }
-                          }
-                        } catch (err) {}
-                      }).catch(() => {});
-                      
-                      // Fallback just in case
-                      await searchInput.press("Enter");
-                    }
-                    
-                    await pdfSource.locator('div[full-screen-ajax-loader] .full-screen-bg').waitFor({ state: "hidden", timeout: 30000 }).catch(() => {});
-                    await pdfSource.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
-
-                    // Add logical retry to ensure the EFT in the row matches the searched chk
                     let eftMatches = false;
-                    for (let retry = 0; retry < 15; retry++) {
-                      const rowEftLocator = pdfSource.locator('tr.line-item td:nth-child(3)').first();
-                      if (await rowEftLocator.count() > 0 && await rowEftLocator.isVisible()) {
-                        const rowEftText = await rowEftLocator.innerText();
-                        if (rowEftText && rowEftText.includes(chk)) {
-                          eftMatches = true;
-                          break;
-                        }
+                    for (let searchAttempt = 0; searchAttempt < 2; searchAttempt++) {
+                      const searchAgainBtn = pdfSource.locator(".accordionPane:has(.search-again), h2.search-again").first();
+                      if (await searchAgainBtn.count() > 0 && await searchAgainBtn.isVisible()) {
+                         await searchAgainBtn.click({ timeout: 5000 });
+                         await pdfSource.waitForTimeout(500); 
                       }
-                      await pdfSource.waitForTimeout(1000); // Wait 1s before checking again
+                      
+                      const searchInput = pdfSource.locator("input#search, input[placeholder*='Check Number']").first();
+                      await searchInput.fill(chk);
+                      await pdfSource.waitForTimeout(500); // Allow Angular model to digest the fill
+                      
+                      const searchBtn = pdfSource.locator(".singleSearchButton, button[type='submit']").first();
+                      if (await searchBtn.count() > 0 && await searchBtn.isVisible()) {
+                        await searchBtn.click();
+                      } else {
+                        // Try executing Angular's submit function directly on the scope
+                        await searchInput.evaluate((el: HTMLInputElement) => {
+                          try {
+                            const ng = (window as any).angular;
+                            if (ng) {
+                              const scope = ng.element(el).scope();
+                              if (scope && scope.search && typeof scope.search.submit === 'function') {
+                                scope.search.submit();
+                                if (!scope.$$phase && !scope.$root.$$phase) scope.$apply();
+                              }
+                            }
+                          } catch (err) {}
+                        }).catch(() => {});
+                        
+                        // Fallback just in case
+                        await searchInput.press("Enter");
+                      }
+                      
+                      await pdfSource.locator('div[full-screen-ajax-loader] .full-screen-bg').waitFor({ state: "hidden", timeout: 30000 }).catch(() => {});
+                      await pdfSource.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
+  
+                      // Logical retry to ensure the EFT in the row matches the searched chk
+                      for (let retry = 0; retry < 5; retry++) {
+                        const rowEftLocator = pdfSource.locator('tr.line-item td:nth-child(3)').first();
+                        if (await rowEftLocator.count() > 0 && await rowEftLocator.isVisible()) {
+                          const rowEftText = await rowEftLocator.innerText();
+                          if (rowEftText && rowEftText.includes(chk)) {
+                            eftMatches = true;
+                            break;
+                          }
+                        }
+                        await pdfSource.waitForTimeout(1000); // Wait 1s before checking again
+                      }
+                      
+                      if (eftMatches) {
+                        break;
+                      }
                     }
 
                     if (!eftMatches) {
-                      throw new Error(`PDF download link not found for ${chk}: Search result EFT mismatch or page did not load.`);
+                      throw new Error(`PDF download link not found for ${chk}: Search result EFT mismatch or page did not load after 2 search attempts.`);
                     }
 
                     const combinedPdfSelector = [
