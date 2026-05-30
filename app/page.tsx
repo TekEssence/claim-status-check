@@ -101,10 +101,74 @@ export default function Home() {
       setStatus(`Starting process for ${totalRows} rows...`);
 
       const processChunk = async (startIndex: number) => {
+        // ── Generate jobId client-side and open relay FIRST ─────────
+        // Critical: the relay MUST open BEFORE the POST request.
+        // Vercel's edge proxy buffers the POST response (headers+body)
+        // until the function completes or times out. If we wait for the
+        // POST response to get the jobId, the relay opens too late.
+        //
+        // By generating jobId here and sending it in the form data,
+        // the relay starts polling Redis immediately while the POST
+        // is still in flight.
+        const jobId = crypto.randomUUID();
+        let relayConnected = false;
+        const progressController = new AbortController();
+
+        console.log(`[SSE] Job ${jobId}: opening Edge relay BEFORE POST`);
+
+        // Fire-and-forget relay — starts immediately
+        (async () => {
+          try {
+            const progressRes = await fetch(`/api/progress?jobId=${jobId}`, {
+              signal: progressController.signal,
+              cache: "no-store",
+            });
+            if (!progressRes.body) {
+              console.warn("[SSE] Edge relay returned no body — falling back to direct stream");
+              return;
+            }
+            const progressReader = progressRes.body.getReader();
+            const progressDecoder = new TextDecoder();
+            let progressBuffer = "";
+            while (true) {
+              const { done, value } = await progressReader.read();
+              if (done) break;
+              progressBuffer += progressDecoder.decode(value, { stream: true });
+              const parts = progressBuffer.split("\n\n");
+              progressBuffer = parts.pop() || "";
+              for (const part of parts) {
+                if (!part.startsWith("data: ")) continue;
+                try {
+                  const ev = JSON.parse(part.substring(6));
+                  if (ev.type === "padding") continue;
+
+                  if (!relayConnected) {
+                    relayConnected = true;
+                    console.log("[SSE] Edge relay connected — relay is now source of truth for progress/logs");
+                  }
+
+                  if (ev.type === "progress") {
+                    setProgress({ completed: ev.completed, total: ev.total });
+                  } else if (ev.type === "log") {
+                    setLogs((prev) => [...prev, ev.message]);
+                  }
+                } catch { /* ignore parse errors */ }
+              }
+            }
+          } catch (err: unknown) {
+            if (err instanceof Error && err.name !== "AbortError") {
+              console.error("[SSE] Edge relay error — falling back to direct stream:", err);
+              relayConnected = false;
+            }
+          }
+        })();
+
+        // Now send the POST with the jobId
         const formData = new FormData();
         formData.append("loginExcel", loginFile);
         formData.append("claimRows", JSON.stringify(claimRows));
         formData.append("startIndex", startIndex.toString());
+        formData.append("jobId", jobId);
 
         const response = await fetch("/api/process-claims", {
           method: "POST",
@@ -113,75 +177,6 @@ export default function Home() {
         });
 
         if (!response.body) throw new Error("No response body.");
-
-        // ── Flag-based stream switching ──────────────────────────────
-        // The direct SSE stream (US→India) is buffered by Vercel's edge
-        // proxy. Events arrive in bursts at the end of each batch.
-        // The Edge relay (Mumbai→India) bypasses this via Redis and
-        // delivers events in real-time.
-        //
-        // Strategy:
-        //   relayConnected = false → direct stream is source of truth
-        //   relayConnected = true  → relay is source of truth
-        //   Direct stream ALWAYS tracks currentCompleted for auto-resume.
-        let relayConnected = false;
-
-        const jobId = response.headers.get("X-Job-Id");
-        let progressController: AbortController | null = null;
-        if (jobId) {
-          console.log(`[SSE] Job ${jobId}: opening Edge relay at /api/progress`);
-          progressController = new AbortController();
-          // Fire-and-forget — runs concurrently with the main reader below
-          (async () => {
-            try {
-              const progressRes = await fetch(`/api/progress?jobId=${jobId}`, {
-                signal: progressController!.signal,
-                cache: "no-store",
-              });
-              if (!progressRes.body) {
-                console.warn("[SSE] Edge relay returned no body — falling back to direct stream");
-                return;
-              }
-              const progressReader = progressRes.body.getReader();
-              const progressDecoder = new TextDecoder();
-              let progressBuffer = "";
-              while (true) {
-                const { done, value } = await progressReader.read();
-                if (done) break;
-                progressBuffer += progressDecoder.decode(value, { stream: true });
-                const parts = progressBuffer.split("\n\n");
-                progressBuffer = parts.pop() || "";
-                for (const part of parts) {
-                  if (!part.startsWith("data: ")) continue;
-                  try {
-                    const ev = JSON.parse(part.substring(6));
-                    if (ev.type === "padding") continue; // Skip relay padding
-
-                    // First real event from relay — take over from direct stream
-                    if (!relayConnected) {
-                      relayConnected = true;
-                      console.log("[SSE] Edge relay connected — relay is now source of truth for progress/logs");
-                    }
-
-                    if (ev.type === "progress") {
-                      setProgress({ completed: ev.completed, total: ev.total });
-                    } else if (ev.type === "log") {
-                      setLogs((prev) => [...prev, ev.message]);
-                    }
-                    // row_done, done, error — no extra UI action needed
-                  } catch { /* ignore parse errors */ }
-                }
-              }
-            } catch (err: unknown) {
-              if (err instanceof Error && err.name !== "AbortError") {
-                console.error("[SSE] Edge relay error — falling back to direct stream:", err);
-                relayConnected = false; // Fall back to direct stream
-              }
-            }
-          })();
-        } else {
-          console.warn("[SSE] No X-Job-Id header — Edge relay unavailable, using direct stream only");
-        }
 
         const reader = response.body.getReader();
         const decoder = new TextDecoder();

@@ -364,18 +364,58 @@ test("PHI events from direct stream are always handled regardless of relay", () 
 });
 
 // -----------------------------------------------------------------------
-// Console diagnostic coverage
+// Client-generated jobId
 // -----------------------------------------------------------------------
 
-test("jobId absence triggers fallback mode (no relay)", () => {
-  // When no X-Job-Id header, relay doesn't open and direct stream is sole source
-  const directEvents = [
-    { type: "progress", completed: 5, total: 5 },
-    { type: "log", message: "All done" },
+test("client-generated jobId is valid UUID for relay subscription", () => {
+  const crypto = require("node:crypto");
+  const jobId = crypto.randomUUID();
+  assert.match(jobId, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+  const relayUrl = `/api/progress?jobId=${jobId}`;
+  assert.ok(relayUrl.startsWith("/api/progress?jobId="));
+});
+
+test("relay opens BEFORE POST: relay receives events while POST is in flight", () => {
+  // This test simulates the critical timing:
+  // 1. Client generates jobId
+  // 2. Client opens relay immediately (relay starts polling Redis)
+  // 3. Client sends POST with jobId (server starts pushing to Redis)
+  // 4. Relay receives events in real-time while POST response is buffered
+
+  // Relay events arrive (server pushes to Redis as it processes)
+  const relayEvents = [
+    { type: "log", message: "Row 1: processing" },
+    { type: "progress", completed: 1, total: 3 },
+    { type: "log", message: "Row 2: processing" },
+    { type: "progress", completed: 2, total: 3 },
+    { type: "log", message: "Row 3: processing" },
+    { type: "progress", completed: 3, total: 3 },
   ];
 
-  const result = simulateTwoStreams([], directEvents, -1);
+  // Direct events arrive ALL AT ONCE when POST response is finally delivered
+  const directEvents = [
+    { type: "progress", completed: 1, total: 3 },
+    { type: "progress", completed: 2, total: 3 },
+    { type: "progress", completed: 3, total: 3 },
+    { type: "row_update", index: 0, update: {} },
+    { type: "row_update", index: 1, update: {} },
+    { type: "row_update", index: 2, update: {} },
+  ];
 
-  assert.equal(result.progress.completed, 5);
-  assert.equal(result.logs.length, 1);
+  // Relay delivers BEFORE direct stream (relayArrivalIndex = -1 means
+  // relay delivers after direct, but index 0 means before first direct event)
+  // Here we set index = 0 to simulate relay delivering before direct stream
+  // arrives (because direct stream is buffered for 1 minute)
+  const result = simulateTwoStreams(relayEvents, directEvents, 0);
+
+  // All logs came from relay (direct was skipped because relay connected first)
+  assert.equal(result.logs.length, 3);
+  assert.equal(result.logs[0], "Row 1: processing");
+  assert.equal(result.logs[2], "Row 3: processing");
+
+  // Progress shows final value
+  assert.equal(result.progress.completed, 3);
+
+  // currentCompleted tracked from direct stream for auto-resume
+  assert.equal(result.currentCompleted, 3);
 });
