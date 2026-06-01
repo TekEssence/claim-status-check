@@ -109,6 +109,7 @@ export default function Home() {
 
         let currentCompleted = startIndex;
         let chunkHasError = false;
+        let writeQueue = Promise.resolve();
 
         try {
           await fetchEventSource("/api/process-claims", {
