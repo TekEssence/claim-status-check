@@ -4,6 +4,7 @@ import { FormEvent, useMemo, useState } from "react";
 import * as XLSX from "xlsx";
 import ExcelJS from "exceljs";
 import { applyClaimRowUpdateToWorksheet, postProcessWorksheet } from "@/lib/claim-workbook";
+import { fetchEventSource } from "@microsoft/fetch-event-source";
 
 export default function Home() {
   const [loginFile, setLoginFile] = useState<File | null>(null);
@@ -106,33 +107,19 @@ export default function Home() {
         formData.append("claimRows", JSON.stringify(claimRows));
         formData.append("startIndex", startIndex.toString());
 
-        const response = await fetch("/api/process-claims", {
-          method: "POST",
-          body: formData,
-          cache: "no-store",
-        });
-
-        if (!response.body) throw new Error("No response body.");
-
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = "";
         let currentCompleted = startIndex;
         let chunkHasError = false;
 
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split("\n\n");
-          buffer = lines.pop() || "";
-
-          for (const line of lines) {
-            if (line.startsWith("data: ")) {
-              const dataStr = line.substring(6);
+        try {
+          await fetchEventSource("/api/process-claims", {
+            method: "POST",
+            body: formData,
+            async onmessage(ev) {
               try {
-                const eventData = JSON.parse(dataStr);
+                // Skip ping/padding events explicitly handled by the backend
+                if (ev.data === "" || ev.data.startsWith(":")) return;
+                
+                const eventData = JSON.parse(ev.data);
                 
                 if (eventData.type === "log") {
                   setLogs((prev) => [...prev, eventData.message]);
@@ -190,8 +177,16 @@ export default function Home() {
               } catch (err) {
                 console.error("Failed to parse event data", err);
               }
+            },
+            onerror(err) {
+              console.error("Stream error:", err);
+              chunkHasError = true;
+              throw err; // Throw to prevent infinite reconnect attempts
             }
-          }
+          });
+        } catch (err) {
+          console.error("fetchEventSource failed", err);
+          chunkHasError = true;
         }
 
         // Stream closed. Check if we need to auto-resume
