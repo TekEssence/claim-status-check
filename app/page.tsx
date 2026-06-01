@@ -116,7 +116,6 @@ export default function Home() {
             body: formData,
             async onmessage(ev) {
               try {
-                // Skip ping/padding events explicitly handled by the backend
                 if (ev.data === "" || ev.data.startsWith(":")) return;
                 
                 const eventData = JSON.parse(ev.data);
@@ -129,15 +128,20 @@ export default function Home() {
                 } else if (eventData.type === "row_update") {
                   applyClaimRowUpdateToWorksheet(worksheet, eventData);
 
-                  // Write back with full style preservation
-                  const updatedBuffer = await excelWb.xlsx.writeBuffer();
-                  const writable = await claimFileHandle.createWritable();
-                  await writable.write(updatedBuffer);
-                  await writable.close();
+                  // Queue the write to avoid concurrent access to the same file
+                  writeQueue = writeQueue.then(async () => {
+                    try {
+                      const updatedBuffer = await excelWb.xlsx.writeBuffer();
+                      const writable = await claimFileHandle.createWritable();
+                      await writable.write(updatedBuffer);
+                      await writable.close();
+                    } catch (writeErr) {
+                      console.error("Failed to write to file:", writeErr);
+                    }
+                  });
                 } else if (eventData.type === "error_screenshot") {
                   setErrorScreenshots((prev) => [...prev, { index: eventData.index, image: eventData.image }]);
                 } else if (eventData.type === "debug_html") {
-                  // Automatically trigger a file download for the debug HTML
                   const blob = new Blob([eventData.html], { type: "text/html" });
                   const url = URL.createObjectURL(blob);
                   const a = document.createElement("a");
@@ -149,13 +153,11 @@ export default function Home() {
                   URL.revokeObjectURL(url);
                 } else if (eventData.type === "pdf_download") {
                   try {
-                    // Convert base64 back to binary data
                     const binaryString = window.atob(eventData.base64);
                     const bytes = new Uint8Array(binaryString.length);
                     for (let i = 0; i < binaryString.length; i++) {
                       bytes[i] = binaryString.charCodeAt(i);
                     }
-                    // Trigger download in the user's browser
                     const blob = new Blob([bytes], { type: "application/pdf" });
                     const url = URL.createObjectURL(blob);
                     const a = document.createElement("a");
@@ -184,6 +186,9 @@ export default function Home() {
               throw err; // Throw to prevent infinite reconnect attempts
             }
           });
+
+          // Wait for any pending writes to finish
+          await writeQueue;
         } catch (err) {
           console.error("fetchEventSource failed", err);
           chunkHasError = true;
