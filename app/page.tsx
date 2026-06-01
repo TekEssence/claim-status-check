@@ -119,10 +119,12 @@ export default function Home() {
         // Fire-and-forget relay — starts immediately
         (async () => {
           try {
+            console.log("[SSE] Relay: fetching /api/progress...");
             const progressRes = await fetch(`/api/progress?jobId=${jobId}`, {
               signal: progressController.signal,
               cache: "no-store",
             });
+            console.log("[SSE] Relay: response received, status:", progressRes.status);
             if (!progressRes.body) {
               console.warn("[SSE] Edge relay returned no body — falling back to direct stream");
               return;
@@ -130,16 +132,27 @@ export default function Home() {
             const progressReader = progressRes.body.getReader();
             const progressDecoder = new TextDecoder();
             let progressBuffer = "";
+            let chunkCount = 0;
             while (true) {
               const { done, value } = await progressReader.read();
-              if (done) break;
-              progressBuffer += progressDecoder.decode(value, { stream: true });
+              if (done) {
+                console.log("[SSE] Relay: stream ended (done=true)");
+                break;
+              }
+              chunkCount++;
+              const chunk = progressDecoder.decode(value, { stream: true });
+              console.log(`[SSE] Relay: chunk #${chunkCount}, ${chunk.length} bytes`);
+              progressBuffer += chunk;
               const parts = progressBuffer.split("\n\n");
               progressBuffer = parts.pop() || "";
               for (const part of parts) {
-                if (!part.startsWith("data: ")) continue;
+                if (!part.startsWith("data: ")) {
+                  // SSE comment (ping) or empty — skip
+                  continue;
+                }
                 try {
                   const ev = JSON.parse(part.substring(6));
+                  console.log("[SSE] Relay: parsed event:", ev.type, ev);
                   if (ev.type === "padding") continue;
 
                   if (!relayConnected) {
@@ -148,17 +161,23 @@ export default function Home() {
                   }
 
                   if (ev.type === "progress") {
+                    console.log(`[SSE] Relay: setProgress(${ev.completed}/${ev.total})`);
                     setProgress({ completed: ev.completed, total: ev.total });
                   } else if (ev.type === "log") {
+                    console.log(`[SSE] Relay: setLogs("${ev.message}")`);
                     setLogs((prev) => [...prev, ev.message]);
                   }
-                } catch { /* ignore parse errors */ }
+                } catch (parseErr) {
+                  console.error("[SSE] Relay: JSON parse error:", parseErr, "raw:", part.substring(0, 200));
+                }
               }
             }
           } catch (err: unknown) {
             if (err instanceof Error && err.name !== "AbortError") {
               console.error("[SSE] Edge relay error — falling back to direct stream:", err);
               relayConnected = false;
+            } else {
+              console.log("[SSE] Relay: aborted (expected cleanup)");
             }
           }
         })();
