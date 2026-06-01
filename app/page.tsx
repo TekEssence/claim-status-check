@@ -106,81 +106,45 @@ export default function Home() {
         // Vercel's edge proxy buffers the POST response (headers+body)
         // until the function completes or times out. If we wait for the
         // POST response to get the jobId, the relay opens too late.
-        //
-        // By generating jobId here and sending it in the form data,
-        // the relay starts polling Redis immediately while the POST
-        // is still in flight.
         const jobId = crypto.randomUUID();
         let relayConnected = false;
-        const progressController = new AbortController();
 
-        console.log(`[SSE] Job ${jobId}: opening Edge relay BEFORE POST`);
+        // Use the browser's native EventSource API for the relay.
+        // EventSource event handlers fire through the browser's normal
+        // event loop, guaranteeing React state updates trigger re-renders.
+        // (The previous fire-and-forget async IIFE + ReadableStream approach
+        // had the IIFE body never executing — EventSource avoids this entirely.)
+        const relayUrl = `/api/progress?jobId=${jobId}`;
+        console.log(`[SSE] Job ${jobId}: opening Edge relay via EventSource`);
+        const eventSource = new EventSource(relayUrl);
 
-        // Fire-and-forget relay — starts immediately
-        (async () => {
+        eventSource.onmessage = (event) => {
           try {
-            console.log("[SSE] Relay: fetching /api/progress...");
-            const progressRes = await fetch(`/api/progress?jobId=${jobId}`, {
-              signal: progressController.signal,
-              cache: "no-store",
-            });
-            console.log("[SSE] Relay: response received, status:", progressRes.status);
-            if (!progressRes.body) {
-              console.warn("[SSE] Edge relay returned no body — falling back to direct stream");
-              return;
-            }
-            const progressReader = progressRes.body.getReader();
-            const progressDecoder = new TextDecoder();
-            let progressBuffer = "";
-            let chunkCount = 0;
-            while (true) {
-              const { done, value } = await progressReader.read();
-              if (done) {
-                console.log("[SSE] Relay: stream ended (done=true)");
-                break;
-              }
-              chunkCount++;
-              const chunk = progressDecoder.decode(value, { stream: true });
-              console.log(`[SSE] Relay: chunk #${chunkCount}, ${chunk.length} bytes`);
-              progressBuffer += chunk;
-              const parts = progressBuffer.split("\n\n");
-              progressBuffer = parts.pop() || "";
-              for (const part of parts) {
-                if (!part.startsWith("data: ")) {
-                  // SSE comment (ping) or empty — skip
-                  continue;
-                }
-                try {
-                  const ev = JSON.parse(part.substring(6));
-                  console.log("[SSE] Relay: parsed event:", ev.type, ev);
-                  if (ev.type === "padding") continue;
+            const ev = JSON.parse(event.data);
+            if (ev.type === "padding") return;
 
-                  if (!relayConnected) {
-                    relayConnected = true;
-                    console.log("[SSE] Edge relay connected — relay is now source of truth for progress/logs");
-                  }
+            if (!relayConnected) {
+              relayConnected = true;
+              console.log("[SSE] Edge relay connected — relay is now source of truth for progress/logs");
+            }
 
-                  if (ev.type === "progress") {
-                    console.log(`[SSE] Relay: setProgress(${ev.completed}/${ev.total})`);
-                    setProgress({ completed: ev.completed, total: ev.total });
-                  } else if (ev.type === "log") {
-                    console.log(`[SSE] Relay: setLogs("${ev.message}")`);
-                    setLogs((prev) => [...prev, ev.message]);
-                  }
-                } catch (parseErr) {
-                  console.error("[SSE] Relay: JSON parse error:", parseErr, "raw:", part.substring(0, 200));
-                }
-              }
+            if (ev.type === "progress") {
+              console.log(`[SSE] Relay: progress ${ev.completed}/${ev.total}`);
+              setProgress({ completed: ev.completed, total: ev.total });
+            } else if (ev.type === "log") {
+              setLogs((prev) => [...prev, ev.message]);
             }
-          } catch (err: unknown) {
-            if (err instanceof Error && err.name !== "AbortError") {
-              console.error("[SSE] Edge relay error — falling back to direct stream:", err);
-              relayConnected = false;
-            } else {
-              console.log("[SSE] Relay: aborted (expected cleanup)");
-            }
+          } catch (err) {
+            console.error("[SSE] Relay: parse error:", err);
           }
-        })();
+        };
+
+        eventSource.onerror = () => {
+          // EventSource fires 'error' on connection loss or stream end.
+          // This is expected when the relay closes after 'done' signal.
+          console.log("[SSE] Relay: EventSource error/closed");
+          relayConnected = false;
+        };
 
         // Now send the POST with the jobId
         const formData = new FormData();
@@ -285,7 +249,7 @@ export default function Home() {
         }
 
         // Clean up the Edge relay connection
-        progressController?.abort();
+        eventSource.close();
 
         // Stream closed. Check if we need to auto-resume
         if (chunkHasError) {
