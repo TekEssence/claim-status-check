@@ -109,7 +109,28 @@ export default function Home() {
 
         let currentCompleted = startIndex;
         let chunkHasError = false;
+        
         let writeQueue = Promise.resolve();
+        let nextWriteScheduled = false;
+
+        const scheduleWrite = () => {
+          if (nextWriteScheduled) return;
+          nextWriteScheduled = true;
+          
+          writeQueue = writeQueue.then(async () => {
+            nextWriteScheduled = false;
+            // Yield to main thread for React renders before doing heavy CPU work
+            await new Promise(resolve => setTimeout(resolve, 150));
+            try {
+              const updatedBuffer = await excelWb.xlsx.writeBuffer();
+              const writable = await claimFileHandle.createWritable();
+              await writable.write(updatedBuffer);
+              await writable.close();
+            } catch (writeErr) {
+              console.error("Failed to write to file:", writeErr);
+            }
+          });
+        };
 
         try {
           await fetchEventSource("/api/process-claims", {
@@ -129,17 +150,8 @@ export default function Home() {
                 } else if (eventData.type === "row_update") {
                   applyClaimRowUpdateToWorksheet(worksheet, eventData);
 
-                  // Queue the write to avoid concurrent access to the same file
-                  writeQueue = writeQueue.then(async () => {
-                    try {
-                      const updatedBuffer = await excelWb.xlsx.writeBuffer();
-                      const writable = await claimFileHandle.createWritable();
-                      await writable.write(updatedBuffer);
-                      await writable.close();
-                    } catch (writeErr) {
-                      console.error("Failed to write to file:", writeErr);
-                    }
-                  });
+                  // Batch writes together to avoid freezing the UI with heavy CPU work
+                  scheduleWrite();
                 } else if (eventData.type === "error_screenshot") {
                   setErrorScreenshots((prev) => [...prev, { index: eventData.index, image: eventData.image }]);
                 } else if (eventData.type === "debug_html") {
