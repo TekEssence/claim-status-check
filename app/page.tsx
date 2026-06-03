@@ -19,6 +19,7 @@ export default function Home() {
   const [logs, setLogs] = useState<string[]>([]);
   const [errorScreenshots, setErrorScreenshots] = useState<{ index: number; image: string }[]>([]);
   const [progress, setProgress] = useState<{ completed: number; total: number } | null>(null);
+  const [useStagehand, setUseStagehand] = useState(false);
 
   const canSubmit = useMemo(
     () => Boolean(loginFile && claimFileHandle && !isProcessing),
@@ -112,7 +113,8 @@ export default function Home() {
         let writeQueue = Promise.resolve();
 
         try {
-          await fetchEventSource("/api/process-claims", {
+          const endpoint = useStagehand ? "/api/process-claims-stagehand" : "/api/process-claims";
+          await fetchEventSource(endpoint, {
             method: "POST",
             body: formData,
             async onmessage(ev) {
@@ -272,6 +274,19 @@ export default function Home() {
               </span>
             </div>
             <p className="mt-1 text-xs text-slate-500">We will update this exact file as processing continues.</p>
+          </div>
+
+          <div>
+            <label className="flex items-center gap-2 text-sm font-medium">
+              <input
+                type="checkbox"
+                checked={useStagehand}
+                onChange={(e) => setUseStagehand(e.target.checked)}
+                className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+              />
+              Use Stagehand API (AI-powered)
+            </label>
+            <p className="mt-1 text-xs text-slate-500 ml-6">When enabled, the process uses Browserbase Stagehand AI to navigate and extract data.</p>
           </div>
 
           <button
