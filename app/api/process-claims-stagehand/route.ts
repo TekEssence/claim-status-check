@@ -101,8 +101,12 @@ export async function POST(req: Request) {
         const isVercel = process.env.VERCEL === "1" || !!process.env.VERCEL_ENV;
         
         stagehand = new Stagehand({
-          env: isVercel ? "BROWSERBASE" : "LOCAL",
-          // modelClientOptions: { model: "gpt-4o" }
+          env: "LOCAL",
+          localBrowserLaunchOptions: isVercel ? {
+            args: chromium.args,
+            executablePath: await chromium.executablePath(),
+            headless: true,
+          } : undefined
         });
         
         await stagehand.init();
