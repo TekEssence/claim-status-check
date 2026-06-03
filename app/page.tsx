@@ -109,28 +109,6 @@ export default function Home() {
 
         let currentCompleted = startIndex;
         let chunkHasError = false;
-        
-        let writeQueue = Promise.resolve();
-        let nextWriteScheduled = false;
-
-        const scheduleWrite = () => {
-          if (nextWriteScheduled) return;
-          nextWriteScheduled = true;
-          
-          writeQueue = writeQueue.then(async () => {
-            nextWriteScheduled = false;
-            // Yield to main thread for React renders before doing heavy CPU work
-            await new Promise(resolve => setTimeout(resolve, 150));
-            try {
-              const updatedBuffer = await excelWb.xlsx.writeBuffer();
-              const writable = await claimFileHandle.createWritable();
-              await writable.write(updatedBuffer);
-              await writable.close();
-            } catch (writeErr) {
-              console.error("Failed to write to file:", writeErr);
-            }
-          });
-        };
 
         try {
           await fetchEventSource("/api/process-claims", {
@@ -149,9 +127,8 @@ export default function Home() {
                   setProgress({ completed: eventData.completed, total: eventData.total });
                 } else if (eventData.type === "row_update") {
                   applyClaimRowUpdateToWorksheet(worksheet, eventData);
-
-                  // Batch writes together to avoid freezing the UI with heavy CPU work
-                  scheduleWrite();
+                  // We ONLY write to the in-memory worksheet on event.
+                  // The file will be flushed to disk at the end of the batch.
                 } else if (eventData.type === "error_screenshot") {
                   setErrorScreenshots((prev) => [...prev, { index: eventData.index, image: eventData.image }]);
                 } else if (eventData.type === "debug_html") {
@@ -199,12 +176,19 @@ export default function Home() {
               throw err; // Throw to prevent infinite reconnect attempts
             }
           });
-
-          // Wait for any pending writes to finish
-          await writeQueue;
         } catch (err) {
           console.error("fetchEventSource failed", err);
           chunkHasError = true;
+        }
+
+        // Flush the in-memory worksheet to disk at the end of this chunk
+        try {
+          const updatedBuffer = await excelWb.xlsx.writeBuffer();
+          const writable = await claimFileHandle.createWritable();
+          await writable.write(updatedBuffer);
+          await writable.close();
+        } catch (writeErr) {
+          console.error("Failed to write chunk to file:", writeErr);
         }
 
         // Stream closed. Check if we need to auto-resume
