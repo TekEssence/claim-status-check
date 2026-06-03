@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useMemo, useState, useRef, useEffect } from "react";
 import * as XLSX from "xlsx";
 import ExcelJS from "exceljs";
 import { applyClaimRowUpdateToWorksheet, postProcessWorksheet } from "@/lib/claim-workbook";
@@ -19,6 +19,14 @@ export default function Home() {
   const [logs, setLogs] = useState<string[]>([]);
   const [errorScreenshots, setErrorScreenshots] = useState<{ index: number; image: string }[]>([]);
   const [progress, setProgress] = useState<{ completed: number; total: number } | null>(null);
+
+  const logsEndRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (logsEndRef.current) {
+      logsEndRef.current.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [logs]);
 
   const canSubmit = useMemo(
     () => Boolean(loginFile && claimFileHandle && !isProcessing),
@@ -114,11 +122,13 @@ export default function Home() {
           await fetchEventSource("/api/process-claims", {
             method: "POST",
             body: formData,
+            openWhenHidden: true, // Prevents SSE from pausing if user switches tabs or opens DevTools
             async onmessage(ev) {
               try {
                 if (ev.data === "" || ev.data.startsWith(":")) return;
                 
                 const eventData = JSON.parse(ev.data);
+                console.log("SSE Event Received:", eventData);
                 
                 if (eventData.type === "log") {
                   setLogs((prev) => [...prev, eventData.message]);
@@ -321,10 +331,11 @@ export default function Home() {
         {logs.length > 0 && (
           <div className="mt-4 rounded-md border border-slate-200 bg-slate-50 p-3">
             <h2 className="mb-2 text-sm font-semibold">Live Processing Logs</h2>
-            <ul className="max-h-64 list-disc space-y-1 overflow-auto pl-5 text-xs text-slate-700">
+            <ul className="max-h-64 list-disc space-y-1 overflow-auto pl-5 pr-2 text-xs text-slate-700">
               {logs.map((line, idx) => (
                 <li key={idx}>{line}</li>
               ))}
+              <div ref={logsEndRef} />
             </ul>
           </div>
         )}
