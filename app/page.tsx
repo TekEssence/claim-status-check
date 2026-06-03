@@ -1,4 +1,5 @@
 "use client";
+import { flushSync } from "react-dom";
 
 import { FormEvent, useMemo, useState, useRef, useEffect } from "react";
 import * as XLSX from "xlsx";
@@ -131,10 +132,14 @@ export default function Home() {
                 console.log("SSE Event Received:", eventData);
                 
                 if (eventData.type === "log") {
-                  setLogs((prev) => [...prev, eventData.message]);
+                  flushSync(() => {
+                    setLogs((prev) => [...prev, eventData.message]);
+                  });
                 } else if (eventData.type === "progress") {
                   currentCompleted = eventData.completed;
-                  setProgress({ completed: eventData.completed, total: eventData.total });
+                  flushSync(() => {
+                    setProgress({ completed: eventData.completed, total: eventData.total });
+                  });
                 } else if (eventData.type === "row_update") {
                   applyClaimRowUpdateToWorksheet(worksheet, eventData);
                   // We ONLY write to the in-memory worksheet on event.
