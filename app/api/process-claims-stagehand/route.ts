@@ -103,6 +103,7 @@ export async function POST(req: Request) {
         stagehand = new Stagehand({
           env: "LOCAL",
           model: "gemini-2.0-flash",
+          disablePino: true,
           localBrowserLaunchOptions: isVercel ? {
             args: chromium.args,
             executablePath: await chromium.executablePath(),
