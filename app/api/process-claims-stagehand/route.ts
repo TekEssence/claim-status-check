@@ -100,10 +100,10 @@ export async function POST(req: Request) {
 
         log("Launching browser environment via Stagehand...");
         const isVercel = process.env.VERCEL === "1" || !!process.env.VERCEL_ENV;
-        
+
         stagehand = new Stagehand({
           env: "LOCAL",
-          model: "gemini-2.0-flash",
+          model: "gemini-2.5-flash",
           verbose: 1,
           disablePino: true,
           logger: (logLine) => {
@@ -115,7 +115,7 @@ export async function POST(req: Request) {
             headless: true,
           } : undefined
         });
-        
+
         await stagehand.init();
 
         log(`Navigating to login URL: ${loginUrl}`);
@@ -175,7 +175,7 @@ export async function POST(req: Request) {
           try {
             log(`Row ${i + 1}: Navigating to Claims Status and Searching...`);
             await stagehand.act(`Navigate to ${finalClaimStatusUrl}`);
-            
+
             await stagehand.act(`Search for claim with Member ID '${memberPolicyId}' and Date of Service range from '${formatMmDdYyyy(startDate)}' to '${formatMmDdYyyy(endDate)}'. Make sure to expand advanced options if needed. Click the submit or search button.`);
 
             await stagehand.act(`Click on all claim row items on the page to expand and reveal their details. Scroll through the pages if there is pagination to find claims matching DOS ${dosFormatted}. Stop clicking when you have expanded the rows that match the date.`);
@@ -210,24 +210,24 @@ export async function POST(req: Request) {
             }
 
             for (const claim of extracted.claims) {
-               details.push(`Summary: [${claim.summaryText}] | Details: [${claim.headerText}] | Status Info: [${claim.statusInfoText}]`);
-               if (claim.hasReferToRa && claim.checkNumber) {
-                  checkNumbersToDownload.push(claim.checkNumber);
-                  await log(`Row ${i + 1}: Found Check Number ${claim.checkNumber} requiring RA download.`);
-               }
+              details.push(`Summary: [${claim.summaryText}] | Details: [${claim.headerText}] | Status Info: [${claim.statusInfoText}]`);
+              if (claim.hasReferToRa && claim.checkNumber) {
+                checkNumbersToDownload.push(claim.checkNumber);
+                await log(`Row ${i + 1}: Found Check Number ${claim.checkNumber} requiring RA download.`);
+              }
             }
 
             // Download PDFs using Stagehand
             if (checkNumbersToDownload.length > 0) {
               const uniqueChecks = Array.from(new Set(checkNumbersToDownload));
-              
+
               await stagehand.act(`Navigate to the Remittance Advice (RA) or Finance section.`);
 
               for (const chk of uniqueChecks) {
                 await log(`Row ${i + 1}: Processing RA for Check Number ${chk}...`);
-                
+
                 await stagehand.act(`Search for Check Number '${chk}'. Wait for the results to load. Click the download icon or link for the Claim PDF corresponding to this check number. Wait for the download to finish.`);
-                
+
                 // Note: Stagehand V3 doesn't easily expose the raw downloaded file path without hooking into Playwright context.
                 // We will inform the user in logs that PDF parsing via Stagehand requires additional setup.
                 await log(`Row ${i + 1}: PDF download via Stagehand act() completed. Note: PDF binary parsing is not fully supported in pure Stagehand without custom handlers.`);
@@ -239,9 +239,9 @@ export async function POST(req: Request) {
             await sendEvent({
               type: "row_update",
               index: rowIndex,
-              update: { 
-                BotClaimDetails: details.join(" | "), 
-                BotClaimStatusCheck: "Success", 
+              update: {
+                BotClaimDetails: details.join(" | "),
+                BotClaimStatusCheck: "Success",
                 BotClaimStatusCheckError: "",
                 BotReferRA: referRaDetails.length > 0 ? referRaDetails.join(" | ") : ""
               }
@@ -251,7 +251,7 @@ export async function POST(req: Request) {
           } catch (rowError) {
             const msg = rowError instanceof Error ? rowError.message : "Unknown row error";
             await log(`Row ${i + 1}: Failed. ${msg}`);
-            
+
             await sendEvent({
               type: "row_update",
               index: rowIndex,
@@ -271,7 +271,7 @@ export async function POST(req: Request) {
       } finally {
         clearInterval(keepAliveInterval);
         if (stagehand) {
-          await stagehand.close().catch(() => {});
+          await stagehand.close().catch(() => { });
         }
         await sendEvent({ type: "done" });
         controller.close();
