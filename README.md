@@ -1,4 +1,4 @@
-## IEHP Claim Status Check
+## Claim Status Check
 
 This Next.js app uploads:
 - A login Excel file (username/password/login URL)
