@@ -103,7 +103,7 @@ export async function POST(req: Request) {
 
         stagehand = new Stagehand({
           env: "LOCAL",
-          model: "gemini-2.5-flash",
+          model: "google/gemini-2.5-flash",
           verbose: 1,
           disablePino: true,
           logger: (logLine) => {
