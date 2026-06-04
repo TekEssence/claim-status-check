@@ -176,7 +176,7 @@ export async function POST(req: Request) {
             log(`Row ${i + 1}: Navigating to Claims Status and Searching...`);
             await stagehand.act(`Navigate to ${finalClaimStatusUrl}`);
 
-            await stagehand.act(`Search for claim with Member ID '${memberPolicyId}' and Date of Service range from '${formatMmDdYyyy(startDate)}' to '${formatMmDdYyyy(endDate)}'. Make sure to expand advanced options if needed. Click the submit or search button.`);
+            await stagehand.act(`Search for claim with Member ID '${memberPolicyId}' and Date of Service range from '${formatMmDdYyyy(startDate)}' to '${formatMmDdYyyy(endDate)}'. Make sure to expand advanced options if needed. Click the submit or search button. After clicking, WAIT until the search results table or a "no results" message is fully loaded and visible on the page.`);
 
             await stagehand.act(`Click on all claim row items on the page to expand and reveal their details. Scroll through the pages if there is pagination to find claims matching DOS ${dosFormatted}. Stop clicking when you have expanded the rows that match the date.`);
 
@@ -252,6 +252,20 @@ export async function POST(req: Request) {
             const msg = rowError instanceof Error ? rowError.message : "Unknown row error";
             await log(`Row ${i + 1}: Failed. ${msg}`);
 
+            
+            try {
+              if (stagehand && stagehand.context && typeof stagehand.context.activePage === 'function') {
+                const activePage = stagehand.context.activePage();
+                if (activePage && typeof activePage.screenshot === 'function') {
+                  const screenshotBuffer = await activePage.screenshot({ type: "jpeg", quality: 60 });
+                  const base64Screenshot = screenshotBuffer.toString("base64");
+                  await sendEvent({ type: "error_screenshot", index: rowIndex, image: base64Screenshot });
+                }
+              }
+            } catch (screenshotErr) {
+              await log(`Failed to take screenshot: ${screenshotErr instanceof Error ? screenshotErr.message : String(screenshotErr)}`);
+            }
+
             await sendEvent({
               type: "row_update",
               index: rowIndex,
@@ -266,6 +280,20 @@ export async function POST(req: Request) {
       } catch (globalError) {
         const msg = globalError instanceof Error ? globalError.message : "Unexpected automation error.";
         await log(`Global automation error: ${msg}`);
+        
+        try {
+          if (stagehand && stagehand.context && typeof stagehand.context.activePage === 'function') {
+            const activePage = stagehand.context.activePage();
+            if (activePage && typeof activePage.screenshot === 'function') {
+              const screenshotBuffer = await activePage.screenshot({ type: "jpeg", quality: 60 });
+              const base64Screenshot = screenshotBuffer.toString("base64");
+              await sendEvent({ type: "error_screenshot", index: -1, image: base64Screenshot });
+            }
+          }
+        } catch (screenshotErr) {
+          await log(`Failed to take global screenshot: ${screenshotErr instanceof Error ? screenshotErr.message : String(screenshotErr)}`);
+        }
+
         await sendEvent({ type: "error", message: msg });
         await sendEvent({ type: "error_logs_download", logs: stagehandLogs.join("\n") });
       } finally {
