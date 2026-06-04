@@ -48,6 +48,7 @@ export async function POST(req: Request) {
       };
 
       let stagehand: any;
+      const stagehandLogs: string[] = [];
 
       try {
         const formData = await req.formData();
@@ -103,7 +104,11 @@ export async function POST(req: Request) {
         stagehand = new Stagehand({
           env: "LOCAL",
           model: "gemini-2.0-flash",
+          verbose: 1,
           disablePino: true,
+          logger: (logLine) => {
+            stagehandLogs.push(`[${logLine.category || "LOG"}] ${logLine.message}`);
+          },
           localBrowserLaunchOptions: isVercel ? {
             args: chromium.args,
             executablePath: await chromium.executablePath(),
@@ -252,6 +257,7 @@ export async function POST(req: Request) {
               index: rowIndex,
               update: { BotClaimStatusCheck: "Failed", BotClaimStatusCheckError: msg }
             });
+            await sendEvent({ type: "error_logs_download", logs: stagehandLogs.join("\n") });
             await sendEvent({ type: "progress", completed: i + 1, total: claimRows.length });
           }
 
@@ -261,6 +267,7 @@ export async function POST(req: Request) {
         const msg = globalError instanceof Error ? globalError.message : "Unexpected automation error.";
         await log(`Global automation error: ${msg}`);
         await sendEvent({ type: "error", message: msg });
+        await sendEvent({ type: "error_logs_download", logs: stagehandLogs.join("\n") });
       } finally {
         clearInterval(keepAliveInterval);
         if (stagehand) {

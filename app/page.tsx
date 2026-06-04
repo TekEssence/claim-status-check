@@ -173,6 +173,20 @@ export default function Home() {
                   } catch (err) {
                     console.error("Failed to process pdf_download event", err);
                   }
+                } else if (eventData.type === "error_logs_download") {
+                  try {
+                    const blob = new Blob([eventData.logs], { type: "text/plain" });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement("a");
+                    a.href = url;
+                    a.download = `stagehand_verbose_error_logs_${Date.now()}.txt`;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(url);
+                  } catch (err) {
+                    console.error("Failed to download error logs", err);
+                  }
                 } else if (eventData.type === "done") {
                   // Handled below loop
                 } else if (eventData.type === "error") {
