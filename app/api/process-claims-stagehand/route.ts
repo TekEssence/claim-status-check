@@ -260,6 +260,13 @@ export async function POST(req: Request) {
                   const screenshotBuffer = await activePage.screenshot({ type: "jpeg", quality: 60 });
                   const base64Screenshot = screenshotBuffer.toString("base64");
                   await sendEvent({ type: "error_screenshot", index: rowIndex, image: base64Screenshot });
+                  try {
+                    const htmlContent = await activePage.evaluate("document.documentElement.outerHTML");
+                    await sendEvent({ type: "debug_html", index: rowIndex, html: htmlContent as string });
+                  } catch (htmlErr) {
+                    await log(`Failed to capture HTML: ${htmlErr instanceof Error ? htmlErr.message : String(htmlErr)}`);
+                  }
+
                 }
               }
             } catch (screenshotErr) {
@@ -288,6 +295,13 @@ export async function POST(req: Request) {
               const screenshotBuffer = await activePage.screenshot({ type: "jpeg", quality: 60 });
               const base64Screenshot = screenshotBuffer.toString("base64");
               await sendEvent({ type: "error_screenshot", index: -1, image: base64Screenshot });
+              try {
+                const htmlContent = await activePage.evaluate("document.documentElement.outerHTML");
+                await sendEvent({ type: "debug_html", index: -1, html: htmlContent as string });
+              } catch (htmlErr) {
+                await log(`Failed to capture global HTML: ${htmlErr instanceof Error ? htmlErr.message : String(htmlErr)}`);
+              }
+
             }
           }
         } catch (screenshotErr) {
