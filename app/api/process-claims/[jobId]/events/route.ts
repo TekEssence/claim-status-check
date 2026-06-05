@@ -21,7 +21,27 @@ export async function GET(
   const job = getProcessClaimJob(jobId);
 
   if (!job) {
-    return Response.json({ error: "Process claim job not found." }, { status: 404 });
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify({
+          type: "error",
+          message: "Process claim job not found. The serverless instance may have restarted before the event stream connected.",
+        })}\n\n`));
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "done" })}\n\n`));
+        controller.close();
+      },
+    });
+
+    return new Response(stream, {
+      headers: {
+        "Content-Type": "text/event-stream; charset=utf-8",
+        "Cache-Control": "no-cache, no-transform",
+        "Connection": "keep-alive",
+        "X-Accel-Buffering": "no",
+        "Content-Encoding": "none",
+      },
+    });
   }
 
   const url = new URL(req.url);

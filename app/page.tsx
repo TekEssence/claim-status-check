@@ -126,7 +126,7 @@ export default function Home() {
             throw new Error("Failed to start processing job: missing jobId.");
           }
 
-          await fetchEventSource(`/api/process-claims/${encodeURIComponent(jobId)}/events`, {
+          await fetchEventSource(`/api/process-claims?jobId=${encodeURIComponent(jobId)}`, {
             openWhenHidden: true,
             async onmessage(ev) {
               try {
