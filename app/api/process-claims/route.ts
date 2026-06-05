@@ -1,9 +1,10 @@
-import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import chromium from "@sparticuz/chromium";
 import { chromium as playwright, type BrowserContext, type Page } from "playwright-core";
 import * as XLSX from "xlsx";
+import { createProcessClaimJob, emitProcessClaimEvent } from "./jobs";
+import { processReferToRaDownloads } from "./refer-ra";
 import {
   asText,
   exactMmDdYyyyPattern,
@@ -13,54 +14,83 @@ import {
   parseDateInput,
   parseWebsiteMmDdYyyy,
 } from "@/lib/claim-dates";
-import { extractTextFromPdf } from "@/lib/claim-pdf";
 
 type GenericRow = Record<string, unknown>;
 type StreamEvent = Record<string, unknown>;
+
+const SIGNED_IN_SELECTORS = [
+  "li[ng-click='logOut()']",
+  ".headerTopNav_signout",
+  "text=/Sign\\s*Out/i",
+  "text=/Eligibility/i",
+  "text=/Welcome/i",
+  "text=/My\\s*account/i",
+];
+
+const LOGIN_FAILED_SELECTOR = "text=/Login ID or Password entered is incorrect\\. Please re-enter and try again\\.(?:\\s*Attempts Remaining:\\s*\\d+)?/i";
+
+function cleanLoginFailureMessage(message: string): string {
+  return message.replace(/\s*Attempts Remaining:\s*\d+\s*$/i, "").replace(/\s+/g, " ").trim();
+}
+
+async function detectLoginStatus(page: Page, timeoutMs: number): Promise<{ status: "signed-in" | "failed" | "unknown"; message?: string }> {
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() <= deadline) {
+    const failureLocator = page.locator(LOGIN_FAILED_SELECTOR).first();
+    if (await failureLocator.isVisible().catch(() => false)) {
+      const text = await failureLocator.innerText().catch(() => "Login ID or Password entered is incorrect. Please re-enter and try again.");
+      return { status: "failed", message: cleanLoginFailureMessage(text) };
+    }
+
+    for (const selector of SIGNED_IN_SELECTORS) {
+      if (await page.locator(selector).first().isVisible().catch(() => false)) {
+        return { status: "signed-in" };
+      }
+    }
+
+    await page.waitForTimeout(500);
+  }
+
+  return { status: "unknown" };
+}
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 300; // 5 minutes on Vercel Pro
 
 export async function POST(req: Request) {
-  const encoder = new TextEncoder();
-  const stream = new ReadableStream({
-    async start(controller) {
-      // Keep-alive ping to prevent Vercel from buffering or dropping the connection
-      const keepAliveInterval = setInterval(() => {
-        try {
-          controller.enqueue(encoder.encode(`: ping\n\n`));
-        } catch {
-          clearInterval(keepAliveInterval);
-        }
-      }, 1000);
+  const formData = await req.formData();
+  const job = createProcessClaimJob();
 
-      const sendEvent = async (data: StreamEvent) => {
-        try {
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
-          // Yield to event loop to allow Node.js to flush the socket
-          await new Promise(resolve => setTimeout(resolve, 50));
-        } catch {
-          // Stream closed
-        }
-      };
+  runProcessClaimsJob(job.id, formData).catch((error) => {
+    const message = error instanceof Error ? error.message : "Unexpected automation error.";
+    emitProcessClaimEvent(job.id, { type: "error", message });
+    emitProcessClaimEvent(job.id, { type: "done" });
+  });
 
-      // Pad the start to bypass Vercel/Cloudflare buffering limits (8KB)
-      await sendEvent({ type: "padding", payload: "x".repeat(8192) });
+  return Response.json({ jobId: job.id });
+}
 
-      const log = async (message: string) => {
-        await sendEvent({ type: "log", message });
-      };
+async function runProcessClaimsJob(jobId: string, formData: FormData): Promise<void> {
+  const sendEvent = async (data: StreamEvent) => {
+    emitProcessClaimEvent(jobId, data);
+    await new Promise(resolve => setTimeout(resolve, 50));
+  };
+
+  await sendEvent({ type: "padding", payload: "x".repeat(8192) });
+
+  const log = async (message: string) => {
+    await sendEvent({ type: "log", message });
+  };
 
       try {
-        const formData = await req.formData();
         const loginExcelFile = formData.get("loginExcel") as File | null;
         const claimRowsJson = formData.get("claimRows") as string | null;
         const startIndex = parseInt(formData.get("startIndex") as string || "0", 10);
 
         if (!loginExcelFile || !(loginExcelFile instanceof File) || !claimRowsJson) {
           await sendEvent({ type: "error", message: "Missing login Excel file or claim rows." });
-          controller.close();
           return;
         }
 
@@ -72,7 +102,6 @@ export async function POST(req: Request) {
 
         if (loginRows.length === 0) {
           await sendEvent({ type: "error", message: "Login Excel file is empty." });
-          controller.close();
           return;
         }
 
@@ -83,7 +112,6 @@ export async function POST(req: Request) {
 
         if (!rawUrl || !userName || !password) {
           await sendEvent({ type: "error", message: "Invalid login credentials format." });
-          controller.close();
           return;
         }
 
@@ -158,15 +186,16 @@ export async function POST(req: Request) {
           await page.goto(loginUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
           await page.waitForLoadState("networkidle", { timeout: 30000 });
 
-          const loggedInIndicator = page.locator("a[href*='logout'], button[title*='logout'], text='Log Out', text='Sign Out', .user-profile").first();
-          
-          let isLoggedIn = false;
-          try {
-            await loggedInIndicator.waitFor({ state: "visible", timeout: 5000 });
-            isLoggedIn = true;
-            log("Already logged in (session persisted).");
-          } catch {
-            log("Not logged in. Proceeding with authentication...");
+          const initialLoginStatus = await detectLoginStatus(page, 5000);
+          if (initialLoginStatus.status === "failed") {
+            throw new Error(`Login failed: ${initialLoginStatus.message}`);
+          }
+
+          const isLoggedIn = initialLoginStatus.status === "signed-in";
+          if (isLoggedIn) {
+            await log("Already logged in (session persisted).");
+          } else {
+            await log("Not logged in. Proceeding with authentication...");
           }
 
           if (!isLoggedIn) {
@@ -178,13 +207,15 @@ export async function POST(req: Request) {
             
             log("Waiting for navigation after login...");
             await page.waitForNavigation({ waitUntil: "networkidle", timeout: 15000 }).catch(() => log("waitForNavigation timeout, continuing..."));
-            
-            try {
-              await loggedInIndicator.waitFor({ state: "visible", timeout: 5000 });
-              log("Login verification successful (indicator found).");
-            } catch {
-              log("Warning: Could not find strict logout indicator. Proceeding assuming login was successful...");
+
+            const loginOutcome = await detectLoginStatus(page, 15000);
+            if (loginOutcome.status === "failed") {
+              throw new Error(`Login failed: ${loginOutcome.message}`);
             }
+            if (loginOutcome.status !== "signed-in") {
+              throw new Error("Login verification failed: could not find Sign Out, Eligibility, Welcome, or My account after submitting credentials.");
+            }
+            await log("Login verification successful (signed-in indicator found).");
           }
 
           const processStartTime = Date.now();
@@ -454,150 +485,17 @@ export async function POST(req: Request) {
                 continue;
               }
 
-              // -------------------------------------------------------------
-              // BATCH DOWNLOAD REFER TO YOUR RA PDFs FOR THIS ROW
-              // -------------------------------------------------------------
               if (checkNumbersToDownload.length > 0) {
-                const uniqueChecks = Array.from(new Set(checkNumbersToDownload));
-                await log(`Row ${i + 1}: Downloading RAs sequentially for Check Numbers: ${uniqueChecks.join(", ")}`);
-
-                try {
-                  // Navigate to RA page directly using Angular UI-Router to avoid stale locator timeouts
-                  await page.evaluate(() => {
-                    const injector = (window as any).angular && (window as any).angular.element(document.body).injector();
-                    if (injector) {
-                      injector.get('$state').go('finance.remittance');
-                    } else {
-                      window.location.hash = '/finance/remittance-advice';
-                    }
-                  });
-                  await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
-                  
-                  const pdfSource = page;
-                  for (let cIdx = 0; cIdx < uniqueChecks.length; cIdx++) {
-                    const chk = uniqueChecks[cIdx];
-                    await log(`Row ${i + 1}: Processing RA for Check Number ${chk} (${cIdx + 1}/${uniqueChecks.length})...`);
-                    
-                    let eftMatches = false;
-                    for (let searchAttempt = 0; searchAttempt < 2; searchAttempt++) {
-                      const searchAgainBtn = pdfSource.locator(".accordionPane:has(.search-again), h2.search-again").first();
-                      if (await searchAgainBtn.count() > 0 && await searchAgainBtn.isVisible()) {
-                         await searchAgainBtn.click({ timeout: 5000 });
-                         await pdfSource.waitForTimeout(500); 
-                      }
-                      
-                      const searchInput = pdfSource.locator("input#search, input[placeholder*='Check Number']").first();
-                      await searchInput.fill(chk);
-                      await pdfSource.waitForTimeout(500); // Allow Angular model to digest the fill
-                      
-                      const searchBtn = pdfSource.locator(".singleSearchButton, button[type='submit']").first();
-                      if (await searchBtn.count() > 0 && await searchBtn.isVisible()) {
-                        await searchBtn.click();
-                      } else {
-                        // Try executing Angular's submit function directly on the scope
-                        await searchInput.evaluate((el: HTMLInputElement) => {
-                          try {
-                            const ng = (window as any).angular;
-                            if (ng) {
-                              const scope = ng.element(el).scope();
-                              if (scope && scope.search && typeof scope.search.submit === 'function') {
-                                scope.search.submit();
-                                if (!scope.$$phase && !scope.$root.$$phase) scope.$apply();
-                              }
-                            }
-                          } catch (err) {}
-                        }).catch(() => {});
-                        
-                        // Fallback just in case
-                        await searchInput.press("Enter");
-                      }
-                      
-                      await pdfSource.locator('div[full-screen-ajax-loader] .full-screen-bg').waitFor({ state: "hidden", timeout: 30000 }).catch(() => {});
-                      await pdfSource.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
-  
-                      // Logical retry to ensure the EFT in the row matches the searched chk
-                      for (let retry = 0; retry < 5; retry++) {
-                        const rowEftLocator = pdfSource.locator('tr.line-item td:nth-child(3)').first();
-                        if (await rowEftLocator.count() > 0 && await rowEftLocator.isVisible()) {
-                          const rowEftText = await rowEftLocator.innerText();
-                          if (rowEftText && rowEftText.includes(chk)) {
-                            eftMatches = true;
-                            break;
-                          }
-                        }
-                        await pdfSource.waitForTimeout(1000); // Wait 1s before checking again
-                      }
-                      
-                      if (eftMatches) {
-                        break;
-                      }
-                    }
-
-                    if (!eftMatches) {
-                      throw new Error(`PDF download link not found for ${chk}: Search result EFT mismatch or page did not load after 2 search attempts.`);
-                    }
-
-                    const combinedPdfSelector = [
-                      "div[ng-click*='GetRaPdfDownload']",
-                      "div[uib-popover*='download Claim PDF']",
-                      ".fa-arrow-circle-down"
-                    ].join(", ");
-                    
-                    const pdfLink = pdfSource.locator(combinedPdfSelector).first();
-                    await pdfLink.waitFor({ state: "visible", timeout: 15000 }).catch(() => {});
-
-                    if (await pdfLink.isVisible()) {
-                      const [download] = await Promise.all([
-                        pdfSource.waitForEvent("download", { timeout: 25000 }).catch(() => null),
-                        pdfLink.click({ force: true })
-                      ]);
-
-                      if (download) {
-                        const downloadsDir = path.join(os.tmpdir(), "downloads");
-                        if (!fs.existsSync(downloadsDir)) fs.mkdirSync(downloadsDir, { recursive: true });
-                        const cleanDos = formatMmDdYyyy(dosDate).replace(/\//g, "-");
-                        const pdfFileName = `${rowIndex + 2}_${memberPolicyId}_${cleanDos}_${chk}.pdf`;
-                        const pdfPath = path.join(downloadsDir, pdfFileName);
-                        await download.saveAs(pdfPath);
-
-                        const pdfBuffer = fs.readFileSync(pdfPath);
-                        await sendEvent({ type: "pdf_download", filename: pdfFileName, base64: pdfBuffer.toString("base64") });
-
-                        const pdfText = await extractTextFromPdf(pdfBuffer);
-                        const pdfLines = pdfText.split("\n").map(l => l.trim()).filter(Boolean);
-                        const dosStr = formatMmDdYyyy(dosDate);
-                        let matchingLine = "";
-                        for (let j = 0; j < pdfLines.length; j++) {
-                          if (pdfLines[j].includes(memberPolicyId)) {
-                            let end = j + 1;
-                            while (end < pdfLines.length && end - j < 50) {
-                              if (/^\d{14}\b/.test(pdfLines[end])) break; 
-                              end++;
-                            }
-                            const block = pdfLines.slice(j, end);
-                            if (block.some(l => l.includes(dosStr))) {
-                              matchingLine = block.join(" ");
-                              break;
-                            }
-                          }
-                        }
-                        if (matchingLine) {
-                          referRaDetails.push(matchingLine);
-                        } else {
-                          referRaDetails.push(`Check ${chk}: No matching claim details found in PDF`);
-                        }
-                      } else {
-                        referRaDetails.push(`Check ${chk}: Error PDF download failed`);
-                      }
-                    } else {
-                      referRaDetails.push(`Check ${chk}: Error PDF download link not found`);
-                    }
-                  }
-
-                } catch (err) {
-                   await log(`Row ${i + 1}: Error handling RA batch download: ${(err as Error).message}`);
-                   referRaDetails.push(`Error: ${(err as Error).message}`);
-                }
+                referRaDetails.push(...await processReferToRaDownloads({
+                  page,
+                  rowNumber: i + 1,
+                  rowIndex,
+                  memberPolicyId,
+                  dosDate,
+                  checkNumbers: checkNumbersToDownload,
+                  log,
+                  sendEvent,
+                }));
               }
 
               await log(`Row ${i + 1}: Success (${details.length} total matching rows across ${pageNum} page(s)).`);
@@ -647,20 +545,6 @@ export async function POST(req: Request) {
         await log(`Global automation error: ${msg}`);
         await sendEvent({ type: "error", message: msg });
       } finally {
-        clearInterval(keepAliveInterval);
         await sendEvent({ type: "done" });
-        controller.close();
       }
-    }
-  });
-
-  return new Response(stream, {
-    headers: {
-      "Content-Type": "text/event-stream; charset=utf-8",
-      "Cache-Control": "no-cache, no-transform",
-      "Connection": "keep-alive",
-      "X-Accel-Buffering": "no",
-      "Content-Encoding": "none",
-    },
-  });
 }

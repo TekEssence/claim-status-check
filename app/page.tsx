@@ -112,9 +112,22 @@ export default function Home() {
         let writeQueue = Promise.resolve();
 
         try {
-          await fetchEventSource("/api/process-claims", {
+          const jobResponse = await fetch("/api/process-claims", {
             method: "POST",
             body: formData,
+          });
+
+          if (!jobResponse.ok) {
+            throw new Error(`Failed to start processing job: ${jobResponse.status}`);
+          }
+
+          const { jobId } = await jobResponse.json() as { jobId?: string };
+          if (!jobId) {
+            throw new Error("Failed to start processing job: missing jobId.");
+          }
+
+          await fetchEventSource(`/api/process-claims/${encodeURIComponent(jobId)}/events`, {
+            openWhenHidden: true,
             async onmessage(ev) {
               try {
                 if (ev.data === "" || ev.data.startsWith(":")) return;
