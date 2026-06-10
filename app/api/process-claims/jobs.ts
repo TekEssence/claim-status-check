@@ -1,6 +1,8 @@
 type StreamEvent = Record<string, unknown>;
 
-export type ProcessClaimJobStatus = "running" | "done" | "error";
+const TERMINAL_JOB_TTL_MS = 30 * 60 * 1000;
+
+export type ProcessClaimJobStatus = "running" | "done" | "error" | "cancelled";
 
 export type ProcessClaimJobEvent = {
   id: number;
@@ -15,9 +17,31 @@ export type ProcessClaimJob = {
   subscribers: Set<(event: ProcessClaimJobEvent) => void>;
   createdAt: number;
   updatedAt: number;
+  cleanupTimer?: ReturnType<typeof setTimeout>;
 };
 
 const jobs = new Map<string, ProcessClaimJob>();
+
+function isTerminalStatus(status: ProcessClaimJobStatus): boolean {
+  return status === "done" || status === "error" || status === "cancelled";
+}
+
+function scheduleTerminalJobCleanup(job: ProcessClaimJob): void {
+  if (!isTerminalStatus(job.status)) return;
+
+  if (job.cleanupTimer) {
+    clearTimeout(job.cleanupTimer);
+  }
+
+  job.cleanupTimer = setTimeout(() => {
+    const currentJob = jobs.get(job.id);
+    if (!currentJob || !isTerminalStatus(currentJob.status)) return;
+
+    currentJob.subscribers.clear();
+    currentJob.events.length = 0;
+    jobs.delete(job.id);
+  }, TERMINAL_JOB_TTL_MS);
+}
 
 function createJobId(): string {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
@@ -58,6 +82,9 @@ export function emitProcessClaimEvent(jobId: string, data: StreamEvent): void {
   if (data.type === "error") {
     job.status = "error";
   }
+  if (data.type === "cancelled") {
+    job.status = "cancelled";
+  }
 
   const event = {
     id: job.events.length + 1,
@@ -66,6 +93,10 @@ export function emitProcessClaimEvent(jobId: string, data: StreamEvent): void {
   job.events.push(event);
   job.updatedAt = Date.now();
   job.subscribers.forEach((subscriber) => subscriber(event));
+
+  if (isTerminalStatus(job.status)) {
+    scheduleTerminalJobCleanup(job);
+  }
 }
 
 export function subscribeToProcessClaimJob(

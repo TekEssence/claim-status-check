@@ -6,9 +6,6 @@ import * as XLSX from "xlsx";
 import {
   createProcessClaimJob,
   emitProcessClaimEvent,
-  getProcessClaimJob,
-  subscribeToProcessClaimJob,
-  type ProcessClaimJobEvent,
 } from "./jobs";
 import { processReferToRaDownloads } from "./refer-ra";
 import {
@@ -76,120 +73,6 @@ export async function POST(req: Request) {
   });
 
   return Response.json({ jobId: job.id });
-}
-
-function getLastEventId(req: Request, url: URL): number {
-  const fromQuery = Number(url.searchParams.get("after") || "0");
-  const fromHeader = Number(req.headers.get("last-event-id") || "0");
-  const lastEventId = Math.max(
-    Number.isFinite(fromQuery) ? fromQuery : 0,
-    Number.isFinite(fromHeader) ? fromHeader : 0,
-  );
-  return lastEventId > 0 ? lastEventId : 0;
-}
-
-function streamProcessClaimEvents(req: Request, jobId: string, afterEventId: number): Response {
-  const encoder = new TextEncoder();
-  const job = getProcessClaimJob(jobId);
-
-  const stream = new ReadableStream({
-    start(controller) {
-      let closed = false;
-      let unsubscribe = () => {};
-      let keepAliveInterval: ReturnType<typeof setInterval>;
-      let readyToCloseOnDone = false;
-      let closeAfterSubscribe = false;
-
-      const close = () => {
-        if (closed) return;
-        closed = true;
-        if (keepAliveInterval) clearInterval(keepAliveInterval);
-        unsubscribe();
-        controller.close();
-      };
-
-      const send = (event: ProcessClaimJobEvent) => {
-        if (closed) return;
-        try {
-          controller.enqueue(encoder.encode(`id: ${event.id}\n`));
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify(event.data)}\n\n`));
-          if (event.data.type === "done") {
-            if (readyToCloseOnDone) {
-              close();
-            } else {
-              closeAfterSubscribe = true;
-            }
-          }
-        } catch {
-          close();
-        }
-      };
-
-      keepAliveInterval = setInterval(() => {
-        try {
-          controller.enqueue(encoder.encode(": ping\n\n"));
-        } catch {
-          close();
-        }
-      }, 1000);
-
-      if (!job) {
-        send({
-          id: 1,
-          data: {
-            type: "error",
-            message: "Process claim job not found. The serverless instance may have restarted before the event stream connected.",
-          },
-        });
-        send({ id: 2, data: { type: "done" } });
-        readyToCloseOnDone = true;
-        if (closeAfterSubscribe) close();
-        return;
-      }
-
-      unsubscribe = subscribeToProcessClaimJob(jobId, afterEventId, send);
-      readyToCloseOnDone = true;
-      if (closeAfterSubscribe) {
-        close();
-        return;
-      }
-
-      if (job.status === "done" || job.status === "error") {
-        const hasDoneEvent = job.events.some((event) => event.id > afterEventId && event.data.type === "done");
-        if (!hasDoneEvent) {
-          send({ id: job.events.length + 1, data: { type: "done" } });
-        }
-      }
-    },
-    cancel() {
-      // The stream cleanup path removes active subscribers.
-    },
-  });
-
-  req.signal.addEventListener("abort", () => {
-    stream.cancel().catch(() => {});
-  }, { once: true });
-
-  return new Response(stream, {
-    headers: {
-      "Content-Type": "text/event-stream; charset=utf-8",
-      "Cache-Control": "no-cache, no-transform",
-      "Connection": "keep-alive",
-      "X-Accel-Buffering": "no",
-      "Content-Encoding": "none",
-    },
-  });
-}
-
-export async function GET(req: Request) {
-  const url = new URL(req.url);
-  const jobId = url.searchParams.get("jobId");
-
-  if (!jobId) {
-    return streamProcessClaimEvents(req, "", 0);
-  }
-
-  return streamProcessClaimEvents(req, jobId, getLastEventId(req, url));
 }
 
 async function runProcessClaimsJob(jobId: string, formData: FormData): Promise<void> {

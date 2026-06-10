@@ -13,55 +13,76 @@ function getLastEventId(req: Request, url: URL): number {
   return lastEventId > 0 ? lastEventId : 0;
 }
 
+function isTerminalJobStatus(status: string): boolean {
+  return status === "done" || status === "error" || status === "cancelled";
+}
+
+function sseHeaders(): HeadersInit {
+  return {
+    "Content-Type": "text/event-stream; charset=utf-8",
+    "Cache-Control": "no-cache, no-transform",
+    "Connection": "keep-alive",
+    "X-Accel-Buffering": "no",
+    "Content-Encoding": "none",
+  };
+}
+
 export async function GET(
   req: Request,
   { params }: { params: Promise<{ jobId: string }> },
 ) {
   const { jobId } = await params;
   const job = getProcessClaimJob(jobId);
+  const encoder = new TextEncoder();
 
   if (!job) {
-    const encoder = new TextEncoder();
     const stream = new ReadableStream({
       start(controller) {
+        controller.enqueue(encoder.encode("id: 1\n"));
         controller.enqueue(encoder.encode(`data: ${JSON.stringify({
           type: "error",
           message: "Process claim job not found. The serverless instance may have restarted before the event stream connected.",
         })}\n\n`));
+        controller.enqueue(encoder.encode("id: 2\n"));
         controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "done" })}\n\n`));
         controller.close();
       },
     });
 
     return new Response(stream, {
-      headers: {
-        "Content-Type": "text/event-stream; charset=utf-8",
-        "Cache-Control": "no-cache, no-transform",
-        "Connection": "keep-alive",
-        "X-Accel-Buffering": "no",
-        "Content-Encoding": "none",
-      },
+      headers: sseHeaders(),
     });
   }
 
   const url = new URL(req.url);
   const afterEventId = getLastEventId(req, url);
-  const encoder = new TextEncoder();
+  let cleanup = () => {};
+  const abortHandler = () => cleanup();
+  req.signal.addEventListener("abort", abortHandler, { once: true });
 
   const stream = new ReadableStream({
     start(controller) {
       let closed = false;
       let unsubscribe = () => {};
-      let keepAliveInterval: ReturnType<typeof setInterval>;
+      let keepAliveInterval: ReturnType<typeof setInterval> | undefined;
       let readyToCloseOnDone = false;
       let closeAfterSubscribe = false;
 
-      const close = () => {
+      cleanup = () => {
         if (closed) return;
         closed = true;
         if (keepAliveInterval) clearInterval(keepAliveInterval);
         unsubscribe();
-        controller.close();
+        req.signal.removeEventListener("abort", abortHandler);
+      };
+
+      const close = () => {
+        cleanup();
+        try {
+          controller.close();
+        } catch {
+          // The client may already have disconnected.
+        }
       };
 
       const send = (event: ProcessClaimJobEvent) => {
@@ -96,7 +117,7 @@ export async function GET(
         return;
       }
 
-      if (job.status === "done" || job.status === "error") {
+      if (isTerminalJobStatus(job.status)) {
         const hasDoneEvent = job.events.some((event) => event.id > afterEventId && event.data.type === "done");
         if (!hasDoneEvent) {
           send({ id: job.events.length + 1, data: { type: "done" } });
@@ -104,17 +125,11 @@ export async function GET(
       }
     },
     cancel() {
-      // Cleanup is handled by the controller error path or done event.
+      cleanup();
     },
   });
 
   return new Response(stream, {
-    headers: {
-      "Content-Type": "text/event-stream; charset=utf-8",
-      "Cache-Control": "no-cache, no-transform",
-      "Connection": "keep-alive",
-      "X-Accel-Buffering": "no",
-      "Content-Encoding": "none",
-    },
+    headers: sseHeaders(),
   });
 }
