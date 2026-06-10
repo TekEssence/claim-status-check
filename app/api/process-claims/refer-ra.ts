@@ -131,33 +131,41 @@ export async function processReferToRaDownloads({
           const pdfPath = path.join(downloadsDir, pdfFileName);
           await download.saveAs(pdfPath);
 
-          const pdfBuffer = fs.readFileSync(pdfPath);
-          await sendEvent({ type: "pdf_download", filename: pdfFileName, base64: pdfBuffer.toString("base64") });
+          try {
+            const pdfBuffer = fs.readFileSync(pdfPath);
+            await sendEvent({ type: "pdf_download", filename: pdfFileName, base64: pdfBuffer.toString("base64") });
 
-          const pdfText = await extractTextFromPdf(pdfBuffer);
-          const pdfLines = pdfText.split("\n").map((line) => line.trim()).filter(Boolean);
-          const dosStr = formatMmDdYyyy(dosDate);
-          let matchingLine = "";
+            const pdfText = await extractTextFromPdf(pdfBuffer);
+            const pdfLines = pdfText.split("\n").map((line) => line.trim()).filter(Boolean);
+            const dosStr = formatMmDdYyyy(dosDate);
+            let matchingLine = "";
 
-          for (let j = 0; j < pdfLines.length; j++) {
-            if (pdfLines[j].includes(memberPolicyId)) {
-              let end = j + 1;
-              while (end < pdfLines.length && end - j < 50) {
-                if (/^\d{14}\b/.test(pdfLines[end])) break;
-                end++;
-              }
-              const block = pdfLines.slice(j, end);
-              if (block.some((line) => line.includes(dosStr))) {
-                matchingLine = block.join(" ");
-                break;
+            for (let j = 0; j < pdfLines.length; j++) {
+              if (pdfLines[j].includes(memberPolicyId)) {
+                let end = j + 1;
+                while (end < pdfLines.length && end - j < 50) {
+                  if (/^\d{14}\b/.test(pdfLines[end])) break;
+                  end++;
+                }
+                const block = pdfLines.slice(j, end);
+                if (block.some((line) => line.includes(dosStr))) {
+                  matchingLine = block.join(" ");
+                  break;
+                }
               }
             }
-          }
 
-          if (matchingLine) {
-            referRaDetails.push(matchingLine);
-          } else {
-            referRaDetails.push(`Check ${chk}: No matching claim details found in PDF`);
+            if (matchingLine) {
+              referRaDetails.push(matchingLine);
+            } else {
+              referRaDetails.push(`Check ${chk}: No matching claim details found in PDF`);
+            }
+          } finally {
+            try {
+              fs.unlinkSync(pdfPath);
+            } catch {
+              await log(`Row ${rowNumber}: Warning: Could not delete temporary PDF ${pdfFileName}.`);
+            }
           }
         } else {
           referRaDetails.push(`Check ${chk}: Error PDF download failed`);
