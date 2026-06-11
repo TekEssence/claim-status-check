@@ -94,6 +94,23 @@ export default function Home() {
       const totalRows = claimRows.length;
       setStatus(`Starting process for ${totalRows} rows...`);
 
+      const getErrorMessage = (error: unknown) => error instanceof Error ? error.message : String(error);
+
+      const writeWorkbookToClaimFile = async () => {
+        const permission = await claimFileHandle.queryPermission({ mode: "readwrite" });
+        if (permission !== "granted") {
+          const requestedPermission = await claimFileHandle.requestPermission({ mode: "readwrite" });
+          if (requestedPermission !== "granted") {
+            throw new Error("Browser write permission was denied. Please allow file access and run again.");
+          }
+        }
+
+        const updatedBuffer = await excelWb.xlsx.writeBuffer();
+        const writable = await claimFileHandle.createWritable();
+        await writable.write(updatedBuffer);
+        await writable.close();
+      };
+
       const processChunk = async (startIndex: number) => {
         const formData = new FormData();
         formData.append("loginExcel", loginFile);
@@ -103,6 +120,24 @@ export default function Home() {
         let currentCompleted = startIndex;
         let chunkHasError = false;
         let writeQueue = Promise.resolve();
+        let writeFailure: Error | null = null;
+        let writeFailureAlertShown = false;
+        const streamAbortController = new AbortController();
+
+        const handleWriteFailure = (error: unknown): never => {
+          const message = getErrorMessage(error);
+          const userMessage = `Excel update failed. The workbook may be open, locked, moved, or browser file permission may have been lost. Please close Excel, verify file access, and run again. Some recent updates may not have been saved. Details: ${message}`;
+          const failure = new Error(userMessage);
+          writeFailure = failure;
+          chunkHasError = true;
+          setStatus(`Error: ${userMessage}`);
+          streamAbortController.abort();
+          if (!writeFailureAlertShown) {
+            writeFailureAlertShown = true;
+            window.alert(userMessage);
+          }
+          throw failure;
+        };
 
         try {
           const jobResponse = await fetch("/api/process-claims", {
@@ -121,6 +156,7 @@ export default function Home() {
 
           await fetchEventSource(`/api/process-claims?jobId=${encodeURIComponent(jobId)}`, {
             openWhenHidden: true,
+            signal: streamAbortController.signal,
             async onmessage(ev) {
               try {
                 if (ev.data === "" || ev.data.startsWith(":")) return;
@@ -138,12 +174,10 @@ export default function Home() {
                   // Queue the write to avoid concurrent access to the same file
                   writeQueue = writeQueue.then(async () => {
                     try {
-                      const updatedBuffer = await excelWb.xlsx.writeBuffer();
-                      const writable = await claimFileHandle.createWritable();
-                      await writable.write(updatedBuffer);
-                      await writable.close();
+                      await writeWorkbookToClaimFile();
                     } catch (writeErr) {
                       console.error("Failed to write to file:", writeErr);
+                      handleWriteFailure(writeErr);
                     }
                   });
                 } else if (eventData.type === "error_screenshot") {
@@ -197,8 +231,12 @@ export default function Home() {
           // Wait for any pending writes to finish
           await writeQueue;
         } catch (err) {
-          console.error("fetchEventSource failed", err);
-          chunkHasError = true;
+          if (writeFailure) {
+            console.error("Processing stopped because Excel write failed", writeFailure);
+          } else {
+            console.error("fetchEventSource failed", err);
+            chunkHasError = true;
+          }
         }
 
         // Stream closed. Check if we need to auto-resume
@@ -213,10 +251,7 @@ export default function Home() {
             postProcessWorksheet(worksheet);
 
             // Write back with full style preservation
-            const updatedBuffer = await excelWb.xlsx.writeBuffer();
-            const writable = await claimFileHandle.createWritable();
-            await writable.write(updatedBuffer);
-            await writable.close();
+            await writeWorkbookToClaimFile();
 
             setStatus("Processing completed!");
           } catch (postError) {
