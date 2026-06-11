@@ -23,6 +23,18 @@ test("defaults ambiguous slash dates to the website mm/dd/yyyy format", () => {
   assert.equal(formatMmDdYyyy(parsed), "05/02/2026");
 });
 
+test("rejects impossible slash dates instead of normalizing them", () => {
+  assert.equal(parseDateInput("02/30/2026"), null);
+  assert.equal(parseDateInput("04/31/2026"), null);
+});
+
+test("accepts valid leap-day slash dates", () => {
+  const parsed = parseDateInput("02/29/2028");
+
+  assert.ok(parsed);
+  assert.equal(formatMmDdYyyy(parsed), "02/29/2028");
+});
+
 test("builds the +/- one day DOS search range without local timezone drift", () => {
   const parsed = parseDateInput("03/01/2026");
 

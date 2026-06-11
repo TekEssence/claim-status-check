@@ -7,6 +7,30 @@ export function asText(value: unknown): string {
   return String(value).trim();
 }
 
+function createUtcDateStrict(year: number, month: number, day: number): Date | null {
+  if (
+    !Number.isInteger(year) ||
+    !Number.isInteger(month) ||
+    !Number.isInteger(day) ||
+    month < 1 ||
+    month > 12 ||
+    day < 1
+  ) {
+    return null;
+  }
+
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() + 1 !== month ||
+    date.getUTCDate() !== day
+  ) {
+    return null;
+  }
+
+  return date;
+}
+
 export function parseDateInput(value: unknown): Date | null {
   const isDate = value instanceof Date || (value && typeof value === "object" && Object.prototype.toString.call(value) === "[object Date]");
   if (isDate && !Number.isNaN((value as Date).getTime())) {
@@ -17,7 +41,7 @@ export function parseDateInput(value: unknown): Date | null {
   if (typeof value === "number") {
     const parsed = XLSX.SSF.parse_date_code(value);
     if (!parsed) return null;
-    return new Date(Date.UTC(parsed.y, parsed.m - 1, parsed.d));
+    return createUtcDateStrict(parsed.y, parsed.m, parsed.d);
   }
 
   const dateValue = asText(value);
@@ -25,8 +49,7 @@ export function parseDateInput(value: unknown): Date | null {
 
   const isoMatch = dateValue.match(/^(\d{4})-(\d{2})-(\d{2})/);
   if (isoMatch) {
-    const ts = Date.UTC(Number(isoMatch[1]), Number(isoMatch[2]) - 1, Number(isoMatch[3]));
-    return Number.isNaN(ts) ? null : new Date(ts);
+    return createUtcDateStrict(Number(isoMatch[1]), Number(isoMatch[2]), Number(isoMatch[3]));
   }
 
   const parts = dateValue.split("/");
@@ -49,8 +72,7 @@ export function parseDateInput(value: unknown): Date | null {
     day = b;
   }
 
-  const ts = Date.UTC(year, month - 1, day);
-  return Number.isNaN(ts) ? null : new Date(ts);
+  return createUtcDateStrict(year, month, day);
 }
 
 export function formatMmDdYyyy(date: Date): string {

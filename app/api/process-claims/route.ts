@@ -374,8 +374,8 @@ async function runProcessClaimsJob(jobId: string, formData: FormData): Promise<v
 
             const row = claimRows[i];
             const rowIndex = typeof (row as any).__original_index === "number" ? (row as any).__original_index : i;
-            const memberPolicyId = asText(row["Member Policy ID"] ?? row["member policy id"] ?? row["Member ID"]);
-            const dosValue = row["Date Of Service"] ?? row["DOS"] ?? row["date of service"];
+            const memberPolicyId = asText(row["Member Policy ID"] ?? row["member policy id"] ?? row["Member ID"] ?? row["member id"]);
+            const dosValue = row["Date Of Service"] ?? row["DOS"] ?? row["date of service"] ?? row["dos"];
 
 
             

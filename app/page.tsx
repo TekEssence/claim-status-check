@@ -80,17 +80,10 @@ export default function Home() {
       const xlsxWb = XLSX.read(arrayBuffer, { type: "array", cellDates: false });
       const sheetName = xlsxWb.SheetNames[0];
       const rawClaimRows = XLSX.utils.sheet_to_json(xlsxWb.Sheets[sheetName]) as Record<string, any>[];
-      const claimRows = rawClaimRows
-        .map((row, idx) => ({ ...row, __original_index: idx } as Record<string, any>))
-        .filter((row) => {
-          const memberId = row["Member Policy ID"] ?? row["member policy id"] ?? row["Member ID"] ?? row["member id"];
-          const dos = row["Date Of Service"] ?? row["DOS"] ?? row["date of service"] ?? row["dos"];
-          return memberId !== undefined && memberId !== null && String(memberId).trim() !== "" &&
-                 dos !== undefined && dos !== null && String(dos).trim() !== "";
-        });
+      const claimRows = rawClaimRows.map((row, idx) => ({ ...row, __original_index: idx } as Record<string, any>));
 
       if (claimRows.length === 0) {
-        throw new Error("Claim Excel file contains no valid rows with Member ID and DOS.");
+        throw new Error("Claim Excel file contains no rows to process.");
       }
 
       // Load with ExcelJS for style-preserving writes
