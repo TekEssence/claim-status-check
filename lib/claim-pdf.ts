@@ -1,4 +1,5 @@
 import { getDocumentProxy } from 'unpdf';
+import type { PdfTextPage } from "./claim-ra";
 
 /**
  * Extracts layout-aware text content from a PDF Buffer using unpdf.
@@ -54,4 +55,34 @@ export async function extractTextFromPdf(pdfBuffer: Buffer): Promise<string> {
   }
 
   return fullText;
+}
+
+export async function extractTextPagesFromPdf(pdfBuffer: Buffer): Promise<PdfTextPage[]> {
+  const uint8Array = new Uint8Array(pdfBuffer);
+  const pdf = await getDocumentProxy(uint8Array);
+  const pages: PdfTextPage[] = [];
+
+  for (let p = 1; p <= pdf.numPages; p++) {
+    const page = await pdf.getPage(p);
+    const viewport = page.getViewport({ scale: 1 });
+    const content = await page.getTextContent();
+
+    pages.push({
+      pageNumber: p,
+      width: viewport.width,
+      height: viewport.height,
+      rotation: viewport.rotation,
+      items: content.items
+        .filter((item: any) => item.str && item.str.trim() !== "")
+        .map((item: any) => ({
+          str: item.str,
+          x: item.transform[4],
+          y: viewport.height - item.transform[5],
+          width: item.width || item.str.length * 5,
+          height: item.height,
+        })),
+    });
+  }
+
+  return pages;
 }

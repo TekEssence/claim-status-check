@@ -20,6 +20,8 @@ import {
   parseDateInput,
   parseWebsiteMmDdYyyy,
 } from "@/lib/claim-dates";
+import { getClaimCptValue, serializeRaRecords, type RaDetailRecord } from "@/lib/claim-ra";
+import { extractCheckNumbersFromClaimDetailText } from "./covered-ra";
 
 type GenericRow = Record<string, unknown>;
 type StreamEvent = Record<string, unknown>;
@@ -376,6 +378,7 @@ async function runProcessClaimsJob(jobId: string, formData: FormData): Promise<v
             const rowIndex = typeof (row as any).__original_index === "number" ? (row as any).__original_index : i;
             const memberPolicyId = asText(row["Member Policy ID"] ?? row["member policy id"] ?? row["Member ID"] ?? row["member id"]);
             const dosValue = row["Date Of Service"] ?? row["DOS"] ?? row["date of service"] ?? row["dos"];
+            const claimCpt = getClaimCptValue(row);
 
 
             
@@ -450,7 +453,7 @@ async function runProcessClaimsJob(jobId: string, formData: FormData): Promise<v
               // --- Detect sort order by comparing first two result rows ---
               const dosFormatted = formatMmDdYyyy(dosDate);
               const details: string[] = [];
-              const referRaDetails: string[] = [];
+              const referRaDetails: RaDetailRecord[] = [];
               let pageNum = 1;
               let foundAny = false;
 
@@ -508,7 +511,6 @@ async function runProcessClaimsJob(jobId: string, formData: FormData): Promise<v
               };
 
               const checkNumbersToDownload: string[] = [];
-              let raLinkToClick: any = null;
 
               while (true) {
                 const matchingRows = getMatchingRows();
@@ -533,22 +535,13 @@ async function runProcessClaimsJob(jobId: string, formData: FormData): Promise<v
 
                     let statusInfoText = tableText.replace(/\s+/g, " ");
 
-                    // --- Collect Check Numbers if status is 'Refer to your RA' ---
-                    const hasRaText = /Refer/i.test(statusInfoText);
-                    if (hasRaText && context) {
-                      const fullDetailsText = (headerText + " " + statusInfoText).replace(/\s+/g, " ");
-                      const chkMatch = fullDetailsText.match(/Check\s*(?:#|Number)\s*:?\s*([A-Z0-9\-]{5,20})/i);
-                      if (chkMatch) {
-                        const cn = chkMatch[1];
-                        checkNumbersToDownload.push(cn);
-                        await log(`Row ${i + 1}: Found Check Number ${cn} requiring RA download.`);
-                        if (!raLinkToClick) {
-                          const raLink = detailsRow.locator("span, a").filter({ hasText: /Refer to your RA/i }).first();
-                          if (await raLink.count() > 0) raLinkToClick = raLink;
-                        }
-                      } else {
-                        await log(`Row ${i + 1}: 'Refer to your RA' text found, but could not extract Check Number from details text.`);
-                      }
+                    const fullDetailsText = (headerText + " " + statusInfoText).replace(/\s+/g, " ");
+                    const foundCheckNumbers = extractCheckNumbersFromClaimDetailText(fullDetailsText);
+                    if (foundCheckNumbers.length > 0) {
+                      checkNumbersToDownload.push(...foundCheckNumbers);
+                      await log(`Row ${i + 1}: Found Check Number(s) ${foundCheckNumbers.join(", ")} for Covered RA lookup.`);
+                    } else if (/Refer/i.test(statusInfoText)) {
+                      await log(`Row ${i + 1}: 'Refer to your RA' text found, but no Check Number was present in the details block.`);
                     }
 
                     details.push(`Summary: [${summaryText}] | Details: [${headerText.replace(/\s+/g, " ")}] | Status Info: [${statusInfoText}]`);
@@ -628,12 +621,17 @@ async function runProcessClaimsJob(jobId: string, formData: FormData): Promise<v
               }
 
               if (checkNumbersToDownload.length > 0) {
+                if (!claimCpt) {
+                  throw new Error("Refer to RA requires a CPT/procedure column in the claim Excel. Expected one of: CPT, CPT Code, Proc Code, Procedure Code.");
+                }
+
                 referRaDetails.push(...await processReferToRaDownloads({
                   page,
                   rowNumber: i + 1,
                   rowIndex,
                   memberPolicyId,
                   dosDate,
+                  cpt: claimCpt,
                   checkNumbers: checkNumbersToDownload,
                   log,
                   sendEvent,
@@ -648,7 +646,7 @@ async function runProcessClaimsJob(jobId: string, formData: FormData): Promise<v
                   BotClaimDetails: details.join(" | "), 
                   BotClaimStatusCheck: "Success", 
                   BotClaimStatusCheckError: "",
-                  BotReferRA: referRaDetails.length > 0 ? referRaDetails.join(" | ") : ""
+                  BotReferRA: referRaDetails.length > 0 ? serializeRaRecords(referRaDetails) : ""
                 }
               });
               await sendEvent({ type: "progress", completed: i + 1, total: claimRows.length });

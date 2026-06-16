@@ -1,5 +1,5 @@
 import type ExcelJS from "exceljs";
-import { parseDateInput } from "./claim-dates";
+import { parseSerializedRaRecords, type RaDetailRecord } from "./claim-ra";
 
 type ClaimUpdate = {
   BotClaimDetails?: string;
@@ -48,6 +48,16 @@ const BOT_HEADERS = new Set([
   "Other related payment details",
   "Bot CIN",
   "Bot Plan Type",
+  "RA Proc Code",
+  "RA Amount Billed",
+  "RA Amount Allowed",
+  "RA Copay",
+  "RA Coins",
+  "RA Deduct Amount",
+  "RA Net Paid",
+  "RA Status",
+  "RA Reason",
+  "RA Denial Reason",
 ]);
 
 const TARGET_COLS: Array<{ label: string; key: keyof ParsedClaimDetailRecord }> = [
@@ -60,6 +70,19 @@ const TARGET_COLS: Array<{ label: string; key: keyof ParsedClaimDetailRecord }> 
   { label: "Bot Plan Type", key: "BotPlanType" },
   { label: "Check Amount", key: "CheckAmount" },
   { label: "Other related payment details", key: "OtherDetails" },
+];
+
+const RA_TARGET_COLS: Array<{ label: string; key: keyof RaDetailRecord }> = [
+  { label: "RA Proc Code", key: "RAProcCode" },
+  { label: "RA Amount Billed", key: "RAAmountBilled" },
+  { label: "RA Amount Allowed", key: "RAAmountAllowed" },
+  { label: "RA Copay", key: "RACopay" },
+  { label: "RA Coins", key: "RACoins" },
+  { label: "RA Deduct Amount", key: "RADeductAmount" },
+  { label: "RA Net Paid", key: "RANetPaid" },
+  { label: "RA Status", key: "RAStatus" },
+  { label: "RA Reason", key: "RAReason" },
+  { label: "RA Denial Reason", key: "RADenialReason" },
 ];
 
 function cloneStyle(style: Partial<ExcelJS.Style> | undefined): ExcelJS.Style {
@@ -306,6 +329,20 @@ export function postProcessWorksheet(worksheet: ExcelJS.Worksheet): void {
     BotPlanType: 0,
   };
 
+  const raColMap: Record<keyof RaDetailRecord, number> = {
+    CheckNumber: 0,
+    RAProcCode: 0,
+    RAAmountBilled: 0,
+    RAAmountAllowed: 0,
+    RACopay: 0,
+    RACoins: 0,
+    RADeductAmount: 0,
+    RANetPaid: 0,
+    RAStatus: 0,
+    RAReason: 0,
+    RADenialReason: 0,
+  };
+
   let currentNextCol = nextCol;
   TARGET_COLS.forEach((col) => {
     let existingCol = 0;
@@ -332,24 +369,71 @@ export function postProcessWorksheet(worksheet: ExcelJS.Worksheet): void {
 
     colMap[col.key] = existingCol;
   });
+
+  RA_TARGET_COLS.forEach((col) => {
+    let existingCol = 0;
+    headerRow.eachCell((cell, colNum) => {
+      if (String(cell.value) === col.label) existingCol = colNum;
+    });
+
+    if (existingCol === 0) {
+      while (true) {
+        let occupied = false;
+        headerRow.eachCell((cell, colNum) => {
+          if (colNum === currentNextCol && String(cell.value).trim() !== "") {
+            occupied = true;
+          }
+        });
+        if (!occupied) break;
+        currentNextCol++;
+      }
+      existingCol = currentNextCol++;
+      addHeader(headerRow, existingCol, col.label, headerStyle);
+    } else if (currentNextCol <= existingCol) {
+      currentNextCol = existingCol + 1;
+    }
+
+    raColMap[col.key] = existingCol;
+  });
   headerRow.commit();
 
   let r = 2;
   while (r <= worksheet.actualRowCount) {
     const row = worksheet.getRow(r);
     const detailsVal = columns.detailsCol > 0 ? String(row.getCell(columns.detailsCol).value ?? "").trim() : "";
+    const referRaVal = columns.referRaCol > 0 ? String(row.getCell(columns.referRaCol).value ?? "").trim() : "";
 
-    if (!detailsVal) {
+    if (!detailsVal && !referRaVal) {
       r++;
       continue;
     }
 
     const parsedRecords = parseBotClaimDetails(detailsVal);
-    const N = parsedRecords.length;
-    if (N === 0) {
+    const raRecords = parseSerializedRaRecords(referRaVal);
+    if (parsedRecords.length === 0 && raRecords.length === 0) {
       r++;
       continue;
     }
+
+    const claimRecordsForRows: Array<ParsedClaimDetailRecord | null> = parsedRecords.length > 0 ? parsedRecords : [null];
+    const raRecordsForRows: Array<RaDetailRecord | null> = raRecords.length > 0 ? raRecords : [null];
+    const outputRows: Array<{ claim: ParsedClaimDetailRecord | null; ra: RaDetailRecord | null }> = [];
+
+    if (parsedRecords.length > 0 && raRecords.length > 0 && parsedRecords.length === raRecords.length) {
+      for (let k = 0; k < parsedRecords.length; k++) {
+        outputRows.push({ claim: parsedRecords[k], ra: raRecords[k] });
+      }
+    } else if (parsedRecords.length === 1 && raRecords.length > 0) {
+      raRecords.forEach((ra) => outputRows.push({ claim: parsedRecords[0], ra }));
+    } else if (raRecords.length === 1 && parsedRecords.length > 0) {
+      parsedRecords.forEach((claim) => outputRows.push({ claim, ra: raRecords[0] }));
+    } else {
+      claimRecordsForRows.forEach((claim) => {
+        raRecordsForRows.forEach((ra) => outputRows.push({ claim, ra }));
+      });
+    }
+
+    const N = outputRows.length;
 
     // If N > 1, duplicate this row N - 1 times below r
     if (N > 1) {
@@ -378,7 +462,7 @@ export function postProcessWorksheet(worksheet: ExcelJS.Worksheet): void {
     // Populate parsed records for all N rows (r to r + N - 1)
     for (let k = 0; k < N; k++) {
       const targetRow = worksheet.getRow(r + k);
-      const record = parsedRecords[k];
+      const { claim: record, ra: raRecord } = outputRows[k];
 
       const dataStyle = cloneStyle(targetRow.getCell(columns.lastOriginalCol).style);
       delete (dataStyle as any).numFmt;
@@ -389,31 +473,51 @@ export function postProcessWorksheet(worksheet: ExcelJS.Worksheet): void {
       const currencyStyle = cloneStyle(dataStyle);
       currencyStyle.numFmt = "$#,##0.00";
 
-      Object.entries(record).forEach(([key, value]) => {
-        const colNum = colMap[key as keyof ParsedClaimDetailRecord];
-        if (colNum) {
-          const cell = targetRow.getCell(colNum);
-          if (["SummaryBlockDOS", "SummaryBlockDate", "ReceivedDate", "CheckDate"].includes(key)) {
-            cell.value = value;
-            cell.style = cloneStyle(dateStyle);
-          } else if (key === "CheckAmount") {
-            if (typeof value === "string") {
-              const numVal = parseFloat(value.replace(/[^0-9.-]/g, ""));
-              if (!isNaN(numVal)) {
-                cell.value = numVal;
+      if (record) {
+        Object.entries(record).forEach(([key, value]) => {
+          const colNum = colMap[key as keyof ParsedClaimDetailRecord];
+          if (colNum) {
+            const cell = targetRow.getCell(colNum);
+            if (["SummaryBlockDOS", "SummaryBlockDate", "ReceivedDate", "CheckDate"].includes(key)) {
+              cell.value = value;
+              cell.style = cloneStyle(dateStyle);
+            } else if (key === "CheckAmount") {
+              if (typeof value === "string") {
+                const numVal = parseFloat(value.replace(/[^0-9.-]/g, ""));
+                if (!isNaN(numVal)) {
+                  cell.value = numVal;
+                } else {
+                  cell.value = value;
+                }
               } else {
                 cell.value = value;
               }
+              cell.style = cloneStyle(currencyStyle);
             } else {
               cell.value = value;
+              cell.style = cloneStyle(dataStyle);
             }
+          }
+        });
+      }
+
+      if (raRecord) {
+        Object.entries(raRecord).forEach(([key, value]) => {
+          if (key === "CheckNumber") return;
+          const colNum = raColMap[key as keyof RaDetailRecord];
+          if (!colNum) return;
+
+          const cell = targetRow.getCell(colNum);
+          if (["RAAmountBilled", "RAAmountAllowed", "RACopay", "RACoins", "RADeductAmount", "RANetPaid"].includes(key)) {
+            const numVal = parseFloat(String(value).replace(/[^0-9.-]/g, ""));
+            cell.value = !isNaN(numVal) ? numVal : value;
             cell.style = cloneStyle(currencyStyle);
           } else {
             cell.value = value;
             cell.style = cloneStyle(dataStyle);
           }
-        }
-      });
+        });
+      }
       targetRow.commit();
     }
 

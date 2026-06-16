@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import ExcelJS from "exceljs";
 import { applyClaimRowUpdateToWorksheet, parseBotClaimDetails, postProcessWorksheet } from "../lib/claim-workbook";
+import { serializeRaRecords } from "../lib/claim-ra";
 
 function headerMap(worksheet: ExcelJS.Worksheet) {
   const headers: Record<string, number> = {};
@@ -423,4 +424,62 @@ test("postProcessWorksheet preserves correct data types (Dates and Numbers)", ()
   // Date columns should have correct formatting
   const dosCell = row2.getCell(headers["SummaryBlockDOS"]);
   assert.equal(dosCell.style.numFmt, "mm-dd-yy");
+});
+
+test("postProcessWorksheet writes structured RA columns and duplicates multiple reason rows", () => {
+  const workbook = new ExcelJS.Workbook();
+  const worksheet = workbook.addWorksheet("Claims");
+  worksheet.addRow(["Member Policy ID", "Date Of Service", "CPT"]);
+  worksheet.addRow(["member-a", "01/30/2026", "99213"]);
+
+  applyClaimRowUpdateToWorksheet(worksheet, {
+    index: 0,
+    update: {
+      BotClaimDetails: detailsText([
+        { dos: "01/30/2026", received: "04/22/2026", check: "111", amount: "$105.22" },
+      ]),
+      BotClaimStatusCheck: "Success",
+      BotReferRA: serializeRaRecords([
+        {
+          CheckNumber: "111",
+          RAProcCode: "99213",
+          RAAmountBilled: "280.00",
+          RAAmountAllowed: "105.22",
+          RACopay: "0.00",
+          RACoins: "0.00",
+          RADeductAmount: "0.00",
+          RANetPaid: "0.00",
+          RAStatus: "Denied",
+          RAReason: "A1",
+          RADenialReason: "A1 - Charge exceeds fee schedule",
+        },
+        {
+          CheckNumber: "111",
+          RAProcCode: "99213",
+          RAAmountBilled: "280.00",
+          RAAmountAllowed: "105.22",
+          RACopay: "0.00",
+          RACoins: "0.00",
+          RADeductAmount: "0.00",
+          RANetPaid: "0.00",
+          RAStatus: "Denied",
+          RAReason: "AUTHD",
+          RADenialReason: "AUTHD - Precertification absent",
+        },
+      ]),
+    },
+  });
+
+  postProcessWorksheet(worksheet);
+
+  const headers = headerMap(worksheet);
+  assert.equal(worksheet.actualRowCount, 3);
+  assert.equal(worksheet.getRow(2).getCell(headers["RA Proc Code"]).value, "99213");
+  assert.equal(worksheet.getRow(2).getCell(headers["RA Amount Billed"]).value, 280);
+  assert.equal(worksheet.getRow(2).getCell(headers["RA Status"]).value, "Denied");
+  assert.equal(worksheet.getRow(2).getCell(headers["RA Reason"]).value, "A1");
+  assert.equal(worksheet.getRow(2).getCell(headers["RA Denial Reason"]).value, "A1 - Charge exceeds fee schedule");
+  assert.equal(worksheet.getRow(3).getCell(headers["Member Policy ID"]).value, "member-a");
+  assert.equal(worksheet.getRow(3).getCell(headers["RA Reason"]).value, "AUTHD");
+  assert.equal(worksheet.getRow(3).getCell(headers["RA Denial Reason"]).value, "AUTHD - Precertification absent");
 });
