@@ -10,6 +10,7 @@ import {
   subscribeToProcessClaimJob,
   type ProcessClaimJobEvent,
 } from "./jobs";
+import { processCoveredRaDownloads, extractCheckNumbersFromClaimDetailText } from "./covered-ra";
 import { processReferToRaDownloads } from "./refer-ra";
 import {
   asText,
@@ -21,7 +22,6 @@ import {
   parseWebsiteMmDdYyyy,
 } from "@/lib/claim-dates";
 import { getClaimCptValue, serializeRaRecords, type RaDetailRecord } from "@/lib/claim-ra";
-import { extractCheckNumbersFromClaimDetailText } from "./covered-ra";
 
 type GenericRow = Record<string, unknown>;
 type StreamEvent = Record<string, unknown>;
@@ -510,7 +510,8 @@ async function runProcessClaimsJob(jobId: string, formData: FormData): Promise<v
                 return page!.locator("tr.line-item", { hasText: dosFormatted });
               };
 
-              const checkNumbersToDownload: string[] = [];
+              const claimRaCheckNumbers: string[] = [];
+              const coveredRaCheckNumbers: string[] = [];
 
               while (true) {
                 const matchingRows = getMatchingRows();
@@ -536,11 +537,17 @@ async function runProcessClaimsJob(jobId: string, formData: FormData): Promise<v
                     let statusInfoText = tableText.replace(/\s+/g, " ");
 
                     const fullDetailsText = (headerText + " " + statusInfoText).replace(/\s+/g, " ");
+                    const hasReferToRa = /Refer to your RA/i.test(fullDetailsText);
                     const foundCheckNumbers = extractCheckNumbersFromClaimDetailText(fullDetailsText);
                     if (foundCheckNumbers.length > 0) {
-                      checkNumbersToDownload.push(...foundCheckNumbers);
-                      await log(`Row ${i + 1}: Found Check Number(s) ${foundCheckNumbers.join(", ")} for Covered RA lookup.`);
-                    } else if (/Refer/i.test(statusInfoText)) {
+                      if (hasReferToRa) {
+                        claimRaCheckNumbers.push(...foundCheckNumbers);
+                        await log(`Row ${i + 1}: Found Claim RA Check Number(s) ${foundCheckNumbers.join(", ")}.`);
+                      } else {
+                        coveredRaCheckNumbers.push(...foundCheckNumbers);
+                        await log(`Row ${i + 1}: Found Covered RA Check Number(s) ${foundCheckNumbers.join(", ")}.`);
+                      }
+                    } else if (hasReferToRa) {
                       await log(`Row ${i + 1}: 'Refer to your RA' text found, but no Check Number was present in the details block.`);
                     }
 
@@ -620,11 +627,13 @@ async function runProcessClaimsJob(jobId: string, formData: FormData): Promise<v
                 continue;
               }
 
-              if (checkNumbersToDownload.length > 0) {
+              if (claimRaCheckNumbers.length > 0 || coveredRaCheckNumbers.length > 0) {
                 if (!claimCpt) {
                   throw new Error("Refer to RA requires a CPT/procedure column in the claim Excel. Expected one of: CPT, CPT Code, Proc Code, Procedure Code.");
                 }
+              }
 
+              if (claimRaCheckNumbers.length > 0) {
                 referRaDetails.push(...await processReferToRaDownloads({
                   page,
                   rowNumber: i + 1,
@@ -632,7 +641,21 @@ async function runProcessClaimsJob(jobId: string, formData: FormData): Promise<v
                   memberPolicyId,
                   dosDate,
                   cpt: claimCpt,
-                  checkNumbers: checkNumbersToDownload,
+                  checkNumbers: claimRaCheckNumbers,
+                  log,
+                  sendEvent,
+                }));
+              }
+
+              if (coveredRaCheckNumbers.length > 0) {
+                referRaDetails.push(...await processCoveredRaDownloads({
+                  page,
+                  rowNumber: i + 1,
+                  rowIndex,
+                  memberPolicyId,
+                  dosDate,
+                  cpt: claimCpt,
+                  checkNumbers: coveredRaCheckNumbers,
                   log,
                   sendEvent,
                 }));

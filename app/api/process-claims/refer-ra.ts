@@ -1,11 +1,10 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { Page } from "playwright-core";
+import type { Download, Page } from "playwright-core";
 import { formatMmDdYyyy } from "@/lib/claim-dates";
 import { extractTextFromPdf, extractTextPagesFromPdf } from "@/lib/claim-pdf";
 import { parseRaDetailsFromPdfPages, parseRaDetailsFromText, type RaDetailRecord } from "@/lib/claim-ra";
-import { downloadCoveredRaPdf, navigateToCoveredRaPage, searchCoveredRaByCheckNumber } from "./covered-ra";
 
 type StreamEvent = Record<string, unknown>;
 
@@ -20,6 +19,100 @@ type ReferRaOptions = {
   log: (message: string) => Promise<void>;
   sendEvent: (data: StreamEvent) => Promise<void>;
 };
+
+const FINANCE_TOGGLE_SELECTOR = "a[ng-click*='vm.toggle.FIN']";
+const CLAIM_RA_LINK_SELECTOR = "a[ui-sref='finance.remittance'], a[href*='/finance/remittance-advice'], a:has-text('Claims RAs')";
+const CLAIM_RA_SEARCH_INPUT_SELECTOR = "input#search, input[placeholder*='Check Number']";
+const CLAIM_RA_SEARCH_BUTTON_SELECTOR = ".singleSearchButton, button[type='submit']";
+const CLAIM_RA_RESET_SELECTOR = ".accordionPane:has(.search-again), h2.search-again";
+const CLAIM_RA_RESULT_CELL_SELECTOR = "tr.line-item td:nth-child(3)";
+const CLAIM_RA_DOWNLOAD_SELECTOR = [
+  "div[ng-click*='GetRaPdfDownload']",
+  "div[uib-popover*='download Claim PDF']",
+  ".fa-arrow-circle-down",
+].join(", ");
+
+async function waitForResultsToSettle(page: Page): Promise<void> {
+  await page.locator("div[full-screen-ajax-loader] .full-screen-bg").waitFor({ state: "hidden", timeout: 30000 }).catch(() => {});
+  await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
+}
+
+async function navigateToClaimRaPage(page: Page, log: (message: string) => Promise<void>): Promise<void> {
+  await log("Opening Finance tab for Claim RAs...");
+  const financeToggle = page.locator(FINANCE_TOGGLE_SELECTOR).first();
+  await financeToggle.waitFor({ state: "visible", timeout: 15000 }).catch(() => {
+    throw new Error("Finance tab was not found on the IEHP site.");
+  });
+  await financeToggle.click({ force: true });
+  await page.waitForTimeout(750);
+
+  await log("Opening Claims RAs...");
+  const claimRaLink = page.locator(CLAIM_RA_LINK_SELECTOR).first();
+  await claimRaLink.waitFor({ state: "visible", timeout: 15000 }).catch(() => {
+    throw new Error("Claims RAs link was not found under the Finance tab.");
+  });
+  await claimRaLink.click({ force: true });
+  await waitForResultsToSettle(page);
+
+  const searchInput = page.locator(CLAIM_RA_SEARCH_INPUT_SELECTOR).first();
+  await searchInput.waitFor({ state: "visible", timeout: 15000 }).catch(() => {
+    throw new Error("Check Number search input was not found on the Claims RAs page.");
+  });
+}
+
+async function searchClaimRaByCheckNumber(page: Page, checkNumber: string, log: (message: string) => Promise<void>): Promise<void> {
+  await log(`Searching Claims RAs for Check Number ${checkNumber}...`);
+
+  const resetSearch = page.locator(CLAIM_RA_RESET_SELECTOR).first();
+  if (await resetSearch.count() > 0 && await resetSearch.isVisible().catch(() => false)) {
+    await resetSearch.click({ timeout: 5000 }).catch(() => {});
+    await page.waitForTimeout(500);
+  }
+
+  const searchInput = page.locator(CLAIM_RA_SEARCH_INPUT_SELECTOR).first();
+  await searchInput.fill(checkNumber);
+  await page.waitForTimeout(500);
+
+  const searchButton = page.locator(CLAIM_RA_SEARCH_BUTTON_SELECTOR).first();
+  if (await searchButton.count() > 0 && await searchButton.isVisible().catch(() => false)) {
+    await searchButton.click({ force: true });
+  } else {
+    await searchInput.press("Enter");
+  }
+
+  await waitForResultsToSettle(page);
+
+  for (let retry = 0; retry < 5; retry++) {
+    const rowEftLocator = page.locator(CLAIM_RA_RESULT_CELL_SELECTOR).first();
+    if (await rowEftLocator.count() > 0 && await rowEftLocator.isVisible().catch(() => false)) {
+      const rowEftText = await rowEftLocator.innerText();
+      if (rowEftText && rowEftText.includes(checkNumber)) {
+        return;
+      }
+    }
+    await page.waitForTimeout(1000);
+  }
+
+  throw new Error(`No Claims RA row was found for Check Number ${checkNumber}.`);
+}
+
+async function downloadClaimRaPdf(page: Page, checkNumber: string, log: (message: string) => Promise<void>): Promise<Download> {
+  await log(`Downloading PDF for Check Number ${checkNumber} from Claims RAs...`);
+
+  const pdfLink = page.locator(CLAIM_RA_DOWNLOAD_SELECTOR).first();
+  await pdfLink.waitFor({ state: "visible", timeout: 15000 }).catch(() => {
+    throw new Error(`Download button was not found for Claims RA Check Number ${checkNumber}.`);
+  });
+
+  const download = await Promise.all([
+    page.waitForEvent("download", { timeout: 25000 }),
+    pdfLink.click({ force: true }),
+  ]).then(([event]) => event).catch(() => {
+    throw new Error(`PDF download did not start for Claims RA Check Number ${checkNumber}.`);
+  });
+
+  return download;
+}
 
 export async function processReferToRaDownloads({
   page,
@@ -39,16 +132,15 @@ export async function processReferToRaDownloads({
     return referRaDetails;
   }
 
-  await log(`Row ${rowNumber}: Downloading RAs sequentially for Check Numbers: ${uniqueChecks.join(", ")}`);
-
-  await navigateToCoveredRaPage(page, log);
+  await log(`Row ${rowNumber}: Downloading Claim RAs for Check Numbers: ${uniqueChecks.join(", ")}`);
+  await navigateToClaimRaPage(page, log);
 
   for (let cIdx = 0; cIdx < uniqueChecks.length; cIdx++) {
     const chk = uniqueChecks[cIdx];
-    await log(`Row ${rowNumber}: Processing RA for Check Number ${chk} (${cIdx + 1}/${uniqueChecks.length})...`);
+    await log(`Row ${rowNumber}: Processing Claim RA for Check Number ${chk} (${cIdx + 1}/${uniqueChecks.length})...`);
 
-    await searchCoveredRaByCheckNumber(page, chk, log);
-    const download = await downloadCoveredRaPdf(page, chk, log);
+    await searchClaimRaByCheckNumber(page, chk, log);
+    const download = await downloadClaimRaPdf(page, chk, log);
 
     const downloadsDir = path.join(os.tmpdir(), "downloads");
     if (!fs.existsSync(downloadsDir)) fs.mkdirSync(downloadsDir, { recursive: true });
@@ -85,7 +177,7 @@ export async function processReferToRaDownloads({
         if (fallbackRecords.length > 0) {
           referRaDetails.push(...fallbackRecords);
         } else {
-          throw new Error(`No matching RA detail line found in PDF for Check ${chk}, CPT ${cpt}, DOS ${formatMmDdYyyy(dosDate)}.`);
+          throw new Error(`No matching Claim RA detail line found in PDF for Check ${chk}, CPT ${cpt}, DOS ${formatMmDdYyyy(dosDate)}.`);
         }
       }
     } finally {

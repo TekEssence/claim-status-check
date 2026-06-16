@@ -1,6 +1,13 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import type { Download, Page } from "playwright-core";
+import { formatMmDdYyyy } from "@/lib/claim-dates";
+import { extractTextFromPdf, extractTextPagesFromPdf } from "@/lib/claim-pdf";
+import { parseRaDetailsFromPdfPages, parseRaDetailsFromText, type RaDetailRecord } from "@/lib/claim-ra";
 
 type LogFn = (message: string) => Promise<void>;
+type StreamEvent = Record<string, unknown>;
 
 const FINANCE_TOGGLE_SELECTOR = "a[ng-click*='vm.toggle.FIN']";
 const COVERED_RA_LINK_SELECTOR = "a[ui-sref='finance.covered']";
@@ -99,4 +106,94 @@ export async function downloadCoveredRaPdf(page: Page, checkNumber: string, log:
   });
 
   return download;
+}
+
+type CoveredRaOptions = {
+  page: Page;
+  rowNumber: number;
+  rowIndex: number;
+  memberPolicyId: string;
+  dosDate: Date;
+  cpt: string;
+  checkNumbers: string[];
+  log: LogFn;
+  sendEvent: (data: StreamEvent) => Promise<void>;
+};
+
+export async function processCoveredRaDownloads({
+  page,
+  rowNumber,
+  rowIndex,
+  memberPolicyId,
+  dosDate,
+  cpt,
+  checkNumbers,
+  log,
+  sendEvent,
+}: CoveredRaOptions): Promise<RaDetailRecord[]> {
+  const coveredRaDetails: RaDetailRecord[] = [];
+  const uniqueChecks = Array.from(new Set(checkNumbers));
+
+  if (uniqueChecks.length === 0) {
+    return coveredRaDetails;
+  }
+
+  await log(`Row ${rowNumber}: Downloading Covered RAs for Check Numbers: ${uniqueChecks.join(", ")}`);
+  await navigateToCoveredRaPage(page, log);
+
+  for (let cIdx = 0; cIdx < uniqueChecks.length; cIdx++) {
+    const chk = uniqueChecks[cIdx];
+    await log(`Row ${rowNumber}: Processing Covered RA for Check Number ${chk} (${cIdx + 1}/${uniqueChecks.length})...`);
+
+    await searchCoveredRaByCheckNumber(page, chk, log);
+    const download = await downloadCoveredRaPdf(page, chk, log);
+
+    const downloadsDir = path.join(os.tmpdir(), "downloads");
+    if (!fs.existsSync(downloadsDir)) fs.mkdirSync(downloadsDir, { recursive: true });
+    const cleanDos = formatMmDdYyyy(dosDate).replace(/\//g, "-");
+    const pdfFileName = `${rowIndex + 2}_${memberPolicyId}_${cleanDos}_${chk}.pdf`;
+    const pdfPath = path.join(downloadsDir, pdfFileName);
+    await download.saveAs(pdfPath);
+
+    try {
+      const pdfBuffer = fs.readFileSync(pdfPath);
+      await sendEvent({ type: "pdf_download", filename: pdfFileName, base64: pdfBuffer.toString("base64") });
+
+      const pdfText = await extractTextFromPdf(pdfBuffer);
+      const pdfPages = await extractTextPagesFromPdf(pdfBuffer);
+      const parsedRecords = parseRaDetailsFromPdfPages({
+        pages: pdfPages,
+        memberPolicyId,
+        dosDate,
+        cpt,
+        checkNumber: chk,
+      });
+
+      if (parsedRecords.length > 0) {
+        coveredRaDetails.push(...parsedRecords);
+      } else {
+        const fallbackRecords = parseRaDetailsFromText({
+          text: pdfText,
+          memberPolicyId,
+          dosDate,
+          cpt,
+          checkNumber: chk,
+        });
+
+        if (fallbackRecords.length > 0) {
+          coveredRaDetails.push(...fallbackRecords);
+        } else {
+          throw new Error(`No matching Covered RA detail line found in PDF for Check ${chk}, CPT ${cpt}, DOS ${formatMmDdYyyy(dosDate)}.`);
+        }
+      }
+    } finally {
+      try {
+        fs.unlinkSync(pdfPath);
+      } catch {
+        await log(`Row ${rowNumber}: Warning: Could not delete temporary PDF ${pdfFileName}.`);
+      }
+    }
+  }
+
+  return coveredRaDetails;
 }
