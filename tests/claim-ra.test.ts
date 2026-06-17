@@ -88,3 +88,32 @@ test("keeps wrapped RA reason continuation lines with the correct service line",
   assert.equal(records[0].RAAmountBilled, "2,010.00");
   assert.equal(records[3].RADenialReason, "N362 - The number of days or units of service exceeds acceptable maximum.");
 });
+
+test("matches dashed member ids and scans all member sections before deciding", () => {
+  const dosDate = parseDateInput("01/30/2026");
+  assert.ok(dosDate);
+
+  const text = [
+    "Member # Line of Business Patient Name Provider Name",
+    "1111111111-11 Medi-Cal OTHER, MEMBER TEST PROVIDER",
+    "0126368112 001006 04/22/2026 01/30/2026 01/30/2026 99213 24 1.00 280.00 100.00 100.00 0.00 0.00 0.00 0.00 D A1",
+    "8749274028-00 Medi-Cal TARGET, MEMBER TEST PROVIDER",
+    "0126368112 001006 04/22/2026 01/30/2026 01/30/2026 99213 24 1.00 280.00 105.22 105.22 0.00 0.00 0.00 0.00 D AUTHD",
+    "Explanation Code Legend",
+    "A1 Charge exceeds fee schedule/maximum allowable or contracted/legislated fee arrangement.",
+    "AUTHD AUTHD - Precertification/authorization/notification absent",
+    "ST Code Legend: P Payable, D Denied, E Encounter",
+  ].join("\n");
+
+  const records = parseRaDetailsFromText({
+    text,
+    memberPolicyId: "874927402800",
+    dosDate,
+    cpt: "99213",
+    checkNumber: "123456",
+  });
+
+  assert.equal(records.length, 1);
+  assert.equal(records[0].RAReason, "AUTHD");
+  assert.equal(records[0].RAAmountAllowed, "105.22");
+});

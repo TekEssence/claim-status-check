@@ -16,6 +16,7 @@ const RESET_SEARCH_SELECTOR = "div[uib-popover='Reset search'], .close-btn[uib-p
 const SEARCH_BUTTON_SELECTOR = ".singleSearchButton, button[type='submit']";
 const RESULT_ROW_SELECTOR = "tr.line-item";
 const DOWNLOAD_ICON_SELECTOR = ".fa-arrow-circle-down";
+const NO_RECORDS_SELECTOR = "text=/No records found\\./i";
 
 export function extractCheckNumbersFromClaimDetailText(text: string): string[] {
   const matches = Array.from(
@@ -34,16 +35,25 @@ async function waitForResultsToSettle(page: Page): Promise<void> {
 /*
 ###New Code -Start###
 */
+function normalizeCoveredRaCheckNumber(checkNumber: string): string {
+  return checkNumber.replace(/^EFT-/i, "").trim();
+}
+
 async function waitForCoveredRaResultRow(page: Page, checkNumber: string, log: LogFn): Promise<boolean> {
-  for (let elapsedSeconds = 10; elapsedSeconds <= 30; elapsedSeconds += 10) {
+  for (let elapsedSeconds = 5; elapsedSeconds <= 30; elapsedSeconds += 5) {
+    const noRecordsMessage = page.locator(NO_RECORDS_SELECTOR).first();
+    if (await noRecordsMessage.count() > 0 && await noRecordsMessage.isVisible().catch(() => false)) {
+      throw new Error(`No IEHP Covered RA records were found for Check Number ${checkNumber}.`);
+    }
+
     const rowCheckCell = page.locator(`${RESULT_ROW_SELECTOR} td`).filter({ hasText: checkNumber }).first();
     if (await rowCheckCell.count() > 0 && await rowCheckCell.isVisible().catch(() => false)) {
       return true;
     }
 
     if (elapsedSeconds < 30) {
-      await log(`IEHP Covered RA search for ${checkNumber} is still loading. Waiting ${elapsedSeconds + 10} seconds total before retrying...`);
-      await page.waitForTimeout(10000);
+      await log(`IEHP Covered RA search for ${checkNumber} is still loading. Waiting ${elapsedSeconds + 5} seconds total before retrying...`);
+      await page.waitForTimeout(5000);
       await waitForResultsToSettle(page);
     }
   }
@@ -78,7 +88,8 @@ export async function navigateToCoveredRaPage(page: Page, log: LogFn): Promise<v
 }
 
 export async function searchCoveredRaByCheckNumber(page: Page, checkNumber: string, log: LogFn): Promise<void> {
-  await log(`Searching IEHP Covered RAs for Check Number ${checkNumber}...`);
+  const normalizedCheckNumber = normalizeCoveredRaCheckNumber(checkNumber);
+  await log(`Searching IEHP Covered RAs for Check Number ${normalizedCheckNumber}...`);
 
   const resetSearch = page.locator(RESET_SEARCH_SELECTOR).first();
   if (await resetSearch.count() > 0 && await resetSearch.isVisible().catch(() => false)) {
@@ -87,7 +98,7 @@ export async function searchCoveredRaByCheckNumber(page: Page, checkNumber: stri
   }
 
   const searchInput = page.locator(SEARCH_INPUT_SELECTOR).first();
-  await searchInput.fill(checkNumber);
+  await searchInput.fill(normalizedCheckNumber);
   await page.waitForTimeout(300);
 
   for (let searchAttempt = 0; searchAttempt < 2; searchAttempt++) {
@@ -116,7 +127,7 @@ export async function searchCoveredRaByCheckNumber(page: Page, checkNumber: stri
     /*
     ###New Code -Start###
     */
-    if (await waitForCoveredRaResultRow(page, checkNumber, log)) {
+    if (await waitForCoveredRaResultRow(page, normalizedCheckNumber, log)) {
       return;
     }
     /*
@@ -124,7 +135,7 @@ export async function searchCoveredRaByCheckNumber(page: Page, checkNumber: stri
     */
   }
 
-  throw new Error(`No IEHP Covered RA row was found for Check Number ${checkNumber}.`);
+  throw new Error(`No IEHP Covered RA row was found for Check Number ${normalizedCheckNumber}.`);
 }
 
 export async function downloadCoveredRaPdf(page: Page, checkNumber: string, log: LogFn): Promise<Download> {

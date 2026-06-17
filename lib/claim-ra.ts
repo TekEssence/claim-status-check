@@ -106,6 +106,26 @@ function splitReasonCodes(value: string): string[] {
     .filter(Boolean);
 }
 
+function getMemberPolicyIdVariants(memberPolicyId: string): string[] {
+  const raw = memberPolicyId.replace(/\s+/g, "").trim();
+  const variants = new Set<string>();
+
+  if (raw) {
+    variants.add(raw);
+  }
+
+  const digitsOnly = raw.replace(/\D+/g, "");
+  if (digitsOnly) {
+    variants.add(digitsOnly);
+  }
+
+  if (/^\d{12}$/.test(digitsOnly)) {
+    variants.add(`${digitsOnly.slice(0, 10)}-${digitsOnly.slice(10)}`);
+  }
+
+  return Array.from(variants);
+}
+
 function parseExplanationLegend(text: string): Map<string, string> {
   const legend = new Map<string, string>();
   const lines = text.split(/\r?\n/).map((line) => line.replace(/\s+/g, " ").trim()).filter(Boolean);
@@ -231,10 +251,11 @@ export function parseRaDetailsFromText(options: {
   const dosText = formatMmDdYyyy(dosDate);
   const legend = parseExplanationLegend(text);
   const lines = text.split(/\r?\n/).map((line) => line.replace(/\s+/g, " ").trim()).filter(Boolean);
+  const memberPolicyIdVariants = getMemberPolicyIdVariants(memberPolicyId);
   const records: RaDetailRecord[] = [];
 
   for (let i = 0; i < lines.length; i++) {
-    if (!lines[i].includes(memberPolicyId)) continue;
+    if (!memberPolicyIdVariants.some((variant) => variant && lines[i].includes(variant))) continue;
 
     const candidateLines = lines.slice(i, Math.min(i + 8, lines.length));
     for (let offset = 0; offset < candidateLines.length; offset++) {
