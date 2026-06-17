@@ -23,7 +23,7 @@ type ReferRaOptions = {
 const FINANCE_TOGGLE_SELECTOR = "a[ng-click*='vm.toggle.FIN']";
 const CLAIM_RA_LINK_SELECTOR = "a[ui-sref='finance.remittance'], a[href*='/finance/remittance-advice'], a:has-text('Claims RAs')";
 const CLAIM_RA_SEARCH_INPUT_SELECTOR = "input#search, input[placeholder*='Check Number']";
-const CLAIM_RA_SEARCH_BUTTON_SELECTOR = ".singleSearchButton, button[type='submit']";
+const CLAIM_RA_SEARCH_BUTTON_SELECTOR = "button.singleSearchButton:has-text('Search')";
 const CLAIM_RA_RESET_SELECTOR = ".accordionPane:has(.search-again), h2.search-again";
 const CLAIM_RA_RESULT_CELL_SELECTOR = "tr.line-item td:nth-child(3)";
 const CLAIM_RA_DOWNLOAD_SELECTOR = [
@@ -73,24 +73,44 @@ async function searchClaimRaByCheckNumber(page: Page, checkNumber: string, log: 
   await searchInput.fill(checkNumber);
   await page.waitForTimeout(500);
 
-  const searchButton = page.locator(CLAIM_RA_SEARCH_BUTTON_SELECTOR).first();
-  if (await searchButton.count() > 0 && await searchButton.isVisible().catch(() => false)) {
-    await searchButton.click({ force: true });
-  } else {
-    await searchInput.press("Enter");
-  }
-
-  await waitForResultsToSettle(page);
-
-  for (let retry = 0; retry < 5; retry++) {
-    const rowEftLocator = page.locator(CLAIM_RA_RESULT_CELL_SELECTOR).first();
-    if (await rowEftLocator.count() > 0 && await rowEftLocator.isVisible().catch(() => false)) {
-      const rowEftText = await rowEftLocator.innerText();
-      if (rowEftText && rowEftText.includes(checkNumber)) {
-        return;
-      }
+  for (let searchAttempt = 0; searchAttempt < 2; searchAttempt++) {
+    const searchButton = page.locator(CLAIM_RA_SEARCH_BUTTON_SELECTOR).first();
+    if (await searchButton.count() > 0 && await searchButton.isVisible().catch(() => false)) {
+      await searchButton.click({ force: true });
+    } else {
+      await log("Claims RAs Search button was not visible. Falling back to Angular submit and Enter.");
     }
-    await page.waitForTimeout(1000);
+
+    await searchInput.evaluate((el: HTMLInputElement) => {
+      try {
+        const ng = (window as any).angular;
+        if (ng) {
+          const scope = ng.element(el).scope();
+          if (scope && scope.search && typeof scope.search.submit === "function") {
+            scope.search.submit();
+            if (!scope.$$phase && !scope.$root.$$phase) {
+              scope.$apply();
+            }
+          }
+        }
+      } catch {}
+    }).catch(() => {});
+
+    await searchInput.press("Enter").catch(() => {});
+    await waitForResultsToSettle(page);
+
+    for (let retry = 0; retry < 5; retry++) {
+      const rowEftLocator = page.locator(CLAIM_RA_RESULT_CELL_SELECTOR).first();
+      if (await rowEftLocator.count() > 0 && await rowEftLocator.isVisible().catch(() => false)) {
+        const rowEftText = await rowEftLocator.innerText();
+        if (rowEftText && rowEftText.includes(checkNumber)) {
+          return;
+        }
+      }
+      await page.waitForTimeout(1000);
+    }
+
+    await log(`Claims RAs search attempt ${searchAttempt + 1} did not surface Check Number ${checkNumber}. Retrying...`);
   }
 
   throw new Error(`No Claims RA row was found for Check Number ${checkNumber}.`);

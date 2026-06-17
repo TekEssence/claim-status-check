@@ -408,6 +408,8 @@ async function runProcessClaimsJob(jobId: string, formData: FormData): Promise<v
             }
 
             const { startDate, endDate } = getDosSearchRange(dosDate);
+            let claimDetailsText = "";
+            let referRaPayload = "";
 
             log(`Processing Row ${i + 1}: Member ${memberPolicyId}, DOS ${formatMmDdYyyy(dosDate)}`);
 
@@ -627,6 +629,15 @@ async function runProcessClaimsJob(jobId: string, formData: FormData): Promise<v
                 continue;
               }
 
+              claimDetailsText = details.join(" | ");
+              await sendEvent({
+                type: "row_update",
+                index: rowIndex,
+                update: {
+                  BotClaimDetails: claimDetailsText,
+                }
+              });
+
               if (claimRaCheckNumbers.length > 0 || coveredRaCheckNumbers.length > 0) {
                 if (!claimCpt) {
                   throw new Error("Refer to RA requires a CPT/procedure column in the claim Excel. Expected one of: CPT, CPT Code, Proc Code, Procedure Code.");
@@ -661,15 +672,17 @@ async function runProcessClaimsJob(jobId: string, formData: FormData): Promise<v
                 }));
               }
 
+              referRaPayload = referRaDetails.length > 0 ? serializeRaRecords(referRaDetails) : "";
+
               await log(`Row ${i + 1}: Success (${details.length} total matching rows across ${pageNum} page(s)).`);
               await sendEvent({
                 type: "row_update",
                 index: rowIndex,
                 update: { 
-                  BotClaimDetails: details.join(" | "), 
+                  BotClaimDetails: claimDetailsText, 
                   BotClaimStatusCheck: "Success", 
                   BotClaimStatusCheckError: "",
-                  BotReferRA: referRaDetails.length > 0 ? serializeRaRecords(referRaDetails) : ""
+                  BotReferRA: referRaPayload
                 }
               });
               await sendEvent({ type: "progress", completed: i + 1, total: claimRows.length });
@@ -691,7 +704,12 @@ async function runProcessClaimsJob(jobId: string, formData: FormData): Promise<v
               await sendEvent({
                 type: "row_update",
                 index: rowIndex,
-                update: { BotClaimStatusCheck: "Failed", BotClaimStatusCheckError: msg }
+                update: {
+                  BotClaimDetails: claimDetailsText || undefined,
+                  BotClaimStatusCheck: "Failed",
+                  BotClaimStatusCheckError: msg,
+                  BotReferRA: referRaPayload || undefined,
+                }
               });
               await sendEvent({ type: "progress", completed: i + 1, total: claimRows.length });
             }

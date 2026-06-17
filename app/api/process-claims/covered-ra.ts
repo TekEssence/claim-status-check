@@ -13,7 +13,7 @@ const FINANCE_TOGGLE_SELECTOR = "a[ng-click*='vm.toggle.FIN']";
 const COVERED_RA_LINK_SELECTOR = "a[ui-sref='finance.covered']";
 const SEARCH_INPUT_SELECTOR = "input#search, input[placeholder*='Check Number']";
 const RESET_SEARCH_SELECTOR = "div[uib-popover='Reset search'], .close-btn[uib-popover*='Reset search']";
-const SEARCH_BUTTON_SELECTOR = ".singleSearchButton, button[type='submit']";
+const SEARCH_BUTTON_SELECTOR = "button.singleSearchButton:has-text('Search')";
 const RESULT_ROW_SELECTOR = "tr.line-item";
 const DOWNLOAD_ICON_SELECTOR = ".fa-arrow-circle-down";
 
@@ -67,19 +67,41 @@ export async function searchCoveredRaByCheckNumber(page: Page, checkNumber: stri
   await searchInput.fill(checkNumber);
   await page.waitForTimeout(300);
 
-  const searchButton = page.locator(SEARCH_BUTTON_SELECTOR).first();
-  if (await searchButton.count() > 0 && await searchButton.isVisible().catch(() => false)) {
-    await searchButton.click({ force: true });
-  } else {
-    await searchInput.press("Enter");
+  for (let searchAttempt = 0; searchAttempt < 2; searchAttempt++) {
+    const searchButton = page.locator(SEARCH_BUTTON_SELECTOR).first();
+    if (await searchButton.count() > 0 && await searchButton.isVisible().catch(() => false)) {
+      await searchButton.click({ force: true });
+    } else {
+      await log("IEHP Covered RAs Search button was not visible. Falling back to Angular submit and Enter.");
+    }
+
+    await searchInput.evaluate((el: HTMLInputElement) => {
+      try {
+        const ng = (window as any).angular;
+        if (ng) {
+          const scope = ng.element(el).scope();
+          if (scope && scope.search && typeof scope.search.submit === "function") {
+            scope.search.submit();
+            if (!scope.$$phase && !scope.$root.$$phase) {
+              scope.$apply();
+            }
+          }
+        }
+      } catch {}
+    }).catch(() => {});
+
+    await searchInput.press("Enter").catch(() => {});
+    await waitForResultsToSettle(page);
+
+    const rowCheckCell = page.locator(`${RESULT_ROW_SELECTOR} td`).filter({ hasText: checkNumber }).first();
+    if (await rowCheckCell.count() > 0 && await rowCheckCell.isVisible().catch(() => false)) {
+      return;
+    }
+
+    await log(`IEHP Covered RAs search attempt ${searchAttempt + 1} did not surface Check Number ${checkNumber}. Retrying...`);
   }
 
-  await waitForResultsToSettle(page);
-
-  const rowCheckCell = page.locator(`${RESULT_ROW_SELECTOR} td`).filter({ hasText: checkNumber }).first();
-  if (await rowCheckCell.count() === 0 || !(await rowCheckCell.isVisible().catch(() => false))) {
-    throw new Error(`No IEHP Covered RA row was found for Check Number ${checkNumber}.`);
-  }
+  throw new Error(`No IEHP Covered RA row was found for Check Number ${checkNumber}.`);
 }
 
 export async function downloadCoveredRaPdf(page: Page, checkNumber: string, log: LogFn): Promise<Download> {
