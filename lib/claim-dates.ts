@@ -114,6 +114,15 @@ export function getPrimaryDosColumnIndex(headers: string[]): number {
   return index === -1 ? -1 : index + 1;
 }
 
+export function getReceivedColumnIndex(headers: string[]): number {
+  const index = headers.findIndex((header) => {
+    const text = header.replace(/\s+/g, " ").trim().toLowerCase();
+    return text === "received" || text.includes("received date");
+  });
+
+  return index === -1 ? -1 : index + 1;
+}
+
 export function exactMmDdYyyyPattern(value: string): RegExp {
   return new RegExp(`^\\s*${value.replace(/\//g, "\\/")}\\s*$`);
 }

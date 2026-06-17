@@ -18,6 +18,7 @@ import {
   formatMmDdYyyy,
   getDosSearchRange,
   getPrimaryDosColumnIndex,
+  getReceivedColumnIndex,
   parseDateInput,
   parseWebsiteMmDdYyyy,
 } from "@/lib/claim-dates";
@@ -480,6 +481,8 @@ async function runProcessClaimsJob(jobId: string, formData: FormData): Promise<v
               }
               const primaryDosColIndex = getPrimaryDosColumnIndex(headerTexts);
               await log(`Row ${i + 1}: Primary DOS column index: ${primaryDosColIndex === -1 ? "not found (falling back to row text match)" : primaryDosColIndex}`);
+              const receivedColIndex = getReceivedColumnIndex(headerTexts);
+              await log(`Row ${i + 1}: Received column index: ${receivedColIndex === -1 ? "not found" : receivedColIndex}`);
 
               const allRows = page.locator("tr.line-item");
               const totalRows = await allRows.count();
@@ -516,12 +519,38 @@ async function runProcessClaimsJob(jobId: string, formData: FormData): Promise<v
               const coveredRaCheckNumbers: string[] = [];
 
               while (true) {
-                const matchingRows = getMatchingRows();
-                const count = await matchingRows.count();
+                let matchingRows = getMatchingRows();
+                let count = await matchingRows.count();
 
                 if (count > 0) {
                   foundAny = true;
                   await log(`Row ${i + 1}: Found ${count} matching row(s) on page ${pageNum}.`);
+
+                  /*
+                  ###New Code -Start###
+                  */
+                  if (count > 1 && receivedColIndex > 0) {
+                    let latestReceivedTime = Number.NEGATIVE_INFINITY;
+                    let latestReceivedRowIndex = 0;
+
+                    for (let idx = 0; idx < count; idx++) {
+                      const receivedText = await matchingRows.nth(idx).locator(`td:nth-child(${receivedColIndex})`).innerText().catch(() => "");
+                      const receivedDate = parseWebsiteMmDdYyyy(receivedText);
+                      const receivedTime = receivedDate ? receivedDate.getTime() : Number.NEGATIVE_INFINITY;
+
+                      if (receivedTime > latestReceivedTime) {
+                        latestReceivedTime = receivedTime;
+                        latestReceivedRowIndex = idx;
+                      }
+                    }
+
+                    matchingRows = matchingRows.nth(latestReceivedRowIndex);
+                    count = await matchingRows.count();
+                    await log(`Row ${i + 1}: Multiple DOS matches found. Selected the row with the latest Received date.`);
+                  }
+                  /*
+                  ###New Code - End###
+                  */
 
                   // Collect details for each matching row on this page
                   for (let idx = 0; idx < count; idx++) {
