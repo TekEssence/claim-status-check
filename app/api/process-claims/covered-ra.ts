@@ -31,6 +31,29 @@ async function waitForResultsToSettle(page: Page): Promise<void> {
   await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
 }
 
+/*
+###New Code -Start###
+*/
+async function waitForCoveredRaResultRow(page: Page, checkNumber: string, log: LogFn): Promise<boolean> {
+  for (let elapsedSeconds = 10; elapsedSeconds <= 30; elapsedSeconds += 10) {
+    const rowCheckCell = page.locator(`${RESULT_ROW_SELECTOR} td`).filter({ hasText: checkNumber }).first();
+    if (await rowCheckCell.count() > 0 && await rowCheckCell.isVisible().catch(() => false)) {
+      return true;
+    }
+
+    if (elapsedSeconds < 30) {
+      await log(`IEHP Covered RA search for ${checkNumber} is still loading. Waiting ${elapsedSeconds + 10} seconds total before retrying...`);
+      await page.waitForTimeout(10000);
+      await waitForResultsToSettle(page);
+    }
+  }
+
+  return false;
+}
+/*
+###New Code - End###
+*/
+
 export async function navigateToCoveredRaPage(page: Page, log: LogFn): Promise<void> {
   await log("Opening Finance tab...");
   const financeToggle = page.locator(FINANCE_TOGGLE_SELECTOR).first();
@@ -90,10 +113,15 @@ export async function searchCoveredRaByCheckNumber(page: Page, checkNumber: stri
 
     await waitForResultsToSettle(page);
 
-    const rowCheckCell = page.locator(`${RESULT_ROW_SELECTOR} td`).filter({ hasText: checkNumber }).first();
-    if (await rowCheckCell.count() > 0 && await rowCheckCell.isVisible().catch(() => false)) {
+    /*
+    ###New Code -Start###
+    */
+    if (await waitForCoveredRaResultRow(page, checkNumber, log)) {
       return;
     }
+    /*
+    ###New Code - End###
+    */
   }
 
   throw new Error(`No IEHP Covered RA row was found for Check Number ${checkNumber}.`);

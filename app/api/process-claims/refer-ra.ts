@@ -37,6 +37,32 @@ async function waitForResultsToSettle(page: Page): Promise<void> {
   await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
 }
 
+/*
+###New Code -Start###
+*/
+async function waitForClaimRaResultRow(page: Page, checkNumber: string, log: (message: string) => Promise<void>): Promise<boolean> {
+  for (let elapsedSeconds = 10; elapsedSeconds <= 30; elapsedSeconds += 10) {
+    const rowEftLocator = page.locator(CLAIM_RA_RESULT_CELL_SELECTOR).first();
+    if (await rowEftLocator.count() > 0 && await rowEftLocator.isVisible().catch(() => false)) {
+      const rowEftText = await rowEftLocator.innerText().catch(() => "");
+      if (rowEftText && rowEftText.includes(checkNumber)) {
+        return true;
+      }
+    }
+
+    if (elapsedSeconds < 30) {
+      await log(`Claims RA search for ${checkNumber} is still loading. Waiting ${elapsedSeconds + 10} seconds total before retrying...`);
+      await page.waitForTimeout(10000);
+      await waitForResultsToSettle(page);
+    }
+  }
+
+  return false;
+}
+/*
+###New Code - End###
+*/
+
 async function navigateToClaimRaPage(page: Page, log: (message: string) => Promise<void>): Promise<void> {
   await log("Opening Finance tab for Claim RAs...");
   const financeToggle = page.locator(FINANCE_TOGGLE_SELECTOR).first();
@@ -96,16 +122,15 @@ async function searchClaimRaByCheckNumber(page: Page, checkNumber: string, log: 
 
     await waitForResultsToSettle(page);
 
-    for (let retry = 0; retry < 5; retry++) {
-      const rowEftLocator = page.locator(CLAIM_RA_RESULT_CELL_SELECTOR).first();
-      if (await rowEftLocator.count() > 0 && await rowEftLocator.isVisible().catch(() => false)) {
-        const rowEftText = await rowEftLocator.innerText();
-        if (rowEftText && rowEftText.includes(checkNumber)) {
-          return;
-        }
-      }
-      await page.waitForTimeout(1000);
+    /*
+    ###New Code -Start###
+    */
+    if (await waitForClaimRaResultRow(page, checkNumber, log)) {
+      return;
     }
+    /*
+    ###New Code - End###
+    */
   }
 
   throw new Error(`No Claims RA row was found for Check Number ${checkNumber}.`);
