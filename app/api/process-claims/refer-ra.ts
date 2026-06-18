@@ -26,11 +26,7 @@ const CLAIM_RA_SEARCH_INPUT_SELECTOR = "input#search, input[placeholder*='Check 
 const CLAIM_RA_SEARCH_BUTTON_SELECTOR = ".singleSearchButton, button[type='submit']";
 const CLAIM_RA_RESET_SELECTOR = ".accordionPane:has(.search-again), h2.search-again";
 const CLAIM_RA_RESULT_CELL_SELECTOR = "tr.line-item td:nth-child(3)";
-const CLAIM_RA_DOWNLOAD_SELECTOR = [
-  "div[ng-click*='GetRaPdfDownload']",
-  "div[uib-popover*='download Claim PDF']",
-  ".fa-arrow-circle-down",
-].join(", ");
+const CLAIM_RA_DOWNLOAD_SELECTOR = "div[ng-click*='GetRaPdfDownload'], div[uib-popover*='download Claim PDF'], .fa-arrow-circle-down";
 
 async function waitForResultsToSettle(page: Page): Promise<void> {
   await page.locator("div[full-screen-ajax-loader] .full-screen-bg").waitFor({ state: "hidden", timeout: 30000 }).catch(() => {});
@@ -139,7 +135,21 @@ async function searchClaimRaByCheckNumber(page: Page, checkNumber: string, log: 
 async function downloadClaimRaPdf(page: Page, checkNumber: string, log: (message: string) => Promise<void>): Promise<Download> {
   await log(`Downloading PDF for Check Number ${checkNumber} from Claims RAs...`);
 
-  const pdfLink = page.locator(CLAIM_RA_DOWNLOAD_SELECTOR).first();
+  /*
+  ###New Code -Start###
+  */
+  const matchingRow = page.locator("tr.line-item").filter({
+    has: page.locator("td:nth-child(3)", { hasText: checkNumber }),
+  }).first();
+
+  await matchingRow.waitFor({ state: "visible", timeout: 15000 }).catch(() => {
+    throw new Error(`Result row for Claims RA Check Number ${checkNumber} was not visible.`);
+  });
+
+  const pdfLink = matchingRow.locator(CLAIM_RA_DOWNLOAD_SELECTOR).first();
+  /*
+  ###New Code - End###
+  */
   await pdfLink.waitFor({ state: "visible", timeout: 15000 }).catch(() => {
     throw new Error(`Download button was not found for Claims RA Check Number ${checkNumber}.`);
   });

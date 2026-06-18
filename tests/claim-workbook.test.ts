@@ -32,7 +32,7 @@ test("parses detail blocks with nested bracket values", () => {
   assert.deepEqual(record, {
     SummaryBlockDOS: "02/05/2026",
     SummaryBlockDate: "02/06/2026",
-    CheckNumber: "[12345]",
+    CheckNumber: "12345",
     ReceivedDate: "02/06/2026",
     CheckDate: "02/06/2026",
     CheckAmount: "$42.50",
@@ -125,7 +125,7 @@ test("writes bot status and split detail columns without overwriting existing co
   assert.equal(worksheet.getRow(2).getCell(headers["BotClaimStatusCheck"]).value, "Success");
   assert.equal(worksheet.getRow(3).getCell(headers["BotClaimStatusCheck"]).value, "Success");
   assert.equal(worksheet.getRow(2).getCell(headers["SummaryBlockDOS"]).value, "02/05/2026");
-  assert.equal(worksheet.getRow(3).getCell(headers["Check Number"]).value, "[222]");
+  assert.equal(worksheet.getRow(3).getCell(headers["Check Number"]).value, "222");
   assert.equal(worksheet.getRow(2).getCell(headers["Check Amount"]).value, 10);
   assert.equal(worksheet.getRow(3).getCell(headers["Check Amount"]).value, 20);
   assert.equal(worksheet.getRow(2).getCell(headers["Manual Review"]).value, "manual-a");
@@ -208,7 +208,7 @@ test("guarantees 1-to-1 batch phase updates before post-processing duplication",
   assert.equal(worksheet.getRow(2).getCell(headers["Member Policy ID"]).value, "member-a");
   assert.equal(worksheet.getRow(3).getCell(headers["Member Policy ID"]).value, "member-a");
   assert.equal(worksheet.getRow(4).getCell(headers["Member Policy ID"]).value, "member-b");
-  assert.equal(worksheet.getRow(4).getCell(headers["Check Number"]).value, "[333]");
+  assert.equal(worksheet.getRow(4).getCell(headers["Check Number"]).value, "333");
   assert.equal(worksheet.actualRowCount, 4); // 1 header row + 3 data rows
 });
 
@@ -373,11 +373,11 @@ test("postProcessWorksheet processes mixed rows with different record counts cor
 
   // Verify member-1 rows
   assert.equal(worksheet.getRow(2).getCell(headers["Member Policy ID"]).value, "member-1");
-  assert.equal(worksheet.getRow(2).getCell(headers["Check Number"]).value, "[c1-1]");
+  assert.equal(worksheet.getRow(2).getCell(headers["Check Number"]).value, "c1-1");
   assert.equal(worksheet.getRow(3).getCell(headers["Member Policy ID"]).value, "member-1");
-  assert.equal(worksheet.getRow(3).getCell(headers["Check Number"]).value, "[c1-2]");
+  assert.equal(worksheet.getRow(3).getCell(headers["Check Number"]).value, "c1-2");
   assert.equal(worksheet.getRow(4).getCell(headers["Member Policy ID"]).value, "member-1");
-  assert.equal(worksheet.getRow(4).getCell(headers["Check Number"]).value, "[c1-3]");
+  assert.equal(worksheet.getRow(4).getCell(headers["Check Number"]).value, "c1-3");
 
   // Verify member-2 row
   assert.equal(worksheet.getRow(5).getCell(headers["Member Policy ID"]).value, "member-2");
@@ -385,13 +385,13 @@ test("postProcessWorksheet processes mixed rows with different record counts cor
 
   // Verify member-3 rows
   assert.equal(worksheet.getRow(6).getCell(headers["Member Policy ID"]).value, "member-3");
-  assert.equal(worksheet.getRow(6).getCell(headers["Check Number"]).value, "[c3-1]");
+  assert.equal(worksheet.getRow(6).getCell(headers["Check Number"]).value, "c3-1");
   assert.equal(worksheet.getRow(7).getCell(headers["Member Policy ID"]).value, "member-3");
-  assert.equal(worksheet.getRow(7).getCell(headers["Check Number"]).value, "[c3-2]");
+  assert.equal(worksheet.getRow(7).getCell(headers["Check Number"]).value, "c3-2");
 
   // Verify member-4 row
   assert.equal(worksheet.getRow(8).getCell(headers["Member Policy ID"]).value, "member-4");
-  assert.equal(worksheet.getRow(8).getCell(headers["Check Number"]).value, "[c4-1]");
+  assert.equal(worksheet.getRow(8).getCell(headers["Check Number"]).value, "c4-1");
 });
 
 test("postProcessWorksheet preserves correct data types (Dates and Numbers)", () => {
@@ -518,4 +518,59 @@ test("applyClaimRowUpdateToWorksheet pre-creates RA output columns", () => {
   assert.ok(headers["RA Coins"]);
   assert.ok(headers["RA Reason"]);
   assert.ok(headers["RA Denial Reason"]);
+});
+
+test("postProcessWorksheet pairs RA rows by check number instead of cross-joining everything", () => {
+  const workbook = new ExcelJS.Workbook();
+  const worksheet = workbook.addWorksheet("Claims");
+  worksheet.addRow(["Member Policy ID", "Date Of Service", "CPT"]);
+  worksheet.addRow(["member-a", "01/30/2026", "99213"]);
+
+  applyClaimRowUpdateToWorksheet(worksheet, {
+    index: 0,
+    update: {
+      BotClaimDetails: detailsText([
+        { dos: "01/30/2026", received: "04/22/2026", check: "111", amount: "$105.22" },
+        { dos: "01/30/2026", received: "04/23/2026", check: "222", amount: "$210.44" },
+      ]),
+      BotClaimStatusCheck: "Success",
+      BotReferRA: serializeRaRecords([
+        {
+          CheckNumber: "111",
+          RAProcCode: "99213",
+          RAAmountBilled: "280.00",
+          RAAmountAllowed: "105.22",
+          RACopay: "0.00",
+          RACoins: "0.00",
+          RADeductAmount: "0.00",
+          RANetPaid: "0.00",
+          RAStatus: "Denied",
+          RAReason: "A1",
+          RADenialReason: "A1 - Charge exceeds fee schedule",
+        },
+        {
+          CheckNumber: "222",
+          RAProcCode: "99213",
+          RAAmountBilled: "560.00",
+          RAAmountAllowed: "210.44",
+          RACopay: "1.00",
+          RACoins: "2.00",
+          RADeductAmount: "3.00",
+          RANetPaid: "204.44",
+          RAStatus: "Paid",
+          RAReason: "AUTHD",
+          RADenialReason: "AUTHD - Precertification absent",
+        },
+      ]),
+    },
+  });
+
+  postProcessWorksheet(worksheet);
+
+  const headers = headerMap(worksheet);
+  assert.equal(worksheet.actualRowCount, 3);
+  assert.equal(worksheet.getRow(2).getCell(headers["Check Number"]).value, "111");
+  assert.equal(worksheet.getRow(2).getCell(headers["RA Reason"]).value, "A1");
+  assert.equal(worksheet.getRow(3).getCell(headers["Check Number"]).value, "222");
+  assert.equal(worksheet.getRow(3).getCell(headers["RA Reason"]).value, "AUTHD");
 });

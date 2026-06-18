@@ -163,7 +163,7 @@ export function parseBotClaimDetails(text: string): ParsedClaimDetailRecord[] {
     return {
       SummaryBlockDOS: dateMatches[0] || "",
       SummaryBlockDate: dateMatches[1] || "",
-      CheckNumber: getDetailValue("Check #"),
+      CheckNumber: getDetailValue("Check #").replace(/^\[|\]$/g, "").trim(),
       ReceivedDate: getDetailValue("Received Date"),
       CheckDate: getDetailValue("Check Date"),
       CheckAmount: amountMatch ? amountMatch[0] : "",
@@ -452,9 +452,45 @@ export function postProcessWorksheet(worksheet: ExcelJS.Worksheet): void {
       continue;
     }
 
-    const claimRecordsForRows: Array<ParsedClaimDetailRecord | null> = parsedRecords.length > 0 ? parsedRecords : [null];
-    const raRecordsForRows: Array<RaDetailRecord | null> = raRecords.length > 0 ? raRecords : [null];
     const outputRows: Array<{ claim: ParsedClaimDetailRecord | null; ra: RaDetailRecord | null }> = [];
+
+    /*
+    ###New Code -Start###
+    */
+    const normalizeCheckNumber = (value: string) =>
+      value.replace(/^EFT-/i, "").replace(/[\[\]\s]+/g, "").trim();
+    const pushMatchedRowsByCheckNumber = (): boolean => {
+      if (parsedRecords.length === 0 || raRecords.length === 0) return false;
+
+      const matchedRaIndexes = new Set<number>();
+
+      parsedRecords.forEach((claim) => {
+        const claimCheck = normalizeCheckNumber(claim.CheckNumber);
+        const matchingRaEntries = raRecords
+          .map((ra, index) => ({ ra, index }))
+          .filter(({ ra }) => claimCheck && normalizeCheckNumber(ra.CheckNumber) === claimCheck);
+
+        if (matchingRaEntries.length > 0) {
+          matchingRaEntries.forEach(({ ra, index }) => {
+            matchedRaIndexes.add(index);
+            outputRows.push({ claim, ra });
+          });
+        } else {
+          outputRows.push({ claim, ra: null });
+        }
+      });
+
+      raRecords.forEach((ra, index) => {
+        if (!matchedRaIndexes.has(index)) {
+          outputRows.push({ claim: null, ra });
+        }
+      });
+
+      return outputRows.length > 0;
+    };
+    /*
+    ###New Code - End###
+    */
 
     if (parsedRecords.length > 0 && raRecords.length > 0 && parsedRecords.length === raRecords.length) {
       for (let k = 0; k < parsedRecords.length; k++) {
@@ -464,7 +500,11 @@ export function postProcessWorksheet(worksheet: ExcelJS.Worksheet): void {
       raRecords.forEach((ra) => outputRows.push({ claim: parsedRecords[0], ra }));
     } else if (raRecords.length === 1 && parsedRecords.length > 0) {
       parsedRecords.forEach((claim) => outputRows.push({ claim, ra: raRecords[0] }));
+    } else if (pushMatchedRowsByCheckNumber()) {
+      // already populated
     } else {
+      const claimRecordsForRows: Array<ParsedClaimDetailRecord | null> = parsedRecords.length > 0 ? parsedRecords : [null];
+      const raRecordsForRows: Array<RaDetailRecord | null> = raRecords.length > 0 ? raRecords : [null];
       claimRecordsForRows.forEach((claim) => {
         raRecordsForRows.forEach((ra) => outputRows.push({ claim, ra }));
       });
