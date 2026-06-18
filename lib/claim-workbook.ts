@@ -201,6 +201,43 @@ function addHeader(headerRow: ExcelJS.Row, col: number, label: string, headerSty
   cell.style = cloneStyle(headerStyle);
 }
 
+function ensureHeaders(
+  headerRow: ExcelJS.Row,
+  headerStyle: ExcelJS.Style,
+  startingCol: number,
+  labels: string[],
+): number {
+  let nextCol = startingCol;
+
+  const getNextAvailableCol = (start: number): number => {
+    let col = start;
+    while (true) {
+      const cellValue = String(headerRow.getCell(col).value ?? "").trim();
+      if (cellValue === "") {
+        return col;
+      }
+      col++;
+    }
+  };
+
+  labels.forEach((label) => {
+    let existingCol = 0;
+    headerRow.eachCell((cell, colNum) => {
+      if (String(cell.value) === label) existingCol = colNum;
+    });
+
+    if (existingCol === 0) {
+      nextCol = getNextAvailableCol(nextCol);
+      addHeader(headerRow, nextCol, label, headerStyle);
+      nextCol++;
+    } else if (nextCol <= existingCol) {
+      nextCol = existingCol + 1;
+    }
+  });
+
+  return nextCol;
+}
+
 export function applyClaimRowUpdateToWorksheet(
   worksheet: ExcelJS.Worksheet,
   eventData: ClaimRowUpdateEvent,
@@ -249,20 +286,20 @@ export function applyClaimRowUpdateToWorksheet(
     columns.updateTimeCol = nextCol++;
     addHeader(headerRow, columns.updateTimeCol, "BotUpdateTime", headerStyle);
   }
-  if (columns.referRaCol === 0) {
-    // Pre-allocate all post-processing target columns first so BotReferRA comes after them
-    TARGET_COLS.forEach((col) => {
-      let existingCol = 0;
-      headerRow.eachCell((cell, colNum) => {
-        if (String(cell.value) === col.label) existingCol = colNum;
-      });
-      if (existingCol === 0) {
-        nextCol = getNextAvailableCol(nextCol);
-        addHeader(headerRow, nextCol, col.label, headerStyle);
-        nextCol++;
-      }
-    });
+  /*
+  ###New Code -Start###
+  */
+  nextCol = ensureHeaders(
+    headerRow,
+    headerStyle,
+    nextCol,
+    [...TARGET_COLS.map((col) => col.label), ...RA_TARGET_COLS.map((col) => col.label)],
+  );
+  /*
+  ###New Code - End###
+  */
 
+  if (columns.referRaCol === 0) {
     nextCol = getNextAvailableCol(nextCol);
     columns.referRaCol = nextCol++;
     addHeader(headerRow, columns.referRaCol, "BotReferRA", headerStyle);

@@ -483,3 +483,39 @@ test("postProcessWorksheet writes structured RA columns and duplicates multiple 
   assert.equal(worksheet.getRow(3).getCell(headers["RA Reason"]).value, "AUTHD");
   assert.equal(worksheet.getRow(3).getCell(headers["RA Denial Reason"]).value, "AUTHD - Precertification absent");
 });
+
+test("applyClaimRowUpdateToWorksheet pre-creates RA output columns", () => {
+  const workbook = new ExcelJS.Workbook();
+  const worksheet = workbook.addWorksheet("Claims");
+  worksheet.addRow(["Member Policy ID", "Date Of Service", "CPT"]);
+  worksheet.addRow(["member-a", "01/30/2026", "99213"]);
+
+  applyClaimRowUpdateToWorksheet(worksheet, {
+    index: 0,
+    update: {
+      BotClaimStatusCheck: "Success",
+      BotReferRA: serializeRaRecords([
+        {
+          CheckNumber: "111",
+          RAProcCode: "99213",
+          RAAmountBilled: "280.00",
+          RAAmountAllowed: "105.22",
+          RACopay: "0.00",
+          RACoins: "0.00",
+          RADeductAmount: "0.00",
+          RANetPaid: "0.00",
+          RAStatus: "Denied",
+          RAReason: "A1",
+          RADenialReason: "A1 - Charge exceeds fee schedule",
+        },
+      ]),
+    },
+  });
+
+  const headers = headerMap(worksheet);
+  assert.ok(headers["RA Amount Billed"]);
+  assert.ok(headers["RA Copay"]);
+  assert.ok(headers["RA Coins"]);
+  assert.ok(headers["RA Reason"]);
+  assert.ok(headers["RA Denial Reason"]);
+});
