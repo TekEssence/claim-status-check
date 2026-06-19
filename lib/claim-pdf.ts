@@ -106,3 +106,23 @@ export async function rotatePdfBuffer(
   const rotatedBytes = await pdfDoc.save();
   return Buffer.from(rotatedBytes);
 }
+
+/*
+###New Code -Start###
+*/
+function counterClockwiseToPdfLibDegrees(rotationDegreesCounterClockwise: 0 | 90 | 180 | 270): 0 | 90 | 180 | 270 {
+  const normalized = ((360 - rotationDegreesCounterClockwise) % 360) as 0 | 90 | 180 | 270;
+  return normalized;
+}
+
+export async function rotatePdfBufferCounterClockwise(
+  pdfBuffer: Buffer,
+  rotationDegreesCounterClockwise: 0 | 90 | 180 | 270,
+  startPageNumber = 1,
+): Promise<Buffer> {
+  const pdfLibRotationDegrees = counterClockwiseToPdfLibDegrees(rotationDegreesCounterClockwise);
+  return rotatePdfBuffer(pdfBuffer, pdfLibRotationDegrees, startPageNumber);
+}
+/*
+###New Code - End###
+*/
