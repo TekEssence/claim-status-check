@@ -4,7 +4,7 @@ import path from "node:path";
 import type { Download, Page } from "playwright-core";
 import { formatMmDdYyyy } from "@/lib/claim-dates";
 import { extractTextFromPdf, extractTextPagesFromPdf, rotatePdfBufferCounterClockwise } from "@/lib/claim-pdf";
-import { parseRaDetailsFromPdfPages, parseRaDetailsFromText, type RaDetailRecord } from "@/lib/claim-ra";
+import { describeRaMatchFailureFromPdfPages, describeRaMatchFailureFromText, parseRaDetailsFromPdfPages, parseRaDetailsFromText, type RaDetailRecord } from "@/lib/claim-ra";
 
 type LogFn = (message: string) => Promise<void>;
 type StreamEvent = Record<string, unknown>;
@@ -314,7 +314,18 @@ export async function processCoveredRaDownloads({
       if (matchedRecords.length > 0) {
         coveredRaDetails.push(...matchedRecords);
       } else {
-        throw new Error(`No matching Covered RA detail line found in PDF for Check ${chk}, CPT ${cpt}, DOS ${formatMmDdYyyy(dosDate)}.`);
+        const debugSummary =
+          describeRaMatchFailureFromPdfPages({
+            pages: pdfPages,
+            memberPolicyId,
+            preferLastTwoDashedMemberId: true,
+          }) ||
+          describeRaMatchFailureFromText({
+            text: pdfText,
+            memberPolicyId,
+            preferLastTwoDashedMemberId: true,
+          });
+        throw new Error(`No matching Covered RA detail line found in PDF for Check ${chk}, CPT ${cpt}, DOS ${formatMmDdYyyy(dosDate)}. ${debugSummary}`);
       }
       /*
       ###New Code - End###

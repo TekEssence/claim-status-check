@@ -30,6 +30,14 @@ export type RaDetailRecord = {
   RADenialReason: string;
 };
 
+export type RaLineCandidateSummary = {
+  receivedDate: string;
+  serviceFromDate: string;
+  serviceToDate: string;
+  procCode: string;
+  modifiers: string[];
+};
+
 type SerializedRaRecords = {
   type: "refer_ra_records";
   version: 1;
@@ -236,6 +244,24 @@ function hasDate(value: string): boolean {
   return /^\d{2}\/\d{2}\/\d{4}$/.test(value);
 }
 
+function toUtcTime(value: string): number | null {
+  if (!hasDate(value)) return null;
+  const [month, day, year] = value.split("/").map(Number);
+  return Date.UTC(year, month - 1, day);
+}
+
+function serviceDateMatches(dosText: string, serviceFromDate: string, serviceToDate: string): boolean {
+  const dosTime = toUtcTime(dosText);
+  const fromTime = toUtcTime(serviceFromDate);
+  const toTime = toUtcTime(serviceToDate);
+
+  if (dosTime === null || fromTime === null || toTime === null) {
+    return false;
+  }
+
+  return dosTime >= fromTime && dosTime <= toTime;
+}
+
 function isRaServiceLine(line: string): boolean {
   const tokens = line.replace(/\s+/g, " ").trim().split(" ");
   const dateCount = tokens.filter(hasDate).length;
@@ -263,9 +289,10 @@ function collectServiceLineWithReasonContinuations(lines: string[], startIndex: 
   return collected.join(" ");
 }
 
-function lineHasMatchingModifier(tokens: string[], procIndex: number, firstMoneyIndex: number, modifiers: string[]): boolean {
-  if (modifiers.length === 0) return true;
-
+/*
+###New Code -Start###
+*/
+function getModifierTokens(tokens: string[], procIndex: number, firstMoneyIndex: number): string[] {
   const modifierTokens = tokens
     .slice(procIndex + 1, firstMoneyIndex)
     .map((token) => token.trim().toUpperCase())
@@ -277,6 +304,62 @@ function lineHasMatchingModifier(tokens: string[], procIndex: number, firstMoney
       modifierTokens.pop();
     }
   }
+
+  return modifierTokens;
+}
+
+function parseRaLineCandidateSummary(line: string): RaLineCandidateSummary | null {
+  const tokens = line.replace(/\s+/g, " ").trim().split(" ");
+  const moneyTokens = tokens
+    .map((token, index) => ({ token, index }))
+    .filter(({ token }) => isMoneyToken(token));
+
+  if (moneyTokens.length < 7) return null;
+
+  const firstMoneyIndex = moneyTokens[0]?.index ?? -1;
+  if (firstMoneyIndex <= 0) return null;
+
+  const dateIndexesBeforeProc = tokens
+    .map((token, index) => ({ token, index }))
+    .filter(({ token, index }) => index < firstMoneyIndex && hasDate(token));
+
+  if (dateIndexesBeforeProc.length < 3) return null;
+
+  const lastThreeDateEntries = dateIndexesBeforeProc.slice(-3);
+  const [receivedDate, serviceFromDate, serviceToDate] = lastThreeDateEntries.map(({ token }) => token);
+  const lastDateIndex = lastThreeDateEntries[lastThreeDateEntries.length - 1].index;
+
+  let procIndex = lastDateIndex + 1;
+  const tokenAfterLastDate = tokens[procIndex] ?? "";
+  const nextTokenAfterLastDate = tokens[procIndex + 1] ?? "";
+
+  if (!/^\d{4,5}[A-Z0-9]*$/i.test(tokenAfterLastDate) && /^\d{4,5}[A-Z0-9]*$/i.test(nextTokenAfterLastDate)) {
+    procIndex += 1;
+  }
+
+  if (procIndex >= firstMoneyIndex) return null;
+
+  return {
+    receivedDate,
+    serviceFromDate,
+    serviceToDate,
+    procCode: tokens[procIndex],
+    modifiers: getModifierTokens(tokens, procIndex, moneyTokens[0].index),
+  };
+}
+
+function formatRaLineCandidateSummary(candidate: RaLineCandidateSummary): string {
+  const modifiersText = candidate.modifiers.length > 0 ? candidate.modifiers.join(" ") : "(none)";
+  return `Received ${candidate.receivedDate}, Service From ${candidate.serviceFromDate}, Service To ${candidate.serviceToDate}, Proc ${candidate.procCode}, Modifiers ${modifiersText}`;
+}
+/*
+###New Code - End###
+*/
+
+function lineHasMatchingModifier(tokens: string[], procIndex: number, firstMoneyIndex: number, modifiers: string[]): boolean {
+  if (modifiers.length === 0) return true;
+
+  const modifierTokens = getModifierTokens(tokens, procIndex, firstMoneyIndex);
 
   const modifierSet = new Set(modifierTokens);
   return modifiers.some((modifier) => modifierSet.has(modifier.toUpperCase()));
@@ -342,19 +425,49 @@ export function parseRaDetailsFromText(options: {
 
     const candidateLines = lines.slice(i, Math.min(i + 8, lines.length));
     for (let offset = 0; offset < candidateLines.length; offset++) {
-      const candidate = candidateLines[offset];
-      if (!candidate.includes(dosText) || !candidate.includes(cpt)) continue;
-      records.push(...lineToRaRecords(
-        collectServiceLineWithReasonContinuations(lines, i + offset),
-        checkNumber,
-        cpt,
-        modifiers,
-        legend,
-      ));
+      const candidate = collectServiceLineWithReasonContinuations(lines, i + offset);
+      const parsedCandidate = parseRaLineCandidateSummary(candidate);
+      if (!parsedCandidate) continue;
+      if (parsedCandidate.procCode !== cpt) continue;
+      if (!serviceDateMatches(dosText, parsedCandidate.serviceFromDate, parsedCandidate.serviceToDate)) continue;
+      records.push(...lineToRaRecords(candidate, checkNumber, cpt, modifiers, legend));
     }
   }
 
   return records;
+}
+
+export function describeRaMatchFailureFromText(options: {
+  text: string;
+  memberPolicyId: string;
+  preferLastTwoDashedMemberId?: boolean;
+}): string {
+  const { text, memberPolicyId, preferLastTwoDashedMemberId = false } = options;
+  const lines = text.split(/\r?\n/).map((line) => line.replace(/\s+/g, " ").trim()).filter(Boolean);
+  const memberPolicyIdVariants = getMemberPolicyIdVariants(memberPolicyId, preferLastTwoDashedMemberId);
+  const summaries: string[] = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    if (!memberPolicyIdVariants.some((variant) => variant && lines[i].includes(variant))) continue;
+
+    const candidateLines = lines.slice(i, Math.min(i + 8, lines.length));
+    for (let offset = 0; offset < candidateLines.length; offset++) {
+      const candidate = collectServiceLineWithReasonContinuations(lines, i + offset);
+      const parsedCandidate = parseRaLineCandidateSummary(candidate);
+      if (!parsedCandidate) continue;
+
+      const formatted = formatRaLineCandidateSummary(parsedCandidate);
+      if (!summaries.includes(formatted)) {
+        summaries.push(formatted);
+      }
+    }
+  }
+
+  if (summaries.length === 0) {
+    return "No structured RA service lines were found under the matching member section.";
+  }
+
+  return `Found candidate RA lines: ${summaries.join(" | ")}`;
 }
 
 function groupItemsIntoText(items: PdfTextItem[]): string {
@@ -432,6 +545,18 @@ export function parseRaDetailsFromPdfPages(options: {
     cpt: options.cpt,
     modifiers: options.modifiers,
     checkNumber: options.checkNumber,
+    preferLastTwoDashedMemberId: options.preferLastTwoDashedMemberId,
+  });
+}
+
+export function describeRaMatchFailureFromPdfPages(options: {
+  pages: PdfTextPage[];
+  memberPolicyId: string;
+  preferLastTwoDashedMemberId?: boolean;
+}): string {
+  return describeRaMatchFailureFromText({
+    text: extractBestTextFromPdfPages(options.pages),
+    memberPolicyId: options.memberPolicyId,
     preferLastTwoDashedMemberId: options.preferLastTwoDashedMemberId,
   });
 }

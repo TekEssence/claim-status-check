@@ -4,7 +4,7 @@ import path from "node:path";
 import type { Download, Page } from "playwright-core";
 import { formatMmDdYyyy } from "@/lib/claim-dates";
 import { extractTextFromPdf, extractTextPagesFromPdf } from "@/lib/claim-pdf";
-import { parseRaDetailsFromPdfPages, parseRaDetailsFromText, type RaDetailRecord } from "@/lib/claim-ra";
+import { describeRaMatchFailureFromPdfPages, describeRaMatchFailureFromText, parseRaDetailsFromPdfPages, parseRaDetailsFromText, type RaDetailRecord } from "@/lib/claim-ra";
 
 type StreamEvent = Record<string, unknown>;
 
@@ -293,7 +293,16 @@ export async function processReferToRaDownloads({
         if (fallbackRecords.length > 0) {
           referRaDetails.push(...fallbackRecords);
         } else {
-          throw new Error(`No matching Claim RA detail line found in PDF for Check ${chk}, CPT ${cpt}, DOS ${formatMmDdYyyy(dosDate)}.`);
+          const debugSummary =
+            describeRaMatchFailureFromPdfPages({
+              pages: pdfPages,
+              memberPolicyId,
+            }) ||
+            describeRaMatchFailureFromText({
+              text: pdfText,
+              memberPolicyId,
+            });
+          throw new Error(`No matching Claim RA detail line found in PDF for Check ${chk}, CPT ${cpt}, DOS ${formatMmDdYyyy(dosDate)}. ${debugSummary}`);
         }
       }
     } finally {

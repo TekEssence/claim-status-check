@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  describeRaMatchFailureFromText,
   getClaimCptValue,
   getClaimModifierValues,
   parseRaDetailsFromText,
@@ -204,4 +205,50 @@ test("matches RA line when any one excel modifier matches the pdf line modifiers
   assert.equal(records.length, 1);
   assert.equal(records[0].RAProcCode, "38525");
   assert.equal(records[0].RAStatus, "Paid");
+});
+
+test("matches DOS against Service From/To columns instead of any date on the line", () => {
+  const dosDate = parseDateInput("04/13/2026");
+  assert.ok(dosDate);
+
+  const text = [
+    "Member # Line of Business Patient Name Provider Name",
+    "70209400-00 IEHP Covered TARGET, MEMBER TEST PROVIDER",
+    "P202615601413 1 06/05/2026 04/13/2026 04/13/2026 21552 1 $1,375.00 $463.83 $0.00 $0.00 $0.00 $0.00 $463.83 $0.00 P",
+    "ST Code Legend: P Payable, D Denied, E Encounter",
+  ].join("\n");
+
+  const records = parseRaDetailsFromText({
+    text,
+    memberPolicyId: "7020940000",
+    dosDate,
+    cpt: "21552",
+    checkNumber: "181393",
+    preferLastTwoDashedMemberId: true,
+  });
+
+  assert.equal(records.length, 1);
+  assert.equal(records[0].RAProcCode, "21552");
+  assert.equal(records[0].RAStatus, "Paid");
+});
+
+test("describes found service dates, proc, and modifiers when no RA line matches", () => {
+  const text = [
+    "Member # Line of Business Patient Name Provider Name",
+    "70209400-00 IEHP Covered TARGET, MEMBER TEST PROVIDER",
+    "P202615601413 1 06/05/2026 04/13/2026 04/13/2026 21552 RT 1 $1,375.00 $463.83 $0.00 $0.00 $0.00 $0.00 $463.83 $0.00 P",
+    "ST Code Legend: P Payable, D Denied, E Encounter",
+  ].join("\n");
+
+  const description = describeRaMatchFailureFromText({
+    text,
+    memberPolicyId: "7020940000",
+    preferLastTwoDashedMemberId: true,
+  });
+
+  assert.match(description, /Received 06\/05\/2026/);
+  assert.match(description, /Service From 04\/13\/2026/);
+  assert.match(description, /Service To 04\/13\/2026/);
+  assert.match(description, /Proc 21552/);
+  assert.match(description, /Modifiers RT/);
 });
