@@ -232,6 +232,29 @@ test("matches DOS against Service From/To columns instead of any date on the lin
   assert.equal(records[0].RAStatus, "Paid");
 });
 
+test("matches covered-ra member ids even when spaces appear around the dash", () => {
+  const dosDate = parseDateInput("04/13/2026");
+  assert.ok(dosDate);
+
+  const text = [
+    "Member # Line of Business Patient Name Provider Name",
+    "70209400 - 00 IEHP Covered TARGET, MEMBER TEST PROVIDER",
+    "P202615601413 1 06/05/2026 04/13/2026 04/13/2026 21552 1 $1,375.00 $463.83 $0.00 $0.00 $0.00 $0.00 $463.83 $0.00 P",
+    "ST Code Legend: P Payable, D Denied, E Encounter",
+  ].join("\n");
+
+  const records = parseRaDetailsFromText({
+    text,
+    memberPolicyId: "7020940000",
+    dosDate,
+    cpt: "21552",
+    checkNumber: "181393",
+    preferLastTwoDashedMemberId: true,
+  });
+
+  assert.equal(records.length, 1);
+});
+
 test("describes found service dates, proc, and modifiers when no RA line matches", () => {
   const text = [
     "Member # Line of Business Patient Name Provider Name",
@@ -312,4 +335,22 @@ test("describes DOS/CPT from member section even when amount columns are incompl
 
   assert.match(description, /DOS 05\/01\/2026 not found/);
   assert.match(description, /Available DOS: 04\/13\/2026/);
+});
+
+test("lists available member ids when target member is not found", () => {
+  const text = [
+    "Member # Line of Business Patient Name Provider Name",
+    "70209400-00 IEHP Covered TARGET, MEMBER TEST PROVIDER",
+    "8749274028-00 IEHP Covered OTHER, MEMBER TEST PROVIDER",
+    "ST Code Legend: P Payable, D Denied, E Encounter",
+  ].join("\n");
+
+  const description = describeRaMatchFailureFromText({
+    text,
+    memberPolicyId: "1111111111",
+    preferLastTwoDashedMemberId: true,
+  });
+
+  assert.match(description, /Claim\/member not found/);
+  assert.match(description, /Available member IDs: 70209400-00, 8749274028-00/);
 });

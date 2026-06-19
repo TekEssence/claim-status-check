@@ -194,6 +194,38 @@ function getMemberPolicyIdVariants(memberPolicyId: string, preferLastTwoDashed =
   return variants;
 }
 
+/*
+###New Code -Start###
+*/
+function normalizeMemberIdText(value: string): string {
+  return value.replace(/\s+/g, "").replace(/\D+/g, "");
+}
+
+function extractMemberIdsFromLine(line: string): string[] {
+  const matches = line.match(/\b\d[\d\s-]{5,}\d\b/g) ?? [];
+  return Array.from(new Set(matches.map((match) => match.replace(/\s+/g, "").trim()).filter(Boolean)));
+}
+
+function lineMatchesMemberPolicyId(line: string, memberPolicyIdVariants: string[]): boolean {
+  const normalizedLine = line.replace(/\s*-\s*/g, "-");
+
+  if (memberPolicyIdVariants.some((variant) => variant && normalizedLine.includes(variant))) {
+    return true;
+  }
+
+  const targetDigits = new Set(
+    memberPolicyIdVariants
+      .map((variant) => normalizeMemberIdText(variant))
+      .filter(Boolean),
+  );
+
+  const lineMemberIds = extractMemberIdsFromLine(normalizedLine);
+  return lineMemberIds.some((memberId) => targetDigits.has(normalizeMemberIdText(memberId)));
+}
+/*
+###New Code - End###
+*/
+
 function parseExplanationLegend(text: string): Map<string, string> {
   const legend = new Map<string, string>();
   const lines = text.split(/\r?\n/).map((line) => line.replace(/\s+/g, " ").trim()).filter(Boolean);
@@ -417,7 +449,7 @@ export function parseRaDetailsFromText(options: {
   const records: RaDetailRecord[] = [];
 
   for (let i = 0; i < lines.length; i++) {
-    if (!memberPolicyIdVariants.some((variant) => variant && lines[i].includes(variant))) continue;
+    if (!lineMatchesMemberPolicyId(lines[i], memberPolicyIdVariants)) continue;
 
     const candidateLines = lines.slice(i, Math.min(i + 8, lines.length));
     for (let offset = 0; offset < candidateLines.length; offset++) {
@@ -449,13 +481,18 @@ export function describeRaMatchFailureFromText(options: {
   const availableDos = new Set<string>();
   const availableCpts = new Set<string>();
   const availableModifiers = new Set<string>();
+  const availableMemberIds = new Set<string>();
   let memberSectionFound = false;
   let structuredLineFound = false;
   let matchingDosFound = false;
   let matchingCptFound = false;
 
+  lines.forEach((line) => {
+    extractMemberIdsFromLine(line).forEach((memberId) => availableMemberIds.add(memberId));
+  });
+
   for (let i = 0; i < lines.length; i++) {
-    if (!memberPolicyIdVariants.some((variant) => variant && lines[i].includes(variant))) continue;
+    if (!lineMatchesMemberPolicyId(lines[i], memberPolicyIdVariants)) continue;
     memberSectionFound = true;
 
     const candidateLines = lines.slice(i, Math.min(i + 8, lines.length));
@@ -486,7 +523,8 @@ export function describeRaMatchFailureFromText(options: {
   }
 
   if (!memberSectionFound) {
-    return `Claim/member not found in RA for Member ID ${memberPolicyId}.`;
+    const availableMemberIdsText = availableMemberIds.size > 0 ? Array.from(availableMemberIds).join(", ") : "(none)";
+    return `Claim/member not found in RA for Member ID ${memberPolicyId}. Available member IDs: ${availableMemberIdsText}.`;
   }
 
   if (!structuredLineFound) {
