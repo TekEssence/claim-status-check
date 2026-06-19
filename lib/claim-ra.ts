@@ -313,11 +313,7 @@ function parseRaLineCandidateSummary(line: string): RaLineCandidateSummary | nul
   const moneyTokens = tokens
     .map((token, index) => ({ token, index }))
     .filter(({ token }) => isMoneyToken(token));
-
-  if (moneyTokens.length < 7) return null;
-
-  const firstMoneyIndex = moneyTokens[0]?.index ?? -1;
-  if (firstMoneyIndex <= 0) return null;
+  const firstMoneyIndex = moneyTokens[0]?.index ?? tokens.length;
 
   const dateIndexesBeforeProc = tokens
     .map((token, index) => ({ token, index }))
@@ -344,7 +340,7 @@ function parseRaLineCandidateSummary(line: string): RaLineCandidateSummary | nul
     serviceFromDate,
     serviceToDate,
     procCode: tokens[procIndex],
-    modifiers: getModifierTokens(tokens, procIndex, moneyTokens[0].index),
+    modifiers: getModifierTokens(tokens, procIndex, firstMoneyIndex),
   };
 }
 

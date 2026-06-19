@@ -293,3 +293,23 @@ test("describes available modifiers when member, dos, and cpt match but modifier
   assert.match(description, /modifiers LT not found/);
   assert.match(description, /Available modifiers: RT/);
 });
+
+test("describes DOS/CPT from member section even when amount columns are incomplete", () => {
+  const text = [
+    "Member # Line of Business Patient Name Provider Name",
+    "70209400-00 IEHP Covered TARGET, MEMBER TEST PROVIDER",
+    "P202615601413 1 06/05/2026 04/13/2026 04/13/2026 21552 RT 1",
+    "ST Code Legend: P Payable, D Denied, E Encounter",
+  ].join("\n");
+
+  const description = describeRaMatchFailureFromText({
+    text,
+    memberPolicyId: "7020940000",
+    dosDate: parseDateInput("05/01/2026")!,
+    cpt: "21552",
+    preferLastTwoDashedMemberId: true,
+  });
+
+  assert.match(description, /DOS 05\/01\/2026 not found/);
+  assert.match(description, /Available DOS: 04\/13\/2026/);
+});
