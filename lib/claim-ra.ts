@@ -41,6 +41,12 @@ export type RaLineCandidateSummary = {
   qty?: string;
 };
 
+type RaLineParseDebug = {
+  line: string;
+  parsed: Partial<RaLineCandidateSummary>;
+  missing: string[];
+};
+
 type SerializedRaRecords = {
   type: "refer_ra_records";
   version: 1;
@@ -325,6 +331,10 @@ function isRaContinuationStopLine(line: string): boolean {
   );
 }
 
+function isRaSectionStopLine(line: string): boolean {
+  return /^(Claim Totals|Member Totals|Provider Totals|Explanation Code Legend|ST Code Legend)/i.test(line);
+}
+
 function collectServiceLineWithReasonContinuations(lines: string[], startIndex: number): string {
   const collected = [lines[startIndex]];
 
@@ -367,6 +377,62 @@ type StructuredRaLineLayout = {
   qtyIndex?: number;
   firstMoneyIndex: number;
 };
+
+function debugParseRaLineStructure(line: string): RaLineParseDebug {
+  const tokens = line.replace(/\s+/g, " ").trim().split(" ").filter(Boolean);
+  const parsed: Partial<RaLineCandidateSummary> = {};
+  const missing: string[] = [];
+
+  let claimTokenIndex = -1;
+  for (let index = 0; index < tokens.length; index++) {
+    if (
+      isClaimNumberToken(tokens[index] ?? "") &&
+      isIntegerLikeToken(tokens[index + 1] ?? "") &&
+      hasDate(tokens[index + 2] ?? "") &&
+      hasDate(tokens[index + 3] ?? "") &&
+      hasDate(tokens[index + 4] ?? "")
+    ) {
+      claimTokenIndex = index;
+      parsed.claimNumber = tokens[index];
+      break;
+    }
+  }
+
+  if (claimTokenIndex === -1) {
+    missing.push("claim number + line/ver + 3 continuous dates");
+    const dateIndexes = tokens.map((token, index) => ({ token, index })).filter(({ token }) => hasDate(token));
+    if (dateIndexes.length >= 3) {
+      const [receivedDate, serviceFromDate, serviceToDate] = dateIndexes.slice(0, 3).map(({ token }) => token);
+      parsed.receivedDate = receivedDate;
+      parsed.serviceFromDate = serviceFromDate;
+      parsed.serviceToDate = serviceToDate;
+    }
+    return { line, parsed, missing };
+  }
+
+  parsed.receivedDate = tokens[claimTokenIndex + 2];
+  parsed.serviceFromDate = tokens[claimTokenIndex + 3];
+  parsed.serviceToDate = tokens[claimTokenIndex + 4];
+
+  let procIndex = claimTokenIndex + 5;
+  if (isProcedureCodeToken(tokens[procIndex + 1] ?? "")) {
+    parsed.revCode = tokens[procIndex];
+    procIndex += 1;
+  }
+
+  if (!isProcedureCodeToken(tokens[procIndex] ?? "")) {
+    missing.push("proc code after dates");
+    return { line, parsed, missing };
+  }
+
+  parsed.procCode = tokens[procIndex];
+  const moneyTokens = tokens.map((token, index) => ({ token, index })).filter(({ token }) => isMoneyToken(token));
+  const firstMoneyIndex = moneyTokens[0]?.index ?? tokens.length;
+  parsed.modifiers = getModifierTokens(tokens, procIndex, firstMoneyIndex);
+  parsed.qty = tokens.slice(procIndex + 1, firstMoneyIndex).find((token) => /^\d+(?:\.\d+)?$/.test(token));
+
+  return { line, parsed, missing };
+}
 
 function findStructuredRaLineLayout(tokens: string[], firstMoneyIndex: number): StructuredRaLineLayout | null {
   for (let index = 0; index <= Math.max(0, firstMoneyIndex - 5); index++) {
@@ -442,6 +508,16 @@ function findStructuredRaLineLayout(tokens: string[], firstMoneyIndex: number): 
   }
 
   return null;
+}
+
+function getMemberSectionCandidateIndexes(lines: string[], memberLineIndex: number): number[] {
+  const indexes: number[] = [];
+  for (let index = memberLineIndex + 1; index < lines.length; index++) {
+    const line = lines[index];
+    if (isRaSectionStopLine(line)) break;
+    indexes.push(index);
+  }
+  return indexes;
 }
 
 function parseRaLineCandidateSummary(line: string): RaLineCandidateSummary | null {
@@ -542,10 +618,9 @@ export function parseRaDetailsFromText(options: {
 
   for (let i = 0; i < lines.length; i++) {
     if (!lineMatchesMemberPolicyId(lines[i], memberPolicyIdVariants)) continue;
-
-    const candidateLines = lines.slice(i, Math.min(i + 8, lines.length));
-    for (let offset = 0; offset < candidateLines.length; offset++) {
-      const candidate = collectServiceLineWithReasonContinuations(lines, i + offset);
+    const candidateIndexes = getMemberSectionCandidateIndexes(lines, i);
+    for (const candidateIndex of candidateIndexes) {
+      const candidate = collectServiceLineWithReasonContinuations(lines, candidateIndex);
       const parsedCandidate = parseRaLineCandidateSummary(candidate);
       if (!parsedCandidate) continue;
       if (parsedCandidate.procCode !== cpt) continue;
@@ -578,6 +653,7 @@ export function describeRaMatchFailureFromText(options: {
   let structuredLineFound = false;
   let matchingDosFound = false;
   let matchingCptFound = false;
+  let firstUnparsedDebug: RaLineParseDebug | null = null;
 
   lines.forEach((line) => {
     extractMemberIdsFromLine(line).forEach((memberId) => availableMemberIds.add(memberId));
@@ -587,11 +663,16 @@ export function describeRaMatchFailureFromText(options: {
     if (!lineMatchesMemberPolicyId(lines[i], memberPolicyIdVariants)) continue;
     memberSectionFound = true;
 
-    const candidateLines = lines.slice(i, Math.min(i + 8, lines.length));
-    for (let offset = 0; offset < candidateLines.length; offset++) {
-      const candidate = collectServiceLineWithReasonContinuations(lines, i + offset);
+    const candidateIndexes = getMemberSectionCandidateIndexes(lines, i);
+    for (const candidateIndex of candidateIndexes) {
+      const candidate = collectServiceLineWithReasonContinuations(lines, candidateIndex);
       const parsedCandidate = parseRaLineCandidateSummary(candidate);
-      if (!parsedCandidate) continue;
+      if (!parsedCandidate) {
+        if (!firstUnparsedDebug) {
+          firstUnparsedDebug = debugParseRaLineStructure(lines[candidateIndex]);
+        }
+        continue;
+      }
       structuredLineFound = true;
 
       const formatted = formatRaLineCandidateSummary(parsedCandidate);
@@ -620,6 +701,17 @@ export function describeRaMatchFailureFromText(options: {
   }
 
   if (!structuredLineFound) {
+    if (firstUnparsedDebug) {
+      const parsedBits = [
+        firstUnparsedDebug.parsed.claimNumber ? `Claim ${firstUnparsedDebug.parsed.claimNumber}` : "",
+        firstUnparsedDebug.parsed.receivedDate ? `Received ${firstUnparsedDebug.parsed.receivedDate}` : "",
+        firstUnparsedDebug.parsed.serviceFromDate ? `Service From ${firstUnparsedDebug.parsed.serviceFromDate}` : "",
+        firstUnparsedDebug.parsed.serviceToDate ? `Service To ${firstUnparsedDebug.parsed.serviceToDate}` : "",
+        firstUnparsedDebug.parsed.procCode ? `Proc ${firstUnparsedDebug.parsed.procCode}` : "",
+      ].filter(Boolean).join(", ");
+      const missingBits = firstUnparsedDebug.missing.join(", ") || "(none)";
+      return `Claim/member found for Member ID ${memberPolicyId}, but no structured RA service lines were found under that member section. Immediate below line: ${firstUnparsedDebug.line}. Parsed: ${parsedBits || "(nothing)"}. Not parsed: ${missingBits}.`;
+    }
     return `Claim/member found for Member ID ${memberPolicyId}, but no structured RA service lines were found under that member section.`;
   }
 

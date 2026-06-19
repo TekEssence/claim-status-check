@@ -383,3 +383,53 @@ test("lists available member ids when target member is not found", () => {
   assert.match(description, /Claim\/member not found/);
   assert.match(description, /Available member IDs: 70209400-00, 8749274028-00/);
 });
+
+test("scans member section lines until totals instead of only a small fixed window", () => {
+  const dosDate = parseDateInput("04/13/2026");
+  assert.ok(dosDate);
+
+  const text = [
+    "Member # Line of Business Patient Name Provider Name",
+    "70209400-00 IEHP Covered TARGET, MEMBER TEST PROVIDER",
+    "Patient Acct. # 4090/123647",
+    "Some wrapped text",
+    "Another wrapped text",
+    "More text",
+    "Still same member section",
+    "Yet another line",
+    "P202615601413 1 06/05/2026 04/13/2026 04/13/2026 21552 1 $1,375.00 $463.83 $0.00 $0.00 $139.15 $0.00 $324.68 $139.15 P 2 001167 004839 $0.00",
+    "Member Totals : 1375.00 463.83 324.68",
+  ].join("\n");
+
+  const records = parseRaDetailsFromText({
+    text,
+    memberPolicyId: "7020940000",
+    dosDate,
+    cpt: "21552",
+    checkNumber: "181393",
+    preferLastTwoDashedMemberId: true,
+  });
+
+  assert.equal(records.length, 1);
+});
+
+test("prints immediate below line with parsed and not parsed pieces when no structured line is found", () => {
+  const text = [
+    "Member # Line of Business Patient Name Provider Name",
+    "70209400-00 IEHP Covered TARGET, MEMBER TEST PROVIDER",
+    "P202615601413 1 06/05/2026 04/13/2026 04/13/2026",
+    "Member Totals : 1375.00 463.83 324.68",
+  ].join("\n");
+
+  const description = describeRaMatchFailureFromText({
+    text,
+    memberPolicyId: "7020940000",
+    dosDate: parseDateInput("04/13/2026")!,
+    cpt: "21552",
+    preferLastTwoDashedMemberId: true,
+  });
+
+  assert.match(description, /Immediate below line:/);
+  assert.match(description, /Parsed: Claim P202615601413, Received 06\/05\/2026, Service From 04\/13\/2026, Service To 04\/13\/2026/);
+  assert.match(description, /Not parsed: proc code after dates/);
+});
