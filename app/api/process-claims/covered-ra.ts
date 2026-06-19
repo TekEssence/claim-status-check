@@ -318,11 +318,17 @@ export async function processCoveredRaDownloads({
           describeRaMatchFailureFromPdfPages({
             pages: pdfPages,
             memberPolicyId,
+            dosDate,
+            cpt,
+            modifiers,
             preferLastTwoDashedMemberId: true,
           }) ||
           describeRaMatchFailureFromText({
             text: pdfText,
             memberPolicyId,
+            dosDate,
+            cpt,
+            modifiers,
             preferLastTwoDashedMemberId: true,
           });
         throw new Error(`No matching Covered RA detail line found in PDF for Check ${chk}, CPT ${cpt}, DOS ${formatMmDdYyyy(dosDate)}. ${debugSummary}`);

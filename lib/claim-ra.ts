@@ -440,34 +440,81 @@ export function parseRaDetailsFromText(options: {
 export function describeRaMatchFailureFromText(options: {
   text: string;
   memberPolicyId: string;
+  dosDate?: Date;
+  cpt?: string;
+  modifiers?: string[];
   preferLastTwoDashedMemberId?: boolean;
 }): string {
-  const { text, memberPolicyId, preferLastTwoDashedMemberId = false } = options;
+  const { text, memberPolicyId, dosDate, cpt, modifiers = [], preferLastTwoDashedMemberId = false } = options;
   const lines = text.split(/\r?\n/).map((line) => line.replace(/\s+/g, " ").trim()).filter(Boolean);
   const memberPolicyIdVariants = getMemberPolicyIdVariants(memberPolicyId, preferLastTwoDashedMemberId);
+  const dosText = dosDate ? formatMmDdYyyy(dosDate) : "";
   const summaries: string[] = [];
+  const availableDos = new Set<string>();
+  const availableCpts = new Set<string>();
+  const availableModifiers = new Set<string>();
+  let memberSectionFound = false;
+  let structuredLineFound = false;
+  let matchingDosFound = false;
+  let matchingCptFound = false;
 
   for (let i = 0; i < lines.length; i++) {
     if (!memberPolicyIdVariants.some((variant) => variant && lines[i].includes(variant))) continue;
+    memberSectionFound = true;
 
     const candidateLines = lines.slice(i, Math.min(i + 8, lines.length));
     for (let offset = 0; offset < candidateLines.length; offset++) {
       const candidate = collectServiceLineWithReasonContinuations(lines, i + offset);
       const parsedCandidate = parseRaLineCandidateSummary(candidate);
       if (!parsedCandidate) continue;
+      structuredLineFound = true;
 
       const formatted = formatRaLineCandidateSummary(parsedCandidate);
       if (!summaries.includes(formatted)) {
         summaries.push(formatted);
       }
+
+      const dosLabel = `${parsedCandidate.serviceFromDate}${parsedCandidate.serviceToDate !== parsedCandidate.serviceFromDate ? ` to ${parsedCandidate.serviceToDate}` : ""}`;
+      availableDos.add(dosLabel);
+
+      if (!dosText || serviceDateMatches(dosText, parsedCandidate.serviceFromDate, parsedCandidate.serviceToDate)) {
+        matchingDosFound = true;
+        availableCpts.add(parsedCandidate.procCode);
+      }
+
+      if ((!dosText || serviceDateMatches(dosText, parsedCandidate.serviceFromDate, parsedCandidate.serviceToDate)) && parsedCandidate.procCode === cpt) {
+        matchingCptFound = true;
+        parsedCandidate.modifiers.forEach((modifier) => availableModifiers.add(modifier));
+      }
     }
   }
 
-  if (summaries.length === 0) {
-    return "No structured RA service lines were found under the matching member section.";
+  if (!memberSectionFound) {
+    return `Claim/member not found in RA for Member ID ${memberPolicyId}.`;
   }
 
-  return `Found candidate RA lines: ${summaries.join(" | ")}`;
+  if (!structuredLineFound) {
+    return `Claim/member found for Member ID ${memberPolicyId}, but no structured RA service lines were found under that member section.`;
+  }
+
+  if (dosText && !matchingDosFound) {
+    return `Claim/member found, but DOS ${dosText} not found. Available DOS: ${Array.from(availableDos).join(", ")}.`;
+  }
+
+  if (cpt && !matchingCptFound) {
+    return `Claim/member and DOS found, but CPT ${cpt} not found. Available CPT: ${Array.from(availableCpts).join(", ")}.`;
+  }
+
+  if (modifiers.length > 0) {
+    const normalizedRequestedModifiers = modifiers.map((modifier) => modifier.toUpperCase());
+    const hasMatchingModifier = normalizedRequestedModifiers.some((modifier) => availableModifiers.has(modifier));
+    if (!hasMatchingModifier) {
+      const availableModifierText = availableModifiers.size > 0 ? Array.from(availableModifiers).join(", ") : "(none)";
+      return `Claim/member, DOS, and CPT found, but modifiers ${normalizedRequestedModifiers.join(", ")} not found. Available modifiers: ${availableModifierText}.`;
+    }
+  }
+
+  return `Claim/member found, but no exact RA line match was found. Candidate lines: ${summaries.join(" | ")}`;
 }
 
 function groupItemsIntoText(items: PdfTextItem[]): string {
@@ -552,11 +599,17 @@ export function parseRaDetailsFromPdfPages(options: {
 export function describeRaMatchFailureFromPdfPages(options: {
   pages: PdfTextPage[];
   memberPolicyId: string;
+  dosDate?: Date;
+  cpt?: string;
+  modifiers?: string[];
   preferLastTwoDashedMemberId?: boolean;
 }): string {
   return describeRaMatchFailureFromText({
     text: extractBestTextFromPdfPages(options.pages),
     memberPolicyId: options.memberPolicyId,
+    dosDate: options.dosDate,
+    cpt: options.cpt,
+    modifiers: options.modifiers,
     preferLastTwoDashedMemberId: options.preferLastTwoDashedMemberId,
   });
 }

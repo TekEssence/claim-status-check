@@ -297,10 +297,16 @@ export async function processReferToRaDownloads({
             describeRaMatchFailureFromPdfPages({
               pages: pdfPages,
               memberPolicyId,
+              dosDate,
+              cpt,
+              modifiers,
             }) ||
             describeRaMatchFailureFromText({
               text: pdfText,
               memberPolicyId,
+              dosDate,
+              cpt,
+              modifiers,
             });
           throw new Error(`No matching Claim RA detail line found in PDF for Check ${chk}, CPT ${cpt}, DOS ${formatMmDdYyyy(dosDate)}. ${debugSummary}`);
         }

@@ -243,12 +243,53 @@ test("describes found service dates, proc, and modifiers when no RA line matches
   const description = describeRaMatchFailureFromText({
     text,
     memberPolicyId: "7020940000",
+    dosDate: parseDateInput("05/01/2026")!,
+    cpt: "21552",
+    modifiers: ["LT"],
     preferLastTwoDashedMemberId: true,
   });
 
-  assert.match(description, /Received 06\/05\/2026/);
-  assert.match(description, /Service From 04\/13\/2026/);
-  assert.match(description, /Service To 04\/13\/2026/);
-  assert.match(description, /Proc 21552/);
-  assert.match(description, /Modifiers RT/);
+  assert.match(description, /DOS 05\/01\/2026 not found/);
+  assert.match(description, /Available DOS: 04\/13\/2026/);
+});
+
+test("describes available CPT when DOS matches but cpt does not", () => {
+  const text = [
+    "Member # Line of Business Patient Name Provider Name",
+    "70209400-00 IEHP Covered TARGET, MEMBER TEST PROVIDER",
+    "P202615601413 1 06/05/2026 04/13/2026 04/13/2026 21552 RT 1 $1,375.00 $463.83 $0.00 $0.00 $0.00 $0.00 $463.83 $0.00 P",
+    "ST Code Legend: P Payable, D Denied, E Encounter",
+  ].join("\n");
+
+  const description = describeRaMatchFailureFromText({
+    text,
+    memberPolicyId: "7020940000",
+    dosDate: parseDateInput("04/13/2026")!,
+    cpt: "99999",
+    preferLastTwoDashedMemberId: true,
+  });
+
+  assert.match(description, /CPT 99999 not found/);
+  assert.match(description, /Available CPT: 21552/);
+});
+
+test("describes available modifiers when member, dos, and cpt match but modifier does not", () => {
+  const text = [
+    "Member # Line of Business Patient Name Provider Name",
+    "70209400-00 IEHP Covered TARGET, MEMBER TEST PROVIDER",
+    "P202615601413 1 06/05/2026 04/13/2026 04/13/2026 21552 RT 1 $1,375.00 $463.83 $0.00 $0.00 $0.00 $0.00 $463.83 $0.00 P",
+    "ST Code Legend: P Payable, D Denied, E Encounter",
+  ].join("\n");
+
+  const description = describeRaMatchFailureFromText({
+    text,
+    memberPolicyId: "7020940000",
+    dosDate: parseDateInput("04/13/2026")!,
+    cpt: "21552",
+    modifiers: ["LT"],
+    preferLastTwoDashedMemberId: true,
+  });
+
+  assert.match(description, /modifiers LT not found/);
+  assert.match(description, /Available modifiers: RT/);
 });
