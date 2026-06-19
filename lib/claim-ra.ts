@@ -48,6 +48,25 @@ const CPT_HEADER_ALIASES = new Set([
   "procedurecode",
 ]);
 
+const MODIFIER_HEADER_ALIASES = new Set([
+  "mod",
+  "mods",
+  "modifier",
+  "modifiers",
+  "modifier 1",
+  "modifier 2",
+  "modifier 3",
+  "modifier 4",
+  "mod 1",
+  "mod 2",
+  "mod 3",
+  "mod 4",
+  "mod1",
+  "mod2",
+  "mod3",
+  "mod4",
+]);
+
 function normalizeHeader(value: string): string {
   return value.toLowerCase().replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim();
 }
@@ -64,6 +83,33 @@ export function getClaimCptValue(row: Record<string, unknown>): string {
   }
 
   return "";
+}
+
+export function getClaimModifierValues(row: Record<string, unknown>): string[] {
+  const modifiers: string[] = [];
+
+  for (const [key, value] of Object.entries(row)) {
+    const normalized = normalizeHeader(key);
+    const compact = normalized.replace(/\s+/g, "");
+    const isModifierColumn =
+      MODIFIER_HEADER_ALIASES.has(normalized) ||
+      MODIFIER_HEADER_ALIASES.has(compact) ||
+      /^modifier\s*\d+$/i.test(normalized) ||
+      /^mod\s*\d+$/i.test(normalized);
+
+    if (!isModifierColumn) continue;
+
+    const rawValue = asText(value);
+    if (!rawValue || rawValue === "NaN") continue;
+
+    rawValue
+      .split(/\s+/)
+      .map((token) => token.trim().toUpperCase())
+      .filter(Boolean)
+      .forEach((token) => modifiers.push(token));
+  }
+
+  return Array.from(new Set(modifiers));
 }
 
 export function serializeRaRecords(records: RaDetailRecord[]): string {
@@ -203,7 +249,26 @@ function collectServiceLineWithReasonContinuations(lines: string[], startIndex: 
   return collected.join(" ");
 }
 
-function lineToRaRecords(line: string, checkNumber: string, cpt: string, legend: Map<string, string>): RaDetailRecord[] {
+function lineHasMatchingModifier(tokens: string[], procIndex: number, firstMoneyIndex: number, modifiers: string[]): boolean {
+  if (modifiers.length === 0) return true;
+
+  const modifierTokens = tokens
+    .slice(procIndex + 1, firstMoneyIndex)
+    .map((token) => token.trim().toUpperCase())
+    .filter(Boolean);
+
+  if (modifierTokens.length > 0) {
+    const lastToken = modifierTokens[modifierTokens.length - 1];
+    if (/^\d+(?:\.\d+)?$/.test(lastToken)) {
+      modifierTokens.pop();
+    }
+  }
+
+  const modifierSet = new Set(modifierTokens);
+  return modifiers.some((modifier) => modifierSet.has(modifier.toUpperCase()));
+}
+
+function lineToRaRecords(line: string, checkNumber: string, cpt: string, modifiers: string[], legend: Map<string, string>): RaDetailRecord[] {
   const tokens = line.replace(/\s+/g, " ").trim().split(" ");
   const procIndex = tokens.findIndex((token) => token === cpt);
   if (procIndex === -1) return [];
@@ -219,6 +284,7 @@ function lineToRaRecords(line: string, checkNumber: string, cpt: string, legend:
 
   const amountOffset = getAmountOffset(tokens, procIndex, moneyTokens);
   const firstMoneyIndex = moneyTokens[amountOffset].index;
+  if (!lineHasMatchingModifier(tokens, procIndex, firstMoneyIndex, modifiers)) return [];
   const lastMoneyIndex = moneyTokens[Math.min(amountOffset + 6, moneyTokens.length - 1)].index;
   const statusIndex = tokens.findIndex((token, index) => index > lastMoneyIndex && /^[A-Z]$/i.test(token));
   const reasonText = statusIndex === -1 ? "" : tokens.slice(statusIndex + 1).join(" ");
@@ -245,9 +311,10 @@ export function parseRaDetailsFromText(options: {
   memberPolicyId: string;
   dosDate: Date;
   cpt: string;
+  modifiers?: string[];
   checkNumber: string;
 }): RaDetailRecord[] {
-  const { text, memberPolicyId, dosDate, cpt, checkNumber } = options;
+  const { text, memberPolicyId, dosDate, cpt, modifiers = [], checkNumber } = options;
   const dosText = formatMmDdYyyy(dosDate);
   const legend = parseExplanationLegend(text);
   const lines = text.split(/\r?\n/).map((line) => line.replace(/\s+/g, " ").trim()).filter(Boolean);
@@ -265,6 +332,7 @@ export function parseRaDetailsFromText(options: {
         collectServiceLineWithReasonContinuations(lines, i + offset),
         checkNumber,
         cpt,
+        modifiers,
         legend,
       ));
     }
@@ -337,6 +405,7 @@ export function parseRaDetailsFromPdfPages(options: {
   memberPolicyId: string;
   dosDate: Date;
   cpt: string;
+  modifiers?: string[];
   checkNumber: string;
 }): RaDetailRecord[] {
   return parseRaDetailsFromText({
@@ -344,6 +413,7 @@ export function parseRaDetailsFromPdfPages(options: {
     memberPolicyId: options.memberPolicyId,
     dosDate: options.dosDate,
     cpt: options.cpt,
+    modifiers: options.modifiers,
     checkNumber: options.checkNumber,
   });
 }

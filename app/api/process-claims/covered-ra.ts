@@ -35,6 +35,39 @@ async function waitForResultsToSettle(page: Page): Promise<void> {
 /*
 ###New Code -Start###
 */
+async function waitForDownloadToStart(
+  page: Page,
+  clickDownload: () => Promise<void>,
+  log: LogFn,
+  checkNumber: string,
+): Promise<Download> {
+  let startedDownload: Download | null = null;
+  const onDownload = (download: Download) => {
+    startedDownload = download;
+  };
+
+  page.on("download", onDownload);
+  try {
+    await clickDownload();
+
+    for (const elapsedSeconds of [5, 10, 15]) {
+      await page.waitForTimeout(5000);
+      if (startedDownload) {
+        return startedDownload;
+      }
+      await log(`IEHP Covered RA download for ${checkNumber} is still starting. Waited ${elapsedSeconds} seconds...`);
+    }
+
+    if (startedDownload) {
+      return startedDownload;
+    }
+
+    throw new Error(`PDF download did not start for Check Number ${checkNumber}.`);
+  } finally {
+    page.off("download", onDownload);
+  }
+}
+
 function normalizeCoveredRaCheckNumber(checkNumber: string): string {
   return checkNumber.replace(/^EFT-/i, "").trim();
 }
@@ -164,12 +197,14 @@ export async function downloadCoveredRaPdf(page: Page, checkNumber: string, log:
     throw new Error(`Download button was not found for Check Number ${checkNumber}.`);
   });
 
-  const download = await Promise.all([
-    page.waitForEvent("download", { timeout: 25000 }),
-    downloadIcon.click({ force: true }),
-  ]).then(([event]) => event).catch(() => {
-    throw new Error(`PDF download did not start for Check Number ${checkNumber}.`);
-  });
+  const download = await waitForDownloadToStart(
+    page,
+    async () => {
+      await downloadIcon.click({ force: true });
+    },
+    log,
+    checkNumber,
+  );
 
   return download;
 }
@@ -181,6 +216,7 @@ type CoveredRaOptions = {
   memberPolicyId: string;
   dosDate: Date;
   cpt: string;
+  modifiers: string[];
   checkNumbers: string[];
   log: LogFn;
   sendEvent: (data: StreamEvent) => Promise<void>;
@@ -193,6 +229,7 @@ export async function processCoveredRaDownloads({
   memberPolicyId,
   dosDate,
   cpt,
+  modifiers,
   checkNumbers,
   log,
   sendEvent,
@@ -232,6 +269,7 @@ export async function processCoveredRaDownloads({
         memberPolicyId,
         dosDate,
         cpt,
+        modifiers,
         checkNumber: chk,
       });
 
@@ -243,6 +281,7 @@ export async function processCoveredRaDownloads({
           memberPolicyId,
           dosDate,
           cpt,
+          modifiers,
           checkNumber: chk,
         });
 

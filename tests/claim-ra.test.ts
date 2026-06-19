@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   getClaimCptValue,
+  getClaimModifierValues,
   parseRaDetailsFromText,
 } from "../lib/claim-ra";
 import { parseDateInput } from "../lib/claim-dates";
@@ -12,6 +13,12 @@ test("finds CPT through common procedure column aliases", () => {
   assert.equal(getClaimCptValue({ "CPT Code": "99215" }), "99215");
   assert.equal(getClaimCptValue({ "procedure code": "99216" }), "99216");
   assert.equal(getClaimCptValue({ "Member ID": "abc" }), "");
+});
+
+test("finds modifiers through common modifier column aliases", () => {
+  assert.deepEqual(getClaimModifierValues({ Mod: "RT" }), ["RT"]);
+  assert.deepEqual(getClaimModifierValues({ "Modifier 1": "78", "Modifier 2": "RT" }), ["78", "RT"]);
+  assert.deepEqual(getClaimModifierValues({ mod1: "78 RT", mod2: "LT" }), ["78", "RT", "LT"]);
 });
 
 test("parses RA detail lines, maps status, splits reasons, and expands denial descriptions", () => {
@@ -116,4 +123,31 @@ test("matches dashed member ids and scans all member sections before deciding", 
   assert.equal(records.length, 1);
   assert.equal(records[0].RAReason, "AUTHD");
   assert.equal(records[0].RAAmountAllowed, "105.22");
+});
+
+test("matches RA line when any one excel modifier matches the pdf line modifiers", () => {
+  const dosDate = parseDateInput("05/01/2026");
+  assert.ok(dosDate);
+
+  const text = [
+    "Member # Line of Business Patient Name Provider Name",
+    "40000336447080 Medi-Cal ABCDE, FGHIJ KMLN OPQR",
+    "1 05/14/2026 05/01/2026 05/01/2026 38525 51 RT 1 $1,350.00 $232.30 $0.00 $0.00 $0.00 $0.00 $232.30 $0.00 P 59",
+    "Explanation Code Legend",
+    "59 Processed based on multiple procedure rules.",
+    "ST Code Legend: P Payable, D Denied, E Encounter",
+  ].join("\n");
+
+  const records = parseRaDetailsFromText({
+    text,
+    memberPolicyId: "40000336447080",
+    dosDate,
+    cpt: "38525",
+    modifiers: ["78", "RT"],
+    checkNumber: "123456",
+  });
+
+  assert.equal(records.length, 1);
+  assert.equal(records[0].RAProcCode, "38525");
+  assert.equal(records[0].RAStatus, "Paid");
 });

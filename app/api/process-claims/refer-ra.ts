@@ -15,6 +15,7 @@ type ReferRaOptions = {
   memberPolicyId: string;
   dosDate: Date;
   cpt: string;
+  modifiers: string[];
   checkNumbers: string[];
   log: (message: string) => Promise<void>;
   sendEvent: (data: StreamEvent) => Promise<void>;
@@ -38,6 +39,39 @@ async function waitForResultsToSettle(page: Page): Promise<void> {
 /*
 ###New Code -Start###
 */
+async function waitForDownloadToStart(
+  page: Page,
+  clickDownload: () => Promise<void>,
+  log: (message: string) => Promise<void>,
+  checkNumber: string,
+): Promise<Download> {
+  let startedDownload: Download | null = null;
+  const onDownload = (download: Download) => {
+    startedDownload = download;
+  };
+
+  page.on("download", onDownload);
+  try {
+    await clickDownload();
+
+    for (const elapsedSeconds of [5, 10, 15]) {
+      await page.waitForTimeout(5000);
+      if (startedDownload) {
+        return startedDownload;
+      }
+      await log(`Claims RA download for ${checkNumber} is still starting. Waited ${elapsedSeconds} seconds...`);
+    }
+
+    if (startedDownload) {
+      return startedDownload;
+    }
+
+    throw new Error(`PDF download did not start for Claims RA Check Number ${checkNumber}.`);
+  } finally {
+    page.off("download", onDownload);
+  }
+}
+
 async function waitForClaimRaResultRow(page: Page, checkNumber: string, log: (message: string) => Promise<void>): Promise<boolean> {
   const checkCurrentState = async (): Promise<boolean> => {
     const noRecordsMessage = page.locator(CLAIM_RA_NO_RECORDS_SELECTOR).first();
@@ -176,12 +210,14 @@ async function downloadClaimRaPdf(page: Page, checkNumber: string, log: (message
     throw new Error(`Download button was not found for Claims RA Check Number ${checkNumber}.`);
   });
 
-  const download = await Promise.all([
-    page.waitForEvent("download", { timeout: 25000 }),
-    pdfLink.click({ force: true }),
-  ]).then(([event]) => event).catch(() => {
-    throw new Error(`PDF download did not start for Claims RA Check Number ${checkNumber}.`);
-  });
+  const download = await waitForDownloadToStart(
+    page,
+    async () => {
+      await pdfLink.click({ force: true });
+    },
+    log,
+    checkNumber,
+  );
 
   return download;
 }
@@ -193,6 +229,7 @@ export async function processReferToRaDownloads({
   memberPolicyId,
   dosDate,
   cpt,
+  modifiers,
   checkNumbers,
   log,
   sendEvent,
@@ -232,6 +269,7 @@ export async function processReferToRaDownloads({
         memberPolicyId,
         dosDate,
         cpt,
+        modifiers,
         checkNumber: chk,
       });
 
@@ -243,6 +281,7 @@ export async function processReferToRaDownloads({
           memberPolicyId,
           dosDate,
           cpt,
+          modifiers,
           checkNumber: chk,
         });
 

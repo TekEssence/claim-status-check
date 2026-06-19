@@ -22,7 +22,7 @@ import {
   parseDateInput,
   parseWebsiteMmDdYyyy,
 } from "@/lib/claim-dates";
-import { getClaimCptValue, serializeRaRecords, type RaDetailRecord } from "@/lib/claim-ra";
+import { getClaimCptValue, getClaimModifierValues, serializeRaRecords, type RaDetailRecord } from "@/lib/claim-ra";
 
 type GenericRow = Record<string, unknown>;
 type StreamEvent = Record<string, unknown>;
@@ -380,6 +380,7 @@ async function runProcessClaimsJob(jobId: string, formData: FormData): Promise<v
             const memberPolicyId = asText(row["Member Policy ID"] ?? row["member policy id"] ?? row["Member ID"] ?? row["member id"]);
             const dosValue = row["Date Of Service"] ?? row["DOS"] ?? row["date of service"] ?? row["dos"];
             const claimCpt = getClaimCptValue(row);
+            const claimModifiers = getClaimModifierValues(row);
 
 
             
@@ -688,6 +689,7 @@ async function runProcessClaimsJob(jobId: string, formData: FormData): Promise<v
                   memberPolicyId,
                   dosDate,
                   cpt: claimCpt,
+                  modifiers: claimModifiers,
                   checkNumbers: claimRaCheckNumbers,
                   log,
                   sendEvent,
@@ -702,6 +704,7 @@ async function runProcessClaimsJob(jobId: string, formData: FormData): Promise<v
                   memberPolicyId,
                   dosDate,
                   cpt: claimCpt,
+                  modifiers: claimModifiers,
                   checkNumbers: coveredRaCheckNumbers,
                   log,
                   sendEvent,
