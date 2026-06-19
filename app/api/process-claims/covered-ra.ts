@@ -223,6 +223,8 @@ type CoveredRaOptions = {
   sendEvent: (data: StreamEvent) => Promise<void>;
 };
 
+const COVERED_RA_FIXED_ROTATION: RotationCandidate = 270;
+
 export async function processCoveredRaDownloads({
   page,
   rowNumber,
@@ -264,32 +266,28 @@ export async function processCoveredRaDownloads({
       ###New Code -Start###
       */
       const originalPdfBuffer = fs.readFileSync(pdfPath);
-      const rotationOrder: RotationCandidate[] = [270, 0, 90, 180];
       let matchedRecords: RaDetailRecord[] = [];
       let matchedPdfBuffer: Buffer | null = null;
 
-      for (const rotation of rotationOrder) {
-        await log(`Row ${rowNumber}: Trying Covered RA PDF rotation ${rotation} degrees for page 2 onward...`);
-        const candidatePdfBuffer = await rotatePdfBuffer(originalPdfBuffer, rotation, 2);
-        const pdfText = await extractTextFromPdf(candidatePdfBuffer);
-        const pdfPages = await extractTextPagesFromPdf(candidatePdfBuffer);
-        const parsedRecords = parseRaDetailsFromPdfPages({
-          pages: pdfPages,
-          memberPolicyId,
-          dosDate,
-          cpt,
-          modifiers,
-          checkNumber: chk,
-          preferLastTwoDashedMemberId: true,
-        });
+      await log(`Row ${rowNumber}: Best Covered RA PDF orientation selected as ${COVERED_RA_FIXED_ROTATION} degrees counterclockwise for page 2 onward.`);
+      const candidatePdfBuffer = await rotatePdfBuffer(originalPdfBuffer, COVERED_RA_FIXED_ROTATION, 2);
+      const pdfText = await extractTextFromPdf(candidatePdfBuffer);
+      const pdfPages = await extractTextPagesFromPdf(candidatePdfBuffer);
+      const parsedRecords = parseRaDetailsFromPdfPages({
+        pages: pdfPages,
+        memberPolicyId,
+        dosDate,
+        cpt,
+        modifiers,
+        checkNumber: chk,
+        preferLastTwoDashedMemberId: true,
+      });
 
-        if (parsedRecords.length > 0) {
-          matchedRecords = parsedRecords;
-          matchedPdfBuffer = candidatePdfBuffer;
-          await log(`Row ${rowNumber}: Covered RA PDF matched after trying rotation ${rotation} degrees for page 2 onward.`);
-          break;
-        }
-
+      if (parsedRecords.length > 0) {
+        matchedRecords = parsedRecords;
+        matchedPdfBuffer = candidatePdfBuffer;
+        await log(`Row ${rowNumber}: Covered RA PDF matched using ${COVERED_RA_FIXED_ROTATION} degrees counterclockwise rotation for page 2 onward.`);
+      } else {
         const fallbackRecords = parseRaDetailsFromText({
           text: pdfText,
           memberPolicyId,
@@ -303,8 +301,7 @@ export async function processCoveredRaDownloads({
         if (fallbackRecords.length > 0) {
           matchedRecords = fallbackRecords;
           matchedPdfBuffer = candidatePdfBuffer;
-          await log(`Row ${rowNumber}: Covered RA PDF fallback matched after trying rotation ${rotation} degrees for page 2 onward.`);
-          break;
+          await log(`Row ${rowNumber}: Covered RA PDF fallback matched using ${COVERED_RA_FIXED_ROTATION} degrees counterclockwise rotation for page 2 onward.`);
         }
       }
 

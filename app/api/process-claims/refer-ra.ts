@@ -61,7 +61,6 @@ async function submitClaimRaSearch(page: Page, searchInput: ReturnType<Page["loc
   }
 
   await waitForResultsToSettle(page);
-  await log(`Claims RA search submit fired for ${checkNumber}.`);
 }
 
 async function waitForDownloadToStart(
@@ -174,11 +173,6 @@ async function searchClaimRaByCheckNumber(page: Page, checkNumber: string, log: 
 
   for (let searchAttempt = 0; searchAttempt < 2; searchAttempt++) {
     await submitClaimRaSearch(page, searchInput, log, checkNumber);
-
-    if (searchAttempt === 0) {
-      await log(`Claims RA first attempt for ${checkNumber} did not confirm immediately. Re-submitting search once before extended wait...`);
-      await submitClaimRaSearch(page, searchInput, log, checkNumber);
-    }
 
     /*
     ###New Code -Start###
