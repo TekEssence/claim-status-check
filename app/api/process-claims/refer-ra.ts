@@ -76,14 +76,24 @@ async function waitForDownloadToStart(
 
   page.on("download", onDownload);
   try {
-    await clickDownload();
+    for (let clickAttempt = 1; clickAttempt <= 2; clickAttempt++) {
+      await clickDownload();
 
-    for (const elapsedSeconds of [5, 10, 15]) {
-      await page.waitForTimeout(5000);
+      for (const elapsedSeconds of [5, 10, 15]) {
+        await page.waitForTimeout(5000);
+        if (startedDownload) {
+          return startedDownload;
+        }
+        await log(`Claims RA download for ${checkNumber} is still starting. Waited ${elapsedSeconds} seconds...`);
+      }
+
       if (startedDownload) {
         return startedDownload;
       }
-      await log(`Claims RA download for ${checkNumber} is still starting. Waited ${elapsedSeconds} seconds...`);
+
+      if (clickAttempt < 2) {
+        await log(`Claims RA download for ${checkNumber} did not start after 15 seconds. Retrying download click once...`);
+      }
     }
 
     if (startedDownload) {
@@ -118,7 +128,7 @@ async function waitForClaimRaResultRow(page: Page, checkNumber: string, log: (me
     return true;
   }
 
-  for (let elapsedSeconds = 5; elapsedSeconds <= 30; elapsedSeconds += 5) {
+  for (let elapsedSeconds = 5; elapsedSeconds <= 15; elapsedSeconds += 5) {
     await log(`Claims RA search for ${checkNumber} is still loading. Waiting ${elapsedSeconds} seconds...`);
     await page.waitForTimeout(5000);
     await waitForResultsToSettle(page);

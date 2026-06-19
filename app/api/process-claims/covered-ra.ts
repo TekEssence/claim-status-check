@@ -93,7 +93,7 @@ async function waitForCoveredRaResultRow(page: Page, checkNumber: string, log: L
     return true;
   }
 
-  for (let elapsedSeconds = 5; elapsedSeconds <= 30; elapsedSeconds += 5) {
+  for (let elapsedSeconds = 5; elapsedSeconds <= 15; elapsedSeconds += 5) {
     await log(`IEHP Covered RA search for ${checkNumber} is still loading. Waiting ${elapsedSeconds} seconds...`);
     await page.waitForTimeout(5000);
     await waitForResultsToSettle(page);
