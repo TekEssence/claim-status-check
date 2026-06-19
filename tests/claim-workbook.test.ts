@@ -229,6 +229,28 @@ test("parses space-separated detail blocks correctly (regex lookahead check)", (
   });
 });
 
+test("parses labeled DOS, service date, and billed amount from expanded-claim fallback summaries", () => {
+  const blobText = [
+    "Summary: [DOS: 06/09/2025 | Service Date: 06/09/2025 | Billed Amount: $120.00 | Procedure: 99231 | Modifier: GC | Quantity: 1 | Status: Refer to your RA | Original Summary: member-a line text]",
+    "Details: [Check #: [EFT-2847609] | Received Date: 06/25/2025 | Check Date: 07/02/2025 | CIN: 96391794C | Plan Type: MED]",
+    "Status Info: [Line From / To Procedure Modifier Quantity Billed Status 3 06/09/2025 - 06/09/2025 99231 GC 1 $120.00 Refer to your RA]",
+  ].join(" | ");
+
+  const [record] = parseBotClaimDetails(blobText);
+
+  assert.deepEqual(record, {
+    SummaryBlockDOS: "06/09/2025",
+    SummaryBlockDate: "06/09/2025",
+    CheckNumber: "EFT-2847609",
+    ReceivedDate: "06/25/2025",
+    CheckDate: "07/02/2025",
+    CheckAmount: "$120.00",
+    OtherDetails: "Line From / To Procedure Modifier Quantity Billed Status 3 06/09/2025 - 06/09/2025 99231 GC 1 $120.00 Refer to your RA",
+    BotCIN: "96391794C",
+    BotPlanType: "MED",
+  });
+});
+
 test("preserves styles on new columns and inserted rows cell-by-cell during post-processing", () => {
   const workbook = new ExcelJS.Workbook();
   const worksheet = workbook.addWorksheet("Claims");

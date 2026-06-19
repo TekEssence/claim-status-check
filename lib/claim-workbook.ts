@@ -137,6 +137,19 @@ function getBracketedSection(block: string, label: string): string {
   return "";
 }
 
+/*
+###New Code -Start###
+*/
+function getLabeledValue(text: string, label: string): string {
+  const escapedLabel = label.replace(/[-\/\\^$*+?.()|[\]{}]/g, "\\$&");
+  const regex = new RegExp(`${escapedLabel}\\s*:\\s*([^|\\n]+)`, "i");
+  const match = text.match(regex);
+  return match ? match[1].trim() : "";
+}
+/*
+###New Code - End###
+*/
+
 export function parseBotClaimDetails(text: string): ParsedClaimDetailRecord[] {
   if (!text) return [];
 
@@ -146,7 +159,16 @@ export function parseBotClaimDetails(text: string): ParsedClaimDetailRecord[] {
     const detailsText = getBracketedSection(block, "Details");
     const statusText = getBracketedSection(block, "Status Info");
     const dateMatches = summaryText.match(/\d{2}\/\d{2}\/\d{4}/g) || [];
-    const amountMatch = summaryText.match(/\$\d+(?:,\d{3})*(?:\.\d{2})?/);
+    /*
+    ###New Code -Start###
+    */
+    const summaryDos = getLabeledValue(summaryText, "DOS");
+    const summaryServiceDate = getLabeledValue(summaryText, "Service Date");
+    const summaryBilledAmount = getLabeledValue(summaryText, "Billed Amount");
+    const amountMatch = summaryBilledAmount || (summaryText.match(/\$\d+(?:,\d{3})*(?:\.\d{2})?/) || [])[0] || "";
+    /*
+    ###New Code - End###
+    */
     const getDetailValue = (label: string) => {
       const escapedLabel = label.replace(/[-\/\\^$*+?.()|[\]{}]/g, "\\$&");
       const regex = new RegExp(
@@ -154,19 +176,38 @@ export function parseBotClaimDetails(text: string): ParsedClaimDetailRecord[] {
         "i"
       );
       const match = detailsText.match(regex);
-      return match ? match[1].trim() : "";
+      /*
+      ###New Code -Start###
+      */
+      const value = match ? match[1].trim() : getLabeledValue(detailsText, label);
+      return value.replace(/^\[|\]$/g, "").trim();
+      /*
+      ###New Code - End###
+      */
     };
 
     const botCin = getDetailValue("CIN");
     const botPlanType = getDetailValue("Plan Type");
 
     return {
-      SummaryBlockDOS: dateMatches[0] || "",
-      SummaryBlockDate: dateMatches[1] || "",
-      CheckNumber: getDetailValue("Check #").replace(/^\[|\]$/g, "").trim(),
+      /*
+      ###New Code -Start###
+      */
+      SummaryBlockDOS: summaryDos || dateMatches[0] || "",
+      SummaryBlockDate: summaryServiceDate || dateMatches[1] || summaryDos || dateMatches[0] || "",
+      /*
+      ###New Code - End###
+      */
+      CheckNumber: getDetailValue("Check #"),
       ReceivedDate: getDetailValue("Received Date"),
       CheckDate: getDetailValue("Check Date"),
-      CheckAmount: amountMatch ? amountMatch[0] : "",
+      /*
+      ###New Code -Start###
+      */
+      CheckAmount: amountMatch,
+      /*
+      ###New Code - End###
+      */
       OtherDetails: statusText,
       BotCIN: botCin,
       BotPlanType: botPlanType,

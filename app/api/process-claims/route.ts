@@ -1,7 +1,7 @@
 import os from "node:os";
 import path from "node:path";
 import chromium from "@sparticuz/chromium";
-import { chromium as playwright, type BrowserContext, type Page } from "playwright-core";
+import { chromium as playwright, type BrowserContext, type Locator, type Page } from "playwright-core";
 import * as XLSX from "xlsx";
 import {
   createProcessClaimJob,
@@ -101,6 +101,206 @@ function isRaDetailNoMatchMessage(message: string): boolean {
 
 function isMainClaimSearchMessage(message: string): boolean {
   return /No matching claim rows on website/i.test(message);
+}
+
+type ClaimDetailLineCandidate = {
+  fromDate: string;
+  toDate: string;
+  procedure: string;
+  modifier: string;
+  quantity: string;
+  billed: string;
+  status: string;
+  raw: string;
+  distance: number;
+  exactDos: boolean;
+  cptMatches: boolean;
+  modifierMatches: boolean;
+};
+
+type ExpandedClaimRowInspection = {
+  summaryText: string;
+  headerText: string;
+  statusInfoText: string;
+  fullDetailsText: string;
+  exactMatch: ClaimDetailLineCandidate | null;
+  nearestCandidates: ClaimDetailLineCandidate[];
+};
+
+/*
+###New Code -Start###
+*/
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function normalizeClaimProcedure(value: string): string {
+  return value.replace(/\s+/g, "").trim().toUpperCase();
+}
+
+function procedureMatchesClaim(detailProcedure: string, claimCpt: string): boolean {
+  if (!claimCpt) return true;
+  const normalizedClaimCpt = normalizeClaimProcedure(claimCpt);
+  const normalizedDetailProcedure = normalizeClaimProcedure(detailProcedure);
+  if (!normalizedClaimCpt || !normalizedDetailProcedure) return false;
+  return new RegExp(`(?:^|\\D)${escapeRegExp(normalizedClaimCpt)}(?:\\D|$)`, "i").test(` ${normalizedDetailProcedure} `);
+}
+
+function buildExpandedDetailSummary(matchedLine: ClaimDetailLineCandidate, originalSummaryText: string): string {
+  return [
+    `DOS: ${matchedLine.fromDate}`,
+    `Service Date: ${matchedLine.toDate}`,
+    matchedLine.billed ? `Billed Amount: ${matchedLine.billed}` : "",
+    matchedLine.procedure ? `Procedure: ${matchedLine.procedure}` : "",
+    matchedLine.modifier ? `Modifier: ${matchedLine.modifier}` : "",
+    matchedLine.quantity ? `Quantity: ${matchedLine.quantity}` : "",
+    matchedLine.status ? `Status: ${matchedLine.status}` : "",
+    `Original Summary: ${originalSummaryText}`,
+  ].filter(Boolean).join(" | ");
+}
+
+function formatNearestDosCandidates(candidates: ClaimDetailLineCandidate[]): string {
+  return candidates
+    .map((candidate) => {
+      const modifierText = candidate.modifier ? ` | Modifier ${candidate.modifier}` : "";
+      return `${candidate.fromDate} - ${candidate.toDate} | Proc ${candidate.procedure}${modifierText}`;
+    })
+    .join(", ");
+}
+/*
+###New Code - End###
+*/
+
+function parseFromToRange(text: string): { fromDate: string; toDate: string } | null {
+  const match = text.match(/(\d{2}\/\d{2}\/\d{4})\s*-\s*(\d{2}\/\d{2}\/\d{4})/);
+  if (!match) return null;
+  return { fromDate: match[1], toDate: match[2] };
+}
+
+function normalizeDetailModifierTokens(value: string): string[] {
+  return value
+    .split(/\s+/)
+    .map((token) => token.trim().toUpperCase())
+    .filter(Boolean);
+}
+
+function getDateDistanceFromRange(targetDate: Date, fromDateText: string, toDateText: string): number {
+  const fromDate = parseWebsiteMmDdYyyy(fromDateText);
+  const toDate = parseWebsiteMmDdYyyy(toDateText);
+  if (!fromDate || !toDate) return Number.POSITIVE_INFINITY;
+
+  const targetTime = targetDate.getTime();
+  const fromTime = fromDate.getTime();
+  const toTime = toDate.getTime();
+
+  if (targetTime >= fromTime && targetTime <= toTime) {
+    return 0;
+  }
+
+  return Math.min(Math.abs(targetTime - fromTime), Math.abs(targetTime - toTime));
+}
+
+function uniqueNearestDetailCandidates(candidates: ClaimDetailLineCandidate[], limit = 3): ClaimDetailLineCandidate[] {
+  const seen = new Set<string>();
+  const sorted = [...candidates].sort((a, b) => a.distance - b.distance || a.raw.localeCompare(b.raw));
+  const unique: ClaimDetailLineCandidate[] = [];
+
+  for (const candidate of sorted) {
+    const key = `${candidate.fromDate}|${candidate.toDate}|${candidate.procedure}|${candidate.modifier}|${candidate.billed}|${candidate.status}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(candidate);
+    if (unique.length >= limit) break;
+  }
+
+  return unique;
+}
+
+async function inspectExpandedClaimRow(
+  currentLineItem: Locator,
+  dosDate: Date,
+  claimCpt: string,
+  claimModifiers: string[],
+): Promise<ExpandedClaimRowInspection> {
+  const summaryText = (await currentLineItem.innerText({ timeout: 5000 })).replace(/\s+/g, " ").trim();
+  await currentLineItem.click({ timeout: 5000 });
+
+  const detailsRow = currentLineItem.locator("~ tr.details").first();
+  const detailsContent = detailsRow.locator(".details-content");
+  await detailsContent.waitFor({ state: "visible", timeout: 10000 });
+  const headerText = await detailsContent.locator(".details-header").innerText();
+  const tableText = await detailsContent.locator("table.table-condensed").innerText();
+  const statusInfoText = tableText.replace(/\s+/g, " ");
+  const fullDetailsText = `${headerText} ${statusInfoText}`.replace(/\s+/g, " ");
+
+  const rawRows = await detailsContent.locator("table.table-condensed tbody tr").evaluateAll((rows) =>
+    rows.map((row) =>
+      Array.from(row.querySelectorAll("td")).map((cell) => (cell.textContent || "").replace(/\s+/g, " ").trim()),
+    ),
+  );
+
+  const detailCandidates: ClaimDetailLineCandidate[] = rawRows
+    .map((cells) => {
+      if (cells.length < 7) return null;
+      const dateRange = parseFromToRange(cells[1] || "");
+      if (!dateRange) return null;
+
+      const procedureText = (cells[2] || "").replace(/\s+/g, " ").trim();
+      const modifierText = (cells[3] || "").replace(/\s+/g, " ").trim();
+      const distance = getDateDistanceFromRange(dosDate, dateRange.fromDate, dateRange.toDate);
+      const exactDos = distance === 0;
+      /*
+      ###New Code -Start###
+      */
+      const cptMatches = procedureMatchesClaim(procedureText, claimCpt);
+      /*
+      ###New Code - End###
+      */
+      const detailModifierTokens = normalizeDetailModifierTokens(modifierText);
+      const modifierMatches =
+        claimModifiers.length === 0 || claimModifiers.some((modifier) => detailModifierTokens.includes(modifier.toUpperCase()));
+
+      return {
+        fromDate: dateRange.fromDate,
+        toDate: dateRange.toDate,
+        procedure: procedureText,
+        modifier: modifierText,
+        quantity: (cells[4] || "").trim(),
+        billed: (cells[5] || "").trim(),
+        status: (cells[6] || "").trim(),
+        raw: cells.join(" | "),
+        distance,
+        exactDos,
+        cptMatches,
+        modifierMatches,
+      } satisfies ClaimDetailLineCandidate;
+    })
+    .filter((candidate): candidate is ClaimDetailLineCandidate => candidate !== null);
+
+  /*
+  ###New Code -Start###
+  */
+  const exactDosCandidates = detailCandidates.filter((candidate) => candidate.exactDos);
+  const exactCandidates = (claimCpt
+    ? exactDosCandidates.filter((candidate) => candidate.cptMatches)
+    : exactDosCandidates)
+    .sort((a, b) => {
+      const scoreA = (a.cptMatches ? 2 : 0) + (a.modifierMatches ? 1 : 0);
+      const scoreB = (b.cptMatches ? 2 : 0) + (b.modifierMatches ? 1 : 0);
+      return scoreB - scoreA;
+    });
+  /*
+  ###New Code - End###
+  */
+
+  return {
+    summaryText,
+    headerText,
+    statusInfoText,
+    fullDetailsText,
+    exactMatch: exactCandidates[0] ?? null,
+    nearestCandidates: uniqueNearestDetailCandidates(detailCandidates, 3),
+  };
 }
 
 function sseHeaders(): HeadersInit {
@@ -526,6 +726,7 @@ async function runProcessClaimsJob(jobId: string, formData: FormData): Promise<v
 
               const claimRaCheckNumbers: string[] = [];
               const coveredRaCheckNumbers: string[] = [];
+              const nearestDetailDosCandidates: ClaimDetailLineCandidate[] = [];
               let selectedLatestReceivedRowOnly = false;
 
               while (true) {
@@ -567,21 +768,11 @@ async function runProcessClaimsJob(jobId: string, formData: FormData): Promise<v
                   for (let idx = 0; idx < count; idx++) {
                     try {
                       const currentLineItem = matchingRows.nth(idx);
-                      const summaryText = (await currentLineItem.innerText({ timeout: 5000 })).replace(/\s+/g, " ").trim();
-                      await currentLineItem.click({ timeout: 5000 });
-                    // Use sibling tr.details after the matched line-item
-                    const detailsRow = currentLineItem.locator("~ tr.details").first();
-                    const detailsContent = detailsRow.locator('.details-content');
-                    await detailsContent.waitFor({ state: "visible", timeout: 10000 });
-                    const headerText = await detailsContent.locator('.details-header').innerText();
-                    const tableText = await detailsContent.locator('table.table-condensed').innerText();
-
-                    let statusInfoText = tableText.replace(/\s+/g, " ");
-
-                    const fullDetailsText = (headerText + " " + statusInfoText).replace(/\s+/g, " ");
-                    const hasReferToRa = /Refer to your RA/i.test(fullDetailsText);
-                    const foundCheckNumbers = extractCheckNumbersFromClaimDetailText(fullDetailsText);
-                    if (foundCheckNumbers.length > 0) {
+                      const inspection = await inspectExpandedClaimRow(currentLineItem, dosDate, claimCpt, claimModifiers);
+                      const { summaryText, headerText, statusInfoText, fullDetailsText } = inspection;
+                      const hasReferToRa = /Refer to your RA/i.test(fullDetailsText);
+                      const foundCheckNumbers = extractCheckNumbersFromClaimDetailText(fullDetailsText);
+                      if (foundCheckNumbers.length > 0) {
                       if (hasReferToRa) {
                         claimRaCheckNumbers.push(...foundCheckNumbers);
                         await log(`Row ${i + 1}: Found Claim RA Check Number(s) ${foundCheckNumbers.join(", ")}.`);
@@ -628,6 +819,84 @@ async function runProcessClaimsJob(jobId: string, formData: FormData): Promise<v
                   break; // DOS found, not on last row (or no next page) — we're done
                 }
 
+                let detailLevelMatchFound = false;
+                const currentPageRows = page.locator("tr.line-item");
+                const currentPageRowCount = await currentPageRows.count();
+
+                /*
+                ###New Code -Start###
+                */
+                await log(`Row ${i + 1}: Exact DOS was not found in the main claim rows on page ${pageNum}. Checking expanded claim detail lines for a detailed-page DOS match...`);
+                /*
+                ###New Code - End###
+                */
+
+                for (let rowIdx = 0; rowIdx < currentPageRowCount; rowIdx++) {
+                  try {
+                    const inspection = await inspectExpandedClaimRow(currentPageRows.nth(rowIdx), dosDate, claimCpt, claimModifiers);
+                    nearestDetailDosCandidates.push(...inspection.nearestCandidates);
+
+                    if (!inspection.exactMatch) {
+                      continue;
+                    }
+
+                    foundAny = true;
+                    detailLevelMatchFound = true;
+
+                    const fullDetailsText = inspection.fullDetailsText;
+                    const hasReferToRa = /Refer to your RA/i.test(fullDetailsText);
+                    const foundCheckNumbers = extractCheckNumbersFromClaimDetailText(fullDetailsText);
+                    if (foundCheckNumbers.length > 0) {
+                      if (hasReferToRa) {
+                        claimRaCheckNumbers.push(...foundCheckNumbers);
+                        await log(`Row ${i + 1}: Found Claim RA Check Number(s) ${foundCheckNumbers.join(", ")} from expanded claim line details.`);
+                      } else {
+                        coveredRaCheckNumbers.push(...foundCheckNumbers);
+                        await log(`Row ${i + 1}: Found Covered RA Check Number(s) ${foundCheckNumbers.join(", ")} from expanded claim line details.`);
+                      }
+                    } else if (hasReferToRa) {
+                      await log(`Row ${i + 1}: Expanded claim line details showed 'Refer to your RA', but no Check Number was present in the details block.`);
+                    }
+
+                    const matchedLine = inspection.exactMatch;
+                    /*
+                    ###New Code -Start###
+                    */
+                    const detailSummaryText = buildExpandedDetailSummary(matchedLine, inspection.summaryText);
+                    /*
+                    ###New Code - End###
+                    */
+
+                    details.push(
+                      `Summary: [${detailSummaryText}] | Details: [${inspection.headerText.replace(/\s+/g, " ")}] | Status Info: [${inspection.statusInfoText}]`,
+                    );
+                    await log(`Row ${i + 1}: DOS matched in expanded claim line details on page ${pageNum}.`);
+                    break;
+                  } catch (detailInspectionError) {
+                    await log(`Row ${i + 1}: Warning: Could not inspect expanded claim details for a nearby DOS on page ${pageNum}.`);
+                    continue;
+                  }
+                }
+
+                /*
+                ###New Code -Start###
+                */
+                if (!detailLevelMatchFound) {
+                  const pageNearestDosText = formatNearestDosCandidates(uniqueNearestDetailCandidates(nearestDetailDosCandidates, 3));
+                  if (pageNearestDosText) {
+                    await log(`Row ${i + 1}: Detailed-page nearest DOS candidates so far: ${pageNearestDosText}.`);
+                  } else {
+                    await log(`Row ${i + 1}: Detailed page did not expose any usable DOS candidates on page ${pageNum}.`);
+                  }
+                }
+                /*
+                ###New Code - End###
+                */
+
+                if (detailLevelMatchFound) {
+                  break;
+                }
+
                 // No match on this page.
                 // Early-exit: only if sort order is known — if first row has passed our target, stop.
                 if (sortDescending !== null) {
@@ -657,7 +926,17 @@ async function runProcessClaimsJob(jobId: string, formData: FormData): Promise<v
               }
 
               if (!foundAny) {
-                const msg = `No matching claim rows on website (searched ${pageNum} page(s)).`;
+                /*
+                ###New Code -Start###
+                */
+                const nearestDosCandidates = uniqueNearestDetailCandidates(nearestDetailDosCandidates, 3);
+                const formattedNearestDosText = formatNearestDosCandidates(nearestDosCandidates);
+                /*
+                ###New Code - End###
+                */
+                const msg = nearestDosCandidates.length > 0
+                  ? `No matching claim rows on website (searched ${pageNum} page(s)). Nearest DOS in expanded claim details: ${formattedNearestDosText}.`
+                  : `No matching claim rows on website (searched ${pageNum} page(s)).`;
                 log(`Row ${i + 1}: Failed. ${msg}`);
                 try {
                   const screenshot = await page.screenshot({ type: "jpeg", quality: 60 });
