@@ -26,7 +26,9 @@ const CLAIM_RA_SEARCH_INPUT_SELECTOR = "input#search, input[placeholder*='Check 
 const CLAIM_RA_SEARCH_BUTTON_SELECTOR = ".singleSearchButton, button[type='submit']";
 const CLAIM_RA_RESET_SELECTOR = ".accordionPane:has(.search-again), h2.search-again";
 const CLAIM_RA_RESULT_CELL_SELECTOR = "tr.line-item td:nth-child(3)";
-const CLAIM_RA_DOWNLOAD_SELECTOR = "div[ng-click*='GetRaPdfDownload'], div[uib-popover*='download Claim PDF'], .fa-arrow-circle-down";
+const CLAIM_RA_DOWNLOAD_SELECTOR = "div[ng-click*='GetRaPdfDownload']";
+const CLAIM_RA_DOWNLOAD_FALLBACK_SELECTOR = "div[uib-popover*='download Claim PDF'], .fa-arrow-circle-down";
+const CLAIM_RA_NO_RECORDS_SELECTOR = "text=/No records found\\./i";
 
 async function waitForResultsToSettle(page: Page): Promise<void> {
   await page.locator("div[full-screen-ajax-loader] .full-screen-bg").waitFor({ state: "hidden", timeout: 30000 }).catch(() => {});
@@ -37,7 +39,12 @@ async function waitForResultsToSettle(page: Page): Promise<void> {
 ###New Code -Start###
 */
 async function waitForClaimRaResultRow(page: Page, checkNumber: string, log: (message: string) => Promise<void>): Promise<boolean> {
-  for (let elapsedSeconds = 10; elapsedSeconds <= 30; elapsedSeconds += 10) {
+  const checkCurrentState = async (): Promise<boolean> => {
+    const noRecordsMessage = page.locator(CLAIM_RA_NO_RECORDS_SELECTOR).first();
+    if (await noRecordsMessage.count() > 0 && await noRecordsMessage.isVisible().catch(() => false)) {
+      throw new Error(`No Claims RA records were found for Check Number ${checkNumber}.`);
+    }
+
     const rowEftLocator = page.locator(CLAIM_RA_RESULT_CELL_SELECTOR).first();
     if (await rowEftLocator.count() > 0 && await rowEftLocator.isVisible().catch(() => false)) {
       const rowEftText = await rowEftLocator.innerText().catch(() => "");
@@ -46,10 +53,20 @@ async function waitForClaimRaResultRow(page: Page, checkNumber: string, log: (me
       }
     }
 
-    if (elapsedSeconds < 30) {
-      await log(`Claims RA search for ${checkNumber} is still loading. Waiting ${elapsedSeconds + 10} seconds total before retrying...`);
-      await page.waitForTimeout(10000);
-      await waitForResultsToSettle(page);
+    return false;
+  };
+
+  if (await checkCurrentState()) {
+    return true;
+  }
+
+  for (let elapsedSeconds = 5; elapsedSeconds <= 30; elapsedSeconds += 5) {
+    await log(`Claims RA search for ${checkNumber} is still loading. Waiting ${elapsedSeconds} seconds...`);
+    await page.waitForTimeout(5000);
+    await waitForResultsToSettle(page);
+
+    if (await checkCurrentState()) {
+      return true;
     }
   }
 
@@ -146,10 +163,15 @@ async function downloadClaimRaPdf(page: Page, checkNumber: string, log: (message
     throw new Error(`Result row for Claims RA Check Number ${checkNumber} was not visible.`);
   });
 
-  const pdfLink = matchingRow.locator(CLAIM_RA_DOWNLOAD_SELECTOR).first();
+  let pdfLink = matchingRow.locator(CLAIM_RA_DOWNLOAD_SELECTOR).first();
   /*
   ###New Code - End###
   */
+  const hasPrimaryDownloadButton = await pdfLink.count().catch(() => 0);
+  if (!hasPrimaryDownloadButton || !await pdfLink.isVisible().catch(() => false)) {
+    pdfLink = matchingRow.locator(CLAIM_RA_DOWNLOAD_FALLBACK_SELECTOR).first();
+  }
+
   await pdfLink.waitFor({ state: "visible", timeout: 15000 }).catch(() => {
     throw new Error(`Download button was not found for Claims RA Check Number ${checkNumber}.`);
   });

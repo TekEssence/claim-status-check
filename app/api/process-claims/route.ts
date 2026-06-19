@@ -517,6 +517,7 @@ async function runProcessClaimsJob(jobId: string, formData: FormData): Promise<v
 
               const claimRaCheckNumbers: string[] = [];
               const coveredRaCheckNumbers: string[] = [];
+              let selectedLatestReceivedRowOnly = false;
 
               while (true) {
                 let matchingRows = getMatchingRows();
@@ -546,6 +547,7 @@ async function runProcessClaimsJob(jobId: string, formData: FormData): Promise<v
 
                     matchingRows = matchingRows.nth(latestReceivedRowIndex);
                     count = await matchingRows.count();
+                    selectedLatestReceivedRowOnly = true;
                     await log(`Row ${i + 1}: Multiple DOS matches found. Selected the row with the latest Received date.`);
                   }
                   /*
@@ -599,6 +601,11 @@ async function runProcessClaimsJob(jobId: string, formData: FormData): Promise<v
 
                   const nextBtn = page.locator("li.pagination-next:not(.disabled) a").first();
                   const hasNextPage = await nextBtn.count() > 0;
+
+                  if (selectedLatestReceivedRowOnly) {
+                    await log(`Row ${i + 1}: Using only the latest Received Date match for this claim.`);
+                    break;
+                  }
 
                   if (dosIsLastRow && hasNextPage) {
                     await log(`Row ${i + 1}: DOS is last row on page ${pageNum}, checking next page for more...`);

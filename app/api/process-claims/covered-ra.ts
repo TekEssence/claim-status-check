@@ -40,7 +40,7 @@ function normalizeCoveredRaCheckNumber(checkNumber: string): string {
 }
 
 async function waitForCoveredRaResultRow(page: Page, checkNumber: string, log: LogFn): Promise<boolean> {
-  for (let elapsedSeconds = 5; elapsedSeconds <= 30; elapsedSeconds += 5) {
+  const checkCurrentState = async (): Promise<boolean> => {
     const noRecordsMessage = page.locator(NO_RECORDS_SELECTOR).first();
     if (await noRecordsMessage.count() > 0 && await noRecordsMessage.isVisible().catch(() => false)) {
       throw new Error(`No IEHP Covered RA records were found for Check Number ${checkNumber}.`);
@@ -51,10 +51,20 @@ async function waitForCoveredRaResultRow(page: Page, checkNumber: string, log: L
       return true;
     }
 
-    if (elapsedSeconds < 30) {
-      await log(`IEHP Covered RA search for ${checkNumber} is still loading. Waiting ${elapsedSeconds + 5} seconds total before retrying...`);
-      await page.waitForTimeout(5000);
-      await waitForResultsToSettle(page);
+    return false;
+  };
+
+  if (await checkCurrentState()) {
+    return true;
+  }
+
+  for (let elapsedSeconds = 5; elapsedSeconds <= 30; elapsedSeconds += 5) {
+    await log(`IEHP Covered RA search for ${checkNumber} is still loading. Waiting ${elapsedSeconds} seconds...`);
+    await page.waitForTimeout(5000);
+    await waitForResultsToSettle(page);
+
+    if (await checkCurrentState()) {
+      return true;
     }
   }
 
