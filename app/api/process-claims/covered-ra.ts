@@ -271,6 +271,7 @@ export async function processCoveredRaDownloads({
         cpt,
         modifiers,
         checkNumber: chk,
+        preferLastTwoDashedMemberId: true,
       });
 
       if (parsedRecords.length > 0) {
@@ -283,6 +284,7 @@ export async function processCoveredRaDownloads({
           cpt,
           modifiers,
           checkNumber: chk,
+          preferLastTwoDashedMemberId: true,
         });
 
         if (fallbackRecords.length > 0) {

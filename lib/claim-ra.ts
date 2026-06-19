@@ -152,24 +152,38 @@ function splitReasonCodes(value: string): string[] {
     .filter(Boolean);
 }
 
-function getMemberPolicyIdVariants(memberPolicyId: string): string[] {
+function getMemberPolicyIdVariants(memberPolicyId: string, preferLastTwoDashed = false): string[] {
   const raw = memberPolicyId.replace(/\s+/g, "").trim();
-  const variants = new Set<string>();
-
-  if (raw) {
-    variants.add(raw);
-  }
+  const variants: string[] = [];
+  const addVariant = (value: string) => {
+    if (value && !variants.includes(value)) {
+      variants.push(value);
+    }
+  };
 
   const digitsOnly = raw.replace(/\D+/g, "");
+
+  if (preferLastTwoDashed && digitsOnly.length > 2) {
+    addVariant(`${digitsOnly.slice(0, -2)}-${digitsOnly.slice(-2)}`);
+  } else {
+    if (/^\d{10}$/.test(digitsOnly)) {
+      addVariant(`${digitsOnly.slice(0, 8)}-${digitsOnly.slice(8)}`);
+    }
+
+    if (/^\d{12}$/.test(digitsOnly)) {
+      addVariant(`${digitsOnly.slice(0, 10)}-${digitsOnly.slice(10)}`);
+    }
+  }
+
+  if (raw) {
+    addVariant(raw);
+  }
+
   if (digitsOnly) {
-    variants.add(digitsOnly);
+    addVariant(digitsOnly);
   }
 
-  if (/^\d{12}$/.test(digitsOnly)) {
-    variants.add(`${digitsOnly.slice(0, 10)}-${digitsOnly.slice(10)}`);
-  }
-
-  return Array.from(variants);
+  return variants;
 }
 
 function parseExplanationLegend(text: string): Map<string, string> {
@@ -314,12 +328,13 @@ export function parseRaDetailsFromText(options: {
   cpt: string;
   modifiers?: string[];
   checkNumber: string;
+  preferLastTwoDashedMemberId?: boolean;
 }): RaDetailRecord[] {
-  const { text, memberPolicyId, dosDate, cpt, modifiers = [], checkNumber } = options;
+  const { text, memberPolicyId, dosDate, cpt, modifiers = [], checkNumber, preferLastTwoDashedMemberId = false } = options;
   const dosText = formatMmDdYyyy(dosDate);
   const legend = parseExplanationLegend(text);
   const lines = text.split(/\r?\n/).map((line) => line.replace(/\s+/g, " ").trim()).filter(Boolean);
-  const memberPolicyIdVariants = getMemberPolicyIdVariants(memberPolicyId);
+  const memberPolicyIdVariants = getMemberPolicyIdVariants(memberPolicyId, preferLastTwoDashedMemberId);
   const records: RaDetailRecord[] = [];
 
   for (let i = 0; i < lines.length; i++) {
@@ -408,6 +423,7 @@ export function parseRaDetailsFromPdfPages(options: {
   cpt: string;
   modifiers?: string[];
   checkNumber: string;
+  preferLastTwoDashedMemberId?: boolean;
 }): RaDetailRecord[] {
   return parseRaDetailsFromText({
     text: extractBestTextFromPdfPages(options.pages),
@@ -416,5 +432,6 @@ export function parseRaDetailsFromPdfPages(options: {
     cpt: options.cpt,
     modifiers: options.modifiers,
     checkNumber: options.checkNumber,
+    preferLastTwoDashedMemberId: options.preferLastTwoDashedMemberId,
   });
 }

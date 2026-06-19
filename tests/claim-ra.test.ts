@@ -127,6 +127,58 @@ test("matches dashed member ids and scans all member sections before deciding", 
   assert.equal(records[0].RAAmountAllowed, "105.22");
 });
 
+test("matches 10-digit member ids against 8-2 dashed covered-ra style ids", () => {
+  const dosDate = parseDateInput("01/30/2026");
+  assert.ok(dosDate);
+
+  const text = [
+    "Member # Line of Business Patient Name Provider Name",
+    "70209400-00 Medi-Cal TARGET, MEMBER TEST PROVIDER",
+    "0126368112 001006 04/22/2026 01/30/2026 01/30/2026 99213 24 1.00 280.00 105.22 105.22 0.00 0.00 0.00 0.00 D AUTHD",
+    "Explanation Code Legend",
+    "AUTHD AUTHD - Precertification/authorization/notification absent",
+    "ST Code Legend: P Payable, D Denied, E Encounter",
+  ].join("\n");
+
+  const records = parseRaDetailsFromText({
+    text,
+    memberPolicyId: "7020940000",
+    dosDate,
+    cpt: "99213",
+    checkNumber: "123456",
+    preferLastTwoDashedMemberId: true,
+  });
+
+  assert.equal(records.length, 1);
+  assert.equal(records[0].RAReason, "AUTHD");
+});
+
+test("matches generalized covered-ra dashed member ids using all-but-last-2 format", () => {
+  const dosDate = parseDateInput("01/30/2026");
+  assert.ok(dosDate);
+
+  const text = [
+    "Member # Line of Business Patient Name Provider Name",
+    "400003364470-80 Medi-Cal TARGET, MEMBER TEST PROVIDER",
+    "0126368112 001006 04/22/2026 01/30/2026 01/30/2026 99213 24 1.00 280.00 105.22 105.22 0.00 0.00 0.00 0.00 D AUTHD",
+    "Explanation Code Legend",
+    "AUTHD AUTHD - Precertification/authorization/notification absent",
+    "ST Code Legend: P Payable, D Denied, E Encounter",
+  ].join("\n");
+
+  const records = parseRaDetailsFromText({
+    text,
+    memberPolicyId: "40000336447080",
+    dosDate,
+    cpt: "99213",
+    checkNumber: "123456",
+    preferLastTwoDashedMemberId: true,
+  });
+
+  assert.equal(records.length, 1);
+  assert.equal(records[0].RAReason, "AUTHD");
+});
+
 test("matches RA line when any one excel modifier matches the pdf line modifiers", () => {
   const dosDate = parseDateInput("05/01/2026");
   assert.ok(dosDate);
