@@ -1,4 +1,5 @@
 import { getDocumentProxy } from 'unpdf';
+import { PDFDocument, degrees } from "pdf-lib";
 import type { PdfTextPage } from "./claim-ra";
 
 /**
@@ -85,4 +86,18 @@ export async function extractTextPagesFromPdf(pdfBuffer: Buffer): Promise<PdfTex
   }
 
   return pages;
+}
+
+export async function rotatePdfBuffer(pdfBuffer: Buffer, rotationDegrees: 0 | 90 | 180 | 270): Promise<Buffer> {
+  if (rotationDegrees === 0) {
+    return pdfBuffer;
+  }
+
+  const pdfDoc = await PDFDocument.load(pdfBuffer);
+  for (const page of pdfDoc.getPages()) {
+    page.setRotation(degrees(rotationDegrees));
+  }
+
+  const rotatedBytes = await pdfDoc.save();
+  return Buffer.from(rotatedBytes);
 }

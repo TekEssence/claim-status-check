@@ -3,11 +3,12 @@ import os from "node:os";
 import path from "node:path";
 import type { Download, Page } from "playwright-core";
 import { formatMmDdYyyy } from "@/lib/claim-dates";
-import { extractTextFromPdf, extractTextPagesFromPdf } from "@/lib/claim-pdf";
+import { extractTextFromPdf, extractTextPagesFromPdf, rotatePdfBuffer } from "@/lib/claim-pdf";
 import { parseRaDetailsFromPdfPages, parseRaDetailsFromText, type RaDetailRecord } from "@/lib/claim-ra";
 
 type LogFn = (message: string) => Promise<void>;
 type StreamEvent = Record<string, unknown>;
+type RotationCandidate = 0 | 90 | 180 | 270;
 
 const FINANCE_TOGGLE_SELECTOR = "a[ng-click*='vm.toggle.FIN']";
 const COVERED_RA_LINK_SELECTOR = "a[ui-sref='finance.covered']";
@@ -259,24 +260,35 @@ export async function processCoveredRaDownloads({
     await download.saveAs(pdfPath);
 
     try {
-      const pdfBuffer = fs.readFileSync(pdfPath);
-      await sendEvent({ type: "pdf_download", filename: pdfFileName, base64: pdfBuffer.toString("base64") });
+      /*
+      ###New Code -Start###
+      */
+      const originalPdfBuffer = fs.readFileSync(pdfPath);
+      const rotationOrder: RotationCandidate[] = [270, 0, 90, 180];
+      let matchedRecords: RaDetailRecord[] = [];
+      let matchedPdfBuffer: Buffer | null = null;
 
-      const pdfText = await extractTextFromPdf(pdfBuffer);
-      const pdfPages = await extractTextPagesFromPdf(pdfBuffer);
-      const parsedRecords = parseRaDetailsFromPdfPages({
-        pages: pdfPages,
-        memberPolicyId,
-        dosDate,
-        cpt,
-        modifiers,
-        checkNumber: chk,
-        preferLastTwoDashedMemberId: true,
-      });
+      for (const rotation of rotationOrder) {
+        const candidatePdfBuffer = await rotatePdfBuffer(originalPdfBuffer, rotation);
+        const pdfText = await extractTextFromPdf(candidatePdfBuffer);
+        const pdfPages = await extractTextPagesFromPdf(candidatePdfBuffer);
+        const parsedRecords = parseRaDetailsFromPdfPages({
+          pages: pdfPages,
+          memberPolicyId,
+          dosDate,
+          cpt,
+          modifiers,
+          checkNumber: chk,
+          preferLastTwoDashedMemberId: true,
+        });
 
-      if (parsedRecords.length > 0) {
-        coveredRaDetails.push(...parsedRecords);
-      } else {
+        if (parsedRecords.length > 0) {
+          matchedRecords = parsedRecords;
+          matchedPdfBuffer = candidatePdfBuffer;
+          await log(`Row ${rowNumber}: Covered RA PDF matched after trying rotation ${rotation} degrees.`);
+          break;
+        }
+
         const fallbackRecords = parseRaDetailsFromText({
           text: pdfText,
           memberPolicyId,
@@ -288,11 +300,24 @@ export async function processCoveredRaDownloads({
         });
 
         if (fallbackRecords.length > 0) {
-          coveredRaDetails.push(...fallbackRecords);
-        } else {
-          throw new Error(`No matching Covered RA detail line found in PDF for Check ${chk}, CPT ${cpt}, DOS ${formatMmDdYyyy(dosDate)}.`);
+          matchedRecords = fallbackRecords;
+          matchedPdfBuffer = candidatePdfBuffer;
+          await log(`Row ${rowNumber}: Covered RA PDF fallback matched after trying rotation ${rotation} degrees.`);
+          break;
         }
       }
+
+      const pdfBufferToSend = matchedPdfBuffer ?? originalPdfBuffer;
+      await sendEvent({ type: "pdf_download", filename: pdfFileName, base64: pdfBufferToSend.toString("base64") });
+
+      if (matchedRecords.length > 0) {
+        coveredRaDetails.push(...matchedRecords);
+      } else {
+        throw new Error(`No matching Covered RA detail line found in PDF for Check ${chk}, CPT ${cpt}, DOS ${formatMmDdYyyy(dosDate)}.`);
+      }
+      /*
+      ###New Code - End###
+      */
     } finally {
       try {
         fs.unlinkSync(pdfPath);
