@@ -103,6 +103,38 @@ function isMainClaimSearchMessage(message: string): boolean {
   return /No matching claim rows on website/i.test(message);
 }
 
+function isRetryableClaimStatusNavigationError(error: unknown, claimStatusUrl: string): boolean {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  return (
+    /page\.goto: Timeout/i.test(message) &&
+    message.includes(claimStatusUrl)
+  ) || /ERR_NETWORK_CHANGED|ERR_CONNECTION_RESET|ERR_CONNECTION_CLOSED|ERR_TIMED_OUT|Navigation failed because page crashed/i.test(message);
+}
+
+async function navigateToClaimStatusWithRetry(
+  page: Page,
+  claimStatusUrl: string,
+  rowNumber: number,
+  log: (message: string) => Promise<void>,
+): Promise<void> {
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      await log(`Row ${rowNumber}: Navigating to Claims Status...`);
+      await page.goto(claimStatusUrl, {
+        waitUntil: "networkidle",
+        timeout: 60000,
+      });
+      return;
+    } catch (error) {
+      if (attempt < 2 && isRetryableClaimStatusNavigationError(error, claimStatusUrl)) {
+        await log(`Row ${rowNumber}: Claims Status navigation failed due to network/timeout. Retrying same claim (attempt 2 of 2)...`);
+        continue;
+      }
+      throw error;
+    }
+  }
+}
+
 type ClaimDetailLineCandidate = {
   fromDate: string;
   toDate: string;
@@ -624,11 +656,13 @@ async function runProcessClaimsJob(jobId: string, formData: FormData): Promise<v
             log(`Processing Row ${i + 1}: Member ${memberPolicyId}, DOS ${formatMmDdYyyy(dosDate)}`);
 
             try {
-              log(`Row ${i + 1}: Navigating to Claims Status...`);
-              await page.goto(finalClaimStatusUrl, {
-                waitUntil: "networkidle",
-                timeout: 60000,
-              });
+              /*
+              ###New Code -Start###
+              */
+              await navigateToClaimStatusWithRetry(page, finalClaimStatusUrl, i + 1, log);
+              /*
+              ###New Code - End###
+              */
 
               await page.locator("input[name='expressionBox']:visible").first().fill(memberPolicyId);
               

@@ -580,3 +580,83 @@ test("postProcessWorksheet pairs RA rows by check number instead of cross-joinin
   assert.equal(worksheet.getRow(3).getCell(headers["Check Number"]).value, "222");
   assert.equal(worksheet.getRow(3).getCell(headers["RA Reason"]).value, "AUTHD");
 });
+
+test("postProcessWorksheet writes Final Status for denied RA rows", () => {
+  const workbook = new ExcelJS.Workbook();
+  const worksheet = workbook.addWorksheet("Claims");
+  worksheet.addRow(["Member Policy ID", "Date Of Service", "Acct #", "CPT"]);
+  worksheet.addRow(["member-a", "01/30/2026", "4090/123456", "99213"]);
+
+  applyClaimRowUpdateToWorksheet(worksheet, {
+    index: 0,
+    update: {
+      BotClaimDetails: detailsText([
+        { dos: "01/30/2026", received: "04/22/2026", check: "111", amount: "$105.22" },
+      ]),
+      BotClaimStatusCheck: "Success",
+      BotReferRA: serializeRaRecords([
+        {
+          CheckNumber: "111",
+          RAProcCode: "99213",
+          RAAmountBilled: "280.00",
+          RAAmountAllowed: "105.22",
+          RACopay: "0.00",
+          RACoins: "0.00",
+          RADeductAmount: "0.00",
+          RANetPaid: "0.00",
+          RAStatus: "Denied",
+          RAReason: "A1",
+          RADenialReason: "A1 - Charge exceeds fee schedule",
+        },
+      ]),
+    },
+  });
+
+  postProcessWorksheet(worksheet);
+
+  const headers = headerMap(worksheet);
+  assert.equal(
+    worksheet.getRow(2).getCell(headers["Final Status"]).value,
+    "DOS 01/30/2026: Checked IEHP portal claim received on 04/22/2026 denied on 04/22/2026 denial reason A1 - Charge exceeds fee schedule. Acct # 4090/123456.",
+  );
+});
+
+test("postProcessWorksheet writes Final Status for paid RA rows using net paid split with copay coins and deduct", () => {
+  const workbook = new ExcelJS.Workbook();
+  const worksheet = workbook.addWorksheet("Claims");
+  worksheet.addRow(["Member Policy ID", "Date Of Service", "Account #", "CPT"]);
+  worksheet.addRow(["member-a", "01/30/2026", "4090/654321", "99213"]);
+
+  applyClaimRowUpdateToWorksheet(worksheet, {
+    index: 0,
+    update: {
+      BotClaimDetails: detailsText([
+        { dos: "01/30/2026", received: "04/22/2026", check: "EFT-222", amount: "$210.44" },
+      ]),
+      BotClaimStatusCheck: "Success",
+      BotReferRA: serializeRaRecords([
+        {
+          CheckNumber: "EFT-222",
+          RAProcCode: "99213",
+          RAAmountBilled: "560.00",
+          RAAmountAllowed: "210.44",
+          RACopay: "1.00",
+          RACoins: "2.00",
+          RADeductAmount: "3.00",
+          RANetPaid: "204.44",
+          RAStatus: "Paid",
+          RAReason: "AUTHD",
+          RADenialReason: "",
+        },
+      ]),
+    },
+  });
+
+  postProcessWorksheet(worksheet);
+
+  const headers = headerMap(worksheet);
+  assert.equal(
+    worksheet.getRow(2).getCell(headers["Final Status"]).value,
+    "DOS 01/30/2026: Checked IEHP portal claim received on 04/22/2026 paid on 04/22/2026 paid amount $1.00 + $2.00 + $3.00 + $198.44 EFT/Check # EFT-222. Acct # 4090/654321.",
+  );
+});

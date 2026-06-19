@@ -58,6 +58,7 @@ const BOT_HEADERS = new Set([
   "RA Status",
   "RA Reason",
   "RA Denial Reason",
+  "Final Status",
 ]);
 
 const TARGET_COLS: Array<{ label: string; key: keyof ParsedClaimDetailRecord }> = [
@@ -132,6 +133,85 @@ function getBracketedSection(block: string, label: string): string {
       chars.push(char);
     }
     cursor++;
+  }
+
+  return "";
+}
+
+function normalizeHeaderName(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, "");
+}
+
+function findOriginalColumnByAliases(headerRow: ExcelJS.Row, aliases: string[]): number {
+  const normalizedAliases = aliases.map(normalizeHeaderName);
+  let foundCol = 0;
+
+  headerRow.eachCell((cell, colNum) => {
+    if (foundCol > 0) return;
+    const normalizedValue = normalizeHeaderName(String(cell.value ?? ""));
+    if (normalizedAliases.includes(normalizedValue)) {
+      foundCol = colNum;
+    }
+  });
+
+  return foundCol;
+}
+
+function parseCurrencyNumber(value: string | number | null | undefined): number {
+  if (typeof value === "number") return Number.isFinite(value) ? value : 0;
+  if (typeof value !== "string") return 0;
+  const parsed = Number.parseFloat(value.replace(/[^0-9.-]/g, ""));
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function formatCurrency(value: number): string {
+  return `$${value.toFixed(2)}`;
+}
+
+function buildPaidAmountText(raRecord: RaDetailRecord): string {
+  const netPaid = parseCurrencyNumber(raRecord.RANetPaid);
+  const copay = parseCurrencyNumber(raRecord.RACopay);
+  const coins = parseCurrencyNumber(raRecord.RACoins);
+  const deduct = parseCurrencyNumber(raRecord.RADeductAmount);
+
+  const adjustmentTotal = copay + coins + deduct;
+  const remainingNetPaid = netPaid > adjustmentTotal ? netPaid - adjustmentTotal : 0;
+  const parts: string[] = [];
+
+  if (copay > 0) parts.push(formatCurrency(copay));
+  if (coins > 0) parts.push(formatCurrency(coins));
+  if (deduct > 0) parts.push(formatCurrency(deduct));
+
+  if (remainingNetPaid > 0) {
+    parts.push(formatCurrency(remainingNetPaid));
+  } else if (parts.length === 0 && netPaid > 0) {
+    parts.push(formatCurrency(netPaid));
+  }
+
+  return parts.length > 0 ? parts.join(" + ") : formatCurrency(0);
+}
+
+function buildFinalStatusText(
+  claimRecord: ParsedClaimDetailRecord | null,
+  raRecord: RaDetailRecord | null,
+  accountNumber: string,
+): string {
+  if (!claimRecord || !raRecord || !raRecord.RAStatus) return "";
+
+  const dos = claimRecord.SummaryBlockDOS || "";
+  const receivedDate = claimRecord.ReceivedDate || "";
+  const checkDate = claimRecord.CheckDate || receivedDate || "";
+  const checkNumber = raRecord.CheckNumber || claimRecord.CheckNumber || "";
+  const acctSuffix = accountNumber ? ` Acct # ${accountNumber}.` : "";
+
+  if (/^paid$/i.test(raRecord.RAStatus)) {
+    const paidAmountText = buildPaidAmountText(raRecord);
+    return `DOS ${dos}: Checked IEHP portal claim received on ${receivedDate} paid on ${checkDate} paid amount ${paidAmountText} EFT/Check # ${checkNumber}.${acctSuffix}`;
+  }
+
+  if (/^denied$/i.test(raRecord.RAStatus)) {
+    const denialReason = raRecord.RADenialReason || raRecord.RAReason || "";
+    return `DOS ${dos}: Checked IEHP portal claim received on ${receivedDate} denied on ${receivedDate} denial reason ${denialReason}.${acctSuffix}`;
   }
 
   return "";
@@ -421,6 +501,22 @@ export function postProcessWorksheet(worksheet: ExcelJS.Worksheet): void {
     RADenialReason: 0,
   };
 
+  /*
+  ###New Code -Start###
+  */
+  const accountNumberCol = findOriginalColumnByAliases(headerRow, [
+    "Acct #",
+    "Acct#",
+    "Account #",
+    "Account#",
+    "Patient Acct #",
+    "Patient Account #",
+  ]);
+  let finalStatusCol = 0;
+  /*
+  ###New Code - End###
+  */
+
   let currentNextCol = nextCol;
   TARGET_COLS.forEach((col) => {
     let existingCol = 0;
@@ -473,6 +569,30 @@ export function postProcessWorksheet(worksheet: ExcelJS.Worksheet): void {
 
     raColMap[col.key] = existingCol;
   });
+
+  /*
+  ###New Code -Start###
+  */
+  headerRow.eachCell((cell, colNum) => {
+    if (String(cell.value) === "Final Status") finalStatusCol = colNum;
+  });
+  if (finalStatusCol === 0) {
+    while (true) {
+      let occupied = false;
+      headerRow.eachCell((cell, colNum) => {
+        if (colNum === currentNextCol && String(cell.value).trim() !== "") {
+          occupied = true;
+        }
+      });
+      if (!occupied) break;
+      currentNextCol++;
+    }
+    finalStatusCol = currentNextCol++;
+    addHeader(headerRow, finalStatusCol, "Final Status", headerStyle);
+  }
+  /*
+  ###New Code - End###
+  */
   headerRow.commit();
 
   let r = 2;
@@ -636,6 +756,20 @@ export function postProcessWorksheet(worksheet: ExcelJS.Worksheet): void {
           }
         });
       }
+
+      /*
+      ###New Code -Start###
+      */
+      if (finalStatusCol > 0) {
+        const accountNumber = accountNumberCol > 0 ? String(targetRow.getCell(accountNumberCol).value ?? "").trim() : "";
+        const finalStatusText = buildFinalStatusText(record, raRecord, accountNumber);
+        const cell = targetRow.getCell(finalStatusCol);
+        cell.value = finalStatusText;
+        cell.style = cloneStyle(dataStyle);
+      }
+      /*
+      ###New Code - End###
+      */
       targetRow.commit();
     }
 
