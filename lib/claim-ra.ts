@@ -31,11 +31,14 @@ export type RaDetailRecord = {
 };
 
 export type RaLineCandidateSummary = {
+  claimNumber?: string;
   receivedDate: string;
   serviceFromDate: string;
   serviceToDate: string;
+  revCode?: string;
   procCode: string;
   modifiers: string[];
+  qty?: string;
 };
 
 type SerializedRaRecords = {
@@ -276,6 +279,19 @@ function hasDate(value: string): boolean {
   return /^\d{2}\/\d{2}\/\d{4}$/.test(value);
 }
 
+function isClaimNumberToken(value: string): boolean {
+  const compact = value.replace(/[^A-Z0-9]/gi, "");
+  return compact.length > 5 && /[A-Z0-9]/i.test(compact);
+}
+
+function isIntegerLikeToken(value: string): boolean {
+  return /^\d+$/.test(value);
+}
+
+function isProcedureCodeToken(value: string): boolean {
+  return /^\d{4,5}[A-Z0-9]*$/i.test(value);
+}
+
 function toUtcTime(value: string): number | null {
   if (!hasDate(value)) return null;
   const [month, day, year] = value.split("/").map(Number);
@@ -340,45 +356,121 @@ function getModifierTokens(tokens: string[], procIndex: number, firstMoneyIndex:
   return modifierTokens;
 }
 
+type StructuredRaLineLayout = {
+  claimNumber?: string;
+  lineVerToken?: string;
+  receivedIndex: number;
+  serviceFromIndex: number;
+  serviceToIndex: number;
+  revIndex?: number;
+  procIndex: number;
+  qtyIndex?: number;
+  firstMoneyIndex: number;
+};
+
+function findStructuredRaLineLayout(tokens: string[], firstMoneyIndex: number): StructuredRaLineLayout | null {
+  for (let index = 0; index <= Math.max(0, firstMoneyIndex - 5); index++) {
+    if (
+      isClaimNumberToken(tokens[index] ?? "") &&
+      isIntegerLikeToken(tokens[index + 1] ?? "") &&
+      hasDate(tokens[index + 2] ?? "") &&
+      hasDate(tokens[index + 3] ?? "") &&
+      hasDate(tokens[index + 4] ?? "")
+    ) {
+      let procIndex = index + 5;
+      let revIndex: number | undefined;
+      if (isProcedureCodeToken(tokens[procIndex + 1] ?? "")) {
+        revIndex = procIndex;
+        procIndex += 1;
+      }
+      if (!isProcedureCodeToken(tokens[procIndex] ?? "") || procIndex >= firstMoneyIndex) continue;
+
+      let qtyIndex: number | undefined;
+      for (let i = procIndex + 1; i < firstMoneyIndex; i++) {
+        if (/^\d+(?:\.\d+)?$/.test(tokens[i] ?? "")) {
+          qtyIndex = i;
+        }
+      }
+
+      return {
+        claimNumber: tokens[index],
+        lineVerToken: tokens[index + 1],
+        receivedIndex: index + 2,
+        serviceFromIndex: index + 3,
+        serviceToIndex: index + 4,
+        revIndex,
+        procIndex,
+        qtyIndex,
+        firstMoneyIndex,
+      };
+    }
+  }
+
+  for (let index = 0; index <= Math.max(0, firstMoneyIndex - 4); index++) {
+    if (
+      isIntegerLikeToken(tokens[index] ?? "") &&
+      hasDate(tokens[index + 1] ?? "") &&
+      hasDate(tokens[index + 2] ?? "") &&
+      hasDate(tokens[index + 3] ?? "")
+    ) {
+      let procIndex = index + 4;
+      let revIndex: number | undefined;
+      if (isProcedureCodeToken(tokens[procIndex + 1] ?? "")) {
+        revIndex = procIndex;
+        procIndex += 1;
+      }
+      if (!isProcedureCodeToken(tokens[procIndex] ?? "") || procIndex >= firstMoneyIndex) continue;
+
+      let qtyIndex: number | undefined;
+      for (let i = procIndex + 1; i < firstMoneyIndex; i++) {
+        if (/^\d+(?:\.\d+)?$/.test(tokens[i] ?? "")) {
+          qtyIndex = i;
+        }
+      }
+
+      return {
+        lineVerToken: tokens[index],
+        receivedIndex: index + 1,
+        serviceFromIndex: index + 2,
+        serviceToIndex: index + 3,
+        revIndex,
+        procIndex,
+        qtyIndex,
+        firstMoneyIndex,
+      };
+    }
+  }
+
+  return null;
+}
+
 function parseRaLineCandidateSummary(line: string): RaLineCandidateSummary | null {
   const tokens = line.replace(/\s+/g, " ").trim().split(" ");
   const moneyTokens = tokens
     .map((token, index) => ({ token, index }))
     .filter(({ token }) => isMoneyToken(token));
   const firstMoneyIndex = moneyTokens[0]?.index ?? tokens.length;
-
-  const dateIndexesBeforeProc = tokens
-    .map((token, index) => ({ token, index }))
-    .filter(({ token, index }) => index < firstMoneyIndex && hasDate(token));
-
-  if (dateIndexesBeforeProc.length < 3) return null;
-
-  const lastThreeDateEntries = dateIndexesBeforeProc.slice(-3);
-  const [receivedDate, serviceFromDate, serviceToDate] = lastThreeDateEntries.map(({ token }) => token);
-  const lastDateIndex = lastThreeDateEntries[lastThreeDateEntries.length - 1].index;
-
-  let procIndex = lastDateIndex + 1;
-  const tokenAfterLastDate = tokens[procIndex] ?? "";
-  const nextTokenAfterLastDate = tokens[procIndex + 1] ?? "";
-
-  if (!/^\d{4,5}[A-Z0-9]*$/i.test(tokenAfterLastDate) && /^\d{4,5}[A-Z0-9]*$/i.test(nextTokenAfterLastDate)) {
-    procIndex += 1;
-  }
-
-  if (procIndex >= firstMoneyIndex) return null;
+  const layout = findStructuredRaLineLayout(tokens, firstMoneyIndex);
+  if (!layout) return null;
 
   return {
-    receivedDate,
-    serviceFromDate,
-    serviceToDate,
-    procCode: tokens[procIndex],
-    modifiers: getModifierTokens(tokens, procIndex, firstMoneyIndex),
+    claimNumber: layout.claimNumber,
+    receivedDate: tokens[layout.receivedIndex],
+    serviceFromDate: tokens[layout.serviceFromIndex],
+    serviceToDate: tokens[layout.serviceToIndex],
+    revCode: layout.revIndex !== undefined ? tokens[layout.revIndex] : undefined,
+    procCode: tokens[layout.procIndex],
+    modifiers: getModifierTokens(tokens, layout.procIndex, firstMoneyIndex),
+    qty: layout.qtyIndex !== undefined ? tokens[layout.qtyIndex] : undefined,
   };
 }
 
 function formatRaLineCandidateSummary(candidate: RaLineCandidateSummary): string {
   const modifiersText = candidate.modifiers.length > 0 ? candidate.modifiers.join(" ") : "(none)";
-  return `Received ${candidate.receivedDate}, Service From ${candidate.serviceFromDate}, Service To ${candidate.serviceToDate}, Proc ${candidate.procCode}, Modifiers ${modifiersText}`;
+  const claimText = candidate.claimNumber ? `Claim ${candidate.claimNumber}, ` : "";
+  const revText = candidate.revCode ? `, Rev ${candidate.revCode}` : "";
+  const qtyText = candidate.qty ? `, Qty ${candidate.qty}` : "";
+  return `${claimText}Received ${candidate.receivedDate}, Service From ${candidate.serviceFromDate}, Service To ${candidate.serviceToDate}${revText}, Proc ${candidate.procCode}, Modifiers ${modifiersText}${qtyText}`;
 }
 /*
 ###New Code - End###

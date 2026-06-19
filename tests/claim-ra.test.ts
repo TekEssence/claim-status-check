@@ -232,6 +232,35 @@ test("matches DOS against Service From/To columns instead of any date on the lin
   assert.equal(records[0].RAStatus, "Paid");
 });
 
+test("treats claim number plus line/ver plus 3 continuous dates as a structured RA line", () => {
+  const dosDate = parseDateInput("04/13/2026");
+  assert.ok(dosDate);
+
+  const text = [
+    "Member # Line of Business Patient Name Provider Name",
+    "70209400-00 IEHP Covered Julian Gutierrez Gustavo Lara",
+    "P202615601413 1 06/05/2026 04/13/2026 04/13/2026 21552 1 $1,375.00 $463.83 $0.00 $0.00 $139.15 $0.00 $324.68 $139.15 P 2 001167 004839 $0.00",
+    "Explanation Code Legend",
+    "2 Coinsurance amount.",
+    "001167 Contract pricing applied.",
+    "004839 Claim adjusted per payment policy.",
+    "ST Code Legend: P Payable, D Denied, E Encounter",
+  ].join("\n");
+
+  const records = parseRaDetailsFromText({
+    text,
+    memberPolicyId: "7020940000",
+    dosDate,
+    cpt: "21552",
+    checkNumber: "181393",
+    preferLastTwoDashedMemberId: true,
+  });
+
+  assert.equal(records.length, 1);
+  assert.equal(records[0].RAProcCode, "21552");
+  assert.equal(records[0].RAStatus, "Paid");
+});
+
 test("matches covered-ra member ids even when spaces appear around the dash", () => {
   const dosDate = parseDateInput("04/13/2026");
   assert.ok(dosDate);
