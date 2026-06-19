@@ -95,6 +95,14 @@ function isTerminalJobStatus(status: string): boolean {
   return status === "done" || status === "error" || status === "cancelled";
 }
 
+function isRaDetailNoMatchMessage(message: string): boolean {
+  return /No matching (?:Claim|Covered) RA detail line found in PDF/i.test(message);
+}
+
+function isMainClaimSearchMessage(message: string): boolean {
+  return /No matching claim rows on website/i.test(message);
+}
+
 function sseHeaders(): HeadersInit {
   return {
     "Content-Type": "text/event-stream; charset=utf-8",
@@ -727,17 +735,21 @@ async function runProcessClaimsJob(jobId: string, formData: FormData): Promise<v
               await sendEvent({ type: "progress", completed: i + 1, total: claimRows.length });
             } catch (rowError) {
               const msg = rowError instanceof Error ? rowError.message : "Unknown row error";
-              await log(`Row ${i + 1}: Failed. ${msg}`);
+              const isRaDetailNoMatch = isRaDetailNoMatchMessage(msg);
+              const shouldCaptureMainDiagnostics = isMainClaimSearchMessage(msg);
+              await log(`Row ${i + 1}: ${isRaDetailNoMatch ? "Completed with RA note" : "Failed"}. ${msg}`);
               
               // Capture screenshot and HTML on row failure
-              try {
-                const screenshot = await page.screenshot({ type: "jpeg", quality: 60 });
-                await sendEvent({ type: "error_screenshot", index: rowIndex, image: screenshot.toString("base64") });
-                
-                const html = await page.evaluate(() => document.documentElement.outerHTML);
-                await sendEvent({ type: "debug_html", index: rowIndex, html: html });
-              } catch {
-                await log("Failed to capture row error diagnostics.");
+              if (shouldCaptureMainDiagnostics) {
+                try {
+                  const screenshot = await page.screenshot({ type: "jpeg", quality: 60 });
+                  await sendEvent({ type: "error_screenshot", index: rowIndex, image: screenshot.toString("base64") });
+                  
+                  const html = await page.evaluate(() => document.documentElement.outerHTML);
+                  await sendEvent({ type: "debug_html", index: rowIndex, html: html });
+                } catch {
+                  await log("Failed to capture row error diagnostics.");
+                }
               }
 
               await sendEvent({
@@ -745,7 +757,7 @@ async function runProcessClaimsJob(jobId: string, formData: FormData): Promise<v
                 index: rowIndex,
                 update: {
                   BotClaimDetails: claimDetailsText || undefined,
-                  BotClaimStatusCheck: "Failed",
+                  BotClaimStatusCheck: isRaDetailNoMatch ? "Success" : "Failed",
                   BotClaimStatusCheckError: msg,
                   BotReferRA: referRaPayload || undefined,
                 }
