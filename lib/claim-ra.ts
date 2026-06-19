@@ -16,6 +16,8 @@ export type PdfTextPage = {
   items: PdfTextItem[];
 };
 
+type RotationDegrees = 0 | 90 | 180 | 270;
+
 export type RaDetailRecord = {
   CheckNumber: string;
   RAProcCode: string;
@@ -434,17 +436,6 @@ function debugParseRaLineStructure(line: string): RaLineParseDebug {
   return { line, parsed, missing };
 }
 
-function getRaLineParseDebugScore(debug: RaLineParseDebug): number {
-  let score = 0;
-  if (debug.parsed.claimNumber) score += 3;
-  if (debug.parsed.receivedDate) score += 2;
-  if (debug.parsed.serviceFromDate) score += 2;
-  if (debug.parsed.serviceToDate) score += 2;
-  if (debug.parsed.procCode) score += 3;
-  if ((debug.parsed.modifiers?.length ?? 0) > 0) score += 1;
-  return score - debug.missing.length;
-}
-
 function findStructuredRaLineLayout(tokens: string[], firstMoneyIndex: number): StructuredRaLineLayout | null {
   for (let index = 0; index <= Math.max(0, firstMoneyIndex - 5); index++) {
     if (
@@ -664,7 +655,7 @@ export function describeRaMatchFailureFromText(options: {
   let structuredLineFound = false;
   let matchingDosFound = false;
   let matchingCptFound = false;
-  let bestUnparsedDebug: RaLineParseDebug | null = null;
+  let firstUnparsedDebug: RaLineParseDebug | null = null;
   let matchedMemberLine: string | null = null;
 
   lines.forEach((line) => {
@@ -683,9 +674,8 @@ export function describeRaMatchFailureFromText(options: {
       const candidate = collectServiceLineWithReasonContinuations(lines, candidateIndex);
       const parsedCandidate = parseRaLineCandidateSummary(candidate);
       if (!parsedCandidate) {
-        const currentDebug = debugParseRaLineStructure(lines[candidateIndex]);
-        if (!bestUnparsedDebug || getRaLineParseDebugScore(currentDebug) > getRaLineParseDebugScore(bestUnparsedDebug)) {
-          bestUnparsedDebug = currentDebug;
+        if (!firstUnparsedDebug) {
+          firstUnparsedDebug = debugParseRaLineStructure(lines[candidateIndex]);
         }
         continue;
       }
@@ -717,16 +707,16 @@ export function describeRaMatchFailureFromText(options: {
   }
 
   if (!structuredLineFound) {
-    if (bestUnparsedDebug) {
+    if (firstUnparsedDebug) {
       const parsedBits = [
-        bestUnparsedDebug.parsed.claimNumber ? `Claim ${bestUnparsedDebug.parsed.claimNumber}` : "",
-        bestUnparsedDebug.parsed.receivedDate ? `Received ${bestUnparsedDebug.parsed.receivedDate}` : "",
-        bestUnparsedDebug.parsed.serviceFromDate ? `Service From ${bestUnparsedDebug.parsed.serviceFromDate}` : "",
-        bestUnparsedDebug.parsed.serviceToDate ? `Service To ${bestUnparsedDebug.parsed.serviceToDate}` : "",
-        bestUnparsedDebug.parsed.procCode ? `Proc ${bestUnparsedDebug.parsed.procCode}` : "",
+        firstUnparsedDebug.parsed.claimNumber ? `Claim ${firstUnparsedDebug.parsed.claimNumber}` : "",
+        firstUnparsedDebug.parsed.receivedDate ? `Received ${firstUnparsedDebug.parsed.receivedDate}` : "",
+        firstUnparsedDebug.parsed.serviceFromDate ? `Service From ${firstUnparsedDebug.parsed.serviceFromDate}` : "",
+        firstUnparsedDebug.parsed.serviceToDate ? `Service To ${firstUnparsedDebug.parsed.serviceToDate}` : "",
+        firstUnparsedDebug.parsed.procCode ? `Proc ${firstUnparsedDebug.parsed.procCode}` : "",
       ].filter(Boolean).join(", ");
-      const missingBits = bestUnparsedDebug.missing.join(", ") || "(none)";
-      return `Claim/member found for Member ID ${memberPolicyId}. Member line: ${matchedMemberLine ?? "(unknown)"}. Best candidate line checked: ${bestUnparsedDebug.line}. Parsed: ${parsedBits || "(nothing)"}. Not parsed: ${missingBits}.`;
+      const missingBits = firstUnparsedDebug.missing.join(", ") || "(none)";
+      return `Claim/member found for Member ID ${memberPolicyId}. Member line: ${matchedMemberLine ?? "(unknown)"}. Immediate below line: ${firstUnparsedDebug.line}. Parsed: ${parsedBits || "(nothing)"}. Not parsed: ${missingBits}.`;
     }
     return `Claim/member found for Member ID ${memberPolicyId}. Member line: ${matchedMemberLine ?? "(unknown)"}. No structured RA service lines were found under that member section.`;
   }
@@ -772,7 +762,7 @@ function groupItemsIntoText(items: PdfTextItem[]): string {
     .join("\n");
 }
 
-function rotateItems(page: PdfTextPage, rotation: 0 | 90 | 180 | 270): PdfTextItem[] {
+function rotateItems(page: PdfTextPage, rotation: RotationDegrees): PdfTextItem[] {
   return page.items.map((item) => {
     if (rotation === 90) {
       return { ...item, x: page.height - item.y, y: item.x };
@@ -798,9 +788,9 @@ function scoreRaText(text: string): number {
   return score;
 }
 
-export function extractBestTextFromPdfPages(pages: PdfTextPage[]): string {
+export function extractBestTextFromPdfPages(pages: PdfTextPage[], forcedRotation?: RotationDegrees): string {
   return pages.map((page) => {
-    const rotations: Array<0 | 90 | 180 | 270> = [0, 90, 180, 270];
+    const rotations: RotationDegrees[] = forcedRotation !== undefined ? [forcedRotation] : [0, 90, 180, 270];
     const candidates = rotations.map((rotation) => {
       const text = groupItemsIntoText(rotateItems(page, rotation));
       return { text, score: scoreRaText(text) };
@@ -818,9 +808,10 @@ export function parseRaDetailsFromPdfPages(options: {
   modifiers?: string[];
   checkNumber: string;
   preferLastTwoDashedMemberId?: boolean;
+  forcedTextRotation?: RotationDegrees;
 }): RaDetailRecord[] {
   return parseRaDetailsFromText({
-    text: extractBestTextFromPdfPages(options.pages),
+    text: extractBestTextFromPdfPages(options.pages, options.forcedTextRotation),
     memberPolicyId: options.memberPolicyId,
     dosDate: options.dosDate,
     cpt: options.cpt,
@@ -837,9 +828,10 @@ export function describeRaMatchFailureFromPdfPages(options: {
   cpt?: string;
   modifiers?: string[];
   preferLastTwoDashedMemberId?: boolean;
+  forcedTextRotation?: RotationDegrees;
 }): string {
   return describeRaMatchFailureFromText({
-    text: extractBestTextFromPdfPages(options.pages),
+    text: extractBestTextFromPdfPages(options.pages, options.forcedTextRotation),
     memberPolicyId: options.memberPolicyId,
     dosDate: options.dosDate,
     cpt: options.cpt,

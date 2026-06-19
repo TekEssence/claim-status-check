@@ -430,12 +430,12 @@ test("prints immediate below line with parsed and not parsed pieces when no stru
   });
 
   assert.match(description, /Member line: 70209400-00 IEHP Covered TARGET, MEMBER TEST PROVIDER/);
-  assert.match(description, /Best candidate line checked: P202615601413 1 06\/05\/2026 04\/13\/2026 04\/13\/2026/);
+  assert.match(description, /Immediate below line: P202615601413 1 06\/05\/2026 04\/13\/2026 04\/13\/2026/);
   assert.match(description, /Parsed: Claim P202615601413, Received 06\/05\/2026, Service From 04\/13\/2026, Service To 04\/13\/2026/);
   assert.match(description, /Not parsed: proc code after dates/);
 });
 
-test("uses a better second candidate line for debug when the first line is not proper", () => {
+test("keeps immediate below line for debug when the first line is not proper", () => {
   const text = [
     "Member # Line of Business Patient Name Provider Name",
     "70209400-00 IEHP Covered TARGET, MEMBER TEST PROVIDER",
@@ -452,6 +452,6 @@ test("uses a better second candidate line for debug when the first line is not p
     preferLastTwoDashedMemberId: true,
   });
 
-  assert.doesNotMatch(description, /Best candidate line checked: noise only/);
-  assert.match(description, /Best candidate line checked: P202615601413 1 06\/05\/2026 04\/13\/2026 04\/13\/2026/);
+  assert.match(description, /Immediate below line: noise only/);
+  assert.match(description, /Parsed: \(nothing\)/);
 });

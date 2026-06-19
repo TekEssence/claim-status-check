@@ -3,8 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import type { Download, Page } from "playwright-core";
 import { formatMmDdYyyy } from "@/lib/claim-dates";
-import { extractTextFromPdf, extractTextPagesFromPdf, rotatePdfBufferCounterClockwise } from "@/lib/claim-pdf";
-import { describeRaMatchFailureFromPdfPages, describeRaMatchFailureFromText, parseRaDetailsFromPdfPages, parseRaDetailsFromText, type RaDetailRecord } from "@/lib/claim-ra";
+import { extractTextPagesFromPdf, rotatePdfBufferCounterClockwise } from "@/lib/claim-pdf";
+import { describeRaMatchFailureFromPdfPages, parseRaDetailsFromPdfPages, type RaDetailRecord } from "@/lib/claim-ra";
 
 type LogFn = (message: string) => Promise<void>;
 type StreamEvent = Record<string, unknown>;
@@ -18,6 +18,7 @@ const SEARCH_BUTTON_SELECTOR = ".singleSearchButton, button[type='submit']";
 const RESULT_ROW_SELECTOR = "tr.line-item";
 const DOWNLOAD_ICON_SELECTOR = ".fa-arrow-circle-down";
 const NO_RECORDS_SELECTOR = "text=/No records found\\./i";
+const COVERED_RA_FORCED_TEXT_ROTATION = 270;
 
 export function extractCheckNumbersFromClaimDetailText(text: string): string[] {
   const matches = Array.from(
@@ -271,8 +272,7 @@ export async function processCoveredRaDownloads({
       await log(`Row ${rowNumber}: Best Covered RA PDF orientation selected as ${COVERED_RA_FIXED_ROTATION} degrees counterclockwise for the whole PDF.`);
       const candidatePdfBuffer = await rotatePdfBufferCounterClockwise(originalPdfBuffer, COVERED_RA_FIXED_ROTATION);
       fs.writeFileSync(pdfPath, candidatePdfBuffer);
-      const pdfText = await extractTextFromPdf(candidatePdfBuffer);
-      const pdfPages = await extractTextPagesFromPdf(candidatePdfBuffer);
+      const pdfPages = await extractTextPagesFromPdf(originalPdfBuffer);
       const parsedRecords = parseRaDetailsFromPdfPages({
         pages: pdfPages,
         memberPolicyId,
@@ -281,26 +281,12 @@ export async function processCoveredRaDownloads({
         modifiers,
         checkNumber: chk,
         preferLastTwoDashedMemberId: true,
+        forcedTextRotation: COVERED_RA_FORCED_TEXT_ROTATION,
       });
 
       if (parsedRecords.length > 0) {
         matchedRecords = parsedRecords;
-        await log(`Row ${rowNumber}: Covered RA PDF matched using ${COVERED_RA_FIXED_ROTATION} degrees counterclockwise rotation for the whole PDF.`);
-      } else {
-        const fallbackRecords = parseRaDetailsFromText({
-          text: pdfText,
-          memberPolicyId,
-          dosDate,
-          cpt,
-          modifiers,
-          checkNumber: chk,
-          preferLastTwoDashedMemberId: true,
-        });
-
-        if (fallbackRecords.length > 0) {
-          matchedRecords = fallbackRecords;
-          await log(`Row ${rowNumber}: Covered RA PDF fallback matched using ${COVERED_RA_FIXED_ROTATION} degrees counterclockwise rotation for the whole PDF.`);
-        }
+        await log(`Row ${rowNumber}: Covered RA PDF matched using ${COVERED_RA_FORCED_TEXT_ROTATION} degrees corrected text parsing.`);
       }
 
       /*
@@ -322,14 +308,7 @@ export async function processCoveredRaDownloads({
             cpt,
             modifiers,
             preferLastTwoDashedMemberId: true,
-          }) ||
-          describeRaMatchFailureFromText({
-            text: pdfText,
-            memberPolicyId,
-            dosDate,
-            cpt,
-            modifiers,
-            preferLastTwoDashedMemberId: true,
+            forcedTextRotation: COVERED_RA_FORCED_TEXT_ROTATION,
           });
         throw new Error(`No matching Covered RA detail line found in PDF for Check ${chk}, CPT ${cpt}, DOS ${formatMmDdYyyy(dosDate)}. ${debugSummary}`);
       }
