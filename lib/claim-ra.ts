@@ -434,6 +434,17 @@ function debugParseRaLineStructure(line: string): RaLineParseDebug {
   return { line, parsed, missing };
 }
 
+function getRaLineParseDebugScore(debug: RaLineParseDebug): number {
+  let score = 0;
+  if (debug.parsed.claimNumber) score += 3;
+  if (debug.parsed.receivedDate) score += 2;
+  if (debug.parsed.serviceFromDate) score += 2;
+  if (debug.parsed.serviceToDate) score += 2;
+  if (debug.parsed.procCode) score += 3;
+  if ((debug.parsed.modifiers?.length ?? 0) > 0) score += 1;
+  return score - debug.missing.length;
+}
+
 function findStructuredRaLineLayout(tokens: string[], firstMoneyIndex: number): StructuredRaLineLayout | null {
   for (let index = 0; index <= Math.max(0, firstMoneyIndex - 5); index++) {
     if (
@@ -653,7 +664,8 @@ export function describeRaMatchFailureFromText(options: {
   let structuredLineFound = false;
   let matchingDosFound = false;
   let matchingCptFound = false;
-  let firstUnparsedDebug: RaLineParseDebug | null = null;
+  let bestUnparsedDebug: RaLineParseDebug | null = null;
+  let matchedMemberLine: string | null = null;
 
   lines.forEach((line) => {
     extractMemberIdsFromLine(line).forEach((memberId) => availableMemberIds.add(memberId));
@@ -662,14 +674,18 @@ export function describeRaMatchFailureFromText(options: {
   for (let i = 0; i < lines.length; i++) {
     if (!lineMatchesMemberPolicyId(lines[i], memberPolicyIdVariants)) continue;
     memberSectionFound = true;
+    if (!matchedMemberLine) {
+      matchedMemberLine = lines[i];
+    }
 
     const candidateIndexes = getMemberSectionCandidateIndexes(lines, i);
     for (const candidateIndex of candidateIndexes) {
       const candidate = collectServiceLineWithReasonContinuations(lines, candidateIndex);
       const parsedCandidate = parseRaLineCandidateSummary(candidate);
       if (!parsedCandidate) {
-        if (!firstUnparsedDebug) {
-          firstUnparsedDebug = debugParseRaLineStructure(lines[candidateIndex]);
+        const currentDebug = debugParseRaLineStructure(lines[candidateIndex]);
+        if (!bestUnparsedDebug || getRaLineParseDebugScore(currentDebug) > getRaLineParseDebugScore(bestUnparsedDebug)) {
+          bestUnparsedDebug = currentDebug;
         }
         continue;
       }
@@ -701,18 +717,18 @@ export function describeRaMatchFailureFromText(options: {
   }
 
   if (!structuredLineFound) {
-    if (firstUnparsedDebug) {
+    if (bestUnparsedDebug) {
       const parsedBits = [
-        firstUnparsedDebug.parsed.claimNumber ? `Claim ${firstUnparsedDebug.parsed.claimNumber}` : "",
-        firstUnparsedDebug.parsed.receivedDate ? `Received ${firstUnparsedDebug.parsed.receivedDate}` : "",
-        firstUnparsedDebug.parsed.serviceFromDate ? `Service From ${firstUnparsedDebug.parsed.serviceFromDate}` : "",
-        firstUnparsedDebug.parsed.serviceToDate ? `Service To ${firstUnparsedDebug.parsed.serviceToDate}` : "",
-        firstUnparsedDebug.parsed.procCode ? `Proc ${firstUnparsedDebug.parsed.procCode}` : "",
+        bestUnparsedDebug.parsed.claimNumber ? `Claim ${bestUnparsedDebug.parsed.claimNumber}` : "",
+        bestUnparsedDebug.parsed.receivedDate ? `Received ${bestUnparsedDebug.parsed.receivedDate}` : "",
+        bestUnparsedDebug.parsed.serviceFromDate ? `Service From ${bestUnparsedDebug.parsed.serviceFromDate}` : "",
+        bestUnparsedDebug.parsed.serviceToDate ? `Service To ${bestUnparsedDebug.parsed.serviceToDate}` : "",
+        bestUnparsedDebug.parsed.procCode ? `Proc ${bestUnparsedDebug.parsed.procCode}` : "",
       ].filter(Boolean).join(", ");
-      const missingBits = firstUnparsedDebug.missing.join(", ") || "(none)";
-      return `Claim/member found for Member ID ${memberPolicyId}, but no structured RA service lines were found under that member section. Immediate below line: ${firstUnparsedDebug.line}. Parsed: ${parsedBits || "(nothing)"}. Not parsed: ${missingBits}.`;
+      const missingBits = bestUnparsedDebug.missing.join(", ") || "(none)";
+      return `Claim/member found for Member ID ${memberPolicyId}. Member line: ${matchedMemberLine ?? "(unknown)"}. Best candidate line checked: ${bestUnparsedDebug.line}. Parsed: ${parsedBits || "(nothing)"}. Not parsed: ${missingBits}.`;
     }
-    return `Claim/member found for Member ID ${memberPolicyId}, but no structured RA service lines were found under that member section.`;
+    return `Claim/member found for Member ID ${memberPolicyId}. Member line: ${matchedMemberLine ?? "(unknown)"}. No structured RA service lines were found under that member section.`;
   }
 
   if (dosText && !matchingDosFound) {

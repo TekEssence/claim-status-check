@@ -429,7 +429,29 @@ test("prints immediate below line with parsed and not parsed pieces when no stru
     preferLastTwoDashedMemberId: true,
   });
 
-  assert.match(description, /Immediate below line:/);
+  assert.match(description, /Member line: 70209400-00 IEHP Covered TARGET, MEMBER TEST PROVIDER/);
+  assert.match(description, /Best candidate line checked: P202615601413 1 06\/05\/2026 04\/13\/2026 04\/13\/2026/);
   assert.match(description, /Parsed: Claim P202615601413, Received 06\/05\/2026, Service From 04\/13\/2026, Service To 04\/13\/2026/);
   assert.match(description, /Not parsed: proc code after dates/);
+});
+
+test("uses a better second candidate line for debug when the first line is not proper", () => {
+  const text = [
+    "Member # Line of Business Patient Name Provider Name",
+    "70209400-00 IEHP Covered TARGET, MEMBER TEST PROVIDER",
+    "noise only",
+    "P202615601413 1 06/05/2026 04/13/2026 04/13/2026",
+    "Member Totals : 1375.00 463.83 324.68",
+  ].join("\n");
+
+  const description = describeRaMatchFailureFromText({
+    text,
+    memberPolicyId: "7020940000",
+    dosDate: parseDateInput("04/13/2026")!,
+    cpt: "21552",
+    preferLastTwoDashedMemberId: true,
+  });
+
+  assert.doesNotMatch(description, /Best candidate line checked: noise only/);
+  assert.match(description, /Best candidate line checked: P202615601413 1 06\/05\/2026 04\/13\/2026 04\/13\/2026/);
 });
