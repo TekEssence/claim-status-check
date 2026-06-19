@@ -18,7 +18,7 @@ const SEARCH_BUTTON_SELECTOR = ".singleSearchButton, button[type='submit']";
 const RESULT_ROW_SELECTOR = "tr.line-item";
 const DOWNLOAD_ICON_SELECTOR = ".fa-arrow-circle-down";
 const NO_RECORDS_SELECTOR = "text=/No records found\\./i";
-const COVERED_RA_FORCED_TEXT_ROTATION = 270;
+const COVERED_RA_FORCED_TEXT_ROTATION = 90;
 
 export function extractCheckNumbersFromClaimDetailText(text: string): string[] {
   const matches = Array.from(
