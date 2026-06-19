@@ -269,7 +269,8 @@ export async function processCoveredRaDownloads({
       let matchedPdfBuffer: Buffer | null = null;
 
       for (const rotation of rotationOrder) {
-        const candidatePdfBuffer = await rotatePdfBuffer(originalPdfBuffer, rotation);
+        await log(`Row ${rowNumber}: Trying Covered RA PDF rotation ${rotation} degrees for page 2 onward...`);
+        const candidatePdfBuffer = await rotatePdfBuffer(originalPdfBuffer, rotation, 2);
         const pdfText = await extractTextFromPdf(candidatePdfBuffer);
         const pdfPages = await extractTextPagesFromPdf(candidatePdfBuffer);
         const parsedRecords = parseRaDetailsFromPdfPages({
@@ -285,7 +286,7 @@ export async function processCoveredRaDownloads({
         if (parsedRecords.length > 0) {
           matchedRecords = parsedRecords;
           matchedPdfBuffer = candidatePdfBuffer;
-          await log(`Row ${rowNumber}: Covered RA PDF matched after trying rotation ${rotation} degrees.`);
+          await log(`Row ${rowNumber}: Covered RA PDF matched after trying rotation ${rotation} degrees for page 2 onward.`);
           break;
         }
 
@@ -302,7 +303,7 @@ export async function processCoveredRaDownloads({
         if (fallbackRecords.length > 0) {
           matchedRecords = fallbackRecords;
           matchedPdfBuffer = candidatePdfBuffer;
-          await log(`Row ${rowNumber}: Covered RA PDF fallback matched after trying rotation ${rotation} degrees.`);
+          await log(`Row ${rowNumber}: Covered RA PDF fallback matched after trying rotation ${rotation} degrees for page 2 onward.`);
           break;
         }
       }

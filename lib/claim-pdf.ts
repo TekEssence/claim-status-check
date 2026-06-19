@@ -88,14 +88,19 @@ export async function extractTextPagesFromPdf(pdfBuffer: Buffer): Promise<PdfTex
   return pages;
 }
 
-export async function rotatePdfBuffer(pdfBuffer: Buffer, rotationDegrees: 0 | 90 | 180 | 270): Promise<Buffer> {
+export async function rotatePdfBuffer(
+  pdfBuffer: Buffer,
+  rotationDegrees: 0 | 90 | 180 | 270,
+  startPageNumber = 1,
+): Promise<Buffer> {
   if (rotationDegrees === 0) {
     return pdfBuffer;
   }
 
   const pdfDoc = await PDFDocument.load(pdfBuffer);
-  for (const page of pdfDoc.getPages()) {
-    page.setRotation(degrees(rotationDegrees));
+  const pages = pdfDoc.getPages();
+  for (let index = Math.max(0, startPageNumber - 1); index < pages.length; index++) {
+    pages[index].setRotation(degrees(rotationDegrees));
   }
 
   const rotatedBytes = await pdfDoc.save();

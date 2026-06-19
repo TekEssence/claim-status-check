@@ -39,6 +39,31 @@ async function waitForResultsToSettle(page: Page): Promise<void> {
 /*
 ###New Code -Start###
 */
+async function submitClaimRaSearch(page: Page, searchInput: ReturnType<Page["locator"]>, log: (message: string) => Promise<void>, checkNumber: string): Promise<void> {
+  const searchButton = page.locator(CLAIM_RA_SEARCH_BUTTON_SELECTOR).first();
+  if (await searchButton.count() > 0 && await searchButton.isVisible().catch(() => false)) {
+    await searchButton.click();
+  } else {
+    await searchInput.evaluate((el: HTMLInputElement) => {
+      try {
+        const ng = (window as any).angular;
+        if (ng) {
+          const scope = ng.element(el).scope();
+          if (scope && scope.search && typeof scope.search.submit === "function") {
+            scope.search.submit();
+            if (!scope.$$phase && !scope.$root.$$phase) scope.$apply();
+          }
+        }
+      } catch {}
+    }).catch(() => {});
+
+    await searchInput.press("Enter").catch(() => {});
+  }
+
+  await waitForResultsToSettle(page);
+  await log(`Claims RA search submit fired for ${checkNumber}.`);
+}
+
 async function waitForDownloadToStart(
   page: Page,
   clickDownload: () => Promise<void>,
@@ -144,30 +169,16 @@ async function searchClaimRaByCheckNumber(page: Page, checkNumber: string, log: 
 
   const searchInput = page.locator(CLAIM_RA_SEARCH_INPUT_SELECTOR).first();
   await searchInput.fill(checkNumber);
+  await searchInput.evaluate((el: HTMLInputElement) => el.blur()).catch(() => {});
   await page.waitForTimeout(500);
 
   for (let searchAttempt = 0; searchAttempt < 2; searchAttempt++) {
-    const searchButton = page.locator(CLAIM_RA_SEARCH_BUTTON_SELECTOR).first();
-    if (await searchButton.count() > 0 && await searchButton.isVisible().catch(() => false)) {
-      await searchButton.click();
-    } else {
-      await searchInput.evaluate((el: HTMLInputElement) => {
-        try {
-          const ng = (window as any).angular;
-          if (ng) {
-            const scope = ng.element(el).scope();
-            if (scope && scope.search && typeof scope.search.submit === "function") {
-              scope.search.submit();
-              if (!scope.$$phase && !scope.$root.$$phase) scope.$apply();
-            }
-          }
-        } catch {}
-      }).catch(() => {});
+    await submitClaimRaSearch(page, searchInput, log, checkNumber);
 
-      await searchInput.press("Enter").catch(() => {});
+    if (searchAttempt === 0) {
+      await log(`Claims RA first attempt for ${checkNumber} did not confirm immediately. Re-submitting search once before extended wait...`);
+      await submitClaimRaSearch(page, searchInput, log, checkNumber);
     }
-
-    await waitForResultsToSettle(page);
 
     /*
     ###New Code -Start###
