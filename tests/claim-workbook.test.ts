@@ -126,8 +126,8 @@ test("writes bot status and split detail columns without overwriting existing co
   assert.equal(worksheet.getRow(3).getCell(headers["BotClaimStatusCheck"]).value, "Success");
   assert.equal(worksheet.getRow(2).getCell(headers["SummaryBlockDOS"]).value, "02/05/2026");
   assert.equal(worksheet.getRow(3).getCell(headers["Check Number"]).value, "222");
-  assert.equal(worksheet.getRow(2).getCell(headers["Check Amount"]).value, 10);
-  assert.equal(worksheet.getRow(3).getCell(headers["Check Amount"]).value, 20);
+  assert.equal(worksheet.getRow(2).getCell(headers["Billed Amount"]).value, 10);
+  assert.equal(worksheet.getRow(3).getCell(headers["Billed Amount"]).value, 20);
   assert.equal(worksheet.getRow(2).getCell(headers["Manual Review"]).value, "manual-a");
   assert.equal(worksheet.getRow(3).getCell(headers["Manual Review"]).value, "manual-a");
   assert.equal(worksheet.getRow(4).getCell(headers["Member Policy ID"]).value, "member-b");
@@ -415,8 +415,8 @@ test("postProcessWorksheet preserves correct data types (Dates and Numbers)", ()
   const headers = headerMap(worksheet);
   const row2 = worksheet.getRow(2);
 
-  // Check Amount should be written as numeric 150.75 (not a string!)
-  const amtCell = row2.getCell(headers["Check Amount"]);
+  // Billed Amount should be written as numeric 150.75 (not a string!)
+  const amtCell = row2.getCell(headers["Billed Amount"]);
   assert.equal(typeof amtCell.value, "number");
   assert.equal(amtCell.value, 150.75);
   assert.equal(amtCell.style.numFmt, "$#,##0.00");
@@ -426,7 +426,7 @@ test("postProcessWorksheet preserves correct data types (Dates and Numbers)", ()
   assert.equal(dosCell.style.numFmt, "mm-dd-yy");
 });
 
-test("postProcessWorksheet writes structured RA columns and duplicates multiple reason rows", () => {
+test("postProcessWorksheet writes structured RA columns without duplicating a single EFT line with multiple reasons", () => {
   const workbook = new ExcelJS.Workbook();
   const worksheet = workbook.addWorksheet("Claims");
   worksheet.addRow(["Member Policy ID", "Date Of Service", "CPT"]);
@@ -450,21 +450,8 @@ test("postProcessWorksheet writes structured RA columns and duplicates multiple 
           RADeductAmount: "0.00",
           RANetPaid: "0.00",
           RAStatus: "Denied",
-          RAReason: "A1",
-          RADenialReason: "A1 - Charge exceeds fee schedule",
-        },
-        {
-          CheckNumber: "111",
-          RAProcCode: "99213",
-          RAAmountBilled: "280.00",
-          RAAmountAllowed: "105.22",
-          RACopay: "0.00",
-          RACoins: "0.00",
-          RADeductAmount: "0.00",
-          RANetPaid: "0.00",
-          RAStatus: "Denied",
-          RAReason: "AUTHD",
-          RADenialReason: "AUTHD - Precertification absent",
+          RAReason: "A1, AUTHD",
+          RADenialReason: "A1 - Charge exceeds fee schedule, AUTHD - Precertification absent",
         },
       ]),
     },
@@ -473,15 +460,12 @@ test("postProcessWorksheet writes structured RA columns and duplicates multiple 
   postProcessWorksheet(worksheet);
 
   const headers = headerMap(worksheet);
-  assert.equal(worksheet.actualRowCount, 3);
+  assert.equal(worksheet.actualRowCount, 2);
   assert.equal(worksheet.getRow(2).getCell(headers["RA Proc Code"]).value, "99213");
   assert.equal(worksheet.getRow(2).getCell(headers["RA Amount Billed"]).value, 280);
   assert.equal(worksheet.getRow(2).getCell(headers["RA Status"]).value, "Denied");
-  assert.equal(worksheet.getRow(2).getCell(headers["RA Reason"]).value, "A1");
-  assert.equal(worksheet.getRow(2).getCell(headers["RA Denial Reason"]).value, "A1 - Charge exceeds fee schedule");
-  assert.equal(worksheet.getRow(3).getCell(headers["Member Policy ID"]).value, "member-a");
-  assert.equal(worksheet.getRow(3).getCell(headers["RA Reason"]).value, "AUTHD");
-  assert.equal(worksheet.getRow(3).getCell(headers["RA Denial Reason"]).value, "AUTHD - Precertification absent");
+  assert.equal(worksheet.getRow(2).getCell(headers["RA Reason"]).value, "A1, AUTHD");
+  assert.equal(worksheet.getRow(2).getCell(headers["RA Denial Reason"]).value, "A1 - Charge exceeds fee schedule, AUTHD - Precertification absent");
 });
 
 test("applyClaimRowUpdateToWorksheet pre-creates RA output columns", () => {

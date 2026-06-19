@@ -43,7 +43,7 @@ test("parses RA detail lines, maps status, splits reasons, and expands denial de
     checkNumber: "123456",
   });
 
-  assert.equal(records.length, 2);
+  assert.equal(records.length, 1);
   assert.equal(records[0].RAProcCode, "99213");
   assert.equal(records[0].RAAmountBilled, "280.00");
   assert.equal(records[0].RAAmountAllowed, "105.22");
@@ -52,13 +52,11 @@ test("parses RA detail lines, maps status, splits reasons, and expands denial de
   assert.equal(records[0].RADeductAmount, "0.00");
   assert.equal(records[0].RANetPaid, "0.00");
   assert.equal(records[0].RAStatus, "Denied");
-  assert.equal(records[0].RAReason, "A1");
+  assert.equal(records[0].RAReason, "A1, AUTHD");
   assert.equal(
     records[0].RADenialReason,
-    "A1 - Charge exceeds fee schedule/maximum allowable or contracted/legislated fee arrangement.",
+    "A1 - Charge exceeds fee schedule/maximum allowable or contracted/legislated fee arrangement., AUTHD - AUTHD - Precertification/authorization/notification absent",
   );
-  assert.equal(records[1].RAReason, "AUTHD");
-  assert.equal(records[1].RADenialReason, "AUTHD - AUTHD - Precertification/authorization/notification absent");
 });
 
 test("keeps wrapped RA reason continuation lines with the correct service line", () => {
@@ -90,10 +88,14 @@ test("keeps wrapped RA reason continuation lines with the correct service line",
     checkNumber: "123456",
   });
 
-  assert.deepEqual(records.map((record) => record.RAReason), ["59", "001167", "119", "N362"]);
+  assert.equal(records.length, 1);
+  assert.equal(records[0].RAReason, "59, 001167, 119, N362");
   assert.equal(records[0].RAStatus, "Paid");
   assert.equal(records[0].RAAmountBilled, "2,010.00");
-  assert.equal(records[3].RADenialReason, "N362 - The number of days or units of service exceeds acceptable maximum.");
+  assert.equal(
+    records[0].RADenialReason,
+    "59 - Processed based on multiple procedure rules., 001167 - Contract pricing applied., 119 - Benefit maximum for this service has been reached., N362 - The number of days or units of service exceeds acceptable maximum.",
+  );
 });
 
 test("matches dashed member ids and scans all member sections before deciding", () => {

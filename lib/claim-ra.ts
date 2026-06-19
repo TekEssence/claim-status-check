@@ -289,9 +289,10 @@ function lineToRaRecords(line: string, checkNumber: string, cpt: string, modifie
   const statusIndex = tokens.findIndex((token, index) => index > lastMoneyIndex && /^[A-Z]$/i.test(token));
   const reasonText = statusIndex === -1 ? "" : tokens.slice(statusIndex + 1).join(" ");
   const reasons = splitReasonCodes(reasonText);
-  const reasonCodes = reasons.length > 0 ? reasons : [""];
+  const joinedReasonCodes = reasons.join(", ");
+  const joinedDenialReasons = reasons.map((reasonCode) => makeDenialReason(reasonCode, legend)).join(", ");
 
-  return reasonCodes.map((reasonCode) => ({
+  return [{
     CheckNumber: checkNumber,
     RAProcCode: tokens[procIndex],
     RAAmountBilled: cleanMoneyToken(tokens[firstMoneyIndex]),
@@ -301,9 +302,9 @@ function lineToRaRecords(line: string, checkNumber: string, cpt: string, modifie
     RADeductAmount: cleanMoneyToken(moneyTokens[amountOffset + 5]?.token ?? ""),
     RANetPaid: cleanMoneyToken(moneyTokens[amountOffset + 6]?.token ?? ""),
     RAStatus: statusIndex === -1 ? "" : mapStatus(tokens[statusIndex]),
-    RAReason: reasonCode,
-    RADenialReason: reasonCode ? makeDenialReason(reasonCode, legend) : "",
-  }));
+    RAReason: joinedReasonCodes,
+    RADenialReason: joinedDenialReasons,
+  }];
 }
 
 export function parseRaDetailsFromText(options: {

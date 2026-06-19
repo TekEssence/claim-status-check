@@ -44,7 +44,7 @@ const BOT_HEADERS = new Set([
   "Check Number",
   "Received Date",
   "Check Date",
-  "Check Amount",
+  "Billed Amount",
   "Other related payment details",
   "Bot CIN",
   "Bot Plan Type",
@@ -68,7 +68,7 @@ const TARGET_COLS: Array<{ label: string; key: keyof ParsedClaimDetailRecord }> 
   { label: "Received Date", key: "ReceivedDate" },
   { label: "Check Date", key: "CheckDate" },
   { label: "Bot Plan Type", key: "BotPlanType" },
-  { label: "Check Amount", key: "CheckAmount" },
+  { label: "Billed Amount", key: "CheckAmount" },
   { label: "Other related payment details", key: "OtherDetails" },
 ];
 
