@@ -314,6 +314,26 @@ function numberEnv(name: string, fallback: number): number {
   return Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+async function emitAerialArtifacts(
+  context: ScraperContext,
+  state: AerialRunState,
+): Promise<void> {
+  const workbookBuffer = createAerialOutputWorkbookBuffer(state.outputRows, {
+    errorRows: state.errorRows,
+    auditRows: state.auditRows,
+  });
+  await context.emit(downloadableFileEvent("aerial_output.xlsx", workbookBuffer, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"));
+
+  const logContent = formatAerialLog(state.auditRows, state.errorRows);
+  const logPath = await saveAerialLogFile(context.jobId, logContent);
+  await context.log({ level: "info", message: `Aerial log saved: ${logPath}` });
+  await context.emit(downloadableFileEvent("aerial-run.log", Buffer.from(logContent, "utf8"), "text/plain"));
+}
+
 export async function runAerialClaimStatusJob(formData: FormData, context: ScraperContext): Promise<void> {
   loadAerialEnvironment();
   const input: AerialInput = await parseAerialInput(formData);
@@ -354,7 +374,7 @@ export async function runAerialClaimStatusJob(formData: FormData, context: Scrap
         state.outputRows.push(...rowOutputRows);
         addAudit(state, runId, inputRow, page, "row_completed", "completed", "Row processing completed");
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = errorMessage(error);
         const snapshotPath = await captureAerialDiagnostics(context, page, inputRow, "row-processing");
         addError(state, runId, inputRow, page, "row_processing", "row_processing_failed", message, snapshotPath);
         state.outputRows.push({ ...baseOutputRow(inputRow), result: "failed", notes: `Row processing failed: ${message}` });
@@ -364,16 +384,22 @@ export async function runAerialClaimStatusJob(formData: FormData, context: Scrap
       await context.emit({ type: "progress", completed, total: rows.length });
     }
 
-    const workbookBuffer = createAerialOutputWorkbookBuffer(state.outputRows, {
-      errorRows: state.errorRows,
-      auditRows: state.auditRows,
+    await emitAerialArtifacts(context, state);
+    if (state.errorRows.length > 0) {
+      await context.emit({
+        type: "warning",
+        message: `Aerial completed with ${state.errorRows.length} row-level error(s). Download aerial-run.log for details.`,
+      });
+    }
+    await context.emit({ type: "done" });
+  } catch (error) {
+    const message = errorMessage(error);
+    addAudit(state, runId, null, page ?? null, "job_failed", "failed", message);
+    await context.log({ level: "error", message: `Aerial run failed: ${message}` });
+    await emitAerialArtifacts(context, state).catch((artifactError) => {
+      void context.log({ level: "error", message: `Failed to create Aerial partial output/log: ${errorMessage(artifactError)}` });
     });
-    await context.emit(downloadableFileEvent("aerial_output.xlsx", workbookBuffer, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"));
-
-    const logContent = formatAerialLog(state.auditRows, state.errorRows);
-    const logPath = await saveAerialLogFile(context.jobId, logContent);
-    await context.log({ level: "info", message: `Aerial log saved: ${logPath}` });
-    await context.emit(downloadableFileEvent("aerial-run.log", Buffer.from(logContent, "utf8"), "text/plain"));
+    await context.emit({ type: "error", message });
     await context.emit({ type: "done" });
   } finally {
     await browser?.close().catch(() => {});

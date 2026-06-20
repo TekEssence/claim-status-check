@@ -309,6 +309,7 @@ export function ScraperPage() {
     formData.append("inputExcel", aerialInputFile);
 
     let hasError = false;
+    let finalErrorMessage = "";
     const streamAbortController = new AbortController();
 
     const handleJobEvent = async (eventData: ScrapeJobEvent) => {
@@ -321,7 +322,12 @@ export function ScraperPage() {
       } else if (eventData.type === "file_download" && eventData.filename && eventData.base64) {
         downloadBase64File(eventData.filename, eventData.base64, eventData.mimeType || "application/octet-stream");
         setStatus(`Downloaded ${eventData.filename}`);
+      } else if (eventData.type === "warning" && eventData.message) {
+        setLogs((prev) => [...prev, eventData.message ?? ""]);
+        setStatus(eventData.message);
       } else if (eventData.type === "error" && eventData.message) {
+        finalErrorMessage = eventData.message;
+        setLogs((prev) => [...prev, `ERROR: ${eventData.message}`]);
         setStatus(`Error: ${eventData.message}`);
         hasError = true;
       }
@@ -335,10 +341,17 @@ export function ScraperPage() {
         onEvent: handleJobEvent,
         onStreamError(error) {
           console.error("Aerial stream error:", error);
+          finalErrorMessage = getErrorMessage(error);
+          setLogs((prev) => [...prev, `STREAM ERROR: ${finalErrorMessage}`]);
+          setStatus(`Stream error: ${finalErrorMessage}`);
           hasError = true;
         },
       });
-      setStatus(hasError ? "Aerial processing finished with errors." : "Aerial processing completed.");
+      setStatus(
+        hasError
+          ? `Aerial processing finished with errors${finalErrorMessage ? `: ${finalErrorMessage}` : "."}`
+          : "Aerial processing completed.",
+      );
     } catch (error) {
       setStatus(`Failed to process Aerial claims: ${getErrorMessage(error)}`);
     } finally {
