@@ -22,8 +22,8 @@ import {
   getReceivedColumnIndex,
   parseDateInput,
   parseWebsiteMmDdYyyy,
-} from "@/lib/claim-dates";
-import { getClaimCptValue, getClaimModifierValues, serializeRaRecords, type RaDetailRecord } from "@/lib/claim-ra";
+} from "@/backend/src/common/claims/dates";
+import { getClaimCptValue, getClaimModifierValues, serializeRaRecords, type RaDetailRecord } from "@/backend/src/common/claims/ra";
 
 type GenericRow = Record<string, unknown>;
 type StreamEvent = Record<string, unknown>;

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { extractCheckNumbersFromClaimDetailText } from "../app/api/process-claims/covered-ra";
+import { extractCheckNumbersFromClaimDetailText } from "../covered-ra";
 
 test("extracts unique check numbers from claim detail text", () => {
   const text = [

@@ -7,7 +7,7 @@ import {
   getPrimaryDosColumnIndex,
   parseDateInput,
   parseWebsiteMmDdYyyy,
-} from "../lib/claim-dates";
+} from "../../../common/claims/dates";
 
 test("parses Excel serial dates and formats with UTC getters to avoid off-by-one DOS", () => {
   const parsed = parseDateInput(46058);

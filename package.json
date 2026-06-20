@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "test": "tsx --test tests/**/*.test.ts",
+    "test": "tsx --test backend/**/*.test.ts frontend/**/*.test.ts",
     "build": "npm test && next build",
     "start": "next start",
     "lint": "eslint"

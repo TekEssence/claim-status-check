@@ -5,8 +5,8 @@ import {
   getClaimCptValue,
   getClaimModifierValues,
   parseRaDetailsFromText,
-} from "../lib/claim-ra";
-import { parseDateInput } from "../lib/claim-dates";
+} from "../../../common/claims/ra";
+import { parseDateInput } from "../../../common/claims/dates";
 
 test("finds CPT through common procedure column aliases", () => {
   assert.equal(getClaimCptValue({ cpt: "99213" }), "99213");
