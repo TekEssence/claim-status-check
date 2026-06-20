@@ -37,13 +37,23 @@ The loader supports this order:
 external env file from env_path / ENV_PATH / PORTAL_AERIAL_ENV_PATH / AERIAL_ENV_PATH
 ```
 
-Required external env file keys:
+Optional external env file keys for credentials:
 
 ```text
 PORTAL_AERIAL_LOGIN_URL=
 PORTAL_AERIAL_USERNAME=
 PORTAL_AERIAL_PASSWORD=
 ```
+
+If these three env values are missing, the uploaded Aerial login workbook may provide credentials using columns such as:
+
+```text
+URL / Login URL / Aerial URL
+User Name / Username
+Password
+```
+
+For backward compatibility, the uploaded claim workbook may also provide those same credential columns.
 
 Optional keys:
 
@@ -74,7 +84,8 @@ npm run dev
 
 The platform supports both:
 
-- frontend upload: `inputExcel`
+- frontend upload: `credentialExcel` for login credentials
+- frontend upload: `inputExcel` for claim details
 - fallback env path: `PORTAL_AERIAL_INPUT_XLSX_PATH`
 
 Required columns are read by position from the first worksheet:

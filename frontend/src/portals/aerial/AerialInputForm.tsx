@@ -3,19 +3,34 @@ import type { FormEvent } from "react";
 export function AerialInputForm({
   canSubmit,
   isProcessing,
+  onCredentialFileChange,
   onInputFileChange,
   onSubmit,
 }: {
   canSubmit: boolean;
   isProcessing: boolean;
+  onCredentialFileChange: (file: File | null) => void;
   onInputFileChange: (file: File | null) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
 }) {
   return (
     <form className="mt-6 space-y-5" onSubmit={onSubmit}>
       <div>
+        <label className="mb-2 block text-sm font-medium" htmlFor="aerialCredentialExcel">
+          1. Provide Aerial login Excel
+        </label>
+        <input
+          id="aerialCredentialExcel"
+          type="file"
+          accept=".xlsx,.xls,.csv"
+          onChange={(event) => onCredentialFileChange(event.target.files?.[0] ?? null)}
+          className="block w-full rounded-md border border-slate-300 p-2 text-sm"
+        />
+      </div>
+
+      <div>
         <label className="mb-2 block text-sm font-medium" htmlFor="aerialInputExcel">
-          Provide Aerial input Excel
+          2. Provide Aerial claim details Excel
         </label>
         <input
           id="aerialInputExcel"

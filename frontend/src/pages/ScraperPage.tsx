@@ -79,6 +79,7 @@ export function ScraperPage() {
   const [iehpLoginFile, setIehpLoginFile] = useState<File | null>(null);
   const [claimFileHandle, setClaimFileHandle] = useState<FileSystemFileHandle | null>(null);
   const [claimFileName, setClaimFileName] = useState<string>("");
+  const [aerialCredentialFile, setAerialCredentialFile] = useState<File | null>(null);
   const [aerialInputFile, setAerialInputFile] = useState<File | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [status, setStatus] = useState<string>("");
@@ -302,6 +303,9 @@ export function ScraperPage() {
 
     const formData = new FormData();
     formData.append("portalId", "aerial");
+    if (aerialCredentialFile) {
+      formData.append("credentialExcel", aerialCredentialFile);
+    }
     formData.append("inputExcel", aerialInputFile);
 
     let hasError = false;
@@ -411,6 +415,7 @@ export function ScraperPage() {
             <AerialInputForm
               canSubmit={canSubmitAerial}
               isProcessing={isProcessing}
+              onCredentialFileChange={setAerialCredentialFile}
               onInputFileChange={setAerialInputFile}
               onSubmit={submitAerial}
             />

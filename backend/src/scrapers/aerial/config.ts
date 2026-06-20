@@ -10,7 +10,7 @@ export const aerialConfig = {
   },
   runtime: {
     supportsLocal: true,
-    supportsDeployed: false,
-    requiresVpn: true,
+    supportsDeployed: true,
+    requiresVpn: false,
   },
 };
