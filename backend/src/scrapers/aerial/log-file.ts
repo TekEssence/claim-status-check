@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { aerialWritableDataPath } from "./storage";
 
 export function formatAerialLog(auditRows: Record<string, unknown>[], errorRows: Record<string, unknown>[]): string {
   const lines = ["Aerial scraper run log", ""];
@@ -32,7 +33,7 @@ export function formatAerialLog(auditRows: Record<string, unknown>[], errorRows:
 }
 
 export async function saveAerialLogFile(jobId: string, content: string): Promise<string> {
-  const dir = path.join(process.cwd(), "data", "logs", "aerial", jobId);
+  const dir = aerialWritableDataPath("logs", "aerial", jobId);
   await fs.mkdir(dir, { recursive: true });
   const filePath = path.join(dir, "aerial-run.log");
   await fs.writeFile(filePath, content, "utf8");

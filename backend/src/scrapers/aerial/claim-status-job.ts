@@ -7,6 +7,7 @@ import { parseAerialInput, type AerialInput } from "./input";
 import { createAerialOutputWorkbookBuffer, readAerialInputWorkbookFromBuffer, type AerialInputRow } from "./workbook";
 import { formatAerialLog, saveAerialLogFile } from "./log-file";
 import { loadAerialEnvironment } from "./env";
+import { aerialWritableDataPath } from "./storage";
 
 type AerialLoginModule = {
   loginToAerial(page: Page, config: AerialRuntimeConfig): Promise<void>;
@@ -134,7 +135,7 @@ async function captureAerialDiagnostics(
   if (!page) return "";
 
   const safeReason = reason.replace(/[^a-z0-9_-]+/gi, "-").slice(0, 60) || "error";
-  const dir = path.join(process.cwd(), "data", "screenshots", "aerial", context.jobId);
+  const dir = aerialWritableDataPath("screenshots", "aerial", context.jobId);
   await fs.mkdir(dir, { recursive: true });
   const basePath = path.join(dir, `row-${inputRow.input_row_id}-${safeReason}`);
   const screenshotPath = `${basePath}.jpg`;
