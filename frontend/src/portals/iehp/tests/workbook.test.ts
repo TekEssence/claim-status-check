@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import ExcelJS from "exceljs";
 import { applyClaimRowUpdateToWorksheet, parseBotClaimDetails, postProcessWorksheet } from "../workbook";
-import { serializeRaRecords } from "@/backend/src/common/claims/ra";
+import { serializeRaRecords } from "@/backend/src/scrapers/iehp/claims/ra";
 
 function headerMap(worksheet: ExcelJS.Worksheet) {
   const headers: Record<string, number> = {};

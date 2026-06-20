@@ -1,5 +1,5 @@
 import type ExcelJS from "exceljs";
-import { parseSerializedRaRecords, type RaDetailRecord } from "@/backend/src/common/claims/ra";
+import { parseSerializedRaRecords, type RaDetailRecord } from "@/backend/src/scrapers/iehp/claims/ra";
 
 type ClaimUpdate = {
   BotClaimDetails?: string;

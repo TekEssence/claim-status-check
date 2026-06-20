@@ -2,9 +2,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { Download, Page } from "playwright-core";
-import { formatMmDdYyyy } from "@/backend/src/common/claims/dates";
-import { extractTextPagesFromPdf, rotatePdfBufferCounterClockwise } from "@/backend/src/common/claims/pdf";
-import { describeRaMatchFailureFromPdfPages, parseRaDetailsFromPdfPages, type RaDetailRecord } from "@/backend/src/common/claims/ra";
+import { formatMmDdYyyy } from "./claims/dates";
+import { extractTextPagesFromPdf, rotatePdfBufferCounterClockwise } from "./claims/pdf";
+import { describeRaMatchFailureFromPdfPages, parseRaDetailsFromPdfPages, type RaDetailRecord } from "./claims/ra";
 import { IEHP_SELECTORS } from "./selectors";
 
 type LogFn = (message: string) => Promise<void>;

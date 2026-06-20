@@ -2,9 +2,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { Download, Page } from "playwright-core";
-import { formatMmDdYyyy } from "@/backend/src/common/claims/dates";
-import { extractTextFromPdf, extractTextPagesFromPdf } from "@/backend/src/common/claims/pdf";
-import { describeRaMatchFailureFromPdfPages, describeRaMatchFailureFromText, parseRaDetailsFromPdfPages, parseRaDetailsFromText, type RaDetailRecord } from "@/backend/src/common/claims/ra";
+import { formatMmDdYyyy } from "./claims/dates";
+import { extractTextFromPdf, extractTextPagesFromPdf } from "./claims/pdf";
+import { describeRaMatchFailureFromPdfPages, describeRaMatchFailureFromText, parseRaDetailsFromPdfPages, parseRaDetailsFromText, type RaDetailRecord } from "./claims/ra";
 import { IEHP_SELECTORS } from "./selectors";
 
 type StreamEvent = Record<string, unknown>;
