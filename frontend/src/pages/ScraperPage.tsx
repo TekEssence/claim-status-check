@@ -4,12 +4,17 @@ import { FormEvent, useMemo, useState } from "react";
 import * as XLSX from "xlsx";
 import ExcelJS from "exceljs";
 import { applyClaimRowUpdateToWorksheet, postProcessWorksheet } from "../portals/iehp/workbook";
-import { startProcessClaimsJob, subscribeToProcessClaimEvents } from "../api/process-claims-api";
+import { startScrapeJob, subscribeToScrapeJobEvents } from "../api/scrape-jobs-api";
 import type { FileSystemFileHandle, WindowWithFilePicker } from "../types/file-system-access";
-import type { ClaimRow, ErrorScreenshot, JobProgressValue, ProcessClaimEvent } from "../types/job";
+import type { ClaimRow, ErrorScreenshot, JobProgressValue, ScrapeJobEvent } from "../types/job";
 import { IehpInputForm } from "../portals/iehp/IehpInputForm";
 import { IehpResultView } from "../portals/iehp/IehpResultView";
 import { iehpFrontendPortalConfig } from "../portals/iehp/portal-config";
+import { AerialInputForm } from "../portals/aerial/AerialInputForm";
+import { AerialResultView } from "../portals/aerial/AerialResultView";
+import { aerialFrontendPortalConfig } from "../portals/aerial/portal-config";
+
+type PortalId = "iehp" | "aerial";
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -17,6 +22,10 @@ function getErrorMessage(error: unknown): string {
 
 function downloadTextFile(filename: string, content: string, type: string): void {
   const blob = new Blob([content], { type });
+  downloadBlob(filename, blob);
+}
+
+function downloadBlob(filename: string, blob: Blob): void {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
@@ -27,22 +36,19 @@ function downloadTextFile(filename: string, content: string, type: string): void
   URL.revokeObjectURL(url);
 }
 
-function downloadPdfFile(filename: string, base64: string): void {
+function base64ToBytes(base64: string): Uint8Array {
   const binaryString = window.atob(base64);
   const bytes = new Uint8Array(binaryString.length);
   for (let i = 0; i < binaryString.length; i++) {
     bytes[i] = binaryString.charCodeAt(i);
   }
+  return bytes;
+}
 
-  const blob = new Blob([bytes], { type: "application/pdf" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+function downloadBase64File(filename: string, base64: string, type: string): void {
+  const bytes = base64ToBytes(base64);
+  const arrayBuffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+  downloadBlob(filename, new Blob([arrayBuffer], { type }));
 }
 
 async function selectExcelFileHandle(): Promise<FileSystemFileHandle | null> {
@@ -69,19 +75,39 @@ async function selectExcelFileHandle(): Promise<FileSystemFileHandle | null> {
 }
 
 export function ScraperPage() {
-  const [loginFile, setLoginFile] = useState<File | null>(null);
+  const [selectedPortalId, setSelectedPortalId] = useState<PortalId | null>(null);
+  const [iehpLoginFile, setIehpLoginFile] = useState<File | null>(null);
   const [claimFileHandle, setClaimFileHandle] = useState<FileSystemFileHandle | null>(null);
   const [claimFileName, setClaimFileName] = useState<string>("");
+  const [aerialInputFile, setAerialInputFile] = useState<File | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [status, setStatus] = useState<string>("");
   const [logs, setLogs] = useState<string[]>([]);
   const [errorScreenshots, setErrorScreenshots] = useState<ErrorScreenshot[]>([]);
   const [progress, setProgress] = useState<JobProgressValue | null>(null);
 
-  const canSubmit = useMemo(
-    () => Boolean(loginFile && claimFileHandle && !isProcessing),
-    [loginFile, claimFileHandle, isProcessing],
+  const selectedPortal =
+    selectedPortalId === "iehp"
+      ? iehpFrontendPortalConfig
+      : selectedPortalId === "aerial"
+        ? aerialFrontendPortalConfig
+        : null;
+  const canSubmitIehp = useMemo(
+    () => Boolean(iehpLoginFile && claimFileHandle && !isProcessing),
+    [iehpLoginFile, claimFileHandle, isProcessing],
   );
+  const canSubmitAerial = useMemo(
+    () => Boolean(aerialInputFile && !isProcessing),
+    [aerialInputFile, isProcessing],
+  );
+
+  function resetRunState(message: string) {
+    setIsProcessing(true);
+    setStatus(message);
+    setLogs([]);
+    setErrorScreenshots([]);
+    setProgress(null);
+  }
 
   async function selectClaimFile() {
     try {
@@ -101,19 +127,15 @@ export function ScraperPage() {
     }
   }
 
-  async function onSubmit(e: FormEvent<HTMLFormElement>) {
+  async function submitIehp(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
 
-    if (!loginFile || !claimFileHandle) {
+    if (!iehpLoginFile || !claimFileHandle) {
       setStatus("Please provide both required files.");
       return;
     }
 
-    setIsProcessing(true);
-    setStatus("Reading claim file...");
-    setLogs([]);
-    setErrorScreenshots([]);
-    setProgress(null);
+    resetRunState("Reading claim file...");
 
     try {
       if ((await claimFileHandle.queryPermission({ mode: "readwrite" })) !== "granted") {
@@ -141,7 +163,7 @@ export function ScraperPage() {
       }
 
       const totalRows = claimRows.length;
-      setStatus(`Starting process for ${totalRows} rows...`);
+      setStatus(`Starting IEHP process for ${totalRows} rows...`);
 
       const writeWorkbookToClaimFile = async () => {
         const permission = await claimFileHandle.queryPermission({ mode: "readwrite" });
@@ -160,7 +182,8 @@ export function ScraperPage() {
 
       const processChunk = async (startIndex: number): Promise<void> => {
         const formData = new FormData();
-        formData.append("loginExcel", loginFile);
+        formData.append("portalId", "iehp");
+        formData.append("loginExcel", iehpLoginFile);
         formData.append("claimRows", JSON.stringify(claimRows));
         formData.append("startIndex", startIndex.toString());
 
@@ -186,7 +209,7 @@ export function ScraperPage() {
           throw failure;
         };
 
-        const handleJobEvent = async (eventData: ProcessClaimEvent) => {
+        const handleJobEvent = async (eventData: ScrapeJobEvent) => {
           if (eventData.type === "log" && eventData.message) {
             setLogs((prev) => [...prev, eventData.message ?? ""]);
           } else if (eventData.type === "progress" && typeof eventData.completed === "number" && typeof eventData.total === "number") {
@@ -211,11 +234,7 @@ export function ScraperPage() {
           } else if (eventData.type === "debug_html" && typeof eventData.index === "number" && eventData.html) {
             downloadTextFile(`debug_dom_row_${eventData.index + 1}.html`, eventData.html, "text/html");
           } else if (eventData.type === "pdf_download" && eventData.filename && eventData.base64) {
-            try {
-              downloadPdfFile(eventData.filename, eventData.base64);
-            } catch (error) {
-              console.error("Failed to process pdf_download event", error);
-            }
+            downloadBase64File(eventData.filename, eventData.base64, "application/pdf");
           } else if (eventData.type === "error" && eventData.message) {
             setStatus(`Error: ${eventData.message}`);
             chunkHasError = true;
@@ -223,8 +242,8 @@ export function ScraperPage() {
         };
 
         try {
-          const jobId = await startProcessClaimsJob(formData);
-          await subscribeToProcessClaimEvents({
+          const jobId = await startScrapeJob(formData);
+          await subscribeToScrapeJobEvents({
             jobId,
             signal: streamAbortController.signal,
             onEvent: handleJobEvent,
@@ -254,7 +273,7 @@ export function ScraperPage() {
             setStatus("Running post-processing (generating summary columns & duplicating rows)...");
             postProcessWorksheet(worksheet);
             await writeWorkbookToClaimFile();
-            setStatus("Processing completed!");
+            setStatus("IEHP processing completed.");
           } catch (postError) {
             console.error("Post-processing failed", postError);
             setStatus(`Processing succeeded but post-processing failed: ${getErrorMessage(postError)}`);
@@ -266,34 +285,140 @@ export function ScraperPage() {
 
       await processChunk(0);
     } catch (error) {
-      setStatus(`Failed to process claims: ${getErrorMessage(error)}`);
+      setStatus(`Failed to process IEHP claims: ${getErrorMessage(error)}`);
+      setIsProcessing(false);
+    }
+  }
+
+  async function submitAerial(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+
+    if (!aerialInputFile) {
+      setStatus("Please provide the Aerial input Excel file.");
+      return;
+    }
+
+    resetRunState("Starting Aerial scraper...");
+
+    const formData = new FormData();
+    formData.append("portalId", "aerial");
+    formData.append("inputExcel", aerialInputFile);
+
+    let hasError = false;
+    const streamAbortController = new AbortController();
+
+    const handleJobEvent = async (eventData: ScrapeJobEvent) => {
+      if (eventData.type === "log" && eventData.message) {
+        setLogs((prev) => [...prev, eventData.message ?? ""]);
+      } else if (eventData.type === "progress" && typeof eventData.completed === "number" && typeof eventData.total === "number") {
+        setProgress({ completed: eventData.completed, total: eventData.total });
+      } else if (eventData.type === "error_screenshot" && typeof eventData.index === "number" && eventData.image) {
+        setErrorScreenshots((prev) => [...prev, { index: eventData.index ?? -1, image: eventData.image ?? "" }]);
+      } else if (eventData.type === "file_download" && eventData.filename && eventData.base64) {
+        downloadBase64File(eventData.filename, eventData.base64, eventData.mimeType || "application/octet-stream");
+        setStatus(`Downloaded ${eventData.filename}`);
+      } else if (eventData.type === "error" && eventData.message) {
+        setStatus(`Error: ${eventData.message}`);
+        hasError = true;
+      }
+    };
+
+    try {
+      const jobId = await startScrapeJob(formData);
+      await subscribeToScrapeJobEvents({
+        jobId,
+        signal: streamAbortController.signal,
+        onEvent: handleJobEvent,
+        onStreamError(error) {
+          console.error("Aerial stream error:", error);
+          hasError = true;
+        },
+      });
+      setStatus(hasError ? "Aerial processing finished with errors." : "Aerial processing completed.");
+    } catch (error) {
+      setStatus(`Failed to process Aerial claims: ${getErrorMessage(error)}`);
+    } finally {
       setIsProcessing(false);
     }
   }
 
   return (
     <main className="min-h-screen bg-slate-50 px-4 py-12 text-slate-900">
-      <div className="mx-auto w-full max-w-2xl rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
-        <h1 className="text-2xl font-semibold">{iehpFrontendPortalConfig.name}</h1>
-        <p className="mt-2 text-sm text-slate-600">
-          {iehpFrontendPortalConfig.description}
-        </p>
+      <div className="mx-auto w-full max-w-3xl rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+        {!selectedPortal ? (
+          <>
+            <h1 className="text-2xl font-semibold">Select Portal</h1>
+            <p className="mt-2 text-sm text-slate-600">Choose the portal scraper you want to run.</p>
 
-        <IehpInputForm
-          canSubmit={canSubmit}
-          claimFileName={claimFileName}
-          isProcessing={isProcessing}
-          onLoginFileChange={setLoginFile}
-          onSelectClaimFile={selectClaimFile}
-          onSubmit={onSubmit}
-        />
+            <div className="mt-6 grid gap-4 sm:grid-cols-2">
+              {([iehpFrontendPortalConfig, aerialFrontendPortalConfig] as const).map((portal) => (
+                <button
+                  key={portal.id}
+                  type="button"
+                  onClick={() => {
+                    setSelectedPortalId(portal.id as PortalId);
+                    setStatus("");
+                    setLogs([]);
+                    setErrorScreenshots([]);
+                    setProgress(null);
+                  }}
+                  className="rounded-lg border border-slate-300 bg-white p-5 text-left shadow-sm hover:border-blue-500 hover:bg-blue-50"
+                >
+                  <span className="block text-lg font-semibold">{portal.name}</span>
+                  <span className="mt-2 block text-sm text-slate-600">{portal.description}</span>
+                </button>
+              ))}
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <h1 className="text-2xl font-semibold">{selectedPortal.name}</h1>
+            <p className="mt-2 max-w-xl text-sm text-slate-600">{selectedPortal.description}</p>
+          </div>
 
-        <IehpResultView
-          errorScreenshots={errorScreenshots}
-          logs={logs}
-          progress={progress}
-          status={status}
-        />
+              <button
+                type="button"
+                disabled={isProcessing}
+                onClick={() => {
+                  setSelectedPortalId(null);
+                  setStatus("");
+                  setLogs([]);
+                  setErrorScreenshots([]);
+                  setProgress(null);
+                }}
+                className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium hover:bg-slate-50 disabled:text-slate-400"
+              >
+                Change portal
+              </button>
+        </div>
+
+        {selectedPortalId === "iehp" ? (
+          <>
+            <IehpInputForm
+              canSubmit={canSubmitIehp}
+              claimFileName={claimFileName}
+              isProcessing={isProcessing}
+              onLoginFileChange={setIehpLoginFile}
+              onSelectClaimFile={selectClaimFile}
+              onSubmit={submitIehp}
+            />
+            <IehpResultView errorScreenshots={errorScreenshots} logs={logs} progress={progress} status={status} />
+          </>
+        ) : (
+          <>
+            <AerialInputForm
+              canSubmit={canSubmitAerial}
+              isProcessing={isProcessing}
+              onInputFileChange={setAerialInputFile}
+              onSubmit={submitAerial}
+            />
+            <AerialResultView errorScreenshots={errorScreenshots} logs={logs} progress={progress} status={status} />
+          </>
+        )}
+          </>
+        )}
       </div>
     </main>
   );

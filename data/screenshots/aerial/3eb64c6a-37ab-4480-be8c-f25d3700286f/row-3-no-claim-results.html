@@ -1,0 +1,659 @@
+<html class="k-webkit k-webkit147"><head><script src="include/GeneralFunctions.js" type="text/javascript"></script>
+
+</head><body style="margin:0;"><div id="UIUSMenu_divDither" style="BORDER-RIGHT: 0px; BORDER-TOP: 0px; DISPLAY: none; FILTER: alpha(opacity=40); LEFT: 0px; BORDER-LEFT: 0px; WIDTH: 100%; BORDER-BOTTOM: 0px; POSITION: absolute; TOP: 0px; HEIGHT: 98%; BACKGROUND-COLOR: black; -moz-opacity: .20; opacity: .55;z-index:800"></div>
+<div id="overlay" style="display:none;position: absolute; left: 250px; top: 100px; width: 420px;height:150px; background-color: white;z-index:9999;padding: 10px;clip-path:content-box">
+</div>
+
+
+
+<input type="hidden" value="1800" id="hdnIdleTimeoutSeconds" style="">
+<input type="hidden" value="180" id="hdnIdleTimerCounterSeconds" style="">
+<input type="hidden" value="YES" id="hdnEnableIdleTimeout" style="">
+
+<script src="include/sessionTimeout.js" type="text/javascript"></script>
+
+
+    <title>Aerial - Physician's Neighborhood</title>
+    <link href="css/Timeoutpoppup.css" rel="stylesheet" type="text/css">
+    
+		<link href="css/Pagemenu.css" rel="stylesheet" type="text/css">
+      <link href="css/complexLayoutCore.css" rel="stylesheet" type="text/css">
+        <link href="css/theme.css" rel="stylesheet" type="text/css">
+        <link href="css/primefaces.css" rel="stylesheet" type="text/css">
+		
+    <link href="css/blue.css" rel="stylesheet" type="text/css">
+    <link href="css/table.css" rel="stylesheet" type="text/css">
+     
+    
+     <link rel="stylesheet" href="Css/widget.css">   
+
+    
+    <script src="../lib/jquery/jquery.min.js" type="text/javascript"></script>  
+     <script src="include/kendo.ui.core.min.js" type="text/javascript"></script>
+
+   
+
+   <!-- <script src="http://code.jquery.com/jquery-1.9.1.min.js"></script>
+    <script src="http://cdn.kendostatic.com/2014.1.318/js/kendo.all.min.js"></script>
+  -->
+    <script src="../lib/jquery/jquery.js" type="text/javascript"></script>
+    <script src="include/jquery.corner.js" type="text/javascript"></script>
+    <script src="include/jquery_generalfunctions.js" type="text/javascript"></script>
+    <script src="include/GeneralFunctions.js" type="text/javascript"></script>
+    <script src="include/popup.js" type="text/javascript"></script>
+
+    <script language="javascript" type="text/javascript">
+        $(window).load(function() {
+            $(document).ready(function() {
+                var menutHtml = getMenuHmls();
+                if (menutHtml != "") {
+                    $("#tddynMenu").append(menutHtml[0]);
+                    $("#left-list").append(menutHtml[1].replace('</div>', ''));
+                    if (menutHtml.length > 2) {
+                        menutHtml[2] = menutHtml[2].replace('left-list', 'start');
+                        $("#li_dropDown").append(menutHtml[2].replace('</div>', ''));
+                    }
+                    $('ul.drop li').mouseover(function () {
+                        $('ul.drop li').removeClass('activemenu');
+                        $(this).addClass('activemenu');
+                    });
+                    $(document).click(function () {
+                        $('ul.drop li').removeClass('activemenu');
+                        $('ul.drop li ul').css({ display: 'none' });
+                    });
+                    AddPageFooter();
+                }
+                else {
+                    //if menus are not generated, then session is expired.
+                    //redirect the user to session.aspx where it will decide to redirect to appropriate page
+                    window.location.href = "Session.aspx";
+                }
+
+                $('.top-nav > ul').toggleClass('dfl-dwn top-dwn');
+                $('.top-nav .top-dwn ul.start').hide();
+                $('.top-nav .top-dwn').click(function (e) {
+                    $('.top-nav  ul.dfl-dwn-first').hide();
+                    $('.top-nav .top-dwn ul.start').slideToggle(200);
+                    $('.clicker').toggleClass('active');
+                    e.stopPropagation();
+                });
+                $('tr.dataGrid1Body').mouseover(function () {
+                    $(this).find('td').addClass('activerow');
+                    $(this).find('img').addClass('activerow');
+                    $(this).addClass('activerow');
+                });
+
+                $('tr.dataGrid1Body').mouseout(function () {
+                    $(this).find('td').removeClass('activerow')
+                    $(this).find('img').removeClass('activerow');
+                    $(this).removeClass('activerow')
+                });
+                $(document).click(function () {
+                    if ($('.top-nav .top-dwn ul.start').is(':visible')) {
+                        $('.top-nav .top-dwn ul.start', this).slideUp();
+                        $('.clicker').removeClass('active');
+                    }
+                    $('.top-nav  ul.dfl-dwn-first').hide();
+                });
+
+                $('.clickFirst').mouseover(function () {
+                    $('.top-nav  ul.dfl-dwn-first').show();
+                });
+            });
+        });
+        
+        $(document).ready(function () {
+            $('input[type="button"], input[type="submit"], input[type="reset"]').removeClass('btn1')
+            $('input[type="button"], input[type="submit"], input[type="reset"]').addClass('btn-all');
+
+          
+            //expand
+            $("#sidepanel-wrap").on("click", "span.k-i-arrowhead-e", function (e) {
+                var contentElement = $("#divSide");
+                $(e.target)
+                    .removeClass("k-i-arrowhead-e")
+                    .addClass("k-i-arrowhead-w");
+                $("#tdQuickLinkContent").css('width', '7%');
+                kendo.fx(contentElement).expand("horizontal").stop().play();
+            });
+
+            //collapse
+            $("#sidepanel-wrap").on("click", "span.k-i-arrowhead-w", function (e) {
+                var contentElement = $("#divSide");
+                $(e.target)
+                    .removeClass("k-i-arrowhead-w")
+                    .addClass("k-i-arrowhead-e");
+                $("#tdQuickLinkContent").css('width', '1%');
+
+                kendo.fx(contentElement).expand("horizontal").stop().reverse();
+            });
+        });
+        function getMenuHmls() {
+            var params = "{'userType':'PHY'}";
+            var jsonstr = [];
+            var chrtdataobj;
+            $.ajax({
+                'type': 'POST',
+                'contentType': 'application/json; charset=utf-8',
+                'url': '../service.asmx/GetRoleBasedMenuHtmls',
+                'dataType': 'json',
+                'data': params,
+                'async': false,
+                'success': function(json) {
+                    jsonstr = json.d;
+                    chrtdataobj = $.parseJSON(jsonstr);
+                },
+                'error': function(result) {
+                    console.log('Menu Call - Error');
+                    console.log(result);
+                }
+            });
+            return chrtdataobj;
+        }
+
+        function fChangeCss(s) {
+            var sRef = "include/topBar.asp?css=" + s.value + "&sref=" + escape(location.href) + "&scheme=Y";
+            window.location.href = sRef;
+        }
+
+        var oLastBtn = 0;
+        function RaiseButton() {
+            window.event.cancelBubble = true;
+            oBtn = window.event.srcElement;
+            var bChosen = false;
+            if (oLastBtn && oLastBtn != oBtn) {
+                HideButton();
+            }
+            if (oBtn.buttonType) {
+                oBtn.className = oBtn.buttonType + "Up";
+                oLastBtn = oBtn;
+            }
+            else {
+                oLastBtn = 0;
+            }
+        }
+        
+        function OpenRefAlertsAsPopUp() {
+            var userID = $("#hdnUserID").val(); var groupCode = $("#hdnGroupCode").val();
+            var sFeatures = "height=600,width=780,left=50,top=50,directories=0,location=1,menubar=0,resizable=0,scrollbars=1,status=0,titlebar=0,toolbar=0"
+            win = window.open("ReferralAlert.aspx?GroupCode=" + groupCode, "", sFeatures);
+        }
+        
+        function HideButton() {
+            oLastBtn.className = oLastBtn.buttonType + "Off";
+        }
+        function openAlerts(Uid) {
+            var sFeatures
+            sFeatures = "height=600,width=780,left=50,top=50,directories=0,location=1,menubar=0,resizable=0,scrollbars=1,status=0,titlebar=0,toolbar=0"
+            win = window.open("ReferralAlert.aspx", "", sFeatures);
+        }
+        function openHelpAsPopUp() {
+            var sFeatures
+            sFeatures = "height=" + (screen.availHeight - 50) + ",width=" + (screen.availWidth - 50) + ",left=0,top=0,titlebar=0,toolbar=0,addressbar=0,menubar=0,status=0,resizable=1,scrollbars=1"
+            win = window.open("../webhelp/CERECONS_User_Guide.htm", "", sFeatures);
+        }    
+        function OpenACM(UserId) {
+            UserId = (UserId == null || UserId == 'undefined') ? '' : UserId;
+            var sFeatures;
+            sFeatures = 'height=590,width=975,left=35,top=35,directories=0,location=0,menubar=0,resizable=1,scrollbars=1,status=0,titlebar=0,toolbar=0';
+            win = window.open('ACMCareCoOrdination.aspx?acm_sso=1&user_id=' + UserId, 'CMV', sFeatures);
+        }
+    </script>
+
+
+
+<input type="hidden" id="hidHeaderSideBarImage" name="hidHeaderSideBarImage" value="none" style="">
+
+
+<input type="hidden" id="hdnUserID" value="54389" style="">
+<input type="hidden" id="hdnGroupCode" value="PHY" style="">
+<!-- side bar image is not used anymore -->
+<div id="divSideBarImage" class="divSideBarImage" style="display: none;">
+        <!--img src="images/skin/leaves.png" id='imgSideBarImage' border="0" align="middle" style="z-index:0;" /-->
+        <div id="divSideBarInnerContainer" class="divSideBarInnerContainer"></div>
+    </div>
+    
+    <map name="Map">
+        <area shape="circle" coords="434,39,12" href="mailto:support@uius.com?subject=Aerial Support Notification" alt="Support">
+        <area shape="circle" coords="385,39,12" href="http://www.cerecons.com/contactus.html" alt="Contact Us">
+        <area shape="circle" coords="336,39,12" href="http://www.cerecons.com/services.html" alt="Services">
+        <area shape="circle" coords="285,39,12" href="http://www.cerecons.com/aboutus.html" alt="About Us">
+        <area shape="circle" coords="235,39,12" href="http://www.cerecons.com/" alt="Home">
+    </map>
+     
+   
+    
+    <table border="0" cellpadding="0" cellspacing="0" width="100%" height="100%" id="tblEntirePageContent" style="margin:0px">
+        <tbody><tr>
+             <td colspan="4" height="55" width="100%">
+                <table height="100%" width="100%" cellspacing="0" cellpadding="0" id="Table6">
+                    <tbody><tr>
+                        <td height="59" valign="top" width="20%">
+                          <img src="images/blue_client-logo.png" style="vertical-align: middle"> 
+                        </td>
+                       <td style="text-align: right">
+                           
+                             <a target="_blank" href="https://aerial.carecoordination.medecision.com"><img style="border:0;margin-top:10px;margin-right:10px;float:right;" src="images/aerial_logo_dark.png"></a> 
+                        <div class="top-nav">
+                                <ul class="top-dwn">
+                                    <li id="li_dropDown">
+                                       <a class="clicker">WELCOME, JAY S </a>                                        
+                                    <ul class="start" style="display: none;"><li><a href="Home.aspx" title="Home">Home</a></li><li><a href="editLogin.asp" title="Edit Profile">Edit Profile</a></li><li><a href="#" title="Training">Training</a></li><li><a href="SupportHome.aspx" title="Support">Support</a></li><li><a href="Session.aspx?Logout=Y" title="Log out">Log out</a></li></ul></li>
+                                </ul>
+                            </div>
+                              <div class="clear"></div>
+                         <!--  <td height='59' width='17%' style='background-image:url('images/blue_Pg-Header-Logo-bg.jpg');background-repeat:repeat-x;background-position:right;'> -->
+                         
+                        </td>
+                       
+                    </tr>
+                </tbody></table>
+            </td>
+        </tr>
+        <tr>
+            <td colspan="4" id="tddynMenu" width="100%" style="width: 100%;">
+              
+            <div class="navdiv"><ul id="nav" class="drop"><li>Reporting<ul><li><a href="reportingHome.aspx" title="Reporting Home">Reporting Home</a></li><li><a href="getBookMark.aspx" title="My Favorite Reports">My Favorite Reports</a></li></ul></li><li>Eligibility<ul><li><a href="member_search.asp" title="Eligibility Lookup">Eligibility Lookup</a></li><li><a href="dispMemInfo.asp?hCode=&amp;hsoCode=&amp;fname=&amp;lname=&amp;mCode=&amp;ssn=&amp;pCode=&amp;bDate=&amp;submit1=Submit&amp;mmgsearch=All&amp;isNotSrch=0" title="Advanced Search">Advanced Search</a></li><li><a href="MemberInquiryTaskList.aspx" title="Eligibility Task List">Eligibility Task List</a></li><li><a href="MemberInquiry.aspx" title="Create new Member Inquiry">Create new Member Inquiry</a></li><li><a href="../acclanding.aspx?name=home" title="Decision Dashboard">Decision Dashboard</a></li></ul></li><li>Referrals<ul><li><a href="dispMemInfo.asp?submitReferral=Y" title="Submit Online Referrals">Submit Online Referrals</a></li><li><a href="referralStatus.asp" title="Referral Status">Referral Status</a></li><li><a href="javascript:OpenRefAlertsAsPopUp()" title="View Referral Alerts">View Referral Alerts</a></li><li><a href="Printstatus.aspx" title="Print Status">Print Status</a></li></ul></li><li><a href="claimInfo.asp" title="Claims">Claims</a></li><li><a href="javascript:window.open(&quot;https://success.medecision.com/&quot;);void(0);" title="Aerial Community">Aerial Community</a></li></ul></div></td>
+        </tr>
+       
+        
+        <tr><td style="width: 1%;background-color:#f4f5f7;">&nbsp;</td><td colspan="1" id="tdFirstRowWithCurve" style="background-color:#f4f5f7;">&nbsp;</td></tr>
+        
+        <tr height="100%" id="trEntirePageContent">
+            <td style="width: 1%; background-color: rgb(244, 245, 247); padding-right: 5px;" valign="top">&nbsp;</td>
+            <td style="width: 10%;background-color:#f4f5f7;" valign="top" id="tdQuickLinkContent">
+                <div class="quickTitle">
+                   </div>
+                <div id="left-list">
+                   
+                <ul class="left-list"><li><a href="dispMemInfo.asp?submitReferral=Y" title="Submit Online Referrals">Submit Online Referrals</a></li><li><a href="javascript:OpenRefAlertsAsPopUp()" title="View Referral Alerts">View Referral Alerts</a></li><li><a href="getBookMark.aspx" title="My Favorite Reports">My Favorite Reports</a></li></ul></div>
+            </td>
+            <td valign="top" width="1%" style="background-color:#fff;" class="PageCurvedImage">
+                
+            </td>
+            <td width="88%" valign="top" align="left" class="PageContentStyle">
+                                
+<script type="text/javascript" src="include/GeneralFunctions.js"></script>
+<script type="text/javascript" src="include/validateForm.js"></script>
+<script type="text/javascript" src="include/TableFunctions.js"></script>
+<script src="include/boxover.js" type="text/javascript"></script>
+
+<link type="text/css" rel="stylesheet" href="css/table.css">
+<link href="css/blue.css" type="text/css" rel="stylesheet">
+ <link href="https://fonts.googleapis.com/icon?family=Material+Icons+Outlined" rel="stylesheet">
+<link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+
+
+
+<script language="javascript">
+    function LoadEmdeonLink(claimdetailcode, membercode) {
+        //alert(" claimdetailcode : " + claimdetailcode + " membercode: " + membercode + " clientlayout : " + clientlayout + " encryptionvalue : " + encryptionvalue + " baseurl : " + baseurl + " webserviceurl : " + webserviceurl);
+        var params = "";
+        var lcstrRecipientType = "P";
+        if (Trim(document.getElementById("hidEmdeonRecipientType").value).length > 0) {
+            lcstrRecipientType = Trim(document.getElementById("hidEmdeonRecipientType").value)
+        }
+        lcstrRecipientType = lcstrRecipientType.toUpperCase();
+        params = "{'pstrClaimdetailcode':'" + claimdetailcode + "','pstrMembercode':'" + membercode + "','pstrRecipientType':'" + lcstrRecipientType + "','pstrVersionNumber':'1.00.00','pstrBeginningdate':'','pstrEndDate':''}";
+        //alert(params);
+        $(document).ready(function() {
+            $.ajax({
+                url: "../Service.asmx/FetchEmdeonPdfUrl",
+                type: "POST",
+                contentType: "application/json; charset=utf-8",
+                dataType: "json",
+                data: params,
+                async: false,
+                error: function(msg) {
+                    if (msg.statusText != "OK") {
+                        //alert(msg.statusText);
+                        //alert(msg.status);
+                        alert("Something went wrong! Please reload the page or try again later.");
+                        //ShowLgnProcessing(false);
+                    }
+                },
+                success: function(response) {
+                    //alert(response.d);
+                    OpenEmdeonUrl(response.d);
+                    //Validate_Callback(LoginValidateResponse);
+                }
+            })
+        });
+
+    }
+    function OpenEmdeonUrl(pstrEmdeonUrl) {
+        var objEmdWindow;
+        //window.open(url, strWindowName, 'height =' + iHeight + ',width =' + iWidth + ',left =' + iLeftAlign + ',top =' + iTopAlign + ',scrollbars=' + iScrollBar + ',directories=0,location=0,menubar=0,resizable=1,status=0,titlebar=0,toolbar=0');
+        sFeatures = "height=500,width=700,left=0,top=0,scrollbars=1,directories=0,location=0,menubar=1,resizable=1,status=1,titlebar=1,toolbar=0";
+        if (objEmdWindow != null) {
+            objEmdWindow.close();
+        }
+        //alert(123);
+        objEmdWindow = window.open(pstrEmdeonUrl, "CERECONS", sFeatures);
+    }
+    
+ function isDate(dateStr) 
+ {
+
+var datePat = /^(\d{1,2})(\/|-)(\d{1,2})(\/|-)(\d{4})$/;
+var matchArray = dateStr.match(datePat); // is the format ok?
+
+if (matchArray == null) {
+
+return false;
+}
+
+month = matchArray[1]; // p@rse date into variables
+day = matchArray[3];
+year = matchArray[5];
+
+if (month < 1 || month > 12) { // check month range
+
+return false;
+}
+
+if (day < 1 || day > 31) {
+
+return false;
+}
+
+if ((month==4 || month==6 || month==9 || month==11) && day==31) {
+
+return false;
+}
+
+if (month == 2) { // check for february 29th
+var isleap = (year % 4 == 0 && (year % 100 != 0 || year % 400 == 0));
+if (day > 29 || (day==29 && !isleap)) {
+
+return false;
+}
+}
+return true; // date is valid
+}
+//reloadPage() is used everytime the page is refreshed with new parameters
+//it sets the new Querystring based on hidden variables which hold the Querystring variables
+function reloadPage(action)
+{
+	switch (action)
+	{
+		case 'RegSearch':
+			document.frmSrch.hdnASrch.value = 0;
+			document.frmSrch.hdnFilterAll.value = document.frmSrch.txtFilterAll.value;
+			document.frmSrch.hdnPage.value = 1;
+			if(document.getElementById("txtFilterAll").value !="")
+			{
+			    document.getElementById("txtStartDate").value = "";
+			    document.getElementById("txtEndDate").value = "";
+			}
+			
+		break;
+		case 'AdvSearch':
+			document.frmSrch.hdnASrch.value = 1;
+			document.frmSrch.hdnFilter1.value = document.frmSrch.txtFilter1.value;
+			document.frmSrch.hdnFilter2.value = document.frmSrch.txtFilter2.value;
+			document.frmSrch.hdnFilter3.value = document.frmSrch.txtFilter3.value;
+                
+			document.frmSrch.hdnFilter5.value = document.frmSrch.txtFilter5.value;
+			document.frmSrch.hdnFilter6.value = document.frmSrch.txtFilter6.value;
+			document.frmSrch.hdnFilter7.value = document.frmSrch.txtFilter7.value;
+			document.frmSrch.hdnFilter8.value = document.frmSrch.txtFilter8.value;
+			document.frmSrch.hdnFilter9.value = document.frmSrch.slctFilter9.value;
+			document.frmSrch.hdnFilter10.value = document.frmSrch.slctFilter10.value;
+			document.frmSrch.hdnFilter11.value = document.frmSrch.slctFilter11.value;
+			//Modified for PM Queue Issue (Adding Billing Provider Name)
+			document.frmSrch.hdnFilter12.value = document.frmSrch.txtFilter12.value;
+                document.frmSrch.hdnFilter13.value = document.frmSrch.txtFilter13.value;
+			document.frmSrch.hdnPage.value = 1;
+			
+		
+//			if(isDate(document.getElementById("txtFilter6").value) || (document.getElementById("slctFilter9").value !="") || (document.getElementById("slctFilter10").value !="") || (document.getElementById("slctFilter11").value !="-1") || (document.getElementById("txtFilter12").value !="") || (document.getElementById("txtFilter1").value !="")  || (document.getElementById("txtFilter2").value !="") || (document.getElementById("txtFilter3").value !="") || (document.getElementById("txtFilter4").value !="") || (document.getElementById("txtFilter5").value !="") || (document.getElementById("txtFilter7").value !="") || (document.getElementById("txtFilter8").value !=""))
+//			{
+//			    document.getElementById("txtStartDate").value = "";
+//			    document.getElementById("txtEndDate").value = "";
+//			}
+
+			if (((document.getElementById("txtStartDate").value.replace(/^\s*|\s*$/g, "").replace("mm/dd/yyyy", "") != "" && document.getElementById("txtEndDate").value.replace(/^\s*|\s*$/g, "").replace("mm/dd/yyyy", "") == ""))
+                 || ((document.getElementById("txtStartDate").value.replace(/^\s*|\s*$/g, "").replace("mm/dd/yyyy", "") == "" && document.getElementById("txtEndDate").value.replace(/^\s*|\s*$/g, "").replace("mm/dd/yyyy", "") != ""))) {
+			    alert("Please enter From Date and To Date.");
+			    return;
+			}
+
+			if (document.getElementById("txtStartDate").value.replace(/^\s*|\s*$/g, "").replace("mm/dd/yyyy", "") != ""
+			    && document.getElementById("txtEndDate").value.replace(/^\s*|\s*$/g, "").replace("mm/dd/yyyy", "") != "") {
+			    var daysdiff = DateDifference(document.getElementById("txtStartDate").value, document.getElementById("txtEndDate").value);
+			    if (daysdiff < 0) {
+			        alert("To Date cannot be less than From Date");
+			        return;
+			    }
+			}
+			
+		break;
+		case 'ChangeSort':
+			document.frmSrch.hdnSort.value = arguments[1];
+			if (document.frmSrch.hdnAscDesc.value == 1)
+				document.frmSrch.hdnAscDesc.value = 0;
+			else
+				document.frmSrch.hdnAscDesc.value = 1;
+			document.frmSrch.hdnPage.value = 1;
+		break;
+		case 'ChangeRecPerPage':
+			if (isNonZeroPositiveInteger(document.frmSrch.txtRecPage.value))
+			{
+				document.frmSrch.hdnRecPage.value = document.frmSrch.txtRecPage.value;
+				document.frmSrch.hdnPage.value = 1;
+			}
+			else
+			{
+				alert('Please enter a valid number of records to be displayed.');
+				return;
+			}
+		break;
+		case 'ChangePageNo':
+			var newPageNo;
+			if (arguments.length != 2)
+			{
+				newPageNo = document.frmSrch.txtPageNo.value;
+			}
+			else
+			{
+				newPageNo = arguments[1];
+			}
+			if (isNonZeroPositiveInteger(newPageNo))
+			{
+				if (parseInt(newPageNo) <= parseInt(document.frmSrch.hdnPageCnt.value))
+				{
+					document.frmSrch.hdnPage.value = newPageNo;
+				}
+				else
+				{
+					alert('Invalid Page Number! There are only ' + document.frmSrch.hdnPageCnt.value + ' pages.');
+					return;
+				}
+			}				
+			else
+			{
+				alert('Invalid Page Number.');
+				return;
+			}
+		break;
+//		case 'submit':
+//		    if(
+//		        (
+//		            (document.getElementById("txtStartDate").value.replace(/^\s*|\s*$/g,"") != ""
+//		            && document.getElementById("txtEndDate").value.replace(/^\s*|\s*$/g,"") == ""
+//		            )
+//		        ) ||
+//		        (
+//		         (document.getElementById("txtStartDate").value.replace(/^\s*|\s*$/g,"") == ""
+//		         && document.getElementById("txtEndDate").value.replace(/^\s*|\s*$/g,"") != "" )
+//		         ) 
+//		       )
+//			{
+//			    alert("Please enter From Date and To Date.");
+//			    return;
+//			}
+//			
+//			if(document.getElementById("txtStartDate").value.replace(/^\s*|\s*$/g,"") != "" 
+//			    && document.getElementById("txtEndDate").value.replace(/^\s*|\s*$/g,"") != "" )
+//			{
+//			     var daysdiff = DateDifference(document.getElementById("txtStartDate").value,document.getElementById("txtEndDate").value);
+//			     if (daysdiff < 0)
+//			    {
+//			        alert("To Date cannot be less than From Date");
+//			        return;
+//			    }
+//			}
+//			document.getElementById("txtFilter6").value = "";
+//			document.getElementById("hdnFilter6").value = "";
+//			document.getElementById("txtFilter1").value = "";
+//			document.getElementById("hdnFilter1").value = "";
+//			document.getElementById("txtFilter2").value = "";
+//			document.getElementById("hdnFilter2").value = "";
+//			document.getElementById("txtFilter3").value = "";
+//			document.getElementById("hdnFilter3").value = "";
+//			document.getElementById("txtFilter4").value = "";
+//			document.getElementById("hdnFilter4").value = "";
+//			document.getElementById("txtFilter5").value = "";
+//			document.getElementById("hdnFilter5").value = "";
+//			document.getElementById("txtFilter7").value = "";
+//			document.getElementById("hdnFilter7").value = "";
+//			document.getElementById("txtFilter8").value = "";
+//			document.getElementById("hdnFilter8").value = "";
+//			document.getElementById("txtFilter12").value = "";
+//			document.getElementById("hdnFilter12").value = "";
+//			document.getElementById("slctFilter10").value = "";
+//			document.getElementById("hdnFilter10").value = "";
+//			document.getElementById("slctFilter9").value = "";
+//			document.getElementById("hdnFilter9").value = "";
+//			document.getElementById("slctFilter11").value = "-1";
+//			document.getElementById("hdnFilter11").value = "-1";
+//			
+//			document.getElementById("txtFilterAll").value = "";
+//			document.getElementById("hdnFilterAll").value  = "";
+//		    document.getElementById("hdnVCode").value = 0;
+//		    
+//		    document.frmSrch.hdnPCode.value = 0;
+//		    document.frmSrch.hdnSPCode.value =0;
+//		    
+//		break;
+	}
+	
+	var href =  "claimInfo.asp";
+	href = href + "?ST=" + document.frmSrch.hdnStCode.value;
+	href = href + "&DR=" + document.frmSrch.hdnDrCode.value;
+	href = href + "&RC=" + document.frmSrch.hdnRCode.value;
+	href = href + "&PatNumFilter=";		//not used now
+	href = href + "&ProvNumFilter=";	//not used now
+	href = href + "&RV=" + document.frmSrch.hdnVCode.value;
+	href = href + "&RP=" + document.frmSrch.hdnPCode.value;
+	href = href + "&SP=" + document.frmSrch.hdnSPCode.value;
+	href = href + "&sort=" + document.frmSrch.hdnSort.value;
+	href = href + "&chkAscDesc=" + document.frmSrch.hdnAscDesc.value;
+	href = href + "&page=" + document.frmSrch.hdnPage.value;
+	href = href + "&RPage=" + document.frmSrch.hdnRecPage.value;
+	href = href + "&ASrch=" + document.frmSrch.hdnASrch.value;
+	href = href + "&group_code=I";
+	href = href + "&pri_group=0";
+	href = href + "&sec_group=0";
+	href = href + "&is_date_service=1";
+	href = href + "&pri_group_value=0";
+	href = href + "&sec_group_value=0";
+	href = href + "&start_date=";
+	href = href + "&end_date=";
+        href = href + "&is_flag="+document.frmSrch.hdnIsDrillDown.value;
+        href = href + "&CptCode=" + document.frmSrch.hdnCptCode.value;
+        href = href + "&IcdCode=" + document.frmSrch.hdnIcdCode.value;
+        href = href + "&category_code=" + document.frmSrch.hdnCategoryCode.value;
+	//if "Regular Search", set regular search variables
+	if (document.frmSrch.hdnASrch.value == 0)
+	{
+		href = href + "&txtASrch=" + document.frmSrch.hdnFilterAll.value;
+		href = href + "&ProvC=" + "";
+		href = href + "&PatC=" + "";
+	}
+	//else (if "Advanced Search"), set advanced search variables
+	else
+	{
+		href = href + "&CNum=" + document.frmSrch.hdnFilter1.value;
+		href = href + "&PatC=" + document.frmSrch.hdnFilter2.value;
+		href = href + "&PatName=" + document.frmSrch.hdnFilter3.value;
+		href = href + "&ProvC=" + document.frmSrch.hdnFilter4.value;
+		href = href + "&ProvName=" + document.frmSrch.hdnFilter5.value;
+		href = href + "&DServ=" + document.frmSrch.hdnFilter6.value;
+		href = href + "&BAmt=" + document.frmSrch.hdnFilter7.value;
+		href = href + "&ChNum=" + document.frmSrch.hdnFilter8.value;
+		href = href + "&hCode=" + document.frmSrch.hdnFilter9.value;
+		href = href + "&hsoCode=" + document.frmSrch.hdnFilter10.value;
+		href = href + "&ClaimStatId=" + document.frmSrch.hdnFilter11.value;
+		href = href + "&BillingProviderName=" + document.frmSrch.hdnFilter12.value;
+            href = href + "&NAmt=" + document.frmSrch.hdnFilter13.value;
+	}
+	href =  href + "&DateFilter="+ document.frmSrch.slctDateFilter.selectedIndex;
+	href = href + "&StartFilterDate=" + (document.frmSrch.txtStartDate.value != "mm/dd/yyyy" ? document.frmSrch.txtStartDate.value : "");
+	href = href + "&EndFilterDate=" + (document.frmSrch.txtEndDate.value != "mm/dd/yyyy" ? document.frmSrch.txtEndDate.value : "");
+	
+	window.location.href = href;
+}
+
+function DateDifference(StartDate, EndDate)
+{
+	laterdate = EndDate.split('/');
+	laterM=laterdate[0];
+	laterD=laterdate[1];
+	laterY=laterdate[2];
+
+	earlierdate = StartDate.split('/');
+	earlierM=earlierdate[0];
+	earlierD=earlierdate[1];
+	earlierY=earlierdate[2];
+		
+	var laterdate = new Date(laterY,laterM,laterD);
+	var earlierdate = new Date(earlierY,earlierM,earlierD);
+	var difference = laterdate.getTime() - earlierdate.getTime();
+	var daysDifference = Math.floor(difference/1000/60/60/24);
+	
+	return daysDifference;
+}
+		
+
+//This function is used to open Help/What's New pages in a pop-up window
+function openHelp()
+{
+	var sFeatures
+	sFeatures = "height=500,width=520,left=50,top=50,directories=0,location=0,menubar=0,resizable=0,scrollbars=1,status=0,titlebar=0,toolbar=0"
+	win = window.open("help/refStatus.htm", "", sFeatures);
+}
+
+function viewHMOs()
+{
+	var sFeatures
+	sFeatures = "height=" + (screen.availHeight - 320) + ",width=" + (screen.availWidth - 600) + ",left=175,top=150,directories=0,location=0,menubar=0,resizable=1,scrollbars=1,status=0,titlebar=0,toolbar=0";
+	win = window.open("hmos.asp", "win", sFeatures);	
+	
+}
+
+function viewHSOs()
+{
+	var sFeatures
+	sFeatures = "height=" + (screen.availHeight - 320) + ",width=" + (screen.availWidth - 600) + ",left=175,top=150,directories=0,location=0,menubar=0,resizable=1,scrollbars=1,status=0,titlebar=0,toolbar=0";
+	win = window.open("locations.asp", "win", sFeatures);	
+	
+}
+
+function viewClaimStatusIDs()
+{
+	var sFeatures
+	sFeatures = "height=" + (screen.availHeight - 320) + ",width=" + (screen.availWidth - 600) + ",left=175,top=150,directories=0,location=0,menubar=0,resizable=1,scrollbars=1,status=0,titlebar=0,toolbar=0";
+	win = window.open("claimstatus.asp", "win", sFeatures);
+
+}
+
+function clearDateBox(e) {
+    if (e.value == "mm/dd/yyyy")
+        e.value = "";
+}
+
+</script>
+	
+<form name="frmSrch"><input type="hidden" name="CSRFToken" value="54389vnqfou5jpapujn5ppf1v1h1p" style="">	<input type="hidden" name="hdnUserId" value="54389" style="">	<input type="hidden" name="hdnRCode" value="" style="">	<input type="hidden" name="hdnStCode" value="" style="">	<input type="hidden" name="hdnDrCode" value="" style="">	<input type="hidden" name="hdnPCode" value="0" style="">	<input type="hidden" name="hdnVCode" value="0" style="">	<input type="hidden" name="hdnSPCode" value="0" style="">	<input type="hidden" name="hdnPage" value="1" style="">	<input type="hidden" name="hdnRecPage" value="20" style="">	<input type="hidden" name="hdnSort" value="4" style="">	<input type="hidden" name="hdnAscDesc" value="0" style="">	<input type="hidden" name="hdnASrch" value="1" style="">	<input type="hidden" name="hdnFilterAll" value="" style="">	<input type="hidden" name="hdnFilter1" value="" style="">	<input type="hidden" name="hdnFilter2" value="980553445000" style="">	<input type="hidden" name="hdnFilter3" value="" style="">	<input type="hidden" name="hdnFilter4" value="" style="">	<input type="hidden" name="hdnFilter5" value="" style="">	<input type="hidden" name="hdnFilter6" value="" style="">	<input type="hidden" name="hdnFilter7" value="" style="">	<input type="hidden" name="hdnFilter8" value="" style="">	<input type="hidden" name="hdnFilter9" value="" style="">	<input type="hidden" name="hdnFilter10" value="" style="">	<input type="hidden" name="hdnFilter12" value="" style="">	<input type="hidden" name="hdnFilter13" value="" style="">	<input type="hidden" name="hdnFilter11" value="-1" style="">	<input type="hidden" name="hdnIsDrillDown" value="0" style="">	<input type="hidden" name="hdnCptCode" value="" style="">	<input type="hidden" name="hdnIcdCode" value="" style="">	<input type="hidden" name="hdnCategoryCode" value="" style=""><table width="100%"><tbody><tr><td class="pageHdr">Claim Status</td></tr></tbody></table><br><br><table width="100%" cellpadding="0" cellspacing="0">    <tbody><tr>        <td valign="middle" align="center" width="75%" nowrap="">        <font color="red" size="2">You will only be able to view results which you have permissions for</font>        </td>        <td align="right" style="width:20px;">        <img src="images/ClaimSearchBox.png" height="60"></td>        <td align="right" style="width:28%; background-color:#7288ad">                        <table width="350px">                           <tbody><tr><td style="color:white;font:bold 11px tahoma;" nowrap="">&nbsp;&nbsp;Date Filter Type:</td><td width="1%">&nbsp;</td>                            <td align="left" style="color:white;font:bold 11px tahoma;" nowrap="">From Date:<span style="width:30px;">&nbsp;</span></td><td style="color:white;font:bold 11px tahoma;">&nbsp;&nbsp;To Date:</td></tr>                            <tr><td colspan="2">                            <select name="slctDateFilter" id="slctDateFilter" width="20%">                       <option value="0" selected=""> Date of Service</option>                        <option value="1"> Date Paid</option>                        <option value="2"> Date Received</option>                           </select></td>                        <td align="left" width="20%"><input type="text" name="txtStartDate" value="04/24/2026" onblur="validateDate(this);" size="11" id="txtStartDate" style=""></td><td><input type="text" name="txtEndDate" value="04/24/2026" onblur="validateDate(this);" size="11" id="txtEndDate" style="margin-left: 10px;"></td></tr></tbody></table></td></tr></tbody></table>	<table class="dataGrid1" cellspacing="0">	<tbody><tr class="dataGrid1Header">		<td class="dataGrid1Header" colspan="3" style="width:1px;">&nbsp;</td><td class="dataGrid1Header"><a href="javascript:reloadPage('ChangeSort',1)">Claim Number</a></td><td class="dataGrid1Header"><a href="javascript:reloadPage('ChangeSort',2)">Member ID</a></td><td class="dataGrid1Header"><a href="javascript:reloadPage('ChangeSort',9)">Plan</a></td><td class="dataGrid1Header"><a href="javascript:reloadPage('ChangeSort',10)">Location</a></td><td class="dataGrid1Header"><a href="javascript:reloadPage('ChangeSort',11)">Status</a></td><td class="dataGrid1Header"><a href="javascript:reloadPage('ChangeSort',3)">Patient Name</a></td><td class="dataGrid1Header"><a href="javascript:reloadPage('ChangeSort',6)">PCP Name</a></td><td class="dataGrid1HeaderSort"><a href="javascript:reloadPage('ChangeSort',4)">Date of Service&nbsp;&nbsp;<span border="0" class="material-icons">arrow_drop_down</span></a></td><td class="dataGrid1Header"><a href="javascript:reloadPage('ChangeSort',7)">Billed Amt</a></td><td class="dataGrid1Header"><a href="javascript:reloadPage('ChangeSort',13)">Net Amount</a></td><td class="dataGrid1Header"><a href="javascript:reloadPage('ChangeSort',12)">Billing Provider Name</a></td><td class="dataGrid1Header"><a href="javascript:reloadPage('ChangeSort',8)">Check Number</a></td>		<td class="dataGrid1Header" colspan="3" style="width:1px;">&nbsp;</td>	</tr>	<tr id="AdvancedSearchBar">		<td colspan="3">&nbsp;</td>		<td><input name="txtFilter1" class="text1" value="" size="16" maxlength="20" onkeypress="ReloadOnEnter(event,'AdvSearch');" style=""></td>		<td><input name="txtFilter2" class="text1" value="980553445000" size="14" maxlength="20" onkeypress="ReloadOnEnter(event,'AdvSearch');" style=""></td>		<td><select name="slctFilter9" onkeypress="ReloadOnEnter(event,'AdvSearch');">			<option value="">All</option><option value="ABHMC">ABHMC</option><option value="ABMC">ABMC</option><option value="ACO">ACO</option><option value="ACON">ACON</option><option value="ACOR">ACOR</option><option value="ACS">ACS</option><option value="ACT">ACT</option><option value="AET">AET</option><option value="AETMC">AETMC</option><option value="AETS">AETS</option><option value="AGMM">AGMM</option><option value="AGSR">AGSR</option><option value="AHM">AHM</option><option value="AHPM">AHPM</option><option value="AHPMM">AHPMM</option><option value="ALHP">ALHP</option><option value="ALMM">ALMM</option><option value="AMM">AMM</option><option value="ANJM">ANJM</option><option value="APOS">APOS</option><option value="ASRNJ">ASRNJ</option><option value="BBHMO">BBHMO</option><option value="BBRI">BBRI</option><option value="BBSRS">BBSRS</option><option value="BCBD">BCBD</option><option value="BCBSA">BCBSA</option><option value="BCBSC">BCBSC</option><option value="BCBSM">BCBSM</option><option value="BCBSP">BCBSP</option><option value="BCBSR">BCBSR</option><option value="BCBST">BCBST</option><option value="BCCH">BCCH</option><option value="BCD">BCD</option><option value="BCHF">BCHF</option><option value="BCMC">BCMC</option><option value="BCMM">BCMM</option><option value="BCP">BCP</option><option value="BCSR">BCSR</option><option value="BCSRN">BCSRN</option><option value="BCSTM">BCSTM</option><option value="BCV">BCV</option><option value="BND">BND</option><option value="BNM">BNM</option><option value="BPCMC">BPCMC</option><option value="BPMC">BPMC</option><option value="BPMM">BPMM</option><option value="BS">BS</option><option value="BSCP">BSCP</option><option value="BSE">BSE</option><option value="BSF">BSF</option><option value="BSMM">BSMM</option><option value="BSP">BSP</option><option value="BSSR">BSSR</option><option value="CARE">CARE</option><option value="CC">CC</option><option value="CCHP">CCHP</option><option value="CCMM">CCMM</option><option value="CFCMC">CFCMC</option><option value="CFHF">CFHF</option><option value="CFMC">CFMC</option><option value="CFMM">CFMM</option><option value="CG">CG</option><option value="CGC">CGC</option><option value="CHA">CHA</option><option value="CHAH">CHAH</option><option value="CHMM">CHMM</option><option value="CHP">CHP</option><option value="CHS">CHS</option><option value="CHSM">CHSM</option><option value="CHSR">CHSR</option><option value="CLCR">CLCR</option><option value="CLCRE">CLCRE</option><option value="COHF">COHF</option><option value="COM">COM</option><option value="COMM">COMM</option><option value="COOC">COOC</option><option value="CPOS">CPOS</option><option value="CRM">CRM</option><option value="CRMM">CRMM</option><option value="CTC">CTC</option><option value="CTCOS">CTCOS</option><option value="ECHP">ECHP</option><option value="ECHPS">ECHPS</option><option value="GKHP">GKHP</option><option value="GSMM">GSMM</option><option value="GSSR">GSSR</option><option value="HM">HM</option><option value="HMEDI">HMEDI</option><option value="HMHMO">HMHMO</option><option value="HMM">HMM</option><option value="HMPOS">HMPOS</option><option value="HN">HN</option><option value="HNCC">HNCC</option><option value="HNCMC">HNCMC</option><option value="HNF">HNF</option><option value="HNMC">HNMC</option><option value="HNSC">HNSC</option><option value="HNSR">HNSR</option><option value="HPOS">HPOS</option><option value="ICTXM">ICTXM</option><option value="IECM">IECM</option><option value="IEHM">IEHM</option><option value="IEHP">IEHP</option><option value="IEMC">IEMC</option><option value="IEMM">IEMM</option><option value="IHPC">IHPC</option><option value="IHPCM">IHPCM</option><option value="IICTX">IICTX</option><option value="IVM">IVM</option><option value="IVSH">IVSH</option><option value="KFM">KFM</option><option value="LACC">LACC</option><option value="LACI">LACI</option><option value="LACMC">LACMC</option><option value="LAHF">LAHF</option><option value="LAM">LAM</option><option value="LAMI">LAMI</option><option value="LAMM">LAMM</option><option value="LASPD">LASPD</option><option value="MDC">MDC</option><option value="MDM">MDM</option><option value="MHF">MHF</option><option value="MOCC">MOCC</option><option value="MOCMC">MOCMC</option><option value="MOL">MOL</option><option value="MOLS">MOLS</option><option value="MOMC">MOMC</option><option value="MOMM">MOMM</option><option value="MSCT">MSCT</option><option value="MSRI">MSRI</option><option value="MSS">MSS</option><option value="NHP">NHP</option><option value="OCMC">OCMC</option><option value="OPTI">OPTI</option><option value="PAC">PAC</option><option value="POS">POS</option><option value="PPA">PPA</option><option value="SCAN">SCAN</option><option value="SH">SH</option><option value="SHM">SHM</option><option value="SHPS">SHPS</option><option value="SMM">SMM</option><option value="TUF">TUF</option><option value="TUFMC">TUFMC</option><option value="TUFP">TUFP</option><option value="UCC">UCC</option><option value="UHCR">UHCR</option><option value="UHCRI">UHCRI</option><option value="WCM">WCM</option><option value="WCSR">WCSR</option><option value="WCTX">WCTX</option><option value="WCTXM">WCTXM</option><option value="WTM">WTM</option><option value="WTS">WTS</option>		</select>&nbsp;&nbsp;<a onclick="viewHMOs();"><span class="material-icons-Outlined" border="0" style="cursor:hand;" alt="Health Plans Legend">info</span></a></td>		<td><select name="slctFilter10" onkeypress="ReloadOnEnter(event,'AdvSearch');">			<option value="">All</option>	<option value="ACA">ACA</option>	<option value="ACD">ACD</option>	<option value="ACE">ACE</option>	<option value="ACOAV">ACOAV</option>	<option value="ACOIE">ACOIE</option>	<option value="ACOLA">ACOLA</option>	<option value="ACOOC">ACOOC</option>	<option value="AMB">AMB</option>	<option value="AMC">AMC</option>	<option value="AMG">AMG</option>	<option value="ANE">ANE</option>	<option value="AVM">AVM</option>	<option value="AXS">AXS</option>	<option value="AXX">AXX</option>	<option value="CCA">CCA</option>	<option value="COR">COR</option>	<option value="CSM">CSM</option>	<option value="CTE">CTE</option>	<option value="CTW">CTW</option>	<option value="CVP">CVP</option>	<option value="DAIE">DAIE</option>	<option value="DALA">DALA</option>	<option value="DAOC">DAOC</option>	<option value="GHC">GHC</option>	<option value="GSM">GSM</option>	<option value="HEX">HEX</option>	<option value="HS3">HS3</option>	<option value="LMC">LMC</option>	<option value="MCT">MCT</option>	<option value="MMG">MMG</option>	<option value="MPMG">MPMG</option>	<option value="MRI">MRI</option>	<option value="NFLA">NFLA</option>	<option value="NFM">NFM</option>	<option value="NFOC">NFOC</option>	<option value="OC">OC</option>	<option value="OCA">OCA</option>	<option value="OCB">OCB</option>	<option value="OMA">OMA</option>	<option value="OMB">OMB</option>	<option value="PAP">PAP</option>	<option value="PAZ">PAZ</option>	<option value="PC">PC</option>	<option value="PCCV">PCCV</option>	<option value="PCM">PCM</option>	<option value="PEG">PEG</option>	<option value="PGW">PGW</option>	<option value="PHI">PHI</option>	<option value="PIE">PIE</option>	<option value="PMGLA">PMGLA</option>	<option value="PMGOC">PMGOC</option>	<option value="PNJ">PNJ</option>	<option value="PNW">PNW</option>	<option value="PPA">PPA</option>	<option value="PPC">PPC</option>	<option value="PPF">PPF</option>	<option value="PPL">PPL</option>	<option value="PPV">PPV</option>	<option value="PRB">PRB</option>	<option value="PRI">PRI</option>	<option value="PSD">PSD</option>	<option value="PSO">PSO</option>	<option value="PTX">PTX</option>	<option value="PVM">PVM</option>	<option value="REA">REA</option>	<option value="REB">REB</option>	<option value="SLG">SLG</option>	<option value="SMG">SMG</option>	<option value="SPM">SPM</option>	<option value="UCM">UCM</option>	<option value="UMG">UMG</option>	<option value="VDA">VDA</option>	<option value="VMG">VMG</option>	<option value="XHN">XHN</option>		</select>&nbsp;&nbsp;<a onclick="viewHSOs();"><span class="material-icons-Outlined" border="0" style="cursor:hand;" alt="Locations Legend">info</span></a></td>		<td><select name="slctFilter11" onkeypress="ReloadOnEnter(event,'AdvSearch');">			<option value="-1">All</option>	<option value="1">A</option>	<option value="2">P</option>	<option value="3">RE9</option>	<option value="5">C</option>	<option value="6">R01</option>	<option value="7">R02</option>	<option value="8">R03</option>	<option value="9">R04</option>	<option value="10">R05</option>	<option value="11">R06</option>	<option value="12">R07</option>	<option value="13">R08</option>	<option value="14">R09</option>	<option value="15">R10</option>	<option value="16">R11</option>	<option value="17">R12</option>	<option value="18">R13</option>	<option value="19">R14</option>	<option value="20">R15</option>	<option value="21">R16</option>	<option value="22">R17</option>	<option value="23">R18</option>	<option value="24">R19</option>	<option value="25">R20</option>	<option value="26">R21</option>	<option value="27">R22</option>	<option value="28">R23</option>	<option value="29">R24</option>	<option value="30">R25</option>	<option value="31">R26</option>	<option value="32">R27</option>	<option value="33">R28</option>	<option value="34">R29</option>	<option value="35">R30</option>	<option value="36">R31</option>	<option value="37">R32</option>	<option value="38">R33</option>	<option value="39">R34</option>	<option value="40">R35</option>	<option value="41">R36</option>	<option value="42">R37</option>	<option value="43">R38</option>	<option value="44">R39</option>	<option value="45">R40</option>	<option value="46">R41</option>	<option value="47">R42</option>	<option value="48">R43</option>	<option value="49">R44</option>	<option value="50">R45</option>	<option value="51">R46</option>	<option value="52">R47</option>	<option value="53">R48</option>	<option value="54">R49</option>	<option value="55">R50</option>	<option value="56">R51</option>	<option value="57">R52</option>	<option value="58">R53</option>	<option value="59">R54</option>	<option value="60">R55</option>	<option value="61">R56</option>	<option value="62">R57</option>	<option value="63">R58</option>	<option value="64">R59</option>	<option value="65">R60</option>	<option value="66">R61</option>	<option value="67">R62</option>	<option value="68">R63</option>	<option value="69">R64</option>	<option value="70">R65</option>	<option value="71">R66</option>	<option value="72">R67</option>	<option value="73">R68</option>	<option value="74">R69</option>	<option value="75">R70</option>	<option value="76">R71</option>	<option value="77">R72</option>	<option value="78">R73</option>	<option value="79">R74</option>	<option value="80">R75</option>	<option value="81">R76</option>	<option value="82">R77</option>	<option value="83">R78</option>	<option value="84">R79</option>	<option value="85">R80</option>	<option value="86">R81</option>	<option value="87">R82</option>	<option value="88">R83</option>	<option value="89">R84</option>	<option value="90">R85</option>	<option value="91">R86</option>	<option value="92">R87</option>	<option value="93">R88</option>	<option value="94">R89</option>	<option value="95">R90</option>	<option value="96">R91</option>	<option value="97">R92</option>	<option value="98">R93</option>	<option value="99">R94</option>	<option value="100">R95</option>	<option value="101">R96</option>	<option value="102">R97</option>	<option value="103">R98</option>	<option value="104">R99</option>	<option value="105">RA0</option>	<option value="106">RA1</option>	<option value="107">RA2</option>	<option value="108">RA3</option>	<option value="109">RA4</option>	<option value="110">RA5</option>	<option value="111">RA6</option>	<option value="112">RA7</option>	<option value="113">RA8</option>	<option value="114">RA9</option>	<option value="115">RB0</option>	<option value="116">RB1</option>	<option value="117">RB2</option>	<option value="118">RB3</option>	<option value="119">RB4</option>	<option value="120">RB5</option>	<option value="121">RB6</option>	<option value="122">RB7</option>	<option value="123">RB8</option>	<option value="124">RB9</option>	<option value="125">RC0</option>	<option value="126">RC1</option>	<option value="127">RC2</option>	<option value="128">RC3</option>	<option value="129">RC4</option>	<option value="130">RC5</option>	<option value="131">RC6</option>	<option value="132">RC7</option>	<option value="133">RC8</option>	<option value="134">RC9</option>	<option value="135">RD0</option>	<option value="136">RD1</option>	<option value="137">RD2</option>	<option value="138">RD3</option>	<option value="139">RD4</option>	<option value="140">RD5</option>	<option value="141">RD6</option>	<option value="142">RD7</option>	<option value="143">RD8</option>	<option value="144">RD9</option>	<option value="145">RE0</option>	<option value="146">RE1</option>	<option value="147">RE2</option>	<option value="148">RE3</option>	<option value="149">RE4</option>	<option value="150">RE5</option>	<option value="151">RE6</option>	<option value="152">RE7</option>	<option value="179">RE8</option>	<option value="180">RF0</option>	<option value="181">RF1</option>	<option value="182">RF2</option>	<option value="183">RF3</option>	<option value="184">RF4</option>	<option value="185">RF5</option>	<option value="186">RF6</option>	<option value="187">RF7</option>	<option value="188">RF8</option>	<option value="189">RF9</option>	<option value="190">RG0</option>	<option value="191">RG1</option>	<option value="192">RG2</option>	<option value="193">P01</option>	<option value="194">RG3</option>	<option value="195">F01</option>	<option value="196">RG4</option>	<option value="197">RG5</option>	<option value="198">P02</option>	<option value="199">RG6</option>	<option value="200">RG7</option>	<option value="201">RG8</option>	<option value="202">RG9</option>	<option value="203">RH0</option>	<option value="204">RH1</option>	<option value="205">RH2</option>	<option value="206">RH3</option>	<option value="207">RH4</option>	<option value="208">RH5</option>	<option value="209">RH6</option>	<option value="210">RH7</option>	<option value="211">RH8</option>	<option value="212">RH9</option>	<option value="213">RI0</option>	<option value="214">RI1</option>	<option value="215">RI2</option>	<option value="216">RI3</option>	<option value="217">RI4</option>	<option value="218">RI5</option>	<option value="219">V01</option>	<option value="220">RI6</option>	<option value="221">RI7</option>	<option value="222">RI8</option>	<option value="223">P03</option>	<option value="224">RI9</option>	<option value="225">RJ0</option>	<option value="226">RJ1</option>	<option value="227">RJ2</option>	<option value="228">RJ3</option>	<option value="229">RJ4</option>	<option value="230">RJ5</option>	<option value="231">RJ6</option>	<option value="232">D01</option>	<option value="233">RJ7</option>	<option value="234">RJ8</option>	<option value="235">RJ9</option>	<option value="236">RK0</option>	<option value="237">RK1</option>	<option value="238">RK2</option>	<option value="239">RK3</option>	<option value="240">RK4</option>	<option value="241">RK5</option>	<option value="242">RK6</option>	<option value="243">S01</option>	<option value="244">RK7</option>	<option value="245">RK8</option>	<option value="246">RK9</option>	<option value="247">RL0</option>	<option value="248">RL1</option>	<option value="249">RL2</option>	<option value="250">RL3</option>	<option value="251">RL4</option>	<option value="252">RL5</option>	<option value="253"> RL</option>	<option value="254">RL6</option>	<option value="255">RL7</option>	<option value="256">RL8</option>	<option value="257">RL9</option>	<option value="258">RM0</option>	<option value="259">RM1</option>	<option value="260">RM2</option>	<option value="261">RM3</option>	<option value="262">RM4</option>	<option value="263">RM5</option>	<option value="264">RM6</option>	<option value="265">RM7</option>	<option value="266">RM8</option>	<option value="267">RM9</option>	<option value="268">RN0</option>	<option value="269">RN1</option>	<option value="270">RN2</option>	<option value="271">RN3</option>	<option value="272">RN4</option>	<option value="273">RN5</option>	<option value="274">RN6</option>	<option value="275">RN7</option>	<option value="276">RN8</option>	<option value="277">RN9</option>	<option value="278">RO0</option>	<option value="279">RO1</option>	<option value="280">RO2</option>	<option value="281">RO3</option>	<option value="282">RO4</option>	<option value="283">RO5</option>	<option value="284">RO6</option>	<option value="285">R</option>	<option value="286">AC</option>	<option value="287">RP1</option>	<option value="288">RP2</option>	<option value="289">RP3</option>	<option value="290">RP4</option>	<option value="291">RO7</option>	<option value="292">RO8</option>	<option value="293">RO9</option>	<option value="294">RP0</option>	<option value="295">RP5</option>	<option value="296">RP6</option>	<option value="297">RP7</option>	<option value="298">RP8</option>	<option value="299">RP9</option>	<option value="300">RQ0</option>	<option value="301">RQ1</option>	<option value="302">RQ2</option>	<option value="303">RQ3</option>	<option value="304">RQ4</option>	<option value="305">RQ5</option>	<option value="306">RQ6</option>	<option value="307">RQ7</option>	<option value="308">RQ8</option>	<option value="309">RQ9</option>	<option value="310">RR0</option>	<option value="311">RR1</option>	<option value="312">RR2</option>	<option value="313">RR3</option>	<option value="314">RR4</option>	<option value="315">RR5</option>	<option value="316">RR6</option>	<option value="317">RR7</option>	<option value="318">RR8</option>	<option value="319">RR9</option>	<option value="320">RS0</option>	<option value="321">RS1</option>	<option value="322">RS2</option>	<option value="323">RS3</option>	<option value="324">RS4</option>	<option value="325">RS5</option>	<option value="326">RS6</option>	<option value="327">RS7</option>	<option value="328">RS8</option>	<option value="329">RS9</option>	<option value="330">RT0</option>	<option value="331">RT1</option>	<option value="332">RT2</option>	<option value="333">RT3</option>	<option value="334">RT4</option>	<option value="335">RT5</option>	<option value="336">RT6</option>	<option value="337">RT7</option>	<option value="338">RT8</option>	<option value="339">RT9</option>	<option value="340">RU0</option>	<option value="341">RU1</option>	<option value="342">RU2</option>	<option value="343">RU3</option>	<option value="344">RU4</option>	<option value="345">RU5</option>	<option value="346">RU6</option>	<option value="347">RU7</option>	<option value="348">RU8</option>	<option value="349">RU9</option>	<option value="350">RV0</option>	<option value="351">RV1</option>	<option value="352">RV2</option>	<option value="353">RV3</option>	<option value="354">RV4</option>	<option value="355">RV5</option>	<option value="356">RV6</option>	<option value="357">RV7</option>	<option value="358">RV8</option>	<option value="359">RV9</option>	<option value="360">RW0</option>	<option value="361">RW1</option>	<option value="362">RW2</option>	<option value="363">RW3</option>	<option value="364">RW4</option>	<option value="365">RW5</option>	<option value="366">RW6</option>	<option value="367">RW7</option>	<option value="368">RW8</option>	<option value="369">RW9</option>	<option value="370">RX0</option>	<option value="371">RX1</option>	<option value="372">RX2</option>	<option value="373">RX3</option>	<option value="374">RX4</option>	<option value="375">RX5</option>	<option value="376">RX6</option>	<option value="377">RX7</option>	<option value="378">RX8</option>	<option value="379">RX9</option>	<option value="380">RY0</option>	<option value="381">RY1</option>	<option value="382">RY2</option>	<option value="383">RY3</option>	<option value="384">RY4</option>	<option value="385">RY5</option>		</select>&nbsp;&nbsp;<a onclick="viewClaimStatusIDs();"><span class="material-icons-Outlined" border="0" style="cursor:hand;" alt="Claim Status Legend">info</span></a></td>		<td><input name="txtFilter3" class="text1" value="" size="12" maxlength="30" onkeypress="ReloadOnEnter(event,'AdvSearch');" style=""></td>		<td><input name="txtFilter5" class="text1" value="" size="12" maxlength="20" onkeypress="ReloadOnEnter(event,'AdvSearch');" style=""></td>		<td><input name="txtFilter6" class="text1" value="" size="9" maxlength="20" onkeypress="ReloadOnEnter(event,'AdvSearch');" style=""></td>		<td><input name="txtFilter7" class="text1" value="" size="5" maxlength="20" onkeypress="ReloadOnEnter(event,'AdvSearch');" style=""></td>		<td><input name="txtFilter13" class="text1" value="" size="5" maxlength="20" onkeypress="ReloadOnEnter(event,'AdvSearch');" style=""></td>		<td><input name="txtFilter12" class="text1" value="" size="12" maxlength="30" onkeypress="ReloadOnEnter(event,'AdvSearch');" style=""></td>		<td><input name="txtFilter8" class="text1" value="" size="5" maxlength="20" onkeypress="ReloadOnEnter(event,'AdvSearch');" style=""></td>		<td colspan="2" align="middle"><input type="button" class="btn-all" value="Search" onclick="reloadPage('AdvSearch');" style=""></td>		<td>&nbsp;</td>	</tr><tr>	<td colspan="16" align="center">		<b><font color="red">No claims were returned. Please use different search criteria.</font></b>	</td></tr><input type="hidden" name="hdnPageCnt" value="" style=""><tr class="dataGrid1Body">	<td><img src="images/spacer.gif"></td>	<td colspan="16" style="padding:5px 0px 5px 0px;"><table cellspacing="0" class="dataGrid1Footer" style="display:none" ;=""><tbody><tr>	<td>Showing <input name="txtRecPage" class="text" value="20" size="2" onkeypress="ReloadOnEnter(event,'ChangeRecPerPage');" style="">		<input type="button" class="button btn-all" value="Go" onclick="reloadPage('ChangeRecPerPage');" style=""> records per page	</td>	<td align="center">Records 		 of 	</td>	<td align="right">		<table class="dataGrid1FooterPaging" cellspacing="0">		<tbody><tr>		<td><img alt="First Page" src="images/tblPageFirstOff.gif"></td>		<td><img alt="Previous Page" src="images/tblPagePrevOff.gif"></td>			<td>Page 				<input name="txtPageNo" id="txtPageNo" class="text" value="1" title="Page Number" size="2" onkeypress="ReloadOnEnter(event,'ChangePageNo');" style="">				<input type="button" class="button btn-all" value="Go" onclick="reloadPage('ChangePageNo');" style="">				of 			</td>		<td><a onclick="reloadPage('ChangePageNo','2');"><img style="cursor:hand" alt="Next Page" src="images/tblPageNext.gif"></a></td>		<td><a onclick="reloadPage('ChangePageNo','');"><img style="cursor:hand" alt="Last Page" src="images/tblPageLast.gif"></a></td>		</tr>		</tbody></table>	</td></tr></tbody></table>	</td>	<td><img src="images/spacer.gif"></td></tr></tbody></table><br><font color="white">6:16:41 AM - 6:16:41 AM</font><br></form></td></tr><tr><td width="1%">&nbsp;</td><td id="tdLastRowWithCurve" style="height: 25px;background-color:white;" colspan="4">&nbsp;</td></tr><tr><td colspan="5">&nbsp;</td></tr></tbody></table><iframe src="blank.html" frameborder="0" style="position: absolute; height: 0px; visibility: hidden;"></iframe><div style="position: absolute; visibility: hidden;"><div></div><div></div></div></body></html>

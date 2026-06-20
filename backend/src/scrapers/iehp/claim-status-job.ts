@@ -1,10 +1,10 @@
 import type { BrowserContext, Page } from "playwright-core";
-import { emitProcessClaimEvent } from "@/backend/src/jobs/job-store";
+import { emitScrapeJobEvent } from "@/backend/src/jobs/job-store";
 import { processCoveredRaDownloads, extractCheckNumbersFromClaimDetailText } from "@/backend/src/scrapers/iehp/covered-ra";
 import { processReferToRaDownloads } from "@/backend/src/scrapers/iehp/refer-ra";
 import { detectLoginStatus } from "@/backend/src/scrapers/iehp/auth";
 import { launchIehpBrowser } from "./browser";
-import { parseIehpProcessClaimsInput } from "./input";
+import { parseIehpClaimStatusInput } from "./input";
 import { navigateToClaimStatusWithRetry } from "./claim-status";
 import {
   buildExpandedDetailSummary,
@@ -32,9 +32,9 @@ import { getClaimCptValue, getClaimModifierValues, serializeRaRecords, type RaDe
 
 type StreamEvent = Record<string, unknown>;
 
-export async function runProcessClaimsJob(jobId: string, formData: FormData): Promise<void> {
+export async function runIehpClaimStatusJob(jobId: string, formData: FormData): Promise<void> {
   const sendEvent = async (data: StreamEvent) => {
-    emitProcessClaimEvent(jobId, data);
+    emitScrapeJobEvent(jobId, data);
     await new Promise(resolve => setTimeout(resolve, 50));
   };
 
@@ -53,7 +53,7 @@ export async function runProcessClaimsJob(jobId: string, formData: FormData): Pr
           password,
           claimRows,
           startIndex,
-        } = await parseIehpProcessClaimsInput(formData);
+        } = await parseIehpClaimStatusInput(formData);
 
         if (!claimStatusUrlWasProvided) {
           await log("Warning: Claim Status URL not found in Excel. Using default fallback.");

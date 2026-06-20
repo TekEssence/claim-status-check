@@ -1,9 +1,9 @@
 import {
-  createProcessClaimJob,
-  emitProcessClaimEvent,
-  getProcessClaimJob,
-  subscribeToProcessClaimJob,
-  type ProcessClaimJobEvent,
+  createScrapeJob,
+  emitScrapeJobEvent,
+  getScrapeJob,
+  subscribeToScrapeJob,
+  type ScrapeJobEvent,
 } from "@/backend/src/jobs/job-store";
 import { getScraper } from "@/backend/src/scrapers/registry";
 
@@ -16,16 +16,16 @@ export async function POST(req: Request) {
   const portalId = getPortalId(formData);
   const scraper = getScraper(portalId);
   const input = scraper.validateInput(formData);
-  const job = createProcessClaimJob();
+  const job = createScrapeJob();
 
   scraper.run(input, {
     jobId: job.id,
     portalId,
     emit: async (event) => {
-      emitProcessClaimEvent(job.id, event);
+      emitScrapeJobEvent(job.id, event);
     },
     log: async (event) => {
-      emitProcessClaimEvent(job.id, {
+      emitScrapeJobEvent(job.id, {
         type: "log",
         message: event.message,
         level: event.level,
@@ -36,8 +36,8 @@ export async function POST(req: Request) {
     },
   }).catch((error) => {
     const message = error instanceof Error ? error.message : "Unexpected automation error.";
-    emitProcessClaimEvent(job.id, { type: "error", message });
-    emitProcessClaimEvent(job.id, { type: "done" });
+    emitScrapeJobEvent(job.id, { type: "error", message });
+    emitScrapeJobEvent(job.id, { type: "done" });
   });
 
   return Response.json({ jobId: job.id, portalId });
@@ -48,10 +48,10 @@ export async function GET(req: Request) {
   const jobId = url.searchParams.get("jobId");
 
   if (!jobId) {
-    return Response.json({ error: "Missing process claim jobId." }, { status: 400 });
+    return Response.json({ error: "Missing scrape jobId." }, { status: 400 });
   }
 
-  return streamProcessClaimEvents(req, jobId, getLastEventId(req, url));
+  return streamScrapeJobEvents(req, jobId, getLastEventId(req, url));
 }
 
 function getLastEventId(req: Request, url: URL): number {
@@ -83,9 +83,9 @@ function sseHeaders(): HeadersInit {
   };
 }
 
-function streamProcessClaimEvents(req: Request, jobId: string, afterEventId: number): Response {
+function streamScrapeJobEvents(req: Request, jobId: string, afterEventId: number): Response {
   const encoder = new TextEncoder();
-  const job = getProcessClaimJob(jobId);
+  const job = getScrapeJob(jobId);
 
   if (!job) {
     const stream = new ReadableStream({
@@ -93,7 +93,7 @@ function streamProcessClaimEvents(req: Request, jobId: string, afterEventId: num
         controller.enqueue(encoder.encode("id: 1\n"));
         controller.enqueue(encoder.encode(`data: ${JSON.stringify({
           type: "error",
-          message: "Process claim job not found. Please start processing again.",
+          message: "Scrape job not found. Please start processing again.",
         })}\n\n`));
         controller.enqueue(encoder.encode("id: 2\n"));
         controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "done" })}\n\n`));
@@ -139,7 +139,7 @@ function streamProcessClaimEvents(req: Request, jobId: string, afterEventId: num
         }
       };
 
-      const send = (event: ProcessClaimJobEvent) => {
+      const send = (event: ScrapeJobEvent) => {
         if (closed) return;
         try {
           controller.enqueue(encoder.encode(`id: ${event.id}\n`));
@@ -156,7 +156,7 @@ function streamProcessClaimEvents(req: Request, jobId: string, afterEventId: num
         }
       };
 
-      unsubscribe = subscribeToProcessClaimJob(jobId, afterEventId, send);
+      unsubscribe = subscribeToScrapeJob(jobId, afterEventId, send);
       readyToCloseOnDone = true;
       if (closeAfterSubscribe) {
         close();

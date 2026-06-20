@@ -12,7 +12,7 @@ export type ErrorScreenshot = {
   image: string;
 };
 
-export type ProcessClaimEvent = {
+export type ScrapeJobEvent = {
   type?: string;
   message?: string;
   completed?: number;
@@ -22,5 +22,7 @@ export type ProcessClaimEvent = {
   html?: string;
   base64?: string;
   filename?: string;
+  mimeType?: string;
+  path?: string;
   update?: Record<string, unknown>;
 };

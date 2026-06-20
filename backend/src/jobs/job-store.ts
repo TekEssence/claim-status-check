@@ -1,26 +1,26 @@
 import type {
-  ProcessClaimJob,
-  ProcessClaimJobEvent,
-  ProcessClaimJobStatus,
+  ScrapeJob,
+  ScrapeJobEvent,
+  ScrapeJobStatus,
   StreamEvent,
 } from "./types";
 
 export type {
-  ProcessClaimJob,
-  ProcessClaimJobEvent,
-  ProcessClaimJobStatus,
+  ScrapeJob,
+  ScrapeJobEvent,
+  ScrapeJobStatus,
   StreamEvent,
 } from "./types";
 
 const TERMINAL_JOB_TTL_MS = 30 * 60 * 1000;
 
-const jobs = new Map<string, ProcessClaimJob>();
+const jobs = new Map<string, ScrapeJob>();
 
-function isTerminalStatus(status: ProcessClaimJobStatus): boolean {
+function isTerminalStatus(status: ScrapeJobStatus): boolean {
   return status === "done" || status === "error" || status === "cancelled";
 }
 
-function scheduleTerminalJobCleanup(job: ProcessClaimJob): void {
+function scheduleTerminalJobCleanup(job: ScrapeJob): void {
   if (!isTerminalStatus(job.status)) return;
 
   if (job.cleanupTimer) {
@@ -44,9 +44,9 @@ function createJobId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
-export function createProcessClaimJob(): ProcessClaimJob {
+export function createScrapeJob(): ScrapeJob {
   const now = Date.now();
-  const job: ProcessClaimJob = {
+  const job: ScrapeJob = {
     id: createJobId(),
     status: "running",
     currentCompleted: 0,
@@ -59,11 +59,11 @@ export function createProcessClaimJob(): ProcessClaimJob {
   return job;
 }
 
-export function getProcessClaimJob(jobId: string): ProcessClaimJob | undefined {
+export function getScrapeJob(jobId: string): ScrapeJob | undefined {
   return jobs.get(jobId);
 }
 
-export function emitProcessClaimEvent(jobId: string, data: StreamEvent): void {
+export function emitScrapeJobEvent(jobId: string, data: StreamEvent): void {
   const job = jobs.get(jobId);
   if (!job) return;
 
@@ -93,10 +93,10 @@ export function emitProcessClaimEvent(jobId: string, data: StreamEvent): void {
   }
 }
 
-export function subscribeToProcessClaimJob(
+export function subscribeToScrapeJob(
   jobId: string,
   afterEventId: number,
-  subscriber: (event: ProcessClaimJobEvent) => void,
+  subscriber: (event: ScrapeJobEvent) => void,
 ): () => void {
   const job = jobs.get(jobId);
   if (!job) return () => {};

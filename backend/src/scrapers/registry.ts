@@ -1,8 +1,10 @@
+import { aerialScraper } from "./aerial/scraper";
 import { iehpScraper } from "./iehp/scraper";
 import { UnknownPortalError } from "../core/errors";
 import type { PortalScraper } from "./types";
 
 export const scraperRegistry = {
+  aerial: aerialScraper,
   iehp: iehpScraper,
 } satisfies Record<string, PortalScraper>;
 

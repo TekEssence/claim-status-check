@@ -3,7 +3,7 @@ import { asText } from "./claims/dates";
 
 export type IehpGenericRow = Record<string, unknown>;
 
-export type IehpProcessClaimsInput = {
+export type IehpClaimStatusInput = {
   loginUrl: string;
   claimStatusUrl: string;
   claimStatusUrlWasProvided: boolean;
@@ -13,7 +13,7 @@ export type IehpProcessClaimsInput = {
   startIndex: number;
 };
 
-export async function parseIehpProcessClaimsInput(formData: FormData): Promise<IehpProcessClaimsInput> {
+export async function parseIehpClaimStatusInput(formData: FormData): Promise<IehpClaimStatusInput> {
   const loginExcelFile = formData.get("loginExcel") as File | null;
   const claimRowsJson = formData.get("claimRows") as string | null;
   const startIndex = parseInt(formData.get("startIndex") as string || "0", 10);
