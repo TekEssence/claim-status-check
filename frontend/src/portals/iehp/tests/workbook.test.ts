@@ -655,6 +655,6 @@ test("postProcessWorksheet writes Final Status for paid RA rows using net paid s
   const headers = headerMap(worksheet);
   assert.equal(
     worksheet.getRow(2).getCell(headers["Final Status"]).value,
-    "DOS 01/30/2026: Checked IEHP portal claim received on 04/22/2026 paid on 04/22/2026 paid amount $1.00 + $2.00 + $3.00 + $198.44 EFT/Check # EFT-222. Acct # 4090/654321.",
+    "DOS 01/30/2026: Checked IEHP portal claim received on 04/22/2026 paid on 04/22/2026 paid amount $198.44 with copay of $1.00 and coins of $2.00 and deductible of $3.00 EFT/Check # EFT-222. Acct # 4090/654321.",
   );
 });

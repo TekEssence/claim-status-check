@@ -176,19 +176,18 @@ function buildPaidAmountText(raRecord: RaDetailRecord): string {
 
   const adjustmentTotal = copay + coins + deduct;
   const remainingNetPaid = netPaid > adjustmentTotal ? netPaid - adjustmentTotal : 0;
-  const parts: string[] = [];
+  const basePaidAmount = remainingNetPaid > 0 ? remainingNetPaid : netPaid > 0 ? netPaid : 0;
+  const suffixParts: string[] = [];
 
-  if (copay > 0) parts.push(formatCurrency(copay));
-  if (coins > 0) parts.push(formatCurrency(coins));
-  if (deduct > 0) parts.push(formatCurrency(deduct));
+  if (copay > 0) suffixParts.push(`copay of ${formatCurrency(copay)}`);
+  if (coins > 0) suffixParts.push(`coins of ${formatCurrency(coins)}`);
+  if (deduct > 0) suffixParts.push(`deductible of ${formatCurrency(deduct)}`);
 
-  if (remainingNetPaid > 0) {
-    parts.push(formatCurrency(remainingNetPaid));
-  } else if (parts.length === 0 && netPaid > 0) {
-    parts.push(formatCurrency(netPaid));
+  if (suffixParts.length === 0) {
+    return formatCurrency(basePaidAmount);
   }
 
-  return parts.length > 0 ? parts.join(" + ") : formatCurrency(0);
+  return `${formatCurrency(basePaidAmount)} with ${suffixParts.join(" and ")}`;
 }
 
 function buildFinalStatusText(
