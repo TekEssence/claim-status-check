@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import * as XLSX from "xlsx";
 import ExcelJS from "exceljs";
 import { applyClaimRowUpdateToWorksheet, postProcessWorksheet } from "../portals/iehp/workbook";
@@ -15,6 +15,22 @@ import { AerialResultView } from "../portals/aerial/AerialResultView";
 import { aerialFrontendPortalConfig } from "../portals/aerial/portal-config";
 
 type PortalId = "iehp" | "aerial";
+type AuthUser = {
+  userId: string;
+  username: string;
+  email: string;
+  role: "ADMIN" | "USER";
+  mustResetPassword: boolean;
+};
+
+type ManagedUser = {
+  userId: string;
+  username: string;
+  email: string;
+  role: "ADMIN" | "USER";
+  isActive: boolean;
+  mustResetPassword: boolean;
+};
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -75,6 +91,25 @@ async function selectExcelFileHandle(): Promise<FileSystemFileHandle | null> {
 }
 
 export function ScraperPage() {
+  const [authLoading, setAuthLoading] = useState(true);
+  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
+  const [authUsername, setAuthUsername] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [authConfirmPassword, setAuthConfirmPassword] = useState("");
+  const [authError, setAuthError] = useState("");
+  const [authStatus, setAuthStatus] = useState("");
+  const [authSubmitting, setAuthSubmitting] = useState(false);
+  const [forgotPasswordMode, setForgotPasswordMode] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [activeView, setActiveView] = useState<"portal-selection" | "manage-users">("portal-selection");
+  const [manageTab, setManageTab] = useState<"add" | "employees">("add");
+  const [managedUsers, setManagedUsers] = useState<ManagedUser[]>([]);
+  const [manageError, setManageError] = useState("");
+  const [manageStatus, setManageStatus] = useState("");
+  const [newUserEmail, setNewUserEmail] = useState("");
+  const [temporaryPassword, setTemporaryPassword] = useState("");
+  const [editingUserId, setEditingUserId] = useState("");
+  const [editingEmail, setEditingEmail] = useState("");
   const [selectedPortalId, setSelectedPortalId] = useState<PortalId | null>(null);
   const [iehpLoginFile, setIehpLoginFile] = useState<File | null>(null);
   const [claimFileHandle, setClaimFileHandle] = useState<FileSystemFileHandle | null>(null);
@@ -102,12 +137,232 @@ export function ScraperPage() {
     [aerialInputFile, isProcessing],
   );
 
+  useEffect(() => {
+    let mounted = true;
+
+    fetch("/api/auth/me")
+      .then(async (response) => {
+        if (!mounted) return;
+        if (!response.ok) {
+          setAuthUser(null);
+          return;
+        }
+        const data = await response.json();
+        setAuthUser(data.user ?? null);
+      })
+      .catch(() => {
+        if (mounted) setAuthUser(null);
+      })
+      .finally(() => {
+        if (mounted) setAuthLoading(false);
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
   function resetRunState(message: string) {
     setIsProcessing(true);
     setStatus(message);
     setLogs([]);
     setErrorScreenshots([]);
     setProgress(null);
+  }
+
+  function resetPortalSelection() {
+    setActiveView("portal-selection");
+    setSettingsOpen(false);
+    setSelectedPortalId(null);
+    setStatus("");
+    setLogs([]);
+    setErrorScreenshots([]);
+    setProgress(null);
+  }
+
+  async function loadManagedUsers() {
+    setManageError("");
+    const response = await fetch("/api/admin/users");
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(data.error || "Unable to load users.");
+    }
+    setManagedUsers(data.users ?? []);
+  }
+
+  async function openManageUsers() {
+    setSettingsOpen(false);
+    setActiveView("manage-users");
+    setManageStatus("");
+    try {
+      await loadManagedUsers();
+    } catch (error) {
+      setManageError(getErrorMessage(error));
+    }
+  }
+
+  async function onAuthSubmit(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    setAuthSubmitting(true);
+    setAuthError("");
+    setAuthStatus("");
+
+    try {
+      const response = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: authUsername, password: authPassword }),
+      });
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(data.error || "Login failed.");
+      }
+
+      setAuthUser(data.user ?? null);
+      setAuthUsername("");
+      setAuthPassword("");
+      setAuthConfirmPassword("");
+      resetPortalSelection();
+    } catch (error) {
+      setAuthError(getErrorMessage(error));
+    } finally {
+      setAuthSubmitting(false);
+    }
+  }
+
+  async function onForgotPasswordSubmit(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    setAuthSubmitting(true);
+    setAuthError("");
+    setAuthStatus("");
+
+    try {
+      const response = await fetch("/api/auth/reset-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          username: authUsername,
+          password: authPassword,
+          confirmPassword: authConfirmPassword,
+        }),
+      });
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(data.error || "Reset password failed.");
+      }
+
+      setAuthStatus("Password updated successfully. Please login with the new password.");
+      setForgotPasswordMode(false);
+      setAuthPassword("");
+      setAuthConfirmPassword("");
+    } catch (error) {
+      setAuthError(getErrorMessage(error));
+    } finally {
+      setAuthSubmitting(false);
+    }
+  }
+
+  async function logout() {
+    await fetch("/api/auth/logout", { method: "POST" }).catch(() => {});
+    setAuthUser(null);
+    setAuthUsername("");
+    setAuthPassword("");
+    setAuthConfirmPassword("");
+    setAuthError("");
+    setAuthStatus("");
+    setForgotPasswordMode(false);
+    setSettingsOpen(false);
+    setActiveView("portal-selection");
+    setManagedUsers([]);
+    setManageError("");
+    setManageStatus("");
+    setNewUserEmail("");
+    setTemporaryPassword("");
+    setEditingUserId("");
+    setEditingEmail("");
+    setSelectedPortalId(null);
+    setIehpLoginFile(null);
+    setClaimFileHandle(null);
+    setClaimFileName("");
+    setAerialCredentialFile(null);
+    setAerialInputFile(null);
+    setIsProcessing(false);
+    setStatus("");
+    setLogs([]);
+    setErrorScreenshots([]);
+    setProgress(null);
+  }
+
+  async function addManagedUser(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    setManageError("");
+    setManageStatus("");
+
+    try {
+      const response = await fetch("/api/admin/users", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: newUserEmail,
+          temporaryPassword,
+        }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data.error || "Unable to add user.");
+      }
+
+      setManageStatus(`User added. Temporary password: ${data.temporaryPassword}`);
+      setNewUserEmail("");
+      setTemporaryPassword("");
+      await loadManagedUsers();
+    } catch (error) {
+      setManageError(getErrorMessage(error));
+    }
+  }
+
+  async function updateUserEmail(userId: string) {
+    setManageError("");
+    setManageStatus("");
+    try {
+      const response = await fetch(`/api/admin/users/${encodeURIComponent(userId)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: editingEmail }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data.error || "Unable to update email.");
+      }
+      setEditingUserId("");
+      setEditingEmail("");
+      setManageStatus("Employee email updated.");
+      await loadManagedUsers();
+    } catch (error) {
+      setManageError(getErrorMessage(error));
+    }
+  }
+
+  async function deactivateUser(userId: string) {
+    if (!window.confirm("Deactivate this user? They will no longer be able to login.")) return;
+
+    setManageError("");
+    setManageStatus("");
+    try {
+      const response = await fetch(`/api/admin/users/${encodeURIComponent(userId)}`, {
+        method: "DELETE",
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data.error || "Unable to deactivate user.");
+      }
+      setManageStatus("Employee deactivated.");
+      await loadManagedUsers();
+    } catch (error) {
+      setManageError(getErrorMessage(error));
+    }
   }
 
   async function selectClaimFile() {
@@ -359,83 +614,399 @@ export function ScraperPage() {
     }
   }
 
-  return (
-    <main className="min-h-screen bg-slate-50 px-4 py-12 text-slate-900">
-      <div className="mx-auto w-full max-w-3xl rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
-        {!selectedPortal ? (
-          <>
-            <h1 className="text-2xl font-semibold">Select Portal</h1>
-            <p className="mt-2 text-sm text-slate-600">Choose the portal scraper you want to run.</p>
+  if (authLoading) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-slate-50 px-4 text-slate-900">
+        <div className="rounded-md border border-slate-200 bg-white px-5 py-4 text-sm font-medium shadow-sm">
+          Loading...
+        </div>
+      </main>
+    );
+  }
 
-            <div className="mt-6 grid gap-4 sm:grid-cols-2">
-              {([iehpFrontendPortalConfig, aerialFrontendPortalConfig] as const).map((portal) => (
-                <button
-                  key={portal.id}
-                  type="button"
-                  onClick={() => {
-                    setSelectedPortalId(portal.id as PortalId);
-                    setStatus("");
-                    setLogs([]);
-                    setErrorScreenshots([]);
-                    setProgress(null);
-                  }}
-                  className="rounded-lg border border-slate-300 bg-white p-5 text-left shadow-sm hover:border-blue-500 hover:bg-blue-50"
-                >
-                  <span className="block text-lg font-semibold">{portal.name}</span>
-                  <span className="mt-2 block text-sm text-slate-600">{portal.description}</span>
-                </button>
-              ))}
+  if (!authUser) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-slate-50 px-4 text-slate-900">
+        <div className="w-full max-w-sm rounded-md border border-slate-200 bg-white p-6 shadow-sm">
+          <h1 className="text-xl font-semibold">IEHP Claim Status Check</h1>
+
+          <form className="mt-5 space-y-4" onSubmit={forgotPasswordMode ? onForgotPasswordSubmit : onAuthSubmit}>
+            <div>
+              <label className="mb-2 block text-sm font-medium" htmlFor="authUsername">
+                Username
+              </label>
+              <input
+                id="authUsername"
+                type="text"
+                autoComplete="username"
+                value={authUsername}
+                onChange={(event) => setAuthUsername(event.target.value)}
+                className="block w-full rounded-md border border-slate-300 p-2 text-sm"
+              />
             </div>
-          </>
-        ) : (
-          <>
-            <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-          <div>
-            <h1 className="text-2xl font-semibold">{selectedPortal.name}</h1>
-            <p className="mt-2 max-w-xl text-sm text-slate-600">{selectedPortal.description}</p>
-          </div>
 
+            <div>
+              <label className="mb-2 block text-sm font-medium" htmlFor="authPassword">
+                {forgotPasswordMode ? "New Password" : "Password"}
+              </label>
+              <input
+                id="authPassword"
+                type="password"
+                autoComplete="current-password"
+                value={authPassword}
+                onChange={(event) => setAuthPassword(event.target.value)}
+                className="block w-full rounded-md border border-slate-300 p-2 text-sm"
+              />
+            </div>
+
+            {forgotPasswordMode && (
+              <div>
+                <label className="mb-2 block text-sm font-medium" htmlFor="authConfirmPassword">
+                  Confirm Password
+                </label>
+                <input
+                  id="authConfirmPassword"
+                  type="password"
+                  autoComplete="new-password"
+                  value={authConfirmPassword}
+                  onChange={(event) => setAuthConfirmPassword(event.target.value)}
+                  className="block w-full rounded-md border border-slate-300 p-2 text-sm"
+                />
+              </div>
+            )}
+
+            {authError && (
+              <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm font-medium text-red-700">
+                {authError}
+              </div>
+            )}
+
+            {authStatus && (
+              <div className="rounded-md border border-green-200 bg-green-50 p-3 text-sm font-medium text-green-700">
+                {authStatus}
+              </div>
+            )}
+
+            <button
+              type="submit"
+              disabled={authSubmitting}
+              className="w-full rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:bg-slate-400"
+            >
+              {authSubmitting ? "Please wait..." : forgotPasswordMode ? "Update Password" : "Login"}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setForgotPasswordMode((prev) => !prev);
+                setAuthError("");
+                setAuthStatus("");
+                setAuthPassword("");
+                setAuthConfirmPassword("");
+              }}
+              className="w-full text-sm font-medium text-blue-600 hover:text-blue-700"
+            >
+              {forgotPasswordMode ? "Back to login" : "Forgot password?"}
+            </button>
+          </form>
+        </div>
+      </main>
+    );
+  }
+
+  return (
+    <main className="min-h-screen bg-slate-50 text-slate-900">
+      <nav className="border-b border-slate-200 bg-white px-4 py-3 shadow-sm">
+        <div className="mx-auto flex max-w-5xl items-center justify-between gap-4">
+          <button
+            type="button"
+            onClick={resetPortalSelection}
+            className="flex items-center gap-3 text-left"
+          >
+            <span className="flex h-10 w-16 items-center justify-center rounded-md bg-blue-600 text-sm font-bold text-white">
+              IEHP
+            </span>
+            <span>
+              <span className="block text-base font-semibold">Portal Scraper</span>
+              <span className="block text-xs text-slate-500">Signed in as {authUser.email || authUser.username}</span>
+            </span>
+          </button>
+
+          <div className="flex items-center gap-3">
+            {selectedPortalId && (
               <button
                 type="button"
                 disabled={isProcessing}
-                onClick={() => {
-                  setSelectedPortalId(null);
-                  setStatus("");
-                  setLogs([]);
-                  setErrorScreenshots([]);
-                  setProgress(null);
-                }}
+                onClick={resetPortalSelection}
                 className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium hover:bg-slate-50 disabled:text-slate-400"
               >
                 Change portal
               </button>
-        </div>
+            )}
 
-        {selectedPortalId === "iehp" ? (
-          <>
-            <IehpInputForm
-              canSubmit={canSubmitIehp}
-              claimFileName={claimFileName}
-              isProcessing={isProcessing}
-              onLoginFileChange={setIehpLoginFile}
-              onSelectClaimFile={selectClaimFile}
-              onSubmit={submitIehp}
-            />
-            <IehpResultView errorScreenshots={errorScreenshots} logs={logs} progress={progress} status={status} />
-          </>
+            <div className="relative">
+              <button
+                type="button"
+                aria-label="Settings"
+                onClick={() => setSettingsOpen((open) => !open)}
+                className="flex h-10 w-10 items-center justify-center rounded-md border border-slate-300 bg-white hover:bg-slate-50"
+              >
+                <svg aria-hidden="true" viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2">
+                  <circle cx="12" cy="12" r="3" />
+                  <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 0 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6V21a2 2 0 0 1-4 0v-.1a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1A2 2 0 0 1 4.2 17l.1-.1A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.6-1H3a2 2 0 0 1 0-4h.1a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1A2 2 0 0 1 7 4.2l.1.1a1.7 1.7 0 0 0 1.9.3A1.7 1.7 0 0 0 10 3V3a2 2 0 0 1 4 0v.1a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1A2 2 0 0 1 19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.1a2 2 0 0 1 0 4H21a1.7 1.7 0 0 0-1.6 1Z" />
+                </svg>
+              </button>
+
+              {settingsOpen && (
+                <div className="absolute right-0 z-10 mt-2 w-44 rounded-md border border-slate-200 bg-white py-1 text-sm shadow-lg">
+                  {authUser.role === "ADMIN" && (
+                    <button
+                      type="button"
+                      onClick={openManageUsers}
+                      className="block w-full px-3 py-2 text-left hover:bg-slate-50"
+                    >
+                      Manage Users
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={logout}
+                    disabled={isProcessing}
+                    className="block w-full px-3 py-2 text-left hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-400"
+                  >
+                    Logout
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </nav>
+
+      <div className="px-4 py-12">
+        {activeView === "manage-users" && authUser.role === "ADMIN" ? (
+          <div className="mx-auto w-full max-w-5xl rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <h1 className="text-xl font-semibold">Manage Users</h1>
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveView("portal-selection");
+                  setSettingsOpen(false);
+                }}
+                className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium hover:bg-slate-50"
+              >
+                Back
+              </button>
+            </div>
+
+            <div className="mt-5 flex gap-2 border-b border-slate-200">
+              <button
+                type="button"
+                onClick={() => setManageTab("add")}
+                className={`px-3 py-2 text-sm font-medium ${manageTab === "add" ? "border-b-2 border-blue-600 text-blue-700" : "text-slate-600"}`}
+              >
+                Add User
+              </button>
+              <button
+                type="button"
+                onClick={() => setManageTab("employees")}
+                className={`px-3 py-2 text-sm font-medium ${manageTab === "employees" ? "border-b-2 border-blue-600 text-blue-700" : "text-slate-600"}`}
+              >
+                Manage Employees
+              </button>
+            </div>
+
+            {manageError && (
+              <div className="mt-4 rounded-md border border-red-200 bg-red-50 p-3 text-sm font-medium text-red-700">
+                {manageError}
+              </div>
+            )}
+            {manageStatus && (
+              <div className="mt-4 rounded-md border border-green-200 bg-green-50 p-3 text-sm font-medium text-green-700">
+                {manageStatus}
+              </div>
+            )}
+
+            {manageTab === "add" ? (
+              <form className="mt-5 grid gap-4 md:grid-cols-[1fr_1fr_auto]" onSubmit={addManagedUser}>
+                <div>
+                  <label className="mb-2 block text-sm font-medium" htmlFor="newUserEmail">
+                    Email
+                  </label>
+                  <input
+                    id="newUserEmail"
+                    type="email"
+                    value={newUserEmail}
+                    onChange={(event) => setNewUserEmail(event.target.value)}
+                    className="block w-full rounded-md border border-slate-300 p-2 text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="mb-2 block text-sm font-medium" htmlFor="temporaryPassword">
+                    Temporary password
+                  </label>
+                  <input
+                    id="temporaryPassword"
+                    type="text"
+                    value={temporaryPassword}
+                    placeholder="Welcome123"
+                    onChange={(event) => setTemporaryPassword(event.target.value)}
+                    className="block w-full rounded-md border border-slate-300 p-2 text-sm"
+                  />
+                </div>
+                <div className="flex items-end">
+                  <button
+                    type="submit"
+                    className="w-full rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+                  >
+                    Add User
+                  </button>
+                </div>
+              </form>
+            ) : (
+              <div className="mt-5 overflow-x-auto">
+                <table className="w-full border-collapse text-left text-sm">
+                  <thead>
+                    <tr className="border-b border-slate-200">
+                      <th className="px-3 py-2 font-semibold">S.No.</th>
+                      <th className="px-3 py-2 font-semibold">Employee name</th>
+                      <th className="px-3 py-2 font-semibold">Role</th>
+                      <th className="px-3 py-2 font-semibold">Status</th>
+                      <th className="px-3 py-2 font-semibold">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {managedUsers.map((user, index) => (
+                      <tr key={user.userId} className="border-b border-slate-100">
+                        <td className="px-3 py-3">{index + 1}</td>
+                        <td className="px-3 py-3">
+                          {editingUserId === user.userId ? (
+                            <input
+                              type="email"
+                              value={editingEmail}
+                              onChange={(event) => setEditingEmail(event.target.value)}
+                              className="w-full rounded-md border border-slate-300 p-2 text-sm"
+                            />
+                          ) : (
+                            user.email || user.username
+                          )}
+                        </td>
+                        <td className="px-3 py-3">{user.role}</td>
+                        <td className="px-3 py-3">{user.isActive ? "Active" : "Inactive"}</td>
+                        <td className="px-3 py-3">
+                          <div className="flex flex-wrap gap-2">
+                            {editingUserId === user.userId ? (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => updateUserEmail(user.userId)}
+                                  className="rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white"
+                                >
+                                  Save
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setEditingUserId("");
+                                    setEditingEmail("");
+                                  }}
+                                  className="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-medium"
+                                >
+                                  Cancel
+                                </button>
+                              </>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setEditingUserId(user.userId);
+                                  setEditingEmail(user.email || user.username);
+                                }}
+                                disabled={!user.isActive}
+                                className="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-medium disabled:cursor-not-allowed disabled:text-slate-400"
+                              >
+                                Edit Employee Email
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => deactivateUser(user.userId)}
+                              disabled={!user.isActive || user.userId === authUser.userId}
+                              className="rounded-md border border-red-300 px-3 py-1.5 text-xs font-medium text-red-700 disabled:cursor-not-allowed disabled:text-slate-400"
+                            >
+                              Deactivate
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
         ) : (
-          <>
-            <AerialInputForm
-              canSubmit={canSubmitAerial}
-              isProcessing={isProcessing}
-              onCredentialFileChange={setAerialCredentialFile}
-              onInputFileChange={setAerialInputFile}
-              onSubmit={submitAerial}
-            />
-            <AerialResultView errorScreenshots={errorScreenshots} logs={logs} progress={progress} status={status} />
-          </>
-        )}
-          </>
+          <div className="mx-auto w-full max-w-3xl rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+            {!selectedPortal ? (
+            <>
+              <h1 className="text-2xl font-semibold">Select Portal</h1>
+              <p className="mt-2 text-sm text-slate-600">Choose the portal scraper you want to run.</p>
+
+              <div className="mt-6 grid gap-4 sm:grid-cols-2">
+                {([iehpFrontendPortalConfig, aerialFrontendPortalConfig] as const).map((portal) => (
+                  <button
+                    key={portal.id}
+                    type="button"
+                    onClick={() => {
+                      setSelectedPortalId(portal.id as PortalId);
+                      setStatus("");
+                      setLogs([]);
+                      setErrorScreenshots([]);
+                      setProgress(null);
+                    }}
+                    className="rounded-lg border border-slate-300 bg-white p-5 text-left shadow-sm hover:border-blue-500 hover:bg-blue-50"
+                  >
+                    <span className="block text-lg font-semibold">{portal.name}</span>
+                    <span className="mt-2 block text-sm text-slate-600">{portal.description}</span>
+                  </button>
+                ))}
+              </div>
+            </>
+            ) : (
+            <>
+              <div>
+                <h1 className="text-2xl font-semibold">{selectedPortal.name}</h1>
+                <p className="mt-2 max-w-xl text-sm text-slate-600">{selectedPortal.description}</p>
+              </div>
+
+              {selectedPortalId === "iehp" ? (
+                <>
+                  <IehpInputForm
+                    canSubmit={canSubmitIehp}
+                    claimFileName={claimFileName}
+                    isProcessing={isProcessing}
+                    onLoginFileChange={setIehpLoginFile}
+                    onSelectClaimFile={selectClaimFile}
+                    onSubmit={submitIehp}
+                  />
+                  <IehpResultView errorScreenshots={errorScreenshots} logs={logs} progress={progress} status={status} />
+                </>
+              ) : (
+                <>
+                  <AerialInputForm
+                    canSubmit={canSubmitAerial}
+                    isProcessing={isProcessing}
+                    onCredentialFileChange={setAerialCredentialFile}
+                    onInputFileChange={setAerialInputFile}
+                    onSubmit={submitAerial}
+                  />
+                  <AerialResultView errorScreenshots={errorScreenshots} logs={logs} progress={progress} status={status} />
+                </>
+              )}
+            </>
+            )}
+          </div>
         )}
       </div>
     </main>
