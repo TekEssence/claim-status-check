@@ -43,5 +43,7 @@ yarn-error.log*
 next-env.d.ts
 .aider*
 
+# generated scraper artifacts
 /data/
+*.log
 

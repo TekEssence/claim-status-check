@@ -2,6 +2,7 @@ import os from "node:os";
 import path from "node:path";
 import chromium from "@sparticuz/chromium";
 import { chromium as playwright, type Browser, type BrowserContext } from "playwright-core";
+import { getAutomationRuntimeConfig } from "@/backend/src/core/runtime-config";
 
 export type IehpBrowserSession = {
   browser: Browser | null;
@@ -9,10 +10,10 @@ export type IehpBrowserSession = {
 };
 
 export async function launchIehpBrowser(log: (message: string) => Promise<void>): Promise<IehpBrowserSession> {
-  const isVercel = process.env.VERCEL === "1" || !!process.env.VERCEL_ENV;
+  const runtimeConfig = getAutomationRuntimeConfig();
   const useChromeProfile = false;
 
-  if (isVercel) {
+  if (runtimeConfig.environment === "vercel") {
     await log("Attempting @sparticuz/chromium browser launch for Vercel.");
     const browser = await playwright.launch({
       args: chromium.args,
@@ -26,7 +27,7 @@ export async function launchIehpBrowser(log: (message: string) => Promise<void>)
     return { browser, context };
   }
 
-  await log("Attempting local Chromium launch.");
+  await log(`Attempting local Chromium launch in ${runtimeConfig.headless ? "headless" : "headed"} mode.`);
   if (useChromeProfile) {
     const profilePath = path.join(os.homedir(), "Library/Application Support/Google/Chrome");
     try {
@@ -42,7 +43,7 @@ export async function launchIehpBrowser(log: (message: string) => Promise<void>)
     }
   }
 
-  const browser = await playwright.launch({ headless: true });
+  const browser = await playwright.launch({ headless: runtimeConfig.headless });
   const context = await browser.newContext();
   return { browser, context };
 }

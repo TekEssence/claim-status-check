@@ -1,0 +1,27 @@
+export const regalConfig = {
+  id: "regal",
+  name: "Regal Portal",
+  selectors: {
+    username: "input[name='identifier'][autocomplete='username']",
+    usernameSubmit: "input[type='submit'][value='Next']",
+    password: "input[name='credentials.passcode'][type='password']",
+    passwordSubmit: "input[type='submit'][value='Verify']",
+    errorContainer: "[data-se='o-form-error-container']",
+    dashboardHeading: "h2:has-text('Dashboard')",
+    dashboardText: "text=Dashboard",
+    myAppsHeading: "h2:has-text('My Apps')",
+    myAppsText: "text=My Apps",
+    signOut: "a[data-se='topbar--sign-out'][href='/login/signout']",
+    userMenu: "button:has-text('Regal Medical Group'), [aria-label*='account menu' i], [data-se*='user' i]",
+    regalExpressAccessApp: "a[data-se='app-card'][aria-label='launch app Regal Express Access (REA)'], a[data-se='app-card']:has-text('Regal Express Access'), a:has-text('Regal Express Access')",
+    switchAuthenticator: "a[data-se='switchAuthenticator']",
+    googleAuthenticatorSelect: "[data-se='google_otp'] a[data-se='button'], a[aria-label='Select Google Authenticator.']",
+    googleAuthenticatorCode: "input[name='credentials.passcode'][type='text']",
+    googleAuthenticatorSubmit: "input[type='submit'][value='Verify']",
+  },
+  runtime: {
+    supportsLocal: true,
+    supportsDeployed: true,
+    requiresVpn: false,
+  },
+};

@@ -1,20 +1,19 @@
 import chromium from "@sparticuz/chromium";
 import { chromium as playwright, type Browser, type BrowserContext } from "playwright-core";
 import { getAutomationRuntimeConfig } from "@/backend/src/core/runtime-config";
-import { loadAerialEnvironment } from "./env";
+import { loadRegalEnvironment } from "./env";
 
-export type AerialBrowserSession = {
+export type RegalBrowserSession = {
   browser: Browser;
   context: BrowserContext;
 };
 
-export async function launchAerialBrowser(log: (message: string) => Promise<void>): Promise<AerialBrowserSession> {
-  loadAerialEnvironment();
+export async function launchRegalBrowser(log: (message: string) => Promise<void>): Promise<RegalBrowserSession> {
+  loadRegalEnvironment();
   const runtimeConfig = getAutomationRuntimeConfig();
-  const browserChannel = String(process.env.PORTAL_AERIAL_BROWSER_CHANNEL || "").trim();
 
   if (runtimeConfig.environment === "vercel") {
-    await log("Attempting @sparticuz/chromium browser launch for Aerial.");
+    await log("Attempting @sparticuz/chromium browser launch for Regal.");
     const browser = await playwright.launch({
       args: chromium.args,
       executablePath: await chromium.executablePath(),
@@ -27,11 +26,8 @@ export async function launchAerialBrowser(log: (message: string) => Promise<void
     return { browser, context };
   }
 
-  await log(`Attempting local Chromium launch for Aerial in ${runtimeConfig.headless ? "headless" : "headed"} mode.`);
-  const browser = await playwright.launch({
-    headless: runtimeConfig.headless,
-    ...(browserChannel ? { channel: browserChannel } : {}),
-  });
+  await log(`Attempting local Chromium launch for Regal in ${runtimeConfig.headless ? "headless" : "headed"} mode.`);
+  const browser = await playwright.launch({ headless: runtimeConfig.headless });
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   return { browser, context };
 }

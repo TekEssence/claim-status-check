@@ -2,7 +2,7 @@ import os from "node:os";
 import path from "node:path";
 import chromium from "@sparticuz/chromium";
 import { chromium as playwright, type Browser, type BrowserContext } from "playwright-core";
-import { getRuntimeEnvironment } from "./environment";
+import { getAutomationRuntimeConfig } from "./runtime-config";
 
 export type BrowserLaunchResult = {
   browser: Browser | null;
@@ -10,7 +10,8 @@ export type BrowserLaunchResult = {
 };
 
 export async function launchAutomationBrowser(): Promise<BrowserLaunchResult> {
-  if (getRuntimeEnvironment() === "vercel") {
+  const runtimeConfig = getAutomationRuntimeConfig();
+  if (runtimeConfig.environment === "vercel") {
     const browser = await playwright.launch({
       args: chromium.args,
       executablePath: await chromium.executablePath(),
@@ -25,7 +26,7 @@ export async function launchAutomationBrowser(): Promise<BrowserLaunchResult> {
 
   const executablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH;
   const browser = await playwright.launch({
-    headless: false,
+    headless: runtimeConfig.headless,
     executablePath,
   });
   const context = await browser.newContext({

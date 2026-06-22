@@ -68,10 +68,19 @@ PORTAL_AERIAL_RETRY_MAX_ATTEMPTS=2
 PORTAL_AERIAL_MAX_RESULT_PAGES=25
 PORTAL_AERIAL_SNAPSHOT_ROOT_DIR=error-snapshots
 PORTAL_AERIAL_BROWSER_CHANNEL=
-HEADLESS=true
+HEADLESS=false
+BROWSER_HEADLESS=false
+BROWSER_KEEP_OPEN=false
 ```
 
 `PORTAL_AERIAL_CLAIMS_URL` is optional. If it is absent, the scraper uses the portal's configured Claims link/path: `claimInfo.asp`.
+
+Browser mode:
+
+- Local default: `HEADLESS=false` / `BROWSER_HEADLESS=false`, so the browser opens visibly for testing.
+- Vercel/deployed: forced headless because serverless environments cannot show a browser window.
+- Local override: set `HEADLESS=true` or `BROWSER_HEADLESS=true` if you want local runs hidden.
+- Local debugging: set `BROWSER_KEEP_OPEN=true` if you want the browser to stay open after the run.
 
 Locally, set the external env path before starting Next:
 

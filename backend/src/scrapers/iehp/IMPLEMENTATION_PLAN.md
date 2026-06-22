@@ -44,6 +44,13 @@ Failed-row diagnostics are saved under:
 data/screenshots/<jobId>/
 ```
 
+Browser mode:
+
+- Local default: visible browser for testing.
+- Vercel/deployed: forced headless.
+- Local override: set `HEADLESS=true` or `BROWSER_HEADLESS=true` to run hidden.
+- Local debugging: set `BROWSER_KEEP_OPEN=true` to leave the browser open after the run.
+
 ## Portal Logic
 
 Main files:

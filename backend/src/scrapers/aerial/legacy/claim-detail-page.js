@@ -159,7 +159,10 @@ async function extractServiceLines(page) {
       if (!cells.length) continue;
 
       const cellTexts = cells.map((cell) => normalize(cell.innerText));
-      const isServiceLineRow = cells.length >= 12 && /^\d/.test(cellTexts[0]);
+      const isServiceLineRow =
+        cells.length >= 12 &&
+        cellTexts[0] &&
+        /^\d{1,2}\/\d{1,2}\/\d{4}$/.test(cellTexts[2]);
       const isDetailRow = cells.length === 1 && cells[0].getAttribute("colspan");
 
       if (isServiceLineRow) {

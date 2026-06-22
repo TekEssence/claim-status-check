@@ -13,8 +13,15 @@ import { iehpFrontendPortalConfig } from "../portals/iehp/portal-config";
 import { AerialInputForm } from "../portals/aerial/AerialInputForm";
 import { AerialResultView } from "../portals/aerial/AerialResultView";
 import { aerialFrontendPortalConfig } from "../portals/aerial/portal-config";
+import { RegalInputForm } from "../portals/regal/RegalInputForm";
+import { RegalResultView } from "../portals/regal/RegalResultView";
+import { regalFrontendPortalConfig } from "../portals/regal/portal-config";
 
-type PortalId = "iehp" | "aerial";
+type PortalId = "iehp" | "aerial" | "regal";
+type DownloadFile = {
+  filename: string;
+  bytes: Uint8Array;
+};
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -51,6 +58,121 @@ function downloadBase64File(filename: string, base64: string, type: string): voi
   downloadBlob(filename, new Blob([arrayBuffer], { type }));
 }
 
+function textToBytes(text: string): Uint8Array {
+  return new TextEncoder().encode(text);
+}
+
+function dosDateTime(date = new Date()): { time: number; date: number } {
+  const year = Math.max(1980, date.getFullYear());
+  return {
+    time: (date.getHours() << 11) | (date.getMinutes() << 5) | Math.floor(date.getSeconds() / 2),
+    date: ((year - 1980) << 9) | ((date.getMonth() + 1) << 5) | date.getDate(),
+  };
+}
+
+function crc32(bytes: Uint8Array): number {
+  let crc = 0xffffffff;
+  for (const byte of bytes) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit++) {
+      crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1));
+    }
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function writeUint16(view: DataView, offset: number, value: number): void {
+  view.setUint16(offset, value, true);
+}
+
+function writeUint32(view: DataView, offset: number, value: number): void {
+  view.setUint32(offset, value >>> 0, true);
+}
+
+function concatBytes(parts: Uint8Array[]): Uint8Array {
+  const totalLength = parts.reduce((sum, part) => sum + part.byteLength, 0);
+  const output = new Uint8Array(totalLength);
+  let offset = 0;
+  for (const part of parts) {
+    output.set(part, offset);
+    offset += part.byteLength;
+  }
+  return output;
+}
+
+function createZip(files: DownloadFile[]): Uint8Array {
+  const localParts: Uint8Array[] = [];
+  const centralParts: Uint8Array[] = [];
+  let offset = 0;
+
+  for (const file of files) {
+    const filenameBytes = textToBytes(file.filename.replace(/\\/g, "/"));
+    const checksum = crc32(file.bytes);
+    const stamp = dosDateTime();
+
+    const localHeader = new Uint8Array(30 + filenameBytes.byteLength);
+    const localView = new DataView(localHeader.buffer);
+    writeUint32(localView, 0, 0x04034b50);
+    writeUint16(localView, 4, 20);
+    writeUint16(localView, 6, 0);
+    writeUint16(localView, 8, 0);
+    writeUint16(localView, 10, stamp.time);
+    writeUint16(localView, 12, stamp.date);
+    writeUint32(localView, 14, checksum);
+    writeUint32(localView, 18, file.bytes.byteLength);
+    writeUint32(localView, 22, file.bytes.byteLength);
+    writeUint16(localView, 26, filenameBytes.byteLength);
+    writeUint16(localView, 28, 0);
+    localHeader.set(filenameBytes, 30);
+    localParts.push(localHeader, file.bytes);
+
+    const centralHeader = new Uint8Array(46 + filenameBytes.byteLength);
+    const centralView = new DataView(centralHeader.buffer);
+    writeUint32(centralView, 0, 0x02014b50);
+    writeUint16(centralView, 4, 20);
+    writeUint16(centralView, 6, 20);
+    writeUint16(centralView, 8, 0);
+    writeUint16(centralView, 10, 0);
+    writeUint16(centralView, 12, stamp.time);
+    writeUint16(centralView, 14, stamp.date);
+    writeUint32(centralView, 16, checksum);
+    writeUint32(centralView, 20, file.bytes.byteLength);
+    writeUint32(centralView, 24, file.bytes.byteLength);
+    writeUint16(centralView, 28, filenameBytes.byteLength);
+    writeUint16(centralView, 30, 0);
+    writeUint16(centralView, 32, 0);
+    writeUint16(centralView, 34, 0);
+    writeUint16(centralView, 36, 0);
+    writeUint32(centralView, 38, 0);
+    writeUint32(centralView, 42, offset);
+    centralHeader.set(filenameBytes, 46);
+    centralParts.push(centralHeader);
+
+    offset += localHeader.byteLength + file.bytes.byteLength;
+  }
+
+  const centralDirectory = concatBytes(centralParts);
+  const end = new Uint8Array(22);
+  const endView = new DataView(end.buffer);
+  writeUint32(endView, 0, 0x06054b50);
+  writeUint16(endView, 4, 0);
+  writeUint16(endView, 6, 0);
+  writeUint16(endView, 8, files.length);
+  writeUint16(endView, 10, files.length);
+  writeUint32(endView, 12, centralDirectory.byteLength);
+  writeUint32(endView, 16, offset);
+  writeUint16(endView, 20, 0);
+
+  return concatBytes([...localParts, centralDirectory, end]);
+}
+
+function downloadZip(filename: string, files: DownloadFile[]): void {
+  if (files.length === 0) return;
+  const zipBytes = createZip(files);
+  const arrayBuffer = zipBytes.buffer.slice(zipBytes.byteOffset, zipBytes.byteOffset + zipBytes.byteLength) as ArrayBuffer;
+  downloadBlob(filename, new Blob([arrayBuffer], { type: "application/zip" }));
+}
+
 async function selectExcelFileHandle(): Promise<FileSystemFileHandle | null> {
   const picker = (window as WindowWithFilePicker).showOpenFilePicker;
   if (!picker) {
@@ -81,6 +203,7 @@ export function ScraperPage() {
   const [claimFileName, setClaimFileName] = useState<string>("");
   const [aerialCredentialFile, setAerialCredentialFile] = useState<File | null>(null);
   const [aerialInputFile, setAerialInputFile] = useState<File | null>(null);
+  const [regalLoginFile, setRegalLoginFile] = useState<File | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [status, setStatus] = useState<string>("");
   const [logs, setLogs] = useState<string[]>([]);
@@ -92,7 +215,9 @@ export function ScraperPage() {
       ? iehpFrontendPortalConfig
       : selectedPortalId === "aerial"
         ? aerialFrontendPortalConfig
-        : null;
+        : selectedPortalId === "regal"
+          ? regalFrontendPortalConfig
+          : null;
   const canSubmitIehp = useMemo(
     () => Boolean(iehpLoginFile && claimFileHandle && !isProcessing),
     [iehpLoginFile, claimFileHandle, isProcessing],
@@ -101,6 +226,7 @@ export function ScraperPage() {
     () => Boolean(aerialInputFile && !isProcessing),
     [aerialInputFile, isProcessing],
   );
+  const canSubmitRegal = useMemo(() => !isProcessing, [isProcessing]);
 
   function resetRunState(message: string) {
     setIsProcessing(true);
@@ -310,6 +436,7 @@ export function ScraperPage() {
 
     let hasError = false;
     let finalErrorMessage = "";
+    const diagnosticFiles: DownloadFile[] = [];
     const streamAbortController = new AbortController();
 
     const handleJobEvent = async (eventData: ScrapeJobEvent) => {
@@ -319,6 +446,15 @@ export function ScraperPage() {
         setProgress({ completed: eventData.completed, total: eventData.total });
       } else if (eventData.type === "error_screenshot" && typeof eventData.index === "number" && eventData.image) {
         setErrorScreenshots((prev) => [...prev, { index: eventData.index ?? -1, image: eventData.image ?? "" }]);
+        diagnosticFiles.push({
+          filename: `row-${eventData.index}-screenshot.jpg`,
+          bytes: base64ToBytes(eventData.image),
+        });
+      } else if (eventData.type === "debug_html" && typeof eventData.index === "number" && eventData.html) {
+        diagnosticFiles.push({
+          filename: eventData.filename || `aerial_debug_row_${eventData.index}.html`,
+          bytes: textToBytes(eventData.html),
+        });
       } else if (eventData.type === "file_download" && eventData.filename && eventData.base64) {
         downloadBase64File(eventData.filename, eventData.base64, eventData.mimeType || "application/octet-stream");
         setStatus(`Downloaded ${eventData.filename}`);
@@ -330,6 +466,8 @@ export function ScraperPage() {
         setLogs((prev) => [...prev, `ERROR: ${eventData.message}`]);
         setStatus(`Error: ${eventData.message}`);
         hasError = true;
+      } else if (eventData.type === "done") {
+        downloadZip("aerial-diagnostics.zip", diagnosticFiles);
       }
     };
 
@@ -359,6 +497,85 @@ export function ScraperPage() {
     }
   }
 
+  async function submitRegal(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+
+    resetRunState("Starting Regal login...");
+
+    const formData = new FormData();
+    formData.append("portalId", "regal");
+    if (regalLoginFile) {
+      formData.append("loginExcel", regalLoginFile);
+    }
+
+    let hasError = false;
+    let finalErrorMessage = "";
+    const diagnosticFiles: DownloadFile[] = [];
+    const streamAbortController = new AbortController();
+
+    const handleJobEvent = async (eventData: ScrapeJobEvent) => {
+      if (eventData.type === "log" && eventData.message) {
+        setLogs((prev) => [...prev, eventData.message ?? ""]);
+      } else if (eventData.type === "progress" && typeof eventData.completed === "number" && typeof eventData.total === "number") {
+        setProgress({ completed: eventData.completed, total: eventData.total });
+      } else if (eventData.type === "error_screenshot" && typeof eventData.index === "number" && eventData.image) {
+        setErrorScreenshots((prev) => [...prev, { index: eventData.index ?? -1, image: eventData.image ?? "" }]);
+        diagnosticFiles.push({
+          filename: eventData.filename || `regal_screenshot_${eventData.index}.jpg`,
+          bytes: base64ToBytes(eventData.image),
+        });
+      } else if (eventData.type === "diagnostic_screenshot" && eventData.image) {
+        diagnosticFiles.push({
+          filename: eventData.filename || "regal_diagnostic.jpg",
+          bytes: base64ToBytes(eventData.image),
+        });
+      } else if (eventData.type === "debug_html" && typeof eventData.index === "number" && eventData.html) {
+        diagnosticFiles.push({
+          filename: eventData.filename || `regal_debug_${eventData.index}.html`,
+          bytes: textToBytes(eventData.html),
+        });
+      } else if (eventData.type === "file_download" && eventData.filename && eventData.base64) {
+        downloadBase64File(eventData.filename, eventData.base64, eventData.mimeType || "application/octet-stream");
+        setStatus(`Downloaded ${eventData.filename}`);
+      } else if (eventData.type === "warning" && eventData.message) {
+        setLogs((prev) => [...prev, eventData.message ?? ""]);
+        setStatus(eventData.message);
+      } else if (eventData.type === "error" && eventData.message) {
+        finalErrorMessage = eventData.message;
+        setLogs((prev) => [...prev, `ERROR: ${eventData.message}`]);
+        setStatus(`Error: ${eventData.message}`);
+        hasError = true;
+      } else if (eventData.type === "done") {
+        downloadZip("regal-diagnostics.zip", diagnosticFiles);
+      }
+    };
+
+    try {
+      const jobId = await startScrapeJob(formData);
+      await subscribeToScrapeJobEvents({
+        jobId,
+        signal: streamAbortController.signal,
+        onEvent: handleJobEvent,
+        onStreamError(error) {
+          console.error("Regal stream error:", error);
+          finalErrorMessage = getErrorMessage(error);
+          setLogs((prev) => [...prev, `STREAM ERROR: ${finalErrorMessage}`]);
+          setStatus(`Stream error: ${finalErrorMessage}`);
+          hasError = true;
+        },
+      });
+      setStatus(
+        hasError
+          ? `Regal login finished with errors${finalErrorMessage ? `: ${finalErrorMessage}` : "."}`
+          : "Regal login step completed. Check the downloaded diagnostics for the next page.",
+      );
+    } catch (error) {
+      setStatus(`Failed to run Regal login: ${getErrorMessage(error)}`);
+    } finally {
+      setIsProcessing(false);
+    }
+  }
+
   return (
     <main className="min-h-screen bg-slate-50 px-4 py-12 text-slate-900">
       <div className="mx-auto w-full max-w-3xl rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
@@ -368,7 +585,7 @@ export function ScraperPage() {
             <p className="mt-2 text-sm text-slate-600">Choose the portal scraper you want to run.</p>
 
             <div className="mt-6 grid gap-4 sm:grid-cols-2">
-              {([iehpFrontendPortalConfig, aerialFrontendPortalConfig] as const).map((portal) => (
+              {([iehpFrontendPortalConfig, aerialFrontendPortalConfig, regalFrontendPortalConfig] as const).map((portal) => (
                 <button
                   key={portal.id}
                   type="button"
@@ -423,7 +640,7 @@ export function ScraperPage() {
             />
             <IehpResultView errorScreenshots={errorScreenshots} logs={logs} progress={progress} status={status} />
           </>
-        ) : (
+        ) : selectedPortalId === "aerial" ? (
           <>
             <AerialInputForm
               canSubmit={canSubmitAerial}
@@ -433,6 +650,16 @@ export function ScraperPage() {
               onSubmit={submitAerial}
             />
             <AerialResultView errorScreenshots={errorScreenshots} logs={logs} progress={progress} status={status} />
+          </>
+        ) : (
+          <>
+            <RegalInputForm
+              canSubmit={canSubmitRegal}
+              isProcessing={isProcessing}
+              onLoginFileChange={setRegalLoginFile}
+              onSubmit={submitRegal}
+            />
+            <RegalResultView errorScreenshots={errorScreenshots} logs={logs} progress={progress} status={status} />
           </>
         )}
           </>

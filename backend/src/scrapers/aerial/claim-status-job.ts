@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { Browser, Page } from "playwright-core";
+import { closeAutomationResources } from "@/backend/src/core/runtime-config";
 import type { ScraperContext } from "../types";
 import { launchAerialBrowser } from "./browser";
 import { parseAerialInput, type AerialInput } from "./input";
@@ -145,6 +146,13 @@ async function captureAerialDiagnostics(
   const html = await page.content().catch(() => "");
   if (html) {
     await fs.writeFile(htmlPath, html, "utf8").catch(() => {});
+    await context.emit({
+      type: "debug_html",
+      index: inputRow.input_row_id,
+      html,
+      path: htmlPath,
+      filename: `aerial_row_${inputRow.input_row_id}_${safeReason}.html`,
+    });
   }
 
   if (screenshot) {
@@ -403,6 +411,10 @@ export async function runAerialClaimStatusJob(formData: FormData, context: Scrap
     await context.emit({ type: "error", message });
     await context.emit({ type: "done" });
   } finally {
-    await browser?.close().catch(() => {});
+    await closeAutomationResources({
+      browser,
+      page,
+      log: (message) => context.log({ level: "info", message }),
+    });
   }
 }

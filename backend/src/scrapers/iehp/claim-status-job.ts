@@ -1,4 +1,5 @@
 import type { BrowserContext, Page } from "playwright-core";
+import { closeAutomationResources } from "@/backend/src/core/runtime-config";
 import { emitScrapeJobEvent } from "@/backend/src/jobs/job-store";
 import { processCoveredRaDownloads, extractCheckNumbersFromClaimDetailText } from "@/backend/src/scrapers/iehp/covered-ra";
 import { processReferToRaDownloads } from "@/backend/src/scrapers/iehp/refer-ra";
@@ -600,9 +601,7 @@ export async function runIehpClaimStatusJob(jobId: string, formData: FormData): 
             processedInThisBatch++;
           }
         } finally {
-          await page?.close().catch(() => {});
-          await context?.close().catch(() => {});
-          await browser?.close().catch(() => {});
+          await closeAutomationResources({ browser, context, page, log });
         }
       } catch (globalError) {
         const msg = globalError instanceof Error ? globalError.message : "Unexpected automation error.";
