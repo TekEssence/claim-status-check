@@ -151,6 +151,8 @@ async function navigateToClaimRaPage(page: Page, log: (message: string) => Promi
   });
   await claimRaLink.click({ force: true });
   await waitForResultsToSettle(page);
+  await log("Claims RAs page opened. Waiting 7 seconds for the page to settle before searching...");
+  await page.waitForTimeout(7000);
 
   const searchInput = page.locator(IEHP_SELECTORS.common.searchInput).first();
   await searchInput.waitFor({ state: "visible", timeout: 15000 }).catch(() => {
