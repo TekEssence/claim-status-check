@@ -1,5 +1,4 @@
 import { Pool, type QueryResult, type QueryResultRow } from "pg";
-import { loadBackendEnv } from "@/lib/server-env";
 import { hashPassword, verifyPassword } from "./password";
 
 export type AuthUser = {
@@ -24,8 +23,6 @@ const DB_CONNECT_TIMEOUT_MS = 5000;
 const DB_QUERY_TIMEOUT_MS = 6000;
 
 function getPool(): Pool {
-  loadBackendEnv();
-
   if (pool) return pool;
   if (!process.env.DATABASE_URL) {
     throw new Error("DATABASE_URL must be configured for database authentication.");
