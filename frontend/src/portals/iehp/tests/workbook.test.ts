@@ -457,9 +457,8 @@ test("postProcessWorksheet writes structured RA columns without duplicating a si
   applyClaimRowUpdateToWorksheet(worksheet, {
     index: 0,
     update: {
-      BotClaimDetails: detailsText([
-        { dos: "01/30/2026", received: "04/22/2026", check: "111", amount: "$105.22" },
-      ]),
+      BotClaimDetails:
+        "Summary: [01/30/2026 04/22/2026 $105.22] | Details: [Check #: [111]\nReceived Date: 04/22/2026\nCheck Date: 06/18/2026] | Status Info: [Paid in full]",
       BotClaimStatusCheck: "Success",
       BotReferRA: serializeRaRecords([
         {
@@ -590,9 +589,8 @@ test("postProcessWorksheet writes Final Status for denied RA rows", () => {
   applyClaimRowUpdateToWorksheet(worksheet, {
     index: 0,
     update: {
-      BotClaimDetails: detailsText([
-        { dos: "01/30/2026", received: "04/22/2026", check: "111", amount: "$105.22" },
-      ]),
+      BotClaimDetails:
+        "Summary: [01/30/2026 04/22/2026 $105.22] | Details: [Check #: [111]\nReceived Date: 04/22/2026\nCheck Date: 06/18/2026] | Status Info: [Paid in full]",
       BotClaimStatusCheck: "Success",
       BotReferRA: serializeRaRecords([
         {
@@ -617,7 +615,7 @@ test("postProcessWorksheet writes Final Status for denied RA rows", () => {
   const headers = headerMap(worksheet);
   assert.equal(
     worksheet.getRow(2).getCell(headers["Final Status"]).value,
-    "DOS 01/30/2026: Checked IEHP portal claim received on 04/22/2026 denied on 04/22/2026 denial reason A1 - Charge exceeds fee schedule. Acct # 4090/123456.",
+    "DOS 01/30/2026: Checked IEHP portal claim received on 04/22/2026 denied on 06/18/2026 denial reason A1 - Charge exceeds fee schedule. Acct # 4090/123456.",
   );
 });
 
