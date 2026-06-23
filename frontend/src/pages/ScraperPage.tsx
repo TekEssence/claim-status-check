@@ -363,21 +363,28 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
         if (currentJob.portalId === "iehp") {
           const [storedClaimHandle, storedLoginFile] = await Promise.all([loadClaimFileHandle(), loadIehpLoginFile()]);
           if (cancelled) return;
+          let canAutoResumeIehp = true;
 
           if (storedClaimHandle) {
             setClaimFileHandle(storedClaimHandle);
             setClaimFileName(currentJob.claimFileName || "");
+            const currentPermission = await storedClaimHandle.queryPermission({ mode: "readwrite" }).catch(() => "prompt" as const);
+            if (currentPermission !== "granted") {
+              canAutoResumeIehp = false;
+            }
           }
           if (storedLoginFile) {
             setIehpLoginFile(storedLoginFile);
           }
 
-          if (storedClaimHandle && storedLoginFile) {
+          if (storedClaimHandle && storedLoginFile && canAutoResumeIehp) {
             await resumeExistingIehpRun(currentJob, storedClaimHandle, storedLoginFile);
           } else {
             setPendingIehpRestoreJob(currentJob);
             if (!storedClaimHandle) {
               setStatus(`Could not restore the active run: ${getMissingLocalExcelMessage(currentJob.claimFileName)}`);
+            } else if (!canAutoResumeIehp) {
+              setStatus(`Previous IEHP run restored. Click Choose File for ${currentJob.claimFileName || "the same claim Excel"} to grant write access and continue from row ${currentJob.currentCompleted + 1}.`);
             } else {
               setStatus("A run is active, but the local IEHP login file context could not be restored automatically. Please upload the login file again if needed.");
             }
