@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
+  cancelScrapeJob,
   createScrapeJob,
   emitScrapeJobEvent,
   getScrapeJob,
@@ -85,6 +86,10 @@ export async function POST(req: Request) {
     emit: async (event) => {
       emitScrapeJobEvent(job.id, event);
     },
+    isCancelled: () => {
+      const currentJob = getScrapeJob(job.id);
+      return currentJob?.status === "cancelled";
+    },
     log: async (event) => {
       emitScrapeJobEvent(job.id, {
         type: "log",
@@ -129,6 +134,39 @@ export async function GET(req: Request) {
   }
 
   return streamScrapeJobEvents(req, jobId, getLastEventId(req, url));
+}
+
+export async function DELETE(req: Request) {
+  ensurePersistenceListenerRegistered();
+  const session = await getSessionFromCookies();
+  if (!session) {
+    return Response.json({ error: "Authentication required." }, { status: 401 });
+  }
+
+  const url = new URL(req.url);
+  const jobId = url.searchParams.get("jobId")?.trim() || "";
+  if (!jobId) {
+    return Response.json({ error: "Missing scrape jobId." }, { status: 400 });
+  }
+
+  const ownedJob = await getScrapeJobByIdForUser(jobId, session.userId);
+  if (!ownedJob) {
+    return Response.json({ error: "Run not found for this user." }, { status: 404 });
+  }
+
+  const cancelled = cancelScrapeJob(jobId, "Scrape job cancelled because Excel could not be updated.");
+  if (!cancelled) {
+    return Response.json({ ok: true, alreadyStopped: true });
+  }
+
+  await updateScrapeJobSnapshot({
+    jobId,
+    status: "cancelled",
+    currentCompleted: getScrapeJob(jobId)?.currentCompleted ?? ownedJob.currentCompleted,
+    totalRows: ownedJob.totalRows,
+  }).catch(() => {});
+
+  return Response.json({ ok: true });
 }
 
 function getLastEventId(req: Request, url: URL): number {

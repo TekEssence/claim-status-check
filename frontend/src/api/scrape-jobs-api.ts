@@ -53,6 +53,17 @@ export async function getCurrentScrapeJob(): Promise<CurrentScrapeJob | null> {
   return body.job ?? null;
 }
 
+export async function cancelScrapeJob(jobId: string): Promise<void> {
+  const response = await fetch(`/api/scrape-jobs?jobId=${encodeURIComponent(jobId)}`, {
+    method: "DELETE",
+  });
+
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(body.error || `Failed to cancel scrape job: ${response.status}`);
+  }
+}
+
 export async function subscribeToScrapeJobEvents(options: {
   jobId: string;
   signal: AbortSignal;

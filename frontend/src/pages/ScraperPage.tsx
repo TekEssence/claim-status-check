@@ -5,7 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 import * as XLSX from "xlsx";
 import ExcelJS from "exceljs";
 import { applyClaimRowUpdateToWorksheet, postProcessWorksheet } from "../portals/iehp/workbook";
-import { getCurrentScrapeJob, startScrapeJob, subscribeToScrapeJobEvents, type CurrentScrapeJob } from "../api/scrape-jobs-api";
+import { cancelScrapeJob as cancelScrapeJobRequest, getCurrentScrapeJob, startScrapeJob, subscribeToScrapeJobEvents, type CurrentScrapeJob } from "../api/scrape-jobs-api";
 import { clearStoredRunContext, loadClaimFileHandle, loadIehpLoginFile, saveClaimFileHandle, saveIehpLoginFile } from "../lib/run-context-store";
 import type { FileSystemFileHandle, WindowWithFilePicker } from "../types/file-system-access";
 import type { ClaimRow, ErrorScreenshot, JobProgressValue, ScrapeJobEvent } from "../types/job";
@@ -761,6 +761,7 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
       let writeFailure: Error | null = null;
       let writeFailureAlertShown = false;
       let subscribedJobId = logicalJobId;
+      let cancellationRequested = false;
       const streamAbortController = new AbortController();
 
       const handleWriteFailure = (error: unknown): never => {
@@ -771,6 +772,12 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
         chunkHasError = true;
         setStatus(`Error: ${userMessage}`);
         streamAbortController.abort();
+        if (!cancellationRequested && subscribedJobId) {
+          cancellationRequested = true;
+          void cancelScrapeJobRequest(subscribedJobId).catch((cancelError) => {
+            console.error("Failed to cancel scrape job after Excel write failure", cancelError);
+          });
+        }
         if (!writeFailureAlertShown) {
           writeFailureAlertShown = true;
           window.alert(userMessage);

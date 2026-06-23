@@ -69,6 +69,14 @@ export function getScrapeJob(jobId: string): ScrapeJob | undefined {
   return jobs.get(jobId);
 }
 
+export function cancelScrapeJob(jobId: string, message = "Scrape job cancelled."): boolean {
+  const job = jobs.get(jobId);
+  if (!job || isTerminalStatus(job.status)) return false;
+  emitScrapeJobEvent(jobId, { type: "cancelled", message });
+  emitScrapeJobEvent(jobId, { type: "done" });
+  return true;
+}
+
 export function emitScrapeJobEvent(jobId: string, data: StreamEvent): void {
   const job = jobs.get(jobId);
   if (!job) return;

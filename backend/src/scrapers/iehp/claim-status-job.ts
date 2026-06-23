@@ -1,4 +1,5 @@
 import type { BrowserContext, Page } from "playwright-core";
+import type { ScraperContext } from "../types";
 import { emitScrapeJobEvent } from "@/backend/src/jobs/job-store";
 import { processCoveredRaDownloads, extractCheckNumbersFromClaimDetailText } from "@/backend/src/scrapers/iehp/covered-ra";
 import { processReferToRaDownloads } from "@/backend/src/scrapers/iehp/refer-ra";
@@ -32,7 +33,7 @@ import { getClaimCptValue, getClaimModifierValues, serializeRaRecords, type RaDe
 
 type StreamEvent = Record<string, unknown>;
 
-export async function runIehpClaimStatusJob(jobId: string, formData: FormData): Promise<void> {
+export async function runIehpClaimStatusJob(jobId: string, formData: FormData, context?: ScraperContext): Promise<void> {
   const sendEvent = async (data: StreamEvent) => {
     emitScrapeJobEvent(jobId, data);
     await new Promise(resolve => setTimeout(resolve, 50));
@@ -125,6 +126,10 @@ export async function runIehpClaimStatusJob(jobId: string, formData: FormData): 
           let processedInThisBatch = 0;
 
           for (let i = startIndex; i < claimRows.length; i++) {
+            if (context?.isCancelled?.()) {
+              await log("Processing stopped because the active scrape job was cancelled.");
+              break;
+            }
             // Check for timeout or batch limit
             if (Date.now() - processStartTime > MAX_EXECUTION_TIME_MS || processedInThisBatch >= BATCH_SIZE) {
               await log(`Batch complete. Pausing at Row ${i + 1} to gracefully auto-resume the next chunk...`);

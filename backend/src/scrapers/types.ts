@@ -25,6 +25,7 @@ export type ScraperContext = {
   portalId: string;
   log: (event: LogEvent) => Promise<void>;
   emit: (event: JobEvent) => Promise<void>;
+  isCancelled?: () => boolean;
   captureScreenshot?: (reason: string, rowIndex?: number) => Promise<void>;
 };
 
