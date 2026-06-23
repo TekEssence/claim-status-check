@@ -15,6 +15,7 @@ export type {
 const TERMINAL_JOB_TTL_MS = 30 * 60 * 1000;
 
 const jobs = new Map<string, ScrapeJob>();
+const emitListeners = new Set<(jobId: string, data: StreamEvent, job: ScrapeJob) => void>();
 
 function isTerminalStatus(status: ScrapeJobStatus): boolean {
   return status === "done" || status === "error" || status === "cancelled";
@@ -44,10 +45,15 @@ function createJobId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
-export function createScrapeJob(): ScrapeJob {
+export function createScrapeJob(jobId?: string): ScrapeJob {
   const now = Date.now();
+  const resolvedJobId = jobId || createJobId();
+  const existing = jobs.get(resolvedJobId);
+  if (existing?.cleanupTimer) {
+    clearTimeout(existing.cleanupTimer);
+  }
   const job: ScrapeJob = {
-    id: createJobId(),
+    id: resolvedJobId,
     status: "running",
     currentCompleted: 0,
     events: [],
@@ -55,7 +61,7 @@ export function createScrapeJob(): ScrapeJob {
     createdAt: now,
     updatedAt: now,
   };
-  jobs.set(job.id, job);
+  jobs.set(resolvedJobId, job);
   return job;
 }
 
@@ -87,10 +93,24 @@ export function emitScrapeJobEvent(jobId: string, data: StreamEvent): void {
   job.events.push(event);
   job.updatedAt = Date.now();
   job.subscribers.forEach((subscriber) => subscriber(event));
+  emitListeners.forEach((listener) => {
+    try {
+      listener(jobId, data, job);
+    } catch {
+      // Persistence listeners should not break in-memory streaming.
+    }
+  });
 
   if (isTerminalStatus(job.status)) {
     scheduleTerminalJobCleanup(job);
   }
+}
+
+export function registerScrapeJobEmitListener(listener: (jobId: string, data: StreamEvent, job: ScrapeJob) => void): () => void {
+  emitListeners.add(listener);
+  return () => {
+    emitListeners.delete(listener);
+  };
 }
 
 export function subscribeToScrapeJob(
