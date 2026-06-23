@@ -135,8 +135,23 @@ function isMissingLocalFileError(error: unknown): boolean {
   );
 }
 
+function isFileAccessPermissionError(error: unknown): boolean {
+  const message = getErrorMessage(error).toLowerCase();
+  return (
+    message.includes("notallowederror") ||
+    message.includes("securityerror") ||
+    message.includes("request is not allowed by the user agent or the platform in the current context") ||
+    message.includes("permission") ||
+    message.includes("user activation")
+  );
+}
+
 function getMissingLocalExcelMessage(fileName: string): string {
   return `The previously selected Excel file${fileName ? ` (${fileName})` : ""} was not found on this computer. Please reselect the same claim file and continue.`;
+}
+
+function getExcelReauthorizeMessage(fileName: string): string {
+  return `Browser file permission is not currently granted for the selected Excel file${fileName ? ` (${fileName})` : ""}. Click Choose File once to re-authorize the same claim file and continue.`;
 }
 
 async function selectExcelFileHandle(): Promise<FileSystemFileHandle | null> {
@@ -164,13 +179,15 @@ async function selectExcelFileHandle(): Promise<FileSystemFileHandle | null> {
 
 async function loadIehpWorkbookBundle(
   claimFileHandle: FileSystemFileHandle,
-  options: { requestPermission?: boolean } = {},
+  options: { requestPermission?: boolean; fileNameForErrors?: string } = {},
 ): Promise<IehpWorkbookBundle> {
-  if ((await claimFileHandle.queryPermission({ mode: "readwrite" })) !== "granted") {
+  const fileNameForErrors = options.fileNameForErrors ?? "";
+  const currentPermission = await claimFileHandle.queryPermission({ mode: "readwrite" }).catch(() => "prompt" as const);
+  if (currentPermission !== "granted") {
     if (!options.requestPermission) {
-      throw new Error("Browser file permission is not currently granted. Click Choose File once to re-authorize the same Excel file and continue.");
+      throw new Error(getExcelReauthorizeMessage(fileNameForErrors));
     }
-    if ((await claimFileHandle.requestPermission({ mode: "readwrite" })) !== "granted") {
+    if ((await claimFileHandle.requestPermission({ mode: "readwrite" }).catch(() => "denied" as const)) !== "granted") {
       throw new Error("Write permission denied. Cannot update Excel file.");
     }
   }
@@ -180,7 +197,10 @@ async function loadIehpWorkbookBundle(
     file = await claimFileHandle.getFile();
   } catch (error) {
     if (isMissingLocalFileError(error)) {
-      throw new Error(getMissingLocalExcelMessage(""));
+      throw new Error(getMissingLocalExcelMessage(fileNameForErrors));
+    }
+    if (isFileAccessPermissionError(error)) {
+      throw new Error(getExcelReauthorizeMessage(fileNameForErrors));
     }
     throw error;
   }
@@ -345,12 +365,19 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
 
           if (storedClaimHandle) {
             setClaimFileHandle(storedClaimHandle);
+            const existingPermission = await storedClaimHandle.queryPermission({ mode: "readwrite" }).catch(() => "prompt" as const);
+            if (existingPermission !== "granted") {
+              throw new Error(getExcelReauthorizeMessage(currentJob.claimFileName));
+            }
             try {
               const claimFile = await storedClaimHandle.getFile();
               setClaimFileName(claimFile.name);
             } catch (error) {
               if (isMissingLocalFileError(error)) {
                 throw new Error(getMissingLocalExcelMessage(currentJob.claimFileName));
+              }
+              if (isFileAccessPermissionError(error)) {
+                throw new Error(getExcelReauthorizeMessage(currentJob.claimFileName));
               }
               throw error;
             }
@@ -679,6 +706,7 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
   }) {
     const workbookBundle = await loadIehpWorkbookBundle(options.claimFileHandle, {
       requestPermission: options.allowPermissionPrompt ?? true,
+      fileNameForErrors: options.claimFileHandle ? claimFileName : "",
     });
     const { claimRows, totalRows, excelWb, worksheet } = workbookBundle;
 
