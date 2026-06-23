@@ -69,19 +69,19 @@ export async function runIehpClaimStatusJob(jobId: string, formData: FormData, c
 
         log("Launching browser environment...");
         let browser;
-        let context: BrowserContext | undefined;
+        let browserContext: BrowserContext | undefined;
         let page: Page | undefined;
 
         try {
           const browserSession = await launchIehpBrowser(log);
           browser = browserSession.browser;
-          context = browserSession.context;
+          browserContext = browserSession.context;
 
-          if (!browser || !context) {
+          if (!browser || !browserContext) {
             throw new Error("Failed to initialize browser instance.");
           }
 
-          page = await context.newPage();
+          page = await browserContext.newPage();
           page.setDefaultTimeout(30000);
 
           log(`Navigating to login URL: ${loginUrl}`);
@@ -606,7 +606,7 @@ export async function runIehpClaimStatusJob(jobId: string, formData: FormData, c
           }
         } finally {
           await page?.close().catch(() => {});
-          await context?.close().catch(() => {});
+          await browserContext?.close().catch(() => {});
           await browser?.close().catch(() => {});
         }
       } catch (globalError) {
