@@ -215,7 +215,7 @@ function buildFinalStatusText(
 
   if (/^denied$/i.test(raRecord.RAStatus)) {
     const denialReason = raRecord.RADenialReason || raRecord.RAReason || "";
-    return `DOS ${dos}: Checked IEHP portal claim received on ${receivedDate} denied on ${checkDate} denial reason ${denialReason}.${claimSuffix}${checkAmountSuffix}`.trim();
+    return `DOS ${dos}: Checked IEHP portal claim received on ${receivedDate} denied on ${checkDate} denial reason ${denialReason} EFT/Check # ${checkNumber}.${claimSuffix}${checkAmountSuffix}`.trim();
   }
 
   return "";

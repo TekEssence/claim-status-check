@@ -621,7 +621,7 @@ test("postProcessWorksheet writes Final Status for denied RA rows", () => {
   const headers = headerMap(worksheet);
   assert.equal(
     worksheet.getRow(2).getCell(headers["Final Status"]).value,
-    "DOS 01/30/2026: Checked IEHP portal claim received on 04/22/2026 denied on 06/18/2026 denial reason A1 - Charge exceeds fee schedule. Claim # P202615601413. Check Amount: $105.22.",
+    "DOS 01/30/2026: Checked IEHP portal claim received on 04/22/2026 denied on 06/18/2026 denial reason A1 - Charge exceeds fee schedule EFT/Check # 111. Claim # P202615601413. Check Amount: $105.22.",
   );
   assert.equal(worksheet.getRow(2).getCell(headers["RA Check Amount"]).value, 105.22);
 });
