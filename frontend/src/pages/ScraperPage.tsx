@@ -278,6 +278,7 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
   const [errorScreenshots, setErrorScreenshots] = useState<ErrorScreenshot[]>([]);
   const [progress, setProgress] = useState<JobProgressValue | null>(null);
   const [jobRestoreLoading, setJobRestoreLoading] = useState(true);
+  const [pendingIehpRestoreJob, setPendingIehpRestoreJob] = useState<CurrentScrapeJob | null>(null);
 
   const effectivePortalId = forcedPortalId ?? selectedPortalId;
   const selectedPortal =
@@ -365,22 +366,7 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
 
           if (storedClaimHandle) {
             setClaimFileHandle(storedClaimHandle);
-            const existingPermission = await storedClaimHandle.queryPermission({ mode: "readwrite" }).catch(() => "prompt" as const);
-            if (existingPermission !== "granted") {
-              throw new Error(getExcelReauthorizeMessage(currentJob.claimFileName));
-            }
-            try {
-              const claimFile = await storedClaimHandle.getFile();
-              setClaimFileName(claimFile.name);
-            } catch (error) {
-              if (isMissingLocalFileError(error)) {
-                throw new Error(getMissingLocalExcelMessage(currentJob.claimFileName));
-              }
-              if (isFileAccessPermissionError(error)) {
-                throw new Error(getExcelReauthorizeMessage(currentJob.claimFileName));
-              }
-              throw error;
-            }
+            setClaimFileName(currentJob.claimFileName || "");
           }
           if (storedLoginFile) {
             setIehpLoginFile(storedLoginFile);
@@ -389,6 +375,7 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
           if (storedClaimHandle && storedLoginFile) {
             await resumeExistingIehpRun(currentJob, storedClaimHandle, storedLoginFile);
           } else {
+            setPendingIehpRestoreJob(currentJob);
             if (!storedClaimHandle) {
               setStatus(`Could not restore the active run: ${getMissingLocalExcelMessage(currentJob.claimFileName)}`);
             } else {
@@ -401,6 +388,12 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
         }
       } catch (error) {
         if (!cancelled) {
+          if (isFileAccessPermissionError(error) || getErrorMessage(error).includes("Browser file permission is not currently granted")) {
+            const currentJob = await getCurrentScrapeJob().catch(() => null);
+            if (currentJob?.portalId === "iehp") {
+              setPendingIehpRestoreJob(currentJob);
+            }
+          }
           setStatus(`Could not restore the active run: ${getErrorMessage(error)}`);
           setIsProcessing(false);
         }
@@ -677,6 +670,23 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
       await saveClaimFileHandle(fileHandle).catch(() => {});
       const file = await fileHandle.getFile();
       setClaimFileName(file.name);
+
+      if (pendingIehpRestoreJob) {
+        const loginFileToUse = iehpLoginFile ?? (await loadIehpLoginFile().catch(() => null));
+        if (!loginFileToUse) {
+          setStatus("The active IEHP run is waiting, but the login file could not be restored. Please upload the login file again.");
+          return fileHandle;
+        }
+
+        setIehpLoginFile(loginFileToUse);
+        setPendingIehpRestoreJob(null);
+        void resumeExistingIehpRun(pendingIehpRestoreJob, fileHandle, loginFileToUse).catch((error) => {
+          setPendingIehpRestoreJob(pendingIehpRestoreJob);
+          setStatus(`Could not restore the active run: ${getErrorMessage(error)}`);
+          setIsProcessing(false);
+        });
+      }
+
       return fileHandle;
     } catch (error) {
       if ((error as Error).name !== "AbortError") {
@@ -868,7 +878,6 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
         initialLogs: currentJob.logs,
         initialProgress:
           currentJob.totalRows > 0 ? { completed: currentJob.currentCompleted, total: currentJob.totalRows } : null,
-        allowPermissionPrompt: false,
       });
       return;
     }
@@ -881,7 +890,6 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
       attachToRunningJob: true,
       initialProgress:
         currentJob.totalRows > 0 ? { completed: currentJob.currentCompleted, total: currentJob.totalRows } : null,
-      allowPermissionPrompt: false,
     });
   }
 
