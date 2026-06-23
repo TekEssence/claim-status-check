@@ -15,7 +15,6 @@ import { AerialInputForm } from "../portals/aerial/AerialInputForm";
 import { AerialResultView } from "../portals/aerial/AerialResultView";
 import { aerialFrontendPortalConfig } from "../portals/aerial/portal-config";
 
-type PortalId = "iehp" | "aerial";
 type AuthUser = {
   userId: string;
   username: string;
@@ -39,6 +38,8 @@ type IehpWorkbookBundle = {
   excelWb: ExcelJS.Workbook;
   worksheet: ExcelJS.Worksheet;
 };
+
+export type PortalId = "iehp" | "aerial";
 
 const SELECTED_PORTAL_STORAGE_KEY = "iehp-selected-portal";
 const DOWNLOADED_ARTIFACTS_PREFIX = "iehp-downloaded-artifacts:";
@@ -141,8 +142,14 @@ async function selectExcelFileHandle(): Promise<FileSystemFileHandle | null> {
   return fileHandle ?? null;
 }
 
-async function loadIehpWorkbookBundle(claimFileHandle: FileSystemFileHandle): Promise<IehpWorkbookBundle> {
+async function loadIehpWorkbookBundle(
+  claimFileHandle: FileSystemFileHandle,
+  options: { requestPermission?: boolean } = {},
+): Promise<IehpWorkbookBundle> {
   if ((await claimFileHandle.queryPermission({ mode: "readwrite" })) !== "granted") {
+    if (!options.requestPermission) {
+      throw new Error("Browser file permission is not currently granted. Click Choose File once to re-authorize the same Excel file and continue.");
+    }
     if ((await claimFileHandle.requestPermission({ mode: "readwrite" })) !== "granted") {
       throw new Error("Write permission denied. Cannot update Excel file.");
     }
@@ -189,7 +196,7 @@ async function writeWorkbookToClaimFile(claimFileHandle: FileSystemFileHandle, e
   await writable.close();
 }
 
-export function ScraperPage() {
+export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: PortalId | null }) {
   const [authLoading, setAuthLoading] = useState(true);
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
   const [authUsername, setAuthUsername] = useState("");
@@ -222,10 +229,11 @@ export function ScraperPage() {
   const [progress, setProgress] = useState<JobProgressValue | null>(null);
   const [jobRestoreLoading, setJobRestoreLoading] = useState(true);
 
+  const effectivePortalId = forcedPortalId ?? selectedPortalId;
   const selectedPortal =
-    selectedPortalId === "iehp"
+    effectivePortalId === "iehp"
       ? iehpFrontendPortalConfig
-      : selectedPortalId === "aerial"
+      : effectivePortalId === "aerial"
         ? aerialFrontendPortalConfig
         : null;
   const canSubmitIehp = useMemo(
@@ -337,6 +345,11 @@ export function ScraperPage() {
   }, [authUser]);
 
   useEffect(() => {
+    if (forcedPortalId) {
+      setSelectedPortalId(forcedPortalId);
+      return;
+    }
+
     if (!authUser || selectedPortalId) {
       return;
     }
@@ -349,10 +362,11 @@ export function ScraperPage() {
     } catch {
       // Ignore storage failures.
     }
-  }, [authUser, selectedPortalId]);
+  }, [authUser, selectedPortalId, forcedPortalId]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
+    if (forcedPortalId) return;
     try {
       if (selectedPortalId) {
         window.localStorage.setItem(SELECTED_PORTAL_STORAGE_KEY, selectedPortalId);
@@ -362,7 +376,7 @@ export function ScraperPage() {
     } catch {
       // Ignore storage failures.
     }
-  }, [selectedPortalId]);
+  }, [selectedPortalId, forcedPortalId]);
 
   function resetRunState(message: string) {
     setIsProcessing(true);
@@ -375,6 +389,12 @@ export function ScraperPage() {
   function resetPortalSelection() {
     setActiveView("portal-selection");
     setSettingsOpen(false);
+    if (forcedPortalId) {
+      if (typeof window !== "undefined") {
+        window.location.assign("/");
+      }
+      return;
+    }
     setSelectedPortalId(null);
     try {
       window.localStorage.removeItem(SELECTED_PORTAL_STORAGE_KEY);
@@ -607,8 +627,11 @@ export function ScraperPage() {
     attachToRunningJob?: boolean;
     initialLogs?: string[];
     initialProgress?: JobProgressValue | null;
+    allowPermissionPrompt?: boolean;
   }) {
-    const workbookBundle = await loadIehpWorkbookBundle(options.claimFileHandle);
+    const workbookBundle = await loadIehpWorkbookBundle(options.claimFileHandle, {
+      requestPermission: options.allowPermissionPrompt ?? true,
+    });
     const { claimRows, totalRows, excelWb, worksheet } = workbookBundle;
 
     setClaimFileHandle(options.claimFileHandle);
@@ -769,6 +792,7 @@ export function ScraperPage() {
         initialLogs: currentJob.logs,
         initialProgress:
           currentJob.totalRows > 0 ? { completed: currentJob.currentCompleted, total: currentJob.totalRows } : null,
+        allowPermissionPrompt: false,
       });
       return;
     }
@@ -781,6 +805,7 @@ export function ScraperPage() {
       attachToRunningJob: true,
       initialProgress:
         currentJob.totalRows > 0 ? { completed: currentJob.currentCompleted, total: currentJob.totalRows } : null,
+      allowPermissionPrompt: false,
     });
   }
 
@@ -1064,7 +1089,7 @@ export function ScraperPage() {
           </button>
 
           <div className="flex items-center gap-3">
-            {selectedPortalId && (
+            {effectivePortalId && (
               <button
                 type="button"
                 disabled={isProcessing}
@@ -1311,7 +1336,7 @@ export function ScraperPage() {
                 <p className="mt-2 max-w-xl text-sm text-slate-600">{selectedPortal.description}</p>
               </div>
 
-              {selectedPortalId === "iehp" ? (
+              {effectivePortalId === "iehp" ? (
                 <>
                   <IehpInputForm
                     canSubmit={canSubmitIehp}
