@@ -119,6 +119,21 @@ function buildDownloadArtifactKey(eventData: ScrapeJobEvent): string {
   ].join("|");
 }
 
+function isMissingLocalFileError(error: unknown): boolean {
+  const message = getErrorMessage(error).toLowerCase();
+  return (
+    message.includes("notfounderror") ||
+    message.includes("the requested file could not be found") ||
+    message.includes("could not find the file") ||
+    message.includes("file or directory could not be found") ||
+    message.includes("not be found")
+  );
+}
+
+function getMissingLocalExcelMessage(fileName: string): string {
+  return `The previously selected Excel file${fileName ? ` (${fileName})` : ""} was not found on this computer. Please reselect the same claim file and continue.`;
+}
+
 async function selectExcelFileHandle(): Promise<FileSystemFileHandle | null> {
   const picker = (window as WindowWithFilePicker).showOpenFilePicker;
   if (!picker) {
@@ -155,7 +170,15 @@ async function loadIehpWorkbookBundle(
     }
   }
 
-  const file = await claimFileHandle.getFile();
+  let file: File;
+  try {
+    file = await claimFileHandle.getFile();
+  } catch (error) {
+    if (isMissingLocalFileError(error)) {
+      throw new Error(getMissingLocalExcelMessage(""));
+    }
+    throw error;
+  }
   const arrayBuffer = await file.arrayBuffer();
   const xlsxWb = XLSX.read(arrayBuffer, { type: "array", cellDates: false });
   const sheetName = xlsxWb.SheetNames[0];
@@ -307,9 +330,14 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
 
           if (storedClaimHandle) {
             setClaimFileHandle(storedClaimHandle);
-            const claimFile = await storedClaimHandle.getFile().catch(() => null);
-            if (claimFile) {
+            try {
+              const claimFile = await storedClaimHandle.getFile();
               setClaimFileName(claimFile.name);
+            } catch (error) {
+              if (isMissingLocalFileError(error)) {
+                throw new Error(getMissingLocalExcelMessage(currentJob.claimFileName));
+              }
+              throw error;
             }
           }
           if (storedLoginFile) {
@@ -319,7 +347,11 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
           if (storedClaimHandle && storedLoginFile) {
             await resumeExistingIehpRun(currentJob, storedClaimHandle, storedLoginFile);
           } else {
-            setStatus("A run is active, but the local IEHP file context could not be restored automatically. Please reselect the claim file if needed.");
+            if (!storedClaimHandle) {
+              setStatus(`Could not restore the active run: ${getMissingLocalExcelMessage(currentJob.claimFileName)}`);
+            } else {
+              setStatus("A run is active, but the local IEHP login file context could not be restored automatically. Please upload the login file again if needed.");
+            }
             setIsProcessing(false);
           }
         } else if (currentJob.portalId === "aerial") {

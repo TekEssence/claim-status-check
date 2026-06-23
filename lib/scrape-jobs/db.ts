@@ -190,7 +190,13 @@ export async function getActiveScrapeJobForUser(userId: string): Promise<Persist
       SELECT job_id, user_id, portal_id, status, current_completed, total_rows, claim_file_name, login_file_name, created_at, updated_at, finished_at
       FROM iehp_scrape_jobs
       WHERE user_id = $1
-        AND status IN ('running', 'waiting_resume')
+        AND (
+          status = 'running'
+          OR (
+            status = 'waiting_resume'
+            AND (total_rows <= 0 OR current_completed < total_rows)
+          )
+        )
       ORDER BY updated_at DESC
       LIMIT 1
     `,
