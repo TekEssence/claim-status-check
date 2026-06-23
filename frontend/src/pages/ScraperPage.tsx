@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
+import { usePathname, useRouter } from "next/navigation";
 import * as XLSX from "xlsx";
 import ExcelJS from "exceljs";
 import { applyClaimRowUpdateToWorksheet, postProcessWorksheet } from "../portals/iehp/workbook";
@@ -43,6 +44,10 @@ export type PortalId = "iehp" | "aerial";
 
 const SELECTED_PORTAL_STORAGE_KEY = "iehp-selected-portal";
 const DOWNLOADED_ARTIFACTS_PREFIX = "iehp-downloaded-artifacts:";
+const PORTAL_ROUTE_MAP: Record<PortalId, string> = {
+  iehp: "/iehp",
+  aerial: "/aerial",
+};
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -220,6 +225,8 @@ async function writeWorkbookToClaimFile(claimFileHandle: FileSystemFileHandle, e
 }
 
 export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: PortalId | null }) {
+  const router = useRouter();
+  const pathname = usePathname();
   const [authLoading, setAuthLoading] = useState(true);
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
   const [authUsername, setAuthUsername] = useState("");
@@ -267,6 +274,13 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
     () => Boolean(aerialInputFile && !isProcessing),
     [aerialInputFile, isProcessing],
   );
+
+  function navigateToPortalRoute(portalId: PortalId) {
+    const targetRoute = PORTAL_ROUTE_MAP[portalId];
+    if (pathname !== targetRoute) {
+      router.replace(targetRoute);
+    }
+  }
 
   useEffect(() => {
     let mounted = true;
@@ -322,6 +336,7 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
         setStatus(`Reconnected to ${currentJob.portalId.toUpperCase()} run in progress...`);
         setIsProcessing(true);
         setSelectedPortalId(currentJob.portalId as PortalId);
+        navigateToPortalRoute(currentJob.portalId as PortalId);
         setActiveView("portal-selection");
 
         if (currentJob.portalId === "iehp") {
@@ -390,6 +405,7 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
       const storedPortalId = window.localStorage.getItem(SELECTED_PORTAL_STORAGE_KEY);
       if (storedPortalId === "iehp" || storedPortalId === "aerial") {
         setSelectedPortalId(storedPortalId);
+        navigateToPortalRoute(storedPortalId);
       }
     } catch {
       // Ignore storage failures.
@@ -1348,6 +1364,7 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
                     type="button"
                     onClick={() => {
                       setSelectedPortalId(portal.id as PortalId);
+                      navigateToPortalRoute(portal.id as PortalId);
                       setStatus("");
                       setLogs([]);
                       setErrorScreenshots([]);

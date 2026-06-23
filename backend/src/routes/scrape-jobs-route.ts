@@ -49,7 +49,7 @@ export async function POST(req: Request) {
   const requestedJobId = getRequestedJobId(formData);
   const totalRows = getTotalRows(formData);
   const startIndex = getStartIndex(formData);
-  const existingActiveJob = await getActiveScrapeJobForUser(session.userId);
+  const existingActiveJob = await getNormalizedActiveScrapeJobForUser(session.userId);
 
   if (!requestedJobId && existingActiveJob) {
     return Response.json(
@@ -139,6 +139,39 @@ function getLastEventId(req: Request, url: URL): number {
     Number.isFinite(fromHeader) ? fromHeader : 0,
   );
   return lastEventId > 0 ? lastEventId : 0;
+}
+
+async function getNormalizedActiveScrapeJobForUser(userId: string) {
+  const activeJob = await getActiveScrapeJobForUser(userId);
+  if (!activeJob) return null;
+
+  const inMemoryJob = getScrapeJob(activeJob.jobId);
+  if (activeJob.status === "running" && !inMemoryJob) {
+    if (activeJob.totalRows > 0 && activeJob.currentCompleted < activeJob.totalRows) {
+      await updateScrapeJobSnapshot({
+        jobId: activeJob.jobId,
+        status: "waiting_resume",
+        currentCompleted: activeJob.currentCompleted,
+        totalRows: activeJob.totalRows,
+      }).catch(() => {});
+
+      return {
+        ...activeJob,
+        status: "waiting_resume" as const,
+      };
+    }
+
+    await updateScrapeJobSnapshot({
+      jobId: activeJob.jobId,
+      status: "completed",
+      currentCompleted: activeJob.currentCompleted,
+      totalRows: activeJob.totalRows,
+    }).catch(() => {});
+
+    return null;
+  }
+
+  return activeJob;
 }
 
 function getPortalId(formData: FormData): string {
