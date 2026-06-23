@@ -239,6 +239,26 @@ function lineMatchesMemberPolicyId(line: string, memberPolicyIdVariants: string[
   const lineMemberIds = extractMemberIdsFromLine(normalizedLine);
   return lineMemberIds.some((memberId) => targetDigits.has(normalizeMemberIdText(memberId)));
 }
+
+function isLikelyMemberSectionHeader(line: string): boolean {
+  if (isRaServiceLine(line)) return false;
+  if (/^(Patient Acct\.|Claim Totals|Member Totals|Provider Totals|Explanation Code Legend|ST Code Legend)/i.test(line)) {
+    return false;
+  }
+  return /[A-Za-z]/.test(line);
+}
+
+function getMatchingMemberSectionIndexes(lines: string[], memberPolicyIdVariants: string[]): number[] {
+  const indexes: number[] = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    if (!isLikelyMemberSectionHeader(lines[i])) continue;
+    if (!lineMatchesMemberPolicyId(lines[i], memberPolicyIdVariants)) continue;
+    indexes.push(i);
+  }
+
+  return indexes;
+}
 /*
 ###New Code - End###
 */
@@ -632,10 +652,10 @@ export function parseRaDetailsFromText(options: {
   const lines = text.split(/\r?\n/).map((line) => line.replace(/\s+/g, " ").trim()).filter(Boolean);
   const memberPolicyIdVariants = getMemberPolicyIdVariants(memberPolicyId, preferLastTwoDashedMemberId);
   const records: RaDetailRecord[] = [];
+  const matchingMemberSectionIndexes = getMatchingMemberSectionIndexes(lines, memberPolicyIdVariants);
 
-  for (let i = 0; i < lines.length; i++) {
-    if (!lineMatchesMemberPolicyId(lines[i], memberPolicyIdVariants)) continue;
-    const candidateIndexes = getMemberSectionCandidateIndexes(lines, i);
+  for (const memberSectionIndex of matchingMemberSectionIndexes) {
+    const candidateIndexes = getMemberSectionCandidateIndexes(lines, memberSectionIndex);
     for (const candidateIndex of candidateIndexes) {
       const candidate = collectServiceLineWithReasonContinuations(lines, candidateIndex);
       const parsedCandidate = parseRaLineCandidateSummary(candidate);
@@ -672,19 +692,19 @@ export function describeRaMatchFailureFromText(options: {
   let matchingCptFound = false;
   let firstUnparsedDebug: RaLineParseDebug | null = null;
   let matchedMemberLine: string | null = null;
+  const matchingMemberSectionIndexes = getMatchingMemberSectionIndexes(lines, memberPolicyIdVariants);
 
   lines.forEach((line) => {
     extractMemberIdsFromLine(line).forEach((memberId) => availableMemberIds.add(memberId));
   });
 
-  for (let i = 0; i < lines.length; i++) {
-    if (!lineMatchesMemberPolicyId(lines[i], memberPolicyIdVariants)) continue;
+  for (const memberSectionIndex of matchingMemberSectionIndexes) {
     memberSectionFound = true;
     if (!matchedMemberLine) {
-      matchedMemberLine = lines[i];
+      matchedMemberLine = lines[memberSectionIndex];
     }
 
-    const candidateIndexes = getMemberSectionCandidateIndexes(lines, i);
+    const candidateIndexes = getMemberSectionCandidateIndexes(lines, memberSectionIndex);
     for (const candidateIndex of candidateIndexes) {
       const candidate = collectServiceLineWithReasonContinuations(lines, candidateIndex);
       const parsedCandidate = parseRaLineCandidateSummary(candidate);
