@@ -119,9 +119,9 @@ async function waitForClaimRaResultRow(page: Page, checkNumber: string, log: (me
     return true;
   }
 
-  for (let elapsedSeconds = 5; elapsedSeconds <= 15; elapsedSeconds += 5) {
+  for (let elapsedSeconds = 2; elapsedSeconds <= 14; elapsedSeconds += 2) {
     await log(`Claims RA search for ${checkNumber} is still loading. Waiting ${elapsedSeconds} seconds...`);
-    await page.waitForTimeout(5000);
+    await page.waitForTimeout(2000);
     await waitForResultsToSettle(page);
 
     if (await checkCurrentState()) {

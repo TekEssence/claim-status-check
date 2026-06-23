@@ -40,6 +40,9 @@ type IehpWorkbookBundle = {
   worksheet: ExcelJS.Worksheet;
 };
 
+const SELECTED_PORTAL_STORAGE_KEY = "iehp-selected-portal";
+const DOWNLOADED_ARTIFACTS_PREFIX = "iehp-downloaded-artifacts:";
+
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -73,6 +76,46 @@ function downloadBase64File(filename: string, base64: string, type: string): voi
   const bytes = base64ToBytes(base64);
   const arrayBuffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
   downloadBlob(filename, new Blob([arrayBuffer], { type }));
+}
+
+function getDownloadedArtifactsKey(jobId: string): string {
+  return `${DOWNLOADED_ARTIFACTS_PREFIX}${jobId}`;
+}
+
+function getDownloadedArtifactSet(jobId: string): Set<string> {
+  if (typeof window === "undefined" || !jobId) return new Set<string>();
+  try {
+    const raw = window.localStorage.getItem(getDownloadedArtifactsKey(jobId));
+    if (!raw) return new Set<string>();
+    const parsed = JSON.parse(raw);
+    return new Set(Array.isArray(parsed) ? parsed.filter((value): value is string => typeof value === "string") : []);
+  } catch {
+    return new Set<string>();
+  }
+}
+
+function rememberDownloadedArtifact(jobId: string, artifactKey: string): void {
+  if (typeof window === "undefined" || !jobId || !artifactKey) return;
+  const current = getDownloadedArtifactSet(jobId);
+  current.add(artifactKey);
+  try {
+    window.localStorage.setItem(getDownloadedArtifactsKey(jobId), JSON.stringify(Array.from(current)));
+  } catch {
+    // Best effort only.
+  }
+}
+
+function hasDownloadedArtifact(jobId: string, artifactKey: string): boolean {
+  return getDownloadedArtifactSet(jobId).has(artifactKey);
+}
+
+function buildDownloadArtifactKey(eventData: ScrapeJobEvent): string {
+  return [
+    eventData.type ?? "",
+    typeof eventData.index === "number" ? String(eventData.index) : "",
+    eventData.filename ?? "",
+    eventData.path ?? "",
+  ].join("|");
 }
 
 async function selectExcelFileHandle(): Promise<FileSystemFileHandle | null> {
@@ -293,6 +336,34 @@ export function ScraperPage() {
     };
   }, [authUser]);
 
+  useEffect(() => {
+    if (!authUser || selectedPortalId) {
+      return;
+    }
+
+    try {
+      const storedPortalId = window.localStorage.getItem(SELECTED_PORTAL_STORAGE_KEY);
+      if (storedPortalId === "iehp" || storedPortalId === "aerial") {
+        setSelectedPortalId(storedPortalId);
+      }
+    } catch {
+      // Ignore storage failures.
+    }
+  }, [authUser, selectedPortalId]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      if (selectedPortalId) {
+        window.localStorage.setItem(SELECTED_PORTAL_STORAGE_KEY, selectedPortalId);
+      } else {
+        window.localStorage.removeItem(SELECTED_PORTAL_STORAGE_KEY);
+      }
+    } catch {
+      // Ignore storage failures.
+    }
+  }, [selectedPortalId]);
+
   function resetRunState(message: string) {
     setIsProcessing(true);
     setStatus(message);
@@ -305,6 +376,11 @@ export function ScraperPage() {
     setActiveView("portal-selection");
     setSettingsOpen(false);
     setSelectedPortalId(null);
+    try {
+      window.localStorage.removeItem(SELECTED_PORTAL_STORAGE_KEY);
+    } catch {
+      // Ignore storage failures.
+    }
     setStatus("");
     setLogs([]);
     setErrorScreenshots([]);
@@ -582,13 +658,13 @@ export function ScraperPage() {
         throw failure;
       };
 
-      const handleJobEvent = async (eventData: ScrapeJobEvent) => {
-        if (eventData.type === "log" && eventData.message) {
-          setLogs((prev) => [...prev, eventData.message ?? ""]);
-        } else if (eventData.type === "progress" && typeof eventData.completed === "number" && typeof eventData.total === "number") {
-          currentCompleted = eventData.completed;
-          setProgress({ completed: eventData.completed, total: eventData.total });
-        } else if (eventData.type === "row_update") {
+        const handleJobEvent = async (eventData: ScrapeJobEvent) => {
+          if (eventData.type === "log" && eventData.message) {
+            setLogs((prev) => [...prev, eventData.message ?? ""]);
+          } else if (eventData.type === "progress" && typeof eventData.completed === "number" && typeof eventData.total === "number") {
+            currentCompleted = eventData.completed;
+            setProgress({ completed: eventData.completed, total: eventData.total });
+          } else if (eventData.type === "row_update") {
           applyClaimRowUpdateToWorksheet(worksheet, {
             index: eventData.index ?? 0,
             update: eventData.update ?? {},
@@ -602,17 +678,25 @@ export function ScraperPage() {
               handleWriteFailure(writeErr);
             }
           });
-        } else if (eventData.type === "error_screenshot" && typeof eventData.index === "number" && eventData.image) {
-          setErrorScreenshots((prev) => [...prev, { index: eventData.index ?? -1, image: eventData.image ?? "" }]);
-        } else if (eventData.type === "debug_html" && typeof eventData.index === "number" && eventData.html) {
-          downloadTextFile(`debug_dom_row_${eventData.index + 1}.html`, eventData.html, "text/html");
-        } else if (eventData.type === "pdf_download" && eventData.filename && eventData.base64) {
-          downloadBase64File(eventData.filename, eventData.base64, "application/pdf");
-        } else if (eventData.type === "error" && eventData.message) {
-          setStatus(`Error: ${eventData.message}`);
-          chunkHasError = true;
-        }
-      };
+          } else if (eventData.type === "error_screenshot" && typeof eventData.index === "number" && eventData.image) {
+            setErrorScreenshots((prev) => [...prev, { index: eventData.index ?? -1, image: eventData.image ?? "" }]);
+          } else if (eventData.type === "debug_html" && typeof eventData.index === "number" && eventData.html) {
+            const artifactKey = buildDownloadArtifactKey(eventData);
+            if (!hasDownloadedArtifact(subscribedJobId, artifactKey)) {
+              downloadTextFile(`debug_dom_row_${eventData.index + 1}.html`, eventData.html, "text/html");
+              rememberDownloadedArtifact(subscribedJobId, artifactKey);
+            }
+          } else if (eventData.type === "pdf_download" && eventData.filename && eventData.base64) {
+            const artifactKey = buildDownloadArtifactKey(eventData);
+            if (!hasDownloadedArtifact(subscribedJobId, artifactKey)) {
+              downloadBase64File(eventData.filename, eventData.base64, "application/pdf");
+              rememberDownloadedArtifact(subscribedJobId, artifactKey);
+            }
+          } else if (eventData.type === "error" && eventData.message) {
+            setStatus(`Error: ${eventData.message}`);
+            chunkHasError = true;
+          }
+        };
 
       try {
         if (mode === "start") {
@@ -717,6 +801,7 @@ export function ScraperPage() {
 
     let hasError = false;
     let finalErrorMessage = "";
+    let subscribedJobId = "";
     const streamAbortController = new AbortController();
 
     try {
@@ -731,8 +816,12 @@ export function ScraperPage() {
           } else if (eventData.type === "error_screenshot" && typeof eventData.index === "number" && eventData.image) {
             setErrorScreenshots((prev) => [...prev, { index: eventData.index ?? -1, image: eventData.image ?? "" }]);
           } else if (eventData.type === "file_download" && eventData.filename && eventData.base64) {
-            downloadBase64File(eventData.filename, eventData.base64, eventData.mimeType || "application/octet-stream");
-            setStatus(`Downloaded ${eventData.filename}`);
+            const artifactKey = buildDownloadArtifactKey(eventData);
+            if (!hasDownloadedArtifact(currentJob.jobId, artifactKey)) {
+              downloadBase64File(eventData.filename, eventData.base64, eventData.mimeType || "application/octet-stream");
+              rememberDownloadedArtifact(currentJob.jobId, artifactKey);
+              setStatus(`Downloaded ${eventData.filename}`);
+            }
           } else if (eventData.type === "warning" && eventData.message) {
             setLogs((prev) => [...prev, eventData.message ?? ""]);
             setStatus(eventData.message);
@@ -801,6 +890,7 @@ export function ScraperPage() {
 
     let hasError = false;
     let finalErrorMessage = "";
+    let subscribedJobId = "";
     const streamAbortController = new AbortController();
 
     const handleJobEvent = async (eventData: ScrapeJobEvent) => {
@@ -811,8 +901,12 @@ export function ScraperPage() {
       } else if (eventData.type === "error_screenshot" && typeof eventData.index === "number" && eventData.image) {
         setErrorScreenshots((prev) => [...prev, { index: eventData.index ?? -1, image: eventData.image ?? "" }]);
       } else if (eventData.type === "file_download" && eventData.filename && eventData.base64) {
-        downloadBase64File(eventData.filename, eventData.base64, eventData.mimeType || "application/octet-stream");
-        setStatus(`Downloaded ${eventData.filename}`);
+        const artifactKey = buildDownloadArtifactKey(eventData);
+        if (!hasDownloadedArtifact(subscribedJobId, artifactKey)) {
+          downloadBase64File(eventData.filename, eventData.base64, eventData.mimeType || "application/octet-stream");
+          rememberDownloadedArtifact(subscribedJobId, artifactKey);
+          setStatus(`Downloaded ${eventData.filename}`);
+        }
       } else if (eventData.type === "warning" && eventData.message) {
         setLogs((prev) => [...prev, eventData.message ?? ""]);
         setStatus(eventData.message);
@@ -826,6 +920,7 @@ export function ScraperPage() {
 
     try {
       const jobId = await startScrapeJob(formData);
+      subscribedJobId = jobId;
       await subscribeToScrapeJobEvents({
         jobId,
         signal: streamAbortController.signal,
