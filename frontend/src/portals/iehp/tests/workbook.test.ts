@@ -13,10 +13,11 @@ function headerMap(worksheet: ExcelJS.Worksheet) {
 }
 
 function detailsText(
-  records: Array<{ dos: string; received: string; check: string; amount: string; cin?: string; plan?: string }>
+  records: Array<{ dos: string; received: string; check: string; amount: string; cin?: string; plan?: string; claim?: string }>
 ) {
   return records.map((record) => {
     let details = `Check #: [${record.check}]\nReceived Date: ${record.received}\nCheck Date: ${record.received}`;
+    if (record.claim) details += `\nClaim #: ${record.claim}`;
     if (record.cin) details += `\nCIN: ${record.cin}`;
     if (record.plan) details += `\nPlan Type: ${record.plan}`;
     
@@ -32,6 +33,7 @@ test("parses detail blocks with nested bracket values", () => {
   assert.deepEqual(record, {
     SummaryBlockDOS: "02/05/2026",
     SummaryBlockDate: "02/06/2026",
+    ClaimNumber: "",
     CheckNumber: "12345",
     ReceivedDate: "02/06/2026",
     CheckDate: "02/06/2026",
@@ -219,6 +221,7 @@ test("parses space-separated detail blocks correctly (regex lookahead check)", (
   assert.deepEqual(record, {
     SummaryBlockDOS: "02/05/2026",
     SummaryBlockDate: "02/06/2026",
+    ClaimNumber: "",
     CheckNumber: "12345",
     ReceivedDate: "02/06/2026",
     CheckDate: "02/06/2026",
@@ -241,6 +244,7 @@ test("parses labeled DOS, service date, and billed amount from expanded-claim fa
   assert.deepEqual(record, {
     SummaryBlockDOS: "06/09/2025",
     SummaryBlockDate: "06/09/2025",
+    ClaimNumber: "",
     CheckNumber: "EFT-2847609",
     ReceivedDate: "06/25/2025",
     CheckDate: "07/02/2025",
@@ -458,11 +462,12 @@ test("postProcessWorksheet writes structured RA columns without duplicating a si
     index: 0,
     update: {
       BotClaimDetails:
-        "Summary: [01/30/2026 04/22/2026 $105.22] | Details: [Check #: [111]\nReceived Date: 04/22/2026\nCheck Date: 06/18/2026] | Status Info: [Paid in full]",
+        "Summary: [01/30/2026 04/22/2026 $105.22] | Details: [Check #: [111]\nReceived Date: 04/22/2026\nCheck Date: 06/18/2026\nClaim #: P202615601413] | Status Info: [Paid in full]",
       BotClaimStatusCheck: "Success",
       BotReferRA: serializeRaRecords([
         {
           CheckNumber: "111",
+          RACheckAmount: "105.22",
           RAProcCode: "99213",
           RAAmountBilled: "280.00",
           RAAmountAllowed: "105.22",
@@ -590,11 +595,12 @@ test("postProcessWorksheet writes Final Status for denied RA rows", () => {
     index: 0,
     update: {
       BotClaimDetails:
-        "Summary: [01/30/2026 04/22/2026 $105.22] | Details: [Check #: [111]\nReceived Date: 04/22/2026\nCheck Date: 06/18/2026] | Status Info: [Paid in full]",
+        "Summary: [01/30/2026 04/22/2026 $105.22] | Details: [Check #: [111]\nReceived Date: 04/22/2026\nCheck Date: 06/18/2026\nClaim #: P202615601413] | Status Info: [Paid in full]",
       BotClaimStatusCheck: "Success",
       BotReferRA: serializeRaRecords([
         {
           CheckNumber: "111",
+          RACheckAmount: "105.22",
           RAProcCode: "99213",
           RAAmountBilled: "280.00",
           RAAmountAllowed: "105.22",
@@ -615,8 +621,9 @@ test("postProcessWorksheet writes Final Status for denied RA rows", () => {
   const headers = headerMap(worksheet);
   assert.equal(
     worksheet.getRow(2).getCell(headers["Final Status"]).value,
-    "DOS 01/30/2026: Checked IEHP portal claim received on 04/22/2026 denied on 06/18/2026 denial reason A1 - Charge exceeds fee schedule. Acct # 4090/123456.",
+    "DOS 01/30/2026: Checked IEHP portal claim received on 04/22/2026 denied on 06/18/2026 denial reason A1 - Charge exceeds fee schedule. Claim # P202615601413. Check Amount: $105.22.",
   );
+  assert.equal(worksheet.getRow(2).getCell(headers["RA Check Amount"]).value, 105.22);
 });
 
 test("postProcessWorksheet writes Final Status for paid RA rows using net paid split with copay coins and deduct", () => {
@@ -629,12 +636,13 @@ test("postProcessWorksheet writes Final Status for paid RA rows using net paid s
     index: 0,
     update: {
       BotClaimDetails: detailsText([
-        { dos: "01/30/2026", received: "04/22/2026", check: "EFT-222", amount: "$210.44" },
+        { dos: "01/30/2026", received: "04/22/2026", check: "EFT-222", amount: "$210.44", claim: "P202615601414" },
       ]),
       BotClaimStatusCheck: "Success",
       BotReferRA: serializeRaRecords([
         {
           CheckNumber: "EFT-222",
+          RACheckAmount: "210.44",
           RAProcCode: "99213",
           RAAmountBilled: "560.00",
           RAAmountAllowed: "210.44",
@@ -655,6 +663,7 @@ test("postProcessWorksheet writes Final Status for paid RA rows using net paid s
   const headers = headerMap(worksheet);
   assert.equal(
     worksheet.getRow(2).getCell(headers["Final Status"]).value,
-    "DOS 01/30/2026: Checked IEHP portal claim received on 04/22/2026 paid on 04/22/2026 paid amount $198.44 with copay of $1.00 and coins of $2.00 and deductible of $3.00 EFT/Check # EFT-222. Acct # 4090/654321.",
+    "DOS 01/30/2026: Checked IEHP portal claim received on 04/22/2026 paid on 04/22/2026 paid amount $198.44 with copay of $1.00 and coins of $2.00 and deductible of $3.00 EFT/Check # EFT-222. Claim # P202615601414. Check Amount: $210.44.",
   );
+  assert.equal(worksheet.getRow(2).getCell(headers["RA Check Amount"]).value, 210.44);
 });

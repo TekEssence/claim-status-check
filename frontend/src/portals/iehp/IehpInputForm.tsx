@@ -5,6 +5,7 @@ export function IehpInputForm({
   canSubmit,
   claimFileName,
   isProcessing,
+  isResumePending,
   onLoginFileChange,
   onSelectClaimFile,
   onSubmit,
@@ -12,6 +13,7 @@ export function IehpInputForm({
   canSubmit: boolean;
   claimFileName: string;
   isProcessing: boolean;
+  isResumePending?: boolean;
   onLoginFileChange: (file: File | null) => void;
   onSelectClaimFile: () => Promise<FileSystemFileHandle | null> | void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
@@ -55,7 +57,7 @@ export function IehpInputForm({
         disabled={!canSubmit}
         className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:bg-slate-400"
       >
-        {isProcessing ? "Processing..." : "Start processing"}
+        {isProcessing ? "Processing..." : isResumePending ? "Allow And Continue" : "Start processing"}
       </button>
     </form>
   );

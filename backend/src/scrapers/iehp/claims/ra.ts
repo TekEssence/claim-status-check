@@ -20,6 +20,7 @@ type RotationDegrees = 0 | 90 | 180 | 270;
 
 export type RaDetailRecord = {
   CheckNumber: string;
+  RACheckAmount: string;
   RAProcCode: string;
   RAAmountBilled: string;
   RAAmountAllowed: string;
@@ -169,6 +170,11 @@ function splitReasonCodes(value: string): string[] {
     .split(/\s+/)
     .map((code) => code.trim())
     .filter(Boolean);
+}
+
+function extractRaHeaderCheckAmount(text: string): string {
+  const match = text.match(/Check Amount:\s*\$?([0-9,]+\.\d{2})/i);
+  return match ? match[1].replace(/^\$/, "").trim() : "";
 }
 
 function getMemberPolicyIdVariants(memberPolicyId: string, preferLastTwoDashed = false): string[] {
@@ -563,7 +569,14 @@ function lineHasMatchingModifier(tokens: string[], procIndex: number, firstMoney
   return modifiers.some((modifier) => modifierSet.has(modifier.toUpperCase()));
 }
 
-function lineToRaRecords(line: string, checkNumber: string, cpt: string, modifiers: string[], legend: Map<string, string>): RaDetailRecord[] {
+function lineToRaRecords(
+  line: string,
+  checkNumber: string,
+  raCheckAmount: string,
+  cpt: string,
+  modifiers: string[],
+  legend: Map<string, string>,
+): RaDetailRecord[] {
   const tokens = line.replace(/\s+/g, " ").trim().split(" ");
   const procIndex = tokens.findIndex((token) => token === cpt);
   if (procIndex === -1) return [];
@@ -589,6 +602,7 @@ function lineToRaRecords(line: string, checkNumber: string, cpt: string, modifie
 
   return [{
     CheckNumber: checkNumber,
+    RACheckAmount: raCheckAmount,
     RAProcCode: tokens[procIndex],
     RAAmountBilled: cleanMoneyToken(tokens[firstMoneyIndex]),
     RAAmountAllowed: cleanMoneyToken(moneyTokens[amountOffset + 1]?.token ?? ""),
@@ -614,6 +628,7 @@ export function parseRaDetailsFromText(options: {
   const { text, memberPolicyId, dosDate, cpt, modifiers = [], checkNumber, preferLastTwoDashedMemberId = false } = options;
   const dosText = formatMmDdYyyy(dosDate);
   const legend = parseExplanationLegend(text);
+  const raCheckAmount = extractRaHeaderCheckAmount(text);
   const lines = text.split(/\r?\n/).map((line) => line.replace(/\s+/g, " ").trim()).filter(Boolean);
   const memberPolicyIdVariants = getMemberPolicyIdVariants(memberPolicyId, preferLastTwoDashedMemberId);
   const records: RaDetailRecord[] = [];
@@ -627,7 +642,7 @@ export function parseRaDetailsFromText(options: {
       if (!parsedCandidate) continue;
       if (parsedCandidate.procCode !== cpt) continue;
       if (!serviceDateMatches(dosText, parsedCandidate.serviceFromDate, parsedCandidate.serviceToDate)) continue;
-      records.push(...lineToRaRecords(candidate, checkNumber, cpt, modifiers, legend));
+      records.push(...lineToRaRecords(candidate, checkNumber, raCheckAmount, cpt, modifiers, legend));
     }
   }
 

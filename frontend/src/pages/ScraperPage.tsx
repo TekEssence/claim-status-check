@@ -151,7 +151,7 @@ function getMissingLocalExcelMessage(fileName: string): string {
 }
 
 function getExcelReauthorizeMessage(fileName: string): string {
-  return `Browser file permission is not currently granted for the selected Excel file${fileName ? ` (${fileName})` : ""}. Click Choose File once to re-authorize the same claim file and continue.`;
+  return `Please click Allow And Continue to allow access to the same claim Excel${fileName ? ` (${fileName})` : ""} and continue the previous IEHP run.`;
 }
 
 async function selectExcelFileHandle(): Promise<FileSystemFileHandle | null> {
@@ -384,7 +384,11 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
             if (!storedClaimHandle) {
               setStatus(`Could not restore the active run: ${getMissingLocalExcelMessage(currentJob.claimFileName)}`);
             } else if (!canAutoResumeIehp) {
-              setStatus(`Previous IEHP run restored. Click Choose File for ${currentJob.claimFileName || "the same claim Excel"} to grant write access and continue from row ${currentJob.currentCompleted + 1}.`);
+              const normalizedResumeMessage = `Previous IEHP run restored. Click Allow And Continue to continue from row ${currentJob.currentCompleted + 1}.`;
+              setStatus(normalizedResumeMessage);
+              if (typeof window !== "undefined") {
+                window.alert(normalizedResumeMessage);
+              }
             } else {
               setStatus("A run is active, but the local IEHP login file context could not be restored automatically. Please upload the login file again if needed.");
             }
@@ -975,13 +979,26 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
       return;
     }
 
+    const resumeJob = pendingIehpRestoreJob;
+
     try {
+      if (resumeJob) {
+        setPendingIehpRestoreJob(null);
+        setIsProcessing(true);
+        setStatus(`Resuming previous IEHP run from row ${resumeJob.currentCompleted + 1}...`);
+        await resumeExistingIehpRun(resumeJob, claimFileHandle, iehpLoginFile);
+        return;
+      }
+
       resetRunState("Reading claim file...");
       await runIehpSession({
         claimFileHandle,
         loginFile: iehpLoginFile,
       });
     } catch (error) {
+      if (resumeJob) {
+        setPendingIehpRestoreJob(resumeJob);
+      }
       setStatus(`Failed to process IEHP claims: ${getErrorMessage(error)}`);
       setIsProcessing(false);
     }
@@ -1434,6 +1451,7 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
                     canSubmit={canSubmitIehp}
                     claimFileName={claimFileName}
                     isProcessing={isProcessing}
+                    isResumePending={Boolean(pendingIehpRestoreJob)}
                     onLoginFileChange={handleLoginFileChange}
                     onSelectClaimFile={selectClaimFile}
                     onSubmit={submitIehp}
