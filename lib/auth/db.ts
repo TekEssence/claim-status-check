@@ -18,6 +18,11 @@ export type ManagedUser = {
   mustResetPassword: boolean;
 };
 
+export type ChangePasswordResult =
+  | { status: "updated"; user: AuthUser }
+  | { status: "same_password" }
+  | { status: "not_found" };
+
 let pool: Pool | null = null;
 const DB_CONNECT_TIMEOUT_MS = 5000;
 const DB_QUERY_TIMEOUT_MS = 6000;
@@ -153,6 +158,71 @@ export async function resetPasswordByUsername(username: string, password: string
     email: row.email,
     role: row.role,
     mustResetPassword: row.must_reset_password,
+  };
+}
+
+export async function changePasswordForUser(userId: string, password: string): Promise<ChangePasswordResult> {
+  const existingUserResult = await queryWithRetry<{
+    user_id: string;
+    username: string;
+    email: string;
+    role: "ADMIN" | "USER";
+    password_hash: string;
+    must_reset_password: boolean;
+  }>(
+    `
+      SELECT user_id, username, email, role, password_hash, must_reset_password
+      FROM iehp_auth_users
+      WHERE user_id = $1
+        AND is_active = TRUE
+      LIMIT 1
+    `,
+    [userId],
+  );
+
+  const existingUser = existingUserResult.rows[0];
+  if (!existingUser) {
+    return { status: "not_found" };
+  }
+
+  if (await verifyPassword(password, existingUser.password_hash)) {
+    return { status: "same_password" };
+  }
+
+  const passwordHash = await hashPassword(password);
+  const updatedUserResult = await queryWithRetry<{
+    user_id: string;
+    username: string;
+    email: string;
+    role: "ADMIN" | "USER";
+    must_reset_password: boolean;
+  }>(
+    `
+      UPDATE iehp_auth_users
+      SET password_hash = $2,
+          must_reset_password = FALSE,
+          updated_at = NOW()
+      WHERE user_id = $1
+        AND is_active = TRUE
+      RETURNING user_id, username, email, role, must_reset_password
+    `,
+    [userId, passwordHash],
+  );
+
+  const updatedUser = updatedUserResult.rows[0];
+  if (!updatedUser) {
+    return { status: "not_found" };
+  }
+
+  return {
+    status: "updated",
+    user: {
+      userId: updatedUser.user_id,
+      username: updatedUser.username,
+      email: updatedUser.email,
+      role: updatedUser.role,
+      mustResetPassword: updatedUser.must_reset_password,
+    },
   };
 }
 

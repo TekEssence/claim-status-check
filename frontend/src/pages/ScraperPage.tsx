@@ -257,7 +257,7 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
   const [authSubmitting, setAuthSubmitting] = useState(false);
   const [forgotPasswordMode, setForgotPasswordMode] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [activeView, setActiveView] = useState<"portal-selection" | "manage-users">("portal-selection");
+  const [activeView, setActiveView] = useState<"portal-selection" | "manage-users" | "reset-password">("portal-selection");
   const [manageTab, setManageTab] = useState<"add" | "employees">("add");
   const [managedUsers, setManagedUsers] = useState<ManagedUser[]>([]);
   const [manageError, setManageError] = useState("");
@@ -266,6 +266,11 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
   const [temporaryPassword, setTemporaryPassword] = useState("");
   const [editingUserId, setEditingUserId] = useState("");
   const [editingEmail, setEditingEmail] = useState("");
+  const [settingsPassword, setSettingsPassword] = useState("");
+  const [settingsConfirmPassword, setSettingsConfirmPassword] = useState("");
+  const [settingsPasswordError, setSettingsPasswordError] = useState("");
+  const [settingsPasswordStatus, setSettingsPasswordStatus] = useState("");
+  const [settingsPasswordSubmitting, setSettingsPasswordSubmitting] = useState(false);
   const [selectedPortalId, setSelectedPortalId] = useState<PortalId | null>(null);
   const [iehpLoginFile, setIehpLoginFile] = useState<File | null>(null);
   const [claimFileHandle, setClaimFileHandle] = useState<FileSystemFileHandle | null>(null);
@@ -507,6 +512,15 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
     }
   }
 
+  async function openResetPassword() {
+    setSettingsOpen(false);
+    setActiveView("reset-password");
+    setSettingsPassword("");
+    setSettingsConfirmPassword("");
+    setSettingsPasswordError("");
+    setSettingsPasswordStatus("");
+  }
+
   async function onAuthSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setAuthSubmitting(true);
@@ -589,6 +603,11 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
     setTemporaryPassword("");
     setEditingUserId("");
     setEditingEmail("");
+    setSettingsPassword("");
+    setSettingsConfirmPassword("");
+    setSettingsPasswordError("");
+    setSettingsPasswordStatus("");
+    setSettingsPasswordSubmitting(false);
     setSelectedPortalId(null);
     setIehpLoginFile(null);
     setClaimFileHandle(null);
@@ -600,6 +619,38 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
     setLogs([]);
     setErrorScreenshots([]);
     setProgress(null);
+  }
+
+  async function resetPasswordFromSettings(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    setSettingsPasswordSubmitting(true);
+    setSettingsPasswordError("");
+    setSettingsPasswordStatus("");
+
+    try {
+      const response = await fetch("/api/auth/change-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          password: settingsPassword,
+          confirmPassword: settingsConfirmPassword,
+        }),
+      });
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(data.error || "Password reset failed.");
+      }
+
+      setAuthUser(data.user ?? authUser);
+      setSettingsPassword("");
+      setSettingsConfirmPassword("");
+      setSettingsPasswordStatus("Password updated successfully.");
+    } catch (error) {
+      setSettingsPasswordError(getErrorMessage(error));
+    } finally {
+      setSettingsPasswordSubmitting(false);
+    }
   }
 
   async function addManagedUser(e: FormEvent<HTMLFormElement>) {
@@ -1230,6 +1281,13 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
 
               {settingsOpen && (
                 <div className="absolute right-0 z-10 mt-2 w-44 rounded-md border border-slate-200 bg-white py-1 text-sm shadow-lg">
+                  <button
+                    type="button"
+                    onClick={openResetPassword}
+                    className="block w-full px-3 py-2 text-left hover:bg-slate-50"
+                  >
+                    Reset Password
+                  </button>
                   {authUser.role === "ADMIN" && (
                     <button
                       type="button"
@@ -1255,7 +1313,73 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
       </nav>
 
       <div className="px-4 py-12">
-        {activeView === "manage-users" && authUser.role === "ADMIN" ? (
+        {activeView === "reset-password" ? (
+          <div className="mx-auto w-full max-w-xl rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <h1 className="text-xl font-semibold">Reset Password</h1>
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveView("portal-selection");
+                  setSettingsOpen(false);
+                }}
+                className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium hover:bg-slate-50"
+              >
+                Back
+              </button>
+            </div>
+
+            <form className="mt-5 space-y-4" onSubmit={resetPasswordFromSettings}>
+              <div>
+                <label className="mb-2 block text-sm font-medium" htmlFor="settingsPassword">
+                  Password
+                </label>
+                <input
+                  id="settingsPassword"
+                  type="password"
+                  autoComplete="new-password"
+                  value={settingsPassword}
+                  onChange={(event) => setSettingsPassword(event.target.value)}
+                  className="block w-full rounded-md border border-slate-300 p-2 text-sm"
+                />
+              </div>
+
+              <div>
+                <label className="mb-2 block text-sm font-medium" htmlFor="settingsConfirmPassword">
+                  Confirm Password
+                </label>
+                <input
+                  id="settingsConfirmPassword"
+                  type="password"
+                  autoComplete="new-password"
+                  value={settingsConfirmPassword}
+                  onChange={(event) => setSettingsConfirmPassword(event.target.value)}
+                  className="block w-full rounded-md border border-slate-300 p-2 text-sm"
+                />
+              </div>
+
+              {settingsPasswordError && (
+                <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm font-medium text-red-700">
+                  {settingsPasswordError}
+                </div>
+              )}
+
+              {settingsPasswordStatus && (
+                <div className="rounded-md border border-green-200 bg-green-50 p-3 text-sm font-medium text-green-700">
+                  {settingsPasswordStatus}
+                </div>
+              )}
+
+              <button
+                type="submit"
+                disabled={settingsPasswordSubmitting}
+                className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-400"
+              >
+                {settingsPasswordSubmitting ? "Please wait..." : "Update Password"}
+              </button>
+            </form>
+          </div>
+        ) : activeView === "manage-users" && authUser.role === "ADMIN" ? (
           <div className="mx-auto w-full max-w-5xl rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
             <div className="flex flex-wrap items-center justify-between gap-4">
               <h1 className="text-xl font-semibold">Manage Users</h1>
