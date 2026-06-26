@@ -180,15 +180,49 @@ async function openRegalEmailCodeEntryIfPresent(page: Page, stageLog: (level: Re
   return false;
 }
 
-async function selectRegalEmailOtpIfNeeded(page: Page, stageLog: (level: RegalLogEntry["level"], stage: string, message: string, currentPage?: Page) => Promise<void>): Promise<void> {
+async function openRegalPhoneCodeEntryIfPresent(page: Page, stageLog: (level: RegalLogEntry["level"], stage: string, message: string, currentPage?: Page) => Promise<void>): Promise<boolean> {
+  const sendCodeButton = page.locator(regalConfig.selectors.phoneSendSubmit).first();
+  const codeInput = page.locator(regalConfig.selectors.googleAuthenticatorCode).first();
+  const verifyButton = page.locator(regalConfig.selectors.googleAuthenticatorSubmit).first();
+  const startedAt = Date.now();
+  let codeRequested = false;
+
+  while (Date.now() - startedAt < 30000) {
+    if (await codeInput.isVisible({ timeout: 500 }).catch(() => false)) {
+      await verifyButton.waitFor({ state: "visible", timeout: 30000 });
+      return true;
+    }
+
+    if (!codeRequested && await sendCodeButton.isVisible({ timeout: 500 }).catch(() => false)) {
+      codeRequested = true;
+      await stageLog("info", "mfa", "Requesting Regal SMS verification code.", page);
+      await Promise.all([
+        page.waitForLoadState("domcontentloaded").catch(() => {}),
+        sendCodeButton.click(),
+      ]);
+      await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
+      continue;
+    }
+
+    await page.waitForTimeout(500);
+  }
+
+  return false;
+}
+
+async function selectRegalOtpIfNeeded(page: Page, stageLog: (level: RegalLogEntry["level"], stage: string, message: string, currentPage?: Page) => Promise<void>): Promise<string> {
   const codeInputVisible = await isVisible(page, regalConfig.selectors.googleAuthenticatorCode);
   if (codeInputVisible) {
     await stageLog("info", "mfa", "OTP code page is already visible.", page);
-    return;
+    return "Regal OTP";
   }
 
   if (await openRegalEmailCodeEntryIfPresent(page, stageLog)) {
-    return;
+    return "Regal email OTP";
+  }
+
+  if (await openRegalPhoneCodeEntryIfPresent(page, stageLog)) {
+    return "Regal SMS OTP";
   }
 
   const switchAuthenticatorVisible = await isVisible(page, regalConfig.selectors.switchAuthenticator);
@@ -203,9 +237,22 @@ async function selectRegalEmailOtpIfNeeded(page: Page, stageLog: (level: RegalLo
 
   const emailOption = page.locator(regalConfig.selectors.emailAuthenticatorSelect).first();
   const emailVisible = await emailOption.isVisible({ timeout: 5000 }).catch(() => false);
-  const option = emailVisible ? emailOption : page.locator(regalConfig.selectors.googleAuthenticatorSelect).first();
+  const phoneOption = page.locator(regalConfig.selectors.phoneAuthenticatorSelect).first();
+  const phoneVisible = !emailVisible && await phoneOption.isVisible({ timeout: 3000 }).catch(() => false);
+  const googleOption = page.locator(regalConfig.selectors.googleAuthenticatorSelect).first();
+  const option = emailVisible ? emailOption : phoneVisible ? phoneOption : googleOption;
+  const selectedMethod = emailVisible ? "Regal email OTP" : phoneVisible ? "Regal SMS OTP" : "Regal OTP";
   await option.waitFor({ state: "visible", timeout: 30000 });
-  await stageLog("info", "mfa", emailVisible ? "Selecting Email from available security methods." : "Email MFA not found; selecting available authenticator for manual OTP.", page);
+  await stageLog(
+    "info",
+    "mfa",
+    emailVisible
+      ? "Selecting Email from available security methods."
+      : phoneVisible
+        ? "Email MFA not found; selecting Phone/SMS from available security methods."
+        : "Email/SMS MFA not found; selecting available authenticator for manual OTP.",
+    page,
+  );
   await Promise.all([
     page.waitForLoadState("domcontentloaded").catch(() => {}),
     option.click(),
@@ -217,16 +264,23 @@ async function selectRegalEmailOtpIfNeeded(page: Page, stageLog: (level: RegalLo
       await stageLog("warn", "mfa", "Regal email MFA controls did not reach a visible verification code field within 30 seconds.", page);
       throw new Error("Regal email MFA was selected, but the verification code field did not appear.");
     }
+  } else if (phoneVisible) {
+    if (!(await openRegalPhoneCodeEntryIfPresent(page, stageLog))) {
+      await stageLog("warn", "mfa", "Regal SMS MFA controls did not reach a visible verification code field within 30 seconds.", page);
+      throw new Error("Regal SMS MFA was selected, but the verification code field did not appear.");
+    }
   }
+
+  return selectedMethod;
 }
 
-async function requestRegalOtpFromUser(context: ScraperContext, stageLog: (level: RegalLogEntry["level"], stage: string, message: string, currentPage?: Page) => Promise<void>, page: Page): Promise<string> {
-  await stageLog("info", "mfa", "Waiting for user to enter Regal email OTP in frontend. Timeout: 2 minutes.", page);
+async function requestRegalOtpFromUser(context: ScraperContext, stageLog: (level: RegalLogEntry["level"], stage: string, message: string, currentPage?: Page) => Promise<void>, page: Page, otpLabel: string): Promise<string> {
+  await stageLog("info", "mfa", `Waiting for user to enter ${otpLabel} in frontend. Timeout: 2 minutes.`, page);
   await context.emit({
     type: "input_request",
     inputName: "regal_otp",
-    label: "Regal email OTP",
-    message: "Enter the Regal OTP from email within 2 minutes.",
+    label: otpLabel,
+    message: `Enter the ${otpLabel} within 2 minutes.`,
     timeoutMs: 120000,
   });
   await stageLog("info", "mfa", "Regal OTP input request sent to frontend.", page);
@@ -244,6 +298,14 @@ async function submitRegalOtp(page: Page, code: string): Promise<void> {
     page.locator(regalConfig.selectors.googleAuthenticatorSubmit).first().click(),
   ]);
   await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
+}
+
+async function isPastRegalMfa(page: Page): Promise<boolean> {
+  return Promise.race([
+    findRegalLocator(page, regalConfig.selectors.siteSelect, { state: "visible", timeout: 1500 }).then(() => true, () => false),
+    findRegalLocator(page, regalConfig.selectors.viewClaimsLink, { state: "attached", timeout: 1500 }).then(() => true, () => false),
+    page.locator(regalConfig.selectors.mainIframe).first().waitFor({ state: "attached", timeout: 1500 }).then(() => true, () => false),
+  ]);
 }
 
 type RegalClaimSearchRow = {
@@ -924,10 +986,18 @@ export async function runRegalLoginJob(formData: FormData, context: ScraperConte
     await stageLog("info", "launch-rea", "Regal Express Access click completed; checking reached page.", page);
 
     await emitPageDiagnostics(context, page, "after-regal-express-access-before-mfa");
-    await selectRegalEmailOtpIfNeeded(page, stageLog);
-    const regalOtp = await requestRegalOtpFromUser(context, stageLog, page);
-    await stageLog("info", "mfa", "Submitting Regal OTP provided from frontend.", page);
-    await submitRegalOtp(page, regalOtp);
+    const otpLabel = await selectRegalOtpIfNeeded(page, stageLog);
+    if (!(await isPastRegalMfa(page))) {
+      const regalOtp = await requestRegalOtpFromUser(context, stageLog, page, otpLabel);
+      if (await isPastRegalMfa(page)) {
+        await stageLog("info", "mfa", "Regal MFA already completed in the automation browser; continuing.", page);
+      } else {
+        await stageLog("info", "mfa", "Submitting Regal OTP provided from frontend.", page);
+        await submitRegalOtp(page, regalOtp);
+      }
+    } else {
+      await stageLog("info", "mfa", "Regal MFA already completed; continuing.", page);
+    }
     const mfaStepError = await detectVisibleError(page, 5000);
     if (mfaStepError) {
       throw new Error(`Regal OTP step failed: ${mfaStepError}`);

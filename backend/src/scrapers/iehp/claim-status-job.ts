@@ -1,5 +1,6 @@
 import type { BrowserContext, Page } from "playwright-core";
 import { closeAutomationResources } from "@/backend/src/core/runtime-config";
+import type { ScraperContext } from "../types";
 import { emitScrapeJobEvent } from "@/backend/src/jobs/job-store";
 import { processCoveredRaDownloads, extractCheckNumbersFromClaimDetailText } from "@/backend/src/scrapers/iehp/covered-ra";
 import { processReferToRaDownloads } from "@/backend/src/scrapers/iehp/refer-ra";
@@ -33,7 +34,7 @@ import { getClaimCptValue, getClaimModifierValues, serializeRaRecords, type RaDe
 
 type StreamEvent = Record<string, unknown>;
 
-export async function runIehpClaimStatusJob(jobId: string, formData: FormData): Promise<void> {
+export async function runIehpClaimStatusJob(jobId: string, formData: FormData, context?: ScraperContext): Promise<void> {
   const sendEvent = async (data: StreamEvent) => {
     emitScrapeJobEvent(jobId, data);
     await new Promise(resolve => setTimeout(resolve, 50));
@@ -69,19 +70,19 @@ export async function runIehpClaimStatusJob(jobId: string, formData: FormData): 
 
         log("Launching browser environment...");
         let browser;
-        let context: BrowserContext | undefined;
+        let browserContext: BrowserContext | undefined;
         let page: Page | undefined;
 
         try {
           const browserSession = await launchIehpBrowser(log);
           browser = browserSession.browser;
-          context = browserSession.context;
+          browserContext = browserSession.context;
 
-          if (!browser || !context) {
+          if (!browser || !browserContext) {
             throw new Error("Failed to initialize browser instance.");
           }
 
-          page = await context.newPage();
+          page = await browserContext.newPage();
           page.setDefaultTimeout(30000);
 
           log(`Navigating to login URL: ${loginUrl}`);
@@ -126,6 +127,10 @@ export async function runIehpClaimStatusJob(jobId: string, formData: FormData): 
           let processedInThisBatch = 0;
 
           for (let i = startIndex; i < claimRows.length; i++) {
+            if (context?.isCancelled?.()) {
+              await log("Processing stopped because the active scrape job was cancelled.");
+              break;
+            }
             // Check for timeout or batch limit
             if (Date.now() - processStartTime > MAX_EXECUTION_TIME_MS || processedInThisBatch >= BATCH_SIZE) {
               await log(`Batch complete. Pausing at Row ${i + 1} to gracefully auto-resume the next chunk...`);
@@ -601,7 +606,7 @@ export async function runIehpClaimStatusJob(jobId: string, formData: FormData): 
             processedInThisBatch++;
           }
         } finally {
-          await closeAutomationResources({ browser, context, page, log });
+          await closeAutomationResources({ browser, context: browserContext, page, log });
         }
       } catch (globalError) {
         const msg = globalError instanceof Error ? globalError.message : "Unexpected automation error.";

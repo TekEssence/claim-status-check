@@ -18,7 +18,7 @@ class IehpScraper extends BaseScraper<IehpScraperInput> {
   }
 
   async run(input: IehpScraperInput, context: ScraperContext): Promise<void> {
-    await runIehpClaimStatusJob(context.jobId, input);
+    await runIehpClaimStatusJob(context.jobId, input, context);
   }
 }
 

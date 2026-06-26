@@ -18,6 +18,8 @@ export const regalConfig = {
     emailAuthenticatorSelect: "[data-se='okta_email'] a[data-se='button'], a[aria-label*='Select Email' i]",
     emailSendSubmit: "input[type='submit'][value='Send me an email']",
     emailEnterCodeInstead: "button.enter-auth-code-instead-link:has-text('Enter a verification code instead')",
+    phoneAuthenticatorSelect: "[data-se='phone_number'] a[data-se='button'], a[aria-label*='Select Phone' i], a[aria-label*='phone' i]",
+    phoneSendSubmit: "input[type='submit'][value*='SMS' i], input[type='submit'][value*='text' i], input[type='submit'][value*='code' i], input[type='submit'][value*='Send' i], button:has-text('Send code'), button:has-text('Send me a code'), button:has-text('Receive a code'), a:has-text('Send code')",
     googleAuthenticatorSelect: "[data-se='google_otp'] a[data-se='button'], a[aria-label='Select Google Authenticator.']",
     googleAuthenticatorCode: "input[name='credentials.passcode'][type='text']",
     googleAuthenticatorSubmit: "input[type='submit'][value='Verify']",

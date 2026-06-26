@@ -413,6 +413,38 @@ test("scans member section lines until totals instead of only a small fixed wind
   assert.equal(records.length, 1);
 });
 
+test("returns multiple matching lines for the same member across repeated member sections", () => {
+  const dosDate = parseDateInput("04/13/2026");
+  assert.ok(dosDate);
+
+  const text = [
+    "Member # Line of Business Patient Name Provider Name",
+    "70209400-00 IEHP Covered TARGET, MEMBER TEST PROVIDER",
+    "P202615601413 1 06/05/2026 04/13/2026 04/13/2026 21552 1 $1,375.00 $463.83 $0.00 $0.00 $139.15 $0.00 $324.68 $139.15 P",
+    "Member Totals : 1375.00 463.83 324.68",
+    "70209400-00 IEHP Covered TARGET, MEMBER TEST PROVIDER",
+    "P202615601414 2 06/06/2026 04/13/2026 04/13/2026 21552 1 $500.00 $200.00 $0.00 $0.00 $0.00 $0.00 $200.00 $0.00 D A1",
+    "Explanation Code Legend",
+    "A1 Charge exceeds fee schedule/maximum allowable or contracted/legislated fee arrangement.",
+    "ST Code Legend: P Payable, D Denied, E Encounter",
+  ].join("\n");
+
+  const records = parseRaDetailsFromText({
+    text,
+    memberPolicyId: "7020940000",
+    dosDate,
+    cpt: "21552",
+    checkNumber: "181393",
+    preferLastTwoDashedMemberId: true,
+  });
+
+  assert.equal(records.length, 2);
+  assert.equal(records[0].RAProcCode, "21552");
+  assert.equal(records[1].RAProcCode, "21552");
+  assert.equal(records[0].RAStatus, "Paid");
+  assert.equal(records[1].RAStatus, "Denied");
+});
+
 test("prints immediate below line with parsed and not parsed pieces when no structured line is found", () => {
   const text = [
     "Member # Line of Business Patient Name Provider Name",

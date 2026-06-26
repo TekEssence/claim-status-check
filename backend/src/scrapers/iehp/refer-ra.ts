@@ -119,9 +119,9 @@ async function waitForClaimRaResultRow(page: Page, checkNumber: string, log: (me
     return true;
   }
 
-  for (let elapsedSeconds = 5; elapsedSeconds <= 15; elapsedSeconds += 5) {
+  for (let elapsedSeconds = 2; elapsedSeconds <= 14; elapsedSeconds += 2) {
     await log(`Claims RA search for ${checkNumber} is still loading. Waiting ${elapsedSeconds} seconds...`);
-    await page.waitForTimeout(5000);
+    await page.waitForTimeout(2000);
     await waitForResultsToSettle(page);
 
     if (await checkCurrentState()) {
@@ -151,6 +151,8 @@ async function navigateToClaimRaPage(page: Page, log: (message: string) => Promi
   });
   await claimRaLink.click({ force: true });
   await waitForResultsToSettle(page);
+  await log("Claims RAs page opened. Waiting 4 seconds for the page to settle before searching...");
+  await page.waitForTimeout(4000);
 
   const searchInput = page.locator(IEHP_SELECTORS.common.searchInput).first();
   await searchInput.waitFor({ state: "visible", timeout: 15000 }).catch(() => {

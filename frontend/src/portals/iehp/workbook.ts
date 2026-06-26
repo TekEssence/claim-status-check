@@ -24,6 +24,7 @@ export type ApplyClaimRowUpdateResult = {
 export type ParsedClaimDetailRecord = {
   SummaryBlockDOS: string;
   SummaryBlockDate: string;
+  ClaimNumber: string;
   CheckNumber: string;
   ReceivedDate: string;
   CheckDate: string;
@@ -45,6 +46,7 @@ const BOT_HEADERS = new Set([
   "Received Date",
   "Check Date",
   "Billed Amount",
+  "RA Check Amount",
   "Other related payment details",
   "Bot CIN",
   "Bot Plan Type",
@@ -75,6 +77,7 @@ const TARGET_COLS: Array<{ label: string; key: keyof ParsedClaimDetailRecord }> 
 
 const RA_TARGET_COLS: Array<{ label: string; key: keyof RaDetailRecord }> = [
   { label: "RA Proc Code", key: "RAProcCode" },
+  { label: "RA Check Amount", key: "RACheckAmount" },
   { label: "RA Amount Billed", key: "RAAmountBilled" },
   { label: "RA Amount Allowed", key: "RAAmountAllowed" },
   { label: "RA Copay", key: "RACopay" },
@@ -176,25 +179,23 @@ function buildPaidAmountText(raRecord: RaDetailRecord): string {
 
   const adjustmentTotal = copay + coins + deduct;
   const remainingNetPaid = netPaid > adjustmentTotal ? netPaid - adjustmentTotal : 0;
-  const parts: string[] = [];
+  const basePaidAmount = remainingNetPaid > 0 ? remainingNetPaid : netPaid > 0 ? netPaid : 0;
+  const suffixParts: string[] = [];
 
-  if (copay > 0) parts.push(formatCurrency(copay));
-  if (coins > 0) parts.push(formatCurrency(coins));
-  if (deduct > 0) parts.push(formatCurrency(deduct));
+  if (copay > 0) suffixParts.push(`copay of ${formatCurrency(copay)}`);
+  if (coins > 0) suffixParts.push(`coins of ${formatCurrency(coins)}`);
+  if (deduct > 0) suffixParts.push(`deductible of ${formatCurrency(deduct)}`);
 
-  if (remainingNetPaid > 0) {
-    parts.push(formatCurrency(remainingNetPaid));
-  } else if (parts.length === 0 && netPaid > 0) {
-    parts.push(formatCurrency(netPaid));
+  if (suffixParts.length === 0) {
+    return formatCurrency(basePaidAmount);
   }
 
-  return parts.length > 0 ? parts.join(" + ") : formatCurrency(0);
+  return `${formatCurrency(basePaidAmount)} with ${suffixParts.join(" and ")}`;
 }
 
 function buildFinalStatusText(
   claimRecord: ParsedClaimDetailRecord | null,
   raRecord: RaDetailRecord | null,
-  accountNumber: string,
 ): string {
   if (!claimRecord || !raRecord || !raRecord.RAStatus) return "";
 
@@ -202,16 +203,19 @@ function buildFinalStatusText(
   const receivedDate = claimRecord.ReceivedDate || "";
   const checkDate = claimRecord.CheckDate || receivedDate || "";
   const checkNumber = raRecord.CheckNumber || claimRecord.CheckNumber || "";
-  const acctSuffix = accountNumber ? ` Acct # ${accountNumber}.` : "";
+  const claimNumber = claimRecord.ClaimNumber || "";
+  const raCheckAmount = raRecord.RACheckAmount || "";
+  const claimSuffix = claimNumber ? ` Claim # ${claimNumber}.` : "";
+  const checkAmountSuffix = raCheckAmount ? ` Check Amount: ${formatCurrency(parseCurrencyNumber(raCheckAmount))}.` : "";
 
   if (/^paid$/i.test(raRecord.RAStatus)) {
     const paidAmountText = buildPaidAmountText(raRecord);
-    return `DOS ${dos}: Checked IEHP portal claim received on ${receivedDate} paid on ${checkDate} paid amount ${paidAmountText} EFT/Check # ${checkNumber}.${acctSuffix}`;
+    return `DOS ${dos}: Checked IEHP portal claim received on ${receivedDate} paid on ${checkDate} paid amount ${paidAmountText} EFT/Check # ${checkNumber}.${claimSuffix}${checkAmountSuffix}`.trim();
   }
 
   if (/^denied$/i.test(raRecord.RAStatus)) {
     const denialReason = raRecord.RADenialReason || raRecord.RAReason || "";
-    return `DOS ${dos}: Checked IEHP portal claim received on ${receivedDate} denied on ${receivedDate} denial reason ${denialReason}.${acctSuffix}`;
+    return `DOS ${dos}: Checked IEHP portal claim received on ${receivedDate} denied on ${checkDate} denial reason ${denialReason} EFT/Check # ${checkNumber}.${claimSuffix}${checkAmountSuffix}`.trim();
   }
 
   return "";
@@ -275,6 +279,7 @@ export function parseBotClaimDetails(text: string): ParsedClaimDetailRecord[] {
       */
       SummaryBlockDOS: summaryDos || dateMatches[0] || "",
       SummaryBlockDate: summaryServiceDate || dateMatches[1] || summaryDos || dateMatches[0] || "",
+      ClaimNumber: getDetailValue("Claim #"),
       /*
       ###New Code - End###
       */
@@ -478,6 +483,7 @@ export function postProcessWorksheet(worksheet: ExcelJS.Worksheet): void {
   const colMap: Record<keyof ParsedClaimDetailRecord, number> = {
     SummaryBlockDOS: 0,
     SummaryBlockDate: 0,
+    ClaimNumber: 0,
     CheckNumber: 0,
     ReceivedDate: 0,
     CheckDate: 0,
@@ -489,6 +495,7 @@ export function postProcessWorksheet(worksheet: ExcelJS.Worksheet): void {
 
   const raColMap: Record<keyof RaDetailRecord, number> = {
     CheckNumber: 0,
+    RACheckAmount: 0,
     RAProcCode: 0,
     RAAmountBilled: 0,
     RAAmountAllowed: 0,
@@ -504,14 +511,6 @@ export function postProcessWorksheet(worksheet: ExcelJS.Worksheet): void {
   /*
   ###New Code -Start###
   */
-  const accountNumberCol = findOriginalColumnByAliases(headerRow, [
-    "Acct #",
-    "Acct#",
-    "Account #",
-    "Account#",
-    "Patient Acct #",
-    "Patient Account #",
-  ]);
   let finalStatusCol = 0;
   /*
   ###New Code - End###
@@ -746,7 +745,7 @@ export function postProcessWorksheet(worksheet: ExcelJS.Worksheet): void {
           if (!colNum) return;
 
           const cell = targetRow.getCell(colNum);
-          if (["RAAmountBilled", "RAAmountAllowed", "RACopay", "RACoins", "RADeductAmount", "RANetPaid"].includes(key)) {
+          if (["RACheckAmount", "RAAmountBilled", "RAAmountAllowed", "RACopay", "RACoins", "RADeductAmount", "RANetPaid"].includes(key)) {
             const numVal = parseFloat(String(value).replace(/[^0-9.-]/g, ""));
             cell.value = !isNaN(numVal) ? numVal : value;
             cell.style = cloneStyle(currencyStyle);
@@ -761,8 +760,7 @@ export function postProcessWorksheet(worksheet: ExcelJS.Worksheet): void {
       ###New Code -Start###
       */
       if (finalStatusCol > 0) {
-        const accountNumber = accountNumberCol > 0 ? String(targetRow.getCell(accountNumberCol).value ?? "").trim() : "";
-        const finalStatusText = buildFinalStatusText(record, raRecord, accountNumber);
+        const finalStatusText = buildFinalStatusText(record, raRecord);
         const cell = targetRow.getCell(finalStatusCol);
         cell.value = finalStatusText;
         cell.style = cloneStyle(dataStyle);

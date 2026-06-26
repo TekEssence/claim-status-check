@@ -18,8 +18,10 @@ Implemented now:
 - Handle MFA after REA:
   - if the code page appears directly, request OTP from the frontend.
   - if the security method selection page appears, choose Email, click `Send me an email`, click `Enter a verification code instead`, then request OTP from the frontend.
+  - if Email is not available and Phone/SMS is available, choose Phone/SMS, request the text-message code, then request OTP from the frontend.
   - if the direct code page has `Verify with something else`, it can switch to the method selection page.
   - wait up to 2 minutes for the user to submit the OTP; if not submitted, stop the job with an error.
+  - if the user manually completes MFA in the headed automation browser during local testing, detect that Regal/REA has been reached and continue instead of submitting another OTP.
 - Emit screenshot/HTML diagnostics after dashboard confirmation and after REA launch.
 - Download a replaced-on-each-run `regal-latest.log` file for local testing.
 - After MFA, select the Regal site/group from the header dropdown before opening `View Claims`.
@@ -144,6 +146,8 @@ a[data-se='switchAuthenticator']
 [data-se='okta_email'] a[data-se='button'], a[aria-label*='Select Email' i]
 input[type='submit'][value='Send me an email']
 button.enter-auth-code-instead-link:has-text('Enter a verification code instead')
+[data-se='phone_number'] a[data-se='button'], a[aria-label*='Select Phone' i], a[aria-label*='phone' i]
+input[type='submit'][value*='SMS' i], input[type='submit'][value*='text' i], input[type='submit'][value*='code' i], input[type='submit'][value*='Send' i], button:has-text('Send code'), button:has-text('Send me a code'), button:has-text('Receive a code'), a:has-text('Send code')
 [data-se='google_otp'] a[data-se='button'], a[aria-label='Select Google Authenticator.']
 input[name='credentials.passcode'][type='text']
 input[type='submit'][value='Verify']
@@ -158,6 +162,14 @@ timeoutMs=120000
 ```
 
 The frontend shows an OTP field and submits it back to the active job through `PATCH /api/scrape-jobs`. The backend waits for this value and submits it into the Okta OTP field.
+
+The OTP label changes according to the selected MFA method:
+
+```text
+Regal email OTP
+Regal SMS OTP
+Regal OTP
+```
 
 Claims search:
 
