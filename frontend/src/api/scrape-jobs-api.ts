@@ -19,6 +19,19 @@ export async function startScrapeJob(formData: FormData): Promise<string> {
   return body.jobId;
 }
 
+export async function submitScrapeJobInput(options: { jobId: string; inputName: string; value: string }): Promise<void> {
+  const response = await fetch("/api/scrape-jobs", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(options),
+  });
+
+  if (!response.ok) {
+    const body = await response.json().catch(() => null) as { error?: string } | null;
+    throw new Error(body?.error || `Failed to submit job input: ${response.status}`);
+  }
+}
+
 export async function subscribeToScrapeJobEvents(options: {
   jobId: string;
   signal: AbortSignal;

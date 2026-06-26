@@ -54,6 +54,7 @@ async function getOpenRecordCount(page) {
 async function getMatchingOpenRecordIndexes(page, criteria) {
   return page.locator("tr.dataGrid1Body").evaluateAll((rows, expected) => {
     const normalize = (value) => String(value || "").replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
+    const normalizeMemberId = (value) => normalize(value).toLowerCase();
     const matches = [];
     let openRecordIndex = 0;
 
@@ -65,7 +66,7 @@ async function getMatchingOpenRecordIndexes(page, criteria) {
       const memberId = normalize(cells[4] ? cells[4].innerText : "");
       const serviceDate = normalize(cells[10] ? cells[10].innerText : "");
 
-      if (memberId === expected.subscriberNo && serviceDate === expected.serviceDate) {
+      if (normalizeMemberId(memberId) === normalizeMemberId(expected.subscriberNo) && serviceDate === expected.serviceDate) {
         matches.push(openRecordIndex);
       }
 

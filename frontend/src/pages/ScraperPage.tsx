@@ -4,7 +4,7 @@ import { FormEvent, useMemo, useState } from "react";
 import * as XLSX from "xlsx";
 import ExcelJS from "exceljs";
 import { applyClaimRowUpdateToWorksheet, postProcessWorksheet } from "../portals/iehp/workbook";
-import { startScrapeJob, subscribeToScrapeJobEvents } from "../api/scrape-jobs-api";
+import { startScrapeJob, subscribeToScrapeJobEvents, submitScrapeJobInput } from "../api/scrape-jobs-api";
 import type { FileSystemFileHandle, WindowWithFilePicker } from "../types/file-system-access";
 import type { ClaimRow, ErrorScreenshot, JobProgressValue, ScrapeJobEvent } from "../types/job";
 import { IehpInputForm } from "../portals/iehp/IehpInputForm";
@@ -204,6 +204,10 @@ export function ScraperPage() {
   const [aerialCredentialFile, setAerialCredentialFile] = useState<File | null>(null);
   const [aerialInputFile, setAerialInputFile] = useState<File | null>(null);
   const [regalLoginFile, setRegalLoginFile] = useState<File | null>(null);
+  const [regalClaimFile, setRegalClaimFile] = useState<File | null>(null);
+  const [regalJobId, setRegalJobId] = useState<string>("");
+  const [regalOtpRequest, setRegalOtpRequest] = useState<{ inputName: string; label: string; message: string } | null>(null);
+  const [regalOtpValue, setRegalOtpValue] = useState<string>("");
   const [isProcessing, setIsProcessing] = useState(false);
   const [status, setStatus] = useState<string>("");
   const [logs, setLogs] = useState<string[]>([]);
@@ -226,7 +230,7 @@ export function ScraperPage() {
     () => Boolean(aerialInputFile && !isProcessing),
     [aerialInputFile, isProcessing],
   );
-  const canSubmitRegal = useMemo(() => !isProcessing, [isProcessing]);
+  const canSubmitRegal = useMemo(() => Boolean(regalClaimFile && !isProcessing), [regalClaimFile, isProcessing]);
 
   function resetRunState(message: string) {
     setIsProcessing(true);
@@ -234,6 +238,9 @@ export function ScraperPage() {
     setLogs([]);
     setErrorScreenshots([]);
     setProgress(null);
+    setRegalJobId("");
+    setRegalOtpRequest(null);
+    setRegalOtpValue("");
   }
 
   async function selectClaimFile() {
@@ -444,6 +451,14 @@ export function ScraperPage() {
         setLogs((prev) => [...prev, eventData.message ?? ""]);
       } else if (eventData.type === "progress" && typeof eventData.completed === "number" && typeof eventData.total === "number") {
         setProgress({ completed: eventData.completed, total: eventData.total });
+      } else if (eventData.type === "input_request" && eventData.inputName) {
+        setRegalOtpRequest({
+          inputName: eventData.inputName,
+          label: eventData.label || "Regal OTP",
+          message: eventData.message || "Enter the Regal OTP.",
+        });
+        setRegalOtpValue("");
+        setStatus(eventData.message || "Enter the Regal OTP.");
       } else if (eventData.type === "error_screenshot" && typeof eventData.index === "number" && eventData.image) {
         setErrorScreenshots((prev) => [...prev, { index: eventData.index ?? -1, image: eventData.image ?? "" }]);
         diagnosticFiles.push({
@@ -500,10 +515,18 @@ export function ScraperPage() {
   async function submitRegal(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
 
+    if (!regalClaimFile) {
+      setStatus("Please provide the Regal claim Excel file.");
+      return;
+    }
+
     resetRunState("Starting Regal login...");
 
     const formData = new FormData();
     formData.append("portalId", "regal");
+    if (regalClaimFile) {
+      formData.append("claimExcel", regalClaimFile);
+    }
     if (regalLoginFile) {
       formData.append("loginExcel", regalLoginFile);
     }
@@ -516,8 +539,24 @@ export function ScraperPage() {
     const handleJobEvent = async (eventData: ScrapeJobEvent) => {
       if (eventData.type === "log" && eventData.message) {
         setLogs((prev) => [...prev, eventData.message ?? ""]);
+        if (eventData.message.includes("Waiting for user to enter Regal email OTP")) {
+          setRegalOtpRequest({
+            inputName: "regal_otp",
+            label: "Regal email OTP",
+            message: "Enter the Regal OTP from email within 2 minutes.",
+          });
+          setStatus("Enter the Regal OTP from email within 2 minutes.");
+        }
       } else if (eventData.type === "progress" && typeof eventData.completed === "number" && typeof eventData.total === "number") {
         setProgress({ completed: eventData.completed, total: eventData.total });
+      } else if (eventData.type === "input_request" && eventData.inputName) {
+        setRegalOtpRequest({
+          inputName: eventData.inputName,
+          label: eventData.label || "Regal OTP",
+          message: eventData.message || "Enter the Regal OTP.",
+        });
+        setRegalOtpValue("");
+        setStatus(eventData.message || "Enter the Regal OTP.");
       } else if (eventData.type === "error_screenshot" && typeof eventData.index === "number" && eventData.image) {
         setErrorScreenshots((prev) => [...prev, { index: eventData.index ?? -1, image: eventData.image ?? "" }]);
         diagnosticFiles.push({
@@ -546,12 +585,15 @@ export function ScraperPage() {
         setStatus(`Error: ${eventData.message}`);
         hasError = true;
       } else if (eventData.type === "done") {
+        setRegalOtpRequest(null);
+        setRegalOtpValue("");
         downloadZip("regal-diagnostics.zip", diagnosticFiles);
       }
     };
 
     try {
       const jobId = await startScrapeJob(formData);
+      setRegalJobId(jobId);
       await subscribeToScrapeJobEvents({
         jobId,
         signal: streamAbortController.signal,
@@ -567,12 +609,30 @@ export function ScraperPage() {
       setStatus(
         hasError
           ? `Regal login finished with errors${finalErrorMessage ? `: ${finalErrorMessage}` : "."}`
-          : "Regal login step completed. Check the downloaded diagnostics for the next page.",
+          : "Regal processing completed.",
       );
     } catch (error) {
       setStatus(`Failed to run Regal login: ${getErrorMessage(error)}`);
     } finally {
       setIsProcessing(false);
+    }
+  }
+
+  async function submitRegalOtp() {
+    if (!regalJobId || !regalOtpRequest || !regalOtpValue.trim()) return;
+
+    try {
+      await submitScrapeJobInput({
+        jobId: regalJobId,
+        inputName: regalOtpRequest.inputName,
+        value: regalOtpValue,
+      });
+      setLogs((prev) => [...prev, "Regal OTP submitted from frontend."]);
+      setStatus("Regal OTP submitted. Continuing processing...");
+      setRegalOtpRequest(null);
+      setRegalOtpValue("");
+    } catch (error) {
+      setStatus(`Failed to submit Regal OTP: ${getErrorMessage(error)}`);
     }
   }
 
@@ -656,10 +716,20 @@ export function ScraperPage() {
             <RegalInputForm
               canSubmit={canSubmitRegal}
               isProcessing={isProcessing}
+              onClaimFileChange={setRegalClaimFile}
               onLoginFileChange={setRegalLoginFile}
               onSubmit={submitRegal}
             />
-            <RegalResultView errorScreenshots={errorScreenshots} logs={logs} progress={progress} status={status} />
+            <RegalResultView
+              errorScreenshots={errorScreenshots}
+              logs={logs}
+              onOtpChange={setRegalOtpValue}
+              onOtpSubmit={submitRegalOtp}
+              otpRequest={regalOtpRequest}
+              otpValue={regalOtpValue}
+              progress={progress}
+              status={status}
+            />
           </>
         )}
           </>

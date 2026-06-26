@@ -3,6 +3,7 @@ import {
   emitScrapeJobEvent,
   getScrapeJob,
   subscribeToScrapeJob,
+  submitScrapeJobInput,
   type ScrapeJobEvent,
 } from "@/backend/src/jobs/job-store";
 import { getScraper } from "@/backend/src/scrapers/registry";
@@ -52,6 +53,24 @@ export async function GET(req: Request) {
   }
 
   return streamScrapeJobEvents(req, jobId, getLastEventId(req, url));
+}
+
+export async function PATCH(req: Request) {
+  const body = await req.json().catch(() => null) as { jobId?: unknown; inputName?: unknown; value?: unknown } | null;
+  const jobId = typeof body?.jobId === "string" ? body.jobId : "";
+  const inputName = typeof body?.inputName === "string" ? body.inputName : "";
+  const value = typeof body?.value === "string" ? body.value : "";
+
+  if (!jobId || !inputName || !value.trim()) {
+    return Response.json({ error: "Missing jobId, inputName, or value." }, { status: 400 });
+  }
+
+  const accepted = submitScrapeJobInput(jobId, inputName, value.trim());
+  if (!accepted) {
+    return Response.json({ error: "No pending input request found for this job." }, { status: 404 });
+  }
+
+  return Response.json({ ok: true });
 }
 
 function getLastEventId(req: Request, url: URL): number {

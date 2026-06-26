@@ -31,3 +31,9 @@ test("Aerial service line detection keeps alphanumeric CPT/service codes", () =>
 
   assert.deepEqual(parseServiceLinesFromRows(rows), ["J0702", "20610-RT", "J2003-JZ", "99214-25"]);
 });
+
+test("Aerial member id matching ignores subscriber number casing", () => {
+  const normalizeMemberId = (value: string) => value.replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
+
+  assert.equal(normalizeMemberId("98071313E"), normalizeMemberId("98071313e"));
+});

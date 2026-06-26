@@ -7,14 +7,15 @@ const CLAIM_DETAIL_SELECTORS = {
 };
 
 function extractClaimStatusFromText(text) {
-  const match = String(text || "").match(/\bStatus:\s*([^\r\n<]+)/i);
-  return match ? match[1].trim() : "";
+  return extractLabelValueFromText(text, "Status");
 }
 
 function extractLabelValueFromText(text, label) {
   const escapedLabel = String(label).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const match = String(text || "").match(new RegExp(`\\b${escapedLabel}:\\s*([^\\r\\n<]+)`, "i"));
-  return match ? match[1].trim() : "";
+  const nextLabelBoundary =
+    "\\s+(?:Claim Number|Claim Status|Status|Date Received|Date Paid|Reject Date|Denial Reason|Reject Reason|Reason|Check Number):";
+  const match = String(text || "").match(new RegExp(`\\b${escapedLabel}:\\s*([^\\r\\n<]*?)(?=${nextLabelBoundary}|$)`, "i"));
+  return match ? match[1].replace(/\s+/g, " ").trim() : "";
 }
 
 async function extractClaimDetailFallbackDetails(detailPage) {
@@ -25,6 +26,10 @@ async function extractClaimDetailFallbackDetails(detailPage) {
     claimStatus: extractClaimStatusFromText(bodyText),
     dateReceived: extractLabelValueFromText(bodyText, "Date Received"),
     rejectDate: extractLabelValueFromText(bodyText, "Reject Date"),
+    denialReason:
+      extractLabelValueFromText(bodyText, "Denial Reason") ||
+      extractLabelValueFromText(bodyText, "Reject Reason") ||
+      extractLabelValueFromText(bodyText, "Reason"),
     datePaid: "",
     checkNumber: "",
     providerDetails: "",
@@ -225,6 +230,7 @@ async function extractEobDetails(detailPage) {
     dateReceived: claimInfo["Date Received"] || "",
     datePaid: claimInfo["Date Paid"] || "",
     checkNumber: claimInfo["Check Number"] || "",
+    denialReason: "",
     providerDetails,
     serviceLines,
     eobFound: true,

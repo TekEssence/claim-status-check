@@ -71,6 +71,7 @@ function createRunId(date = new Date()): string {
 function baseOutputRow(inputRow: AerialInputRow): Record<string, any> {
   return {
     inputRowId: inputRow.input_row_id,
+    inputClaimNo: inputRow["Claim No"] || "",
     subscriberNo: inputRow.normalized.subscriberNo,
     serviceDate: inputRow.normalized.serviceDate,
     claimStatus: "",
@@ -78,6 +79,34 @@ function baseOutputRow(inputRow: AerialInputRow): Record<string, any> {
     notes: "",
     extractedAt: new Date().toISOString(),
   };
+}
+
+function moneyToNumber(value: unknown): number {
+  const amount = Number(String(value || "").replace(/[$,\s]/g, ""));
+  return Number.isFinite(amount) ? amount : 0;
+}
+
+function formatMoney(value: number): string {
+  return `$${value.toFixed(2)}`;
+}
+
+function calculateTotalPaid(serviceLines: Array<Record<string, unknown>> | undefined): string {
+  const total = (serviceLines || []).reduce((sum, line) => sum + moneyToNumber(line.paid), 0);
+  return formatMoney(total);
+}
+
+export function buildAerialFinalStatus(inputRow: AerialInputRow, details: Record<string, any>, totalPaid: string): string {
+  const dos = inputRow.normalized.serviceDate || inputRow["Service Date"] || "";
+  const received = details.dateReceived || "";
+  const claimNumber = details.claimNumber || "";
+  const claimStatus = String(details.claimStatus || "").trim().toUpperCase();
+
+  if (claimStatus === "APPROVED") {
+    return `DOS ${dos}: Checked IEHP portal claim received on ${received} paid on ${details.datePaid || ""} paid amount ${totalPaid} EFT/Check # ${details.checkNumber || ""}. Claim # ${claimNumber}.`;
+  }
+
+  const denialReason = details.denialReason || details.claimStatus || "";
+  return `DOS ${dos}: Checked IEHP portal claim received on ${received} denied on ${details.rejectDate || ""} denial reason ${denialReason}. Claim# ${claimNumber}.`;
 }
 
 function addAudit(
@@ -93,6 +122,7 @@ function addAudit(
     run_id: runId,
     timestamp: new Date().toISOString(),
     input_row_id: inputRow?.input_row_id ?? "",
+    input_claim_no: inputRow?.["Claim No"] ?? "",
     subscriber_no: inputRow?.normalized?.subscriberNo ?? "",
     service_date: inputRow?.normalized?.serviceDate ?? "",
     step,
@@ -116,6 +146,7 @@ function addError(
     run_id: runId,
     timestamp: new Date().toISOString(),
     input_row_id: inputRow.input_row_id,
+    input_claim_no: inputRow["Claim No"] ?? "",
     subscriber_no: inputRow.normalized?.subscriberNo ?? inputRow["Subscriber No"],
     service_date: inputRow.normalized?.serviceDate ?? inputRow["Service Date"],
     failure_stage: failureStage,
@@ -172,6 +203,7 @@ async function closePageQuietly(page: Page): Promise<void> {
 }
 
 function outputRowFromDetails(inputRow: AerialInputRow, details: Record<string, any>, resultIndex: number): Record<string, any> {
+  const totalPaid = calculateTotalPaid(details.serviceLines);
   return {
     ...baseOutputRow(inputRow),
     resultIndex: resultIndex + 1,
@@ -182,6 +214,8 @@ function outputRowFromDetails(inputRow: AerialInputRow, details: Record<string, 
     datePaid: details.datePaid,
     checkNumber: details.checkNumber,
     providerDetails: details.providerDetails,
+    totalPaid,
+    finalStatus: buildAerialFinalStatus(inputRow, details, totalPaid),
     memberId: details.memberId,
     memberName: details.memberName,
     memberBirthDate: details.memberBirthDate,

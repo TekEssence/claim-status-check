@@ -59,6 +59,11 @@ function normalizeAmount(value) {
   return amount.toFixed(2);
 }
 
+function normalizeSubscriberNo(value) {
+  const text = String(value || "").trim();
+  return text.toUpperCase().startsWith("XEE") ? text.slice(3).trim() : text;
+}
+
 function validateInputRow(row) {
   const errors = [];
 
@@ -85,7 +90,7 @@ function validateInputRow(row) {
     valid: errors.length === 0,
     errors,
     normalized: {
-      subscriberNo: getField(row, "Subscriber No"),
+      subscriberNo: normalizeSubscriberNo(getField(row, "Subscriber No")),
       serviceDate: normalizeServiceDate(serviceDate),
     },
   };
@@ -97,5 +102,6 @@ module.exports = {
   isValidUsDate,
   normalizeServiceDate,
   normalizeAmount,
+  normalizeSubscriberNo,
   validateInputRow,
 };

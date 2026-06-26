@@ -1,5 +1,67 @@
 # Aerial Implementation Plan
 
+## Current Input Contract
+
+Aerial claim workbook columns are found by header name, not fixed position.
+
+Required claim workbook headers:
+
+```text
+Claim No
+Subscriber No
+Service Date
+```
+
+Supported aliases:
+
+```text
+Claim No: Claim No, Claim Number
+Subscriber No: Subscriber No, Subscriber Number, Member ID
+Service Date: Service Date, Date of Service, DOS
+```
+
+Subscriber number normalization:
+
+```text
+If Subscriber No starts with XEE, remove the XEE prefix before searching Aerial.
+Example: XEE123456789 -> 123456789
+```
+
+Subscriber/member ID result matching is case-insensitive:
+
+```text
+Input Subscriber No: 98071313e
+Returned Member ID: 98071313E
+Match: yes
+```
+
+Fallback for older files without headers:
+
+```text
+Claim No: column A
+Subscriber No: old column H
+Service Date: old column K
+```
+
+Output workbook must include these Aerial status fields:
+
+```text
+total_paid
+final_status
+```
+
+`total_paid` is calculated by adding all extracted EOB service-line paid values for the input row.
+
+`final_status` is generated from the claim detail status text:
+
+```text
+Paid, when claim detail status is APPROVED:
+DOS xx/xx/xxxx: Checked IEHP portal claim received on xx/xx/xx paid on xx/xx/xx paid amount $xx.xx EFT/Check # xxxxxxx. Claim # xxxxxxx.
+
+Denied, for any other claim detail status:
+DOS xx/xx/xxxx: Checked IEHP portal claim received on xx/xx/xx denied on xx/xx/xx denial reason xxxx. Claim# xxxxxxx.
+```
+
 ## Purpose
 
 Aerial is implemented as a portal scraper under the shared scrape-job platform.
@@ -97,12 +159,7 @@ The platform supports both:
 - frontend upload: `inputExcel` for claim details
 - fallback env path: `PORTAL_AERIAL_INPUT_XLSX_PATH`
 
-Required columns are read by position from the first worksheet:
-
-```text
-Column H: Subscriber No
-Column K: Service Date
-```
+Required claim columns are listed at the top of this plan under `Current Input Contract`.
 
 The original input workbook is not modified. The scraper returns a new output workbook.
 

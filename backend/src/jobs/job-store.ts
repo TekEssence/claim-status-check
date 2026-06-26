@@ -52,6 +52,7 @@ export function createScrapeJob(): ScrapeJob {
     currentCompleted: 0,
     events: [],
     subscribers: new Set(),
+    inputWaiters: new Map(),
     createdAt: now,
     updatedAt: now,
   };
@@ -91,6 +92,40 @@ export function emitScrapeJobEvent(jobId: string, data: StreamEvent): void {
   if (isTerminalStatus(job.status)) {
     scheduleTerminalJobCleanup(job);
   }
+}
+
+export function waitForScrapeJobInput(jobId: string, inputName: string, timeoutMs: number): Promise<string> {
+  const job = jobs.get(jobId);
+  if (!job) {
+    return Promise.reject(new Error("Scrape job not found."));
+  }
+
+  const existing = job.inputWaiters.get(inputName);
+  if (existing) {
+    clearTimeout(existing.timer);
+    existing.reject(new Error(`Input request ${inputName} was replaced.`));
+  }
+
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      job.inputWaiters.delete(inputName);
+      reject(new Error("OTP was not sent within 2 minutes."));
+    }, timeoutMs);
+
+    job.inputWaiters.set(inputName, { resolve, reject, timer });
+  });
+}
+
+export function submitScrapeJobInput(jobId: string, inputName: string, value: string): boolean {
+  const job = jobs.get(jobId);
+  const waiter = job?.inputWaiters.get(inputName);
+  if (!job || !waiter) return false;
+
+  clearTimeout(waiter.timer);
+  job.inputWaiters.delete(inputName);
+  waiter.resolve(value);
+  job.updatedAt = Date.now();
+  return true;
 }
 
 export function subscribeToScrapeJob(

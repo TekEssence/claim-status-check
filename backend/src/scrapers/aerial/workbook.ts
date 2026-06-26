@@ -17,6 +17,7 @@ const { validateInputRow } = require("./legacy/validation.js") as AerialLegacyVa
 
 export type AerialInputRow = Record<string, unknown> & {
   input_row_id: number;
+  "Claim No": string;
   "Subscriber No": string;
   "Service Date": string;
   validation_status: "valid" | "invalid";
@@ -25,10 +26,25 @@ export type AerialInputRow = Record<string, unknown> & {
   validation_errors: AerialLegacyValidation["errors"];
 };
 
-const EXCEL_COLUMNS = {
+const FALLBACK_EXCEL_COLUMNS = {
+  claimNo: 0,
   subscriberNo: 7,
   serviceDate: 10,
 };
+
+function normalizeHeader(value: unknown): string {
+  return String(value || "")
+    .replace(/\u00a0/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function findHeaderIndex(headerRow: unknown[], aliases: string[], fallbackIndex: number): number {
+  const normalizedAliases = aliases.map(normalizeHeader);
+  const index = headerRow.findIndex((value) => normalizedAliases.includes(normalizeHeader(value)));
+  return index >= 0 ? index : fallbackIndex;
+}
 
 export function readAerialInputWorkbookFromBuffer(buffer: ArrayBuffer): AerialInputRow[] {
   const workbook = XLSX.read(buffer, {
@@ -46,13 +62,20 @@ export function readAerialInputWorkbookFromBuffer(buffer: ArrayBuffer): AerialIn
     raw: false,
     blankrows: false,
   }) as unknown[][];
+  const headerRow = matrix[0] ?? [];
+  const columns = {
+    claimNo: findHeaderIndex(headerRow, ["Claim No", "Claim Number"], FALLBACK_EXCEL_COLUMNS.claimNo),
+    subscriberNo: findHeaderIndex(headerRow, ["Subscriber No", "Subscriber Number", "Member ID"], FALLBACK_EXCEL_COLUMNS.subscriberNo),
+    serviceDate: findHeaderIndex(headerRow, ["Service Date", "Date of Service", "DOS"], FALLBACK_EXCEL_COLUMNS.serviceDate),
+  };
 
   return matrix
     .slice(1)
     .map((row, index) => ({
       input_row_id: index + 2,
-      "Subscriber No": String(row[EXCEL_COLUMNS.subscriberNo] || ""),
-      "Service Date": String(row[EXCEL_COLUMNS.serviceDate] || ""),
+      "Claim No": String(row[columns.claimNo] || ""),
+      "Subscriber No": String(row[columns.subscriberNo] || ""),
+      "Service Date": String(row[columns.serviceDate] || ""),
     }))
     .filter((row) => row["Subscriber No"] || row["Service Date"])
     .map((row) => {
@@ -73,6 +96,7 @@ function buildOutputRows(rows: Record<string, any>[]): Record<string, unknown>[]
 
     return serviceLines.map((serviceLine: Record<string, unknown>, index: number) => ({
       input_row_id: row.inputRowId,
+      input_claim_no: row.inputClaimNo || "",
       result_index: row.resultIndex || "",
       subscriber_no: row.subscriberNo,
       service_date: row.serviceDate,
@@ -87,6 +111,8 @@ function buildOutputRows(rows: Record<string, any>[]): Record<string, unknown>[]
       member_pcp: row.memberPcp || "",
       claim_number: row.claimNumber || "",
       claim_status: row.claimStatus || "",
+      total_paid: row.totalPaid || "",
+      final_status: row.finalStatus || "",
       date_received: row.dateReceived || "",
       reject_date: row.rejectDate || "",
       date_paid: row.datePaid || "",

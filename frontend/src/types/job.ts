@@ -24,5 +24,8 @@ export type ScrapeJobEvent = {
   filename?: string;
   mimeType?: string;
   path?: string;
+  inputName?: string;
+  label?: string;
+  timeoutMs?: number;
   update?: Record<string, unknown>;
 };
