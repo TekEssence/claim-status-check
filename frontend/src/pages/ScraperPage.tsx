@@ -13,8 +13,11 @@ import { iehpFrontendPortalConfig } from "../portals/iehp/portal-config";
 import { AerialInputForm } from "../portals/aerial/AerialInputForm";
 import { AerialResultView } from "../portals/aerial/AerialResultView";
 import { aerialFrontendPortalConfig } from "../portals/aerial/portal-config";
+import { BlueShieldInputForm } from "../portals/blue-shield/BlueShieldInputForm";
+import { BlueShieldResultView } from "../portals/blue-shield/BlueShieldResultView";
+import { blueShieldFrontendPortalConfig } from "../portals/blue-shield/portal-config";
 
-type PortalId = "iehp" | "aerial";
+type PortalId = "iehp" | "aerial" | "blue-shield";
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -81,6 +84,10 @@ export function ScraperPage() {
   const [claimFileName, setClaimFileName] = useState<string>("");
   const [aerialCredentialFile, setAerialCredentialFile] = useState<File | null>(null);
   const [aerialInputFile, setAerialInputFile] = useState<File | null>(null);
+  const [blueShieldCredentialFile, setBlueShieldCredentialFile] = useState<File | null>(null);
+  const [blueShieldInputFile, setBlueShieldInputFile] = useState<File | null>(null);
+  const [blueShieldGroup, setBlueShieldGroup] = useState("Posada");
+  const [blueShieldResetCheckpoint, setBlueShieldResetCheckpoint] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [status, setStatus] = useState<string>("");
   const [logs, setLogs] = useState<string[]>([]);
@@ -92,7 +99,9 @@ export function ScraperPage() {
       ? iehpFrontendPortalConfig
       : selectedPortalId === "aerial"
         ? aerialFrontendPortalConfig
-        : null;
+        : selectedPortalId === "blue-shield"
+          ? blueShieldFrontendPortalConfig
+          : null;
   const canSubmitIehp = useMemo(
     () => Boolean(iehpLoginFile && claimFileHandle && !isProcessing),
     [iehpLoginFile, claimFileHandle, isProcessing],
@@ -100,6 +109,10 @@ export function ScraperPage() {
   const canSubmitAerial = useMemo(
     () => Boolean(aerialInputFile && !isProcessing),
     [aerialInputFile, isProcessing],
+  );
+  const canSubmitBlueShield = useMemo(
+    () => Boolean(blueShieldCredentialFile && blueShieldInputFile && !isProcessing),
+    [blueShieldCredentialFile, blueShieldInputFile, isProcessing],
   );
 
   function resetRunState(message: string) {
@@ -359,6 +372,75 @@ export function ScraperPage() {
     }
   }
 
+  async function submitBlueShield(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+
+    if (!blueShieldCredentialFile || !blueShieldInputFile) {
+      setStatus("Please provide both the Blue Shield login Excel and input Excel files.");
+      return;
+    }
+
+    resetRunState("Starting Blue Shield scraper...");
+
+    const formData = new FormData();
+    formData.append("portalId", "blue-shield");
+    formData.append("group", blueShieldGroup);
+    formData.append("credentialExcel", blueShieldCredentialFile);
+    formData.append("inputExcel", blueShieldInputFile);
+    formData.append("checkpointId", blueShieldInputFile.name || "blue-shield");
+    formData.append("resetCheckpoint", blueShieldResetCheckpoint ? "true" : "false");
+
+    let hasError = false;
+    let finalErrorMessage = "";
+    const streamAbortController = new AbortController();
+
+    const handleJobEvent = async (eventData: ScrapeJobEvent) => {
+      if (eventData.type === "log" && eventData.message) {
+        setLogs((prev) => [...prev, eventData.message ?? ""]);
+      } else if (eventData.type === "progress" && typeof eventData.completed === "number" && typeof eventData.total === "number") {
+        setProgress({ completed: eventData.completed, total: eventData.total });
+      } else if (eventData.type === "error_screenshot" && typeof eventData.index === "number" && eventData.image) {
+        setErrorScreenshots((prev) => [...prev, { index: eventData.index ?? -1, image: eventData.image ?? "" }]);
+      } else if (eventData.type === "file_download" && eventData.filename && eventData.base64) {
+        downloadBase64File(eventData.filename, eventData.base64, eventData.mimeType || "application/octet-stream");
+        setStatus(`Downloaded ${eventData.filename}`);
+      } else if (eventData.type === "warning" && eventData.message) {
+        setLogs((prev) => [...prev, eventData.message ?? ""]);
+        setStatus(eventData.message);
+      } else if (eventData.type === "error" && eventData.message) {
+        finalErrorMessage = eventData.message;
+        setLogs((prev) => [...prev, `ERROR: ${eventData.message}`]);
+        setStatus(`Error: ${eventData.message}`);
+        hasError = true;
+      }
+    };
+
+    try {
+      const jobId = await startScrapeJob(formData);
+      await subscribeToScrapeJobEvents({
+        jobId,
+        signal: streamAbortController.signal,
+        onEvent: handleJobEvent,
+        onStreamError(error) {
+          console.error("Blue Shield stream error:", error);
+          finalErrorMessage = getErrorMessage(error);
+          setLogs((prev) => [...prev, `STREAM ERROR: ${finalErrorMessage}`]);
+          setStatus(`Stream error: ${finalErrorMessage}`);
+          hasError = true;
+        },
+      });
+      setStatus(
+        hasError
+          ? `Blue Shield processing finished with errors${finalErrorMessage ? `: ${finalErrorMessage}` : "."}`
+          : "Blue Shield processing completed.",
+      );
+    } catch (error) {
+      setStatus(`Failed to process Blue Shield claims: ${getErrorMessage(error)}`);
+    } finally {
+      setIsProcessing(false);
+    }
+  }
+
   return (
     <main className="min-h-screen bg-slate-50 px-4 py-12 text-slate-900">
       <div className="mx-auto w-full max-w-3xl rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
@@ -368,7 +450,7 @@ export function ScraperPage() {
             <p className="mt-2 text-sm text-slate-600">Choose the portal scraper you want to run.</p>
 
             <div className="mt-6 grid gap-4 sm:grid-cols-2">
-              {([iehpFrontendPortalConfig, aerialFrontendPortalConfig] as const).map((portal) => (
+              {([iehpFrontendPortalConfig, aerialFrontendPortalConfig, blueShieldFrontendPortalConfig] as const).map((portal) => (
                 <button
                   key={portal.id}
                   type="button"
@@ -423,7 +505,7 @@ export function ScraperPage() {
             />
             <IehpResultView errorScreenshots={errorScreenshots} logs={logs} progress={progress} status={status} />
           </>
-        ) : (
+        ) : selectedPortalId === "aerial" ? (
           <>
             <AerialInputForm
               canSubmit={canSubmitAerial}
@@ -433,6 +515,21 @@ export function ScraperPage() {
               onSubmit={submitAerial}
             />
             <AerialResultView errorScreenshots={errorScreenshots} logs={logs} progress={progress} status={status} />
+          </>
+        ) : (
+          <>
+            <BlueShieldInputForm
+              canSubmit={canSubmitBlueShield}
+              group={blueShieldGroup}
+              isProcessing={isProcessing}
+              resetCheckpoint={blueShieldResetCheckpoint}
+              onCredentialFileChange={setBlueShieldCredentialFile}
+              onGroupChange={setBlueShieldGroup}
+              onInputFileChange={setBlueShieldInputFile}
+              onResetCheckpointChange={setBlueShieldResetCheckpoint}
+              onSubmit={submitBlueShield}
+            />
+            <BlueShieldResultView errorScreenshots={errorScreenshots} logs={logs} progress={progress} status={status} />
           </>
         )}
           </>
