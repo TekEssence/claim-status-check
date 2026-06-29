@@ -1,0 +1,41 @@
+# Project requirements
+#
+# This is a Node.js / Next.js / TypeScript project, not a Python project.
+# Install dependencies with:
+#
+#   npm install
+#
+# Run locally with:
+#
+#   npm run dev
+#
+# Main runtime requirements:
+# - Node.js 20 or newer recommended
+# - npm
+# - Chrome or Chromium for local Playwright browser automation
+# - VPN / private-network access when required by the target portal
+# - Shared MFA mailbox access for mfa_automation@opusbpo.com
+#
+# Application dependencies are managed in package.json:
+# - @microsoft/fetch-event-source ^2.0.1
+# - @sparticuz/chromium ^148.0.0
+# - exceljs ^4.4.0
+# - next 16.2.4
+# - pdf-lib ^1.17.1
+# - playwright-core ^1.59.1
+# - react 19.2.4
+# - react-dom 19.2.4
+# - unpdf ^1.6.2
+# - xlsx ^0.18.5
+#
+# Development dependencies:
+# - @tailwindcss/postcss ^4
+# - @types/node ^20
+# - @types/react ^19
+# - @types/react-dom ^19
+# - eslint ^9
+# - eslint-config-next 16.2.4
+# - playwright ^1.59.1
+# - tailwindcss ^4
+# - tsx ^4.22.0
+# - typescript ^5

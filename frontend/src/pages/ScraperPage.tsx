@@ -18,6 +18,9 @@ import { aerialFrontendPortalConfig } from "../portals/aerial/portal-config";
 import { RegalInputForm } from "../portals/regal/RegalInputForm";
 import { RegalResultView } from "../portals/regal/RegalResultView";
 import { regalFrontendPortalConfig } from "../portals/regal/portal-config";
+import { BlueShieldInputForm } from "../portals/blue-shield/BlueShieldInputForm";
+import { BlueShieldResultView } from "../portals/blue-shield/BlueShieldResultView";
+import { blueShieldFrontendPortalConfig } from "../portals/blue-shield/portal-config";
 
 type AuthUser = {
   userId: string;
@@ -43,7 +46,7 @@ type IehpWorkbookBundle = {
   worksheet: ExcelJS.Worksheet;
 };
 
-export type PortalId = "iehp" | "aerial" | "regal";
+export type PortalId = "iehp" | "aerial" | "regal" | "blue-shield";
 
 const SELECTED_PORTAL_STORAGE_KEY = "iehp-selected-portal";
 const DOWNLOADED_ARTIFACTS_PREFIX = "iehp-downloaded-artifacts:";
@@ -51,6 +54,7 @@ const PORTAL_ROUTE_MAP: Record<PortalId, string> = {
   iehp: "/iehp",
   aerial: "/aerial",
   regal: "/regal",
+  "blue-shield": "/blue-shield",
 };
 
 function getErrorMessage(error: unknown): string {
@@ -281,6 +285,10 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
   const [claimFileName, setClaimFileName] = useState<string>("");
   const [aerialCredentialFile, setAerialCredentialFile] = useState<File | null>(null);
   const [aerialInputFile, setAerialInputFile] = useState<File | null>(null);
+  const [blueShieldCredentialFile, setBlueShieldCredentialFile] = useState<File | null>(null);
+  const [blueShieldInputFile, setBlueShieldInputFile] = useState<File | null>(null);
+  const [blueShieldGroup, setBlueShieldGroup] = useState("Posada");
+  const [blueShieldResetCheckpoint, setBlueShieldResetCheckpoint] = useState(false);
   const [regalLoginFile, setRegalLoginFile] = useState<File | null>(null);
   const [regalClaimFile, setRegalClaimFile] = useState<File | null>(null);
   const [regalJobId, setRegalJobId] = useState<string>("");
@@ -302,7 +310,9 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
         ? aerialFrontendPortalConfig
         : effectivePortalId === "regal"
           ? regalFrontendPortalConfig
-          : null;
+          : effectivePortalId === "blue-shield"
+            ? blueShieldFrontendPortalConfig
+            : null;
   const canSubmitIehp = useMemo(
     () => Boolean(iehpLoginFile && claimFileHandle && !isProcessing),
     [iehpLoginFile, claimFileHandle, isProcessing],
@@ -314,6 +324,10 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
   const canSubmitRegal = useMemo(
     () => Boolean(regalClaimFile && !isProcessing),
     [regalClaimFile, isProcessing],
+  );
+  const canSubmitBlueShield = useMemo(
+    () => Boolean(blueShieldCredentialFile && blueShieldInputFile && !isProcessing),
+    [blueShieldCredentialFile, blueShieldInputFile, isProcessing],
   );
 
   function navigateToPortalRoute(portalId: PortalId) {
@@ -418,6 +432,8 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
           await reconnectAerialRun(currentJob);
         } else if (currentJob.portalId === "regal") {
           await reconnectRegalRun(currentJob);
+        } else if (currentJob.portalId === "blue-shield") {
+          await reconnectBlueShieldRun(currentJob);
         }
       } catch (error) {
         if (!cancelled) {
@@ -456,7 +472,7 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
 
     try {
       const storedPortalId = window.localStorage.getItem(SELECTED_PORTAL_STORAGE_KEY);
-      if (storedPortalId === "iehp" || storedPortalId === "aerial" || storedPortalId === "regal") {
+      if (storedPortalId === "iehp" || storedPortalId === "aerial" || storedPortalId === "regal" || storedPortalId === "blue-shield") {
         setSelectedPortalId(storedPortalId);
         navigateToPortalRoute(storedPortalId);
       }
@@ -637,6 +653,10 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
     setClaimFileName("");
     setAerialCredentialFile(null);
     setAerialInputFile(null);
+    setBlueShieldCredentialFile(null);
+    setBlueShieldInputFile(null);
+    setBlueShieldGroup("Posada");
+    setBlueShieldResetCheckpoint(false);
     setIsProcessing(false);
     setStatus("");
     setLogs([]);
@@ -1052,6 +1072,74 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
     }
   }
 
+
+
+  async function reconnectBlueShieldRun(currentJob: CurrentScrapeJob) {
+    setIsProcessing(true);
+    setSelectedPortalId("blue-shield");
+    setLogs(currentJob.logs ?? []);
+    setErrorScreenshots(
+      (currentJob.artifacts ?? [])
+        .filter((artifact) => artifact.artifactType === "error_screenshot" && artifact.contentBase64)
+        .map((artifact) => ({
+          index: artifact.rowIndex ?? -1,
+          image: artifact.contentBase64 ?? "",
+        })),
+    );
+    setProgress(currentJob.totalRows > 0 ? { completed: currentJob.currentCompleted, total: currentJob.totalRows } : null);
+    setStatus("Reconnecting to current Blue Shield run...");
+
+    let hasError = false;
+    let finalErrorMessage = "";
+    const streamAbortController = new AbortController();
+
+    try {
+      await subscribeToScrapeJobEvents({
+        jobId: currentJob.jobId,
+        signal: streamAbortController.signal,
+        onEvent: async (eventData) => {
+          if (eventData.type === "log" && eventData.message) {
+            setLogs((prev) => [...prev, eventData.message ?? ""]);
+          } else if (eventData.type === "progress" && typeof eventData.completed === "number" && typeof eventData.total === "number") {
+            setProgress({ completed: eventData.completed, total: eventData.total });
+          } else if (eventData.type === "error_screenshot" && typeof eventData.index === "number" && eventData.image) {
+            setErrorScreenshots((prev) => [...prev, { index: eventData.index ?? -1, image: eventData.image ?? "" }]);
+          } else if (eventData.type === "file_download" && eventData.filename && eventData.base64) {
+            const artifactKey = buildDownloadArtifactKey(eventData);
+            if (!hasDownloadedArtifact(currentJob.jobId, artifactKey)) {
+              downloadBase64File(eventData.filename, eventData.base64, eventData.mimeType || "application/octet-stream");
+              rememberDownloadedArtifact(currentJob.jobId, artifactKey);
+              setStatus(`Downloaded ${eventData.filename}`);
+            }
+          } else if (eventData.type === "warning" && eventData.message) {
+            setLogs((prev) => [...prev, eventData.message ?? ""]);
+            setStatus(eventData.message);
+          } else if (eventData.type === "error" && eventData.message) {
+            finalErrorMessage = eventData.message;
+            setLogs((prev) => [...prev, `ERROR: ${eventData.message}`]);
+            setStatus(`Error: ${eventData.message}`);
+            hasError = true;
+          }
+        },
+        onStreamError(error) {
+          console.error("Blue Shield stream error:", error);
+          finalErrorMessage = getErrorMessage(error);
+          setLogs((prev) => [...prev, `STREAM ERROR: ${finalErrorMessage}`]);
+          setStatus(`Stream error: ${finalErrorMessage}`);
+          hasError = true;
+        },
+      });
+
+      setStatus(
+        hasError
+          ? `Blue Shield processing finished with errors${finalErrorMessage ? `: ${finalErrorMessage}` : "."}`
+          : "Blue Shield processing completed.",
+      );
+    } finally {
+      setIsProcessing(false);
+    }
+  }
+
   async function reconnectRegalRun(currentJob: CurrentScrapeJob) {
     setIsProcessing(true);
     setSelectedPortalId("regal");
@@ -1245,6 +1333,83 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
       );
     } catch (error) {
       setStatus(`Failed to process Aerial claims: ${getErrorMessage(error)}`);
+    } finally {
+      setIsProcessing(false);
+    }
+  }
+
+
+
+  async function submitBlueShield(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+
+    if (!blueShieldCredentialFile || !blueShieldInputFile) {
+      setStatus("Please provide both the Blue Shield login Excel and input Excel files.");
+      return;
+    }
+
+    resetRunState("Starting Blue Shield scraper...");
+
+    const formData = new FormData();
+    formData.append("portalId", "blue-shield");
+    formData.append("group", blueShieldGroup);
+    formData.append("credentialExcel", blueShieldCredentialFile);
+    formData.append("inputExcel", blueShieldInputFile);
+    formData.append("checkpointId", blueShieldInputFile.name || "blue-shield");
+    formData.append("resetCheckpoint", blueShieldResetCheckpoint ? "true" : "false");
+
+    let hasError = false;
+    let finalErrorMessage = "";
+    let subscribedJobId = "";
+    const streamAbortController = new AbortController();
+
+    const handleJobEvent = async (eventData: ScrapeJobEvent) => {
+      if (eventData.type === "log" && eventData.message) {
+        setLogs((prev) => [...prev, eventData.message ?? ""]);
+      } else if (eventData.type === "progress" && typeof eventData.completed === "number" && typeof eventData.total === "number") {
+        setProgress({ completed: eventData.completed, total: eventData.total });
+      } else if (eventData.type === "error_screenshot" && typeof eventData.index === "number" && eventData.image) {
+        setErrorScreenshots((prev) => [...prev, { index: eventData.index ?? -1, image: eventData.image ?? "" }]);
+      } else if (eventData.type === "file_download" && eventData.filename && eventData.base64) {
+        const artifactKey = buildDownloadArtifactKey(eventData);
+        if (!hasDownloadedArtifact(subscribedJobId, artifactKey)) {
+          downloadBase64File(eventData.filename, eventData.base64, eventData.mimeType || "application/octet-stream");
+          rememberDownloadedArtifact(subscribedJobId, artifactKey);
+          setStatus(`Downloaded ${eventData.filename}`);
+        }
+      } else if (eventData.type === "warning" && eventData.message) {
+        setLogs((prev) => [...prev, eventData.message ?? ""]);
+        setStatus(eventData.message);
+      } else if (eventData.type === "error" && eventData.message) {
+        finalErrorMessage = eventData.message;
+        setLogs((prev) => [...prev, `ERROR: ${eventData.message}`]);
+        setStatus(`Error: ${eventData.message}`);
+        hasError = true;
+      }
+    };
+
+    try {
+      const jobId = await startScrapeJob(formData);
+      subscribedJobId = jobId;
+      await subscribeToScrapeJobEvents({
+        jobId,
+        signal: streamAbortController.signal,
+        onEvent: handleJobEvent,
+        onStreamError(error) {
+          console.error("Blue Shield stream error:", error);
+          finalErrorMessage = getErrorMessage(error);
+          setLogs((prev) => [...prev, `STREAM ERROR: ${finalErrorMessage}`]);
+          setStatus(`Stream error: ${finalErrorMessage}`);
+          hasError = true;
+        },
+      });
+      setStatus(
+        hasError
+          ? `Blue Shield processing finished with errors${finalErrorMessage ? `: ${finalErrorMessage}` : "."}`
+          : "Blue Shield processing completed.",
+      );
+    } catch (error) {
+      setStatus(`Failed to process Blue Shield claims: ${getErrorMessage(error)}`);
     } finally {
       setIsProcessing(false);
     }
@@ -1735,7 +1900,7 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
               <p className="mt-2 text-sm text-slate-600">Choose the portal scraper you want to run.</p>
 
               <div className="mt-6 grid gap-4 sm:grid-cols-2">
-                {([iehpFrontendPortalConfig, aerialFrontendPortalConfig, regalFrontendPortalConfig] as const).map((portal) => (
+                {([iehpFrontendPortalConfig, aerialFrontendPortalConfig, regalFrontendPortalConfig, blueShieldFrontendPortalConfig] as const).map((portal) => (
                   <button
                     key={portal.id}
                     type="button"
@@ -1786,7 +1951,7 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
                   />
                   <AerialResultView errorScreenshots={errorScreenshots} logs={logs} progress={progress} status={status} />
                 </>
-              ) : (
+              ) : effectivePortalId === "regal" ? (
                 <>
                   <RegalInputForm
                     canSubmit={canSubmitRegal}
@@ -1805,6 +1970,21 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
                     progress={progress}
                     status={status}
                   />
+                </>
+              ) : (
+                <>
+                  <BlueShieldInputForm
+                    canSubmit={canSubmitBlueShield}
+                    group={blueShieldGroup}
+                    isProcessing={isProcessing}
+                    resetCheckpoint={blueShieldResetCheckpoint}
+                    onCredentialFileChange={setBlueShieldCredentialFile}
+                    onGroupChange={setBlueShieldGroup}
+                    onInputFileChange={setBlueShieldInputFile}
+                    onResetCheckpointChange={setBlueShieldResetCheckpoint}
+                    onSubmit={submitBlueShield}
+                  />
+                  <BlueShieldResultView errorScreenshots={errorScreenshots} logs={logs} progress={progress} status={status} />
                 </>
               )}
             </>
