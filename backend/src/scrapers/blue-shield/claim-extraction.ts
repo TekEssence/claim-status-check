@@ -25,6 +25,7 @@ type BlueShieldDetailData = {
     providerNumber: string;
     nationalProviderIdentifier: string;
     ipaMedGroup: string;
+    planType: string;
     amountBilled: string;
     allowedAmount: string;
     patientResponsibility: string;
@@ -428,6 +429,7 @@ function emptyDetailData(): BlueShieldDetailData {
       providerNumber: "",
       nationalProviderIdentifier: "",
       ipaMedGroup: "",
+      planType: "",
       amountBilled: "",
       allowedAmount: "",
       patientResponsibility: "",
@@ -687,10 +689,16 @@ async function extractDetailData(page: Page, text: string): Promise<BlueShieldDe
     "National Provider Identifier (NPI)",
     "NPI",
     "IPA/Med group",
+    "Plan type",
+    "Plan Type",
     "Amount billed",
     "Allowed amount",
     "Patient responsibility",
     "Amount paid",
+  ]);
+  const memberDetails = await extractKeyValueSection(page, "Member details", [
+    "Plan type",
+    "Plan Type",
   ]);
   const paymentDetails = await extractKeyValueSection(page, "Payment details", [
     "Check/EFT number",
@@ -711,6 +719,12 @@ async function extractDetailData(page: Page, text: string): Promise<BlueShieldDe
       claimDetails.NPI ||
       valueAfterLabel(text, ["National Provider Identifier (NPI)", "NPI"]),
     ipaMedGroup: claimDetails["IPA/Med group"] || valueAfterLabel(text, ["IPA/Med group", "IPA Med group"]),
+    planType:
+      memberDetails["Plan type"] ||
+      memberDetails["Plan Type"] ||
+      claimDetails["Plan type"] ||
+      claimDetails["Plan Type"] ||
+      valueAfterLabel(text, ["Plan type", "Plan Type"]),
     amountBilled: claimDetails["Amount billed"] || valueAfterLabel(text, ["Amount billed"]),
     allowedAmount: claimDetails["Allowed amount"] || valueAfterLabel(text, ["Allowed amount"]),
     patientResponsibility: claimDetails["Patient responsibility"] || valueAfterLabel(text, ["Patient responsibility"]),
@@ -801,6 +815,7 @@ function extractClaimDetails(args: {
     providerNumber: detailData.claim.providerNumber,
     nationalProviderIdentifier: detailData.claim.nationalProviderIdentifier,
     ipaMedGroup: detailData.claim.ipaMedGroup,
+    planType: detailData.claim.planType,
     detailAmountBilled: detailData.claim.amountBilled,
     allowedAmount: detailData.claim.allowedAmount,
     detailPatientResponsibility: detailData.claim.patientResponsibility,
@@ -861,14 +876,14 @@ async function openClaimFromRow(page: Page, row: Locator, resultRowData: BlueShi
       : await claimDetailTarget.count().catch(() => 0) > 0
         ? claimDetailTarget
         : clickableTargets.first();
-  const popupPromise = page.waitForEvent("popup", { timeout: 5000 }).catch(() => null);
+  const popupPromise = page.waitForEvent("popup", { timeout: 1200 }).catch(() => null);
   await target.click();
   const popup = await popupPromise;
   if (popup) {
-    await popup.waitForLoadState("networkidle", { timeout: 30000 }).catch(() => {});
+    await popup.waitForLoadState("domcontentloaded", { timeout: 10000 }).catch(() => {});
     return popup;
   }
-  await page.waitForLoadState("networkidle", { timeout: 30000 }).catch(() => {});
+  await page.waitForLoadState("domcontentloaded", { timeout: 10000 }).catch(() => {});
   const afterPages = page.context().pages();
   return afterPages.find((candidate) => !beforePages.includes(candidate)) ?? page;
 }
@@ -879,15 +894,15 @@ async function expandFullView(page: Page): Promise<void> {
     "a:has-text('Full view')",
     "[role='button']:has-text('Full view')",
   ].join(", ")).first();
-  if (!await fullView.isVisible({ timeout: 3000 }).catch(() => false)) {
+  if (!await fullView.isVisible({ timeout: 700 }).catch(() => false)) {
     return;
   }
 
   await fullView.click().catch(async () => {
     await fullView.click({ force: true, timeout: 5000 });
   });
-  await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
-  await page.waitForTimeout(750);
+  await page.waitForLoadState("domcontentloaded", { timeout: 8000 }).catch(() => {});
+  await page.waitForTimeout(200);
 }
 
 export async function extractAllBlueShieldClaims(options: {
@@ -960,7 +975,7 @@ export async function extractAllBlueShieldClaims(options: {
         if (detailPage && detailPage !== page) {
           await detailPage.close().catch(() => {});
         } else {
-          await page.goBack({ waitUntil: "networkidle", timeout: 15000 }).catch(() => {});
+          await page.goBack({ waitUntil: "domcontentloaded", timeout: 8000 }).catch(() => {});
         }
       }
     }
@@ -968,7 +983,8 @@ export async function extractAllBlueShieldClaims(options: {
     const next = page.locator(blueShieldConfig.selectors.nextResultsPage).first();
     if ((await next.count()) === 0 || !await next.isEnabled().catch(() => false)) break;
     await next.click();
-    await page.waitForLoadState("networkidle", { timeout: 30000 }).catch(() => {});
+    await page.waitForLoadState("domcontentloaded", { timeout: 10000 }).catch(() => {});
+    await page.locator(blueShieldConfig.selectors.resultRows).first().waitFor({ state: "visible", timeout: 10000 }).catch(() => {});
     resultPage++;
   }
 

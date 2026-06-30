@@ -49,6 +49,7 @@ type IehpWorkbookBundle = {
 export type PortalId = "iehp" | "aerial" | "regal" | "blue-shield";
 
 const SELECTED_PORTAL_STORAGE_KEY = "iehp-selected-portal";
+const SKIP_JOB_RESTORE_ONCE_KEY = "iehp-skip-job-restore-once";
 const DOWNLOADED_ARTIFACTS_PREFIX = "iehp-downloaded-artifacts:";
 const PORTAL_ROUTE_MAP: Record<PortalId, string> = {
   iehp: "/iehp",
@@ -56,6 +57,16 @@ const PORTAL_ROUTE_MAP: Record<PortalId, string> = {
   regal: "/regal",
   "blue-shield": "/blue-shield",
 };
+
+function isPortalId(value: string): value is PortalId {
+  return value === "iehp" || value === "aerial" || value === "regal" || value === "blue-shield";
+}
+
+function canRestoreCurrentJob(job: CurrentScrapeJob): job is CurrentScrapeJob & { portalId: PortalId } {
+  if (!isPortalId(job.portalId)) return false;
+  if (job.status === "running") return true;
+  return job.portalId === "iehp" && job.status === "waiting_resume";
+}
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -287,7 +298,7 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
   const [aerialInputFile, setAerialInputFile] = useState<File | null>(null);
   const [blueShieldCredentialFile, setBlueShieldCredentialFile] = useState<File | null>(null);
   const [blueShieldInputFile, setBlueShieldInputFile] = useState<File | null>(null);
-  const [blueShieldGroup, setBlueShieldGroup] = useState("Posada");
+  const [blueShieldGroup, setBlueShieldGroup] = useState("");
   const [blueShieldResetCheckpoint, setBlueShieldResetCheckpoint] = useState(false);
   const [regalLoginFile, setRegalLoginFile] = useState<File | null>(null);
   const [regalClaimFile, setRegalClaimFile] = useState<File | null>(null);
@@ -326,8 +337,8 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
     [regalClaimFile, isProcessing],
   );
   const canSubmitBlueShield = useMemo(
-    () => Boolean(blueShieldCredentialFile && blueShieldInputFile && !isProcessing),
-    [blueShieldCredentialFile, blueShieldInputFile, isProcessing],
+    () => Boolean(blueShieldCredentialFile && blueShieldInputFile && blueShieldGroup && !isProcessing),
+    [blueShieldCredentialFile, blueShieldInputFile, blueShieldGroup, isProcessing],
   );
 
   function navigateToPortalRoute(portalId: PortalId) {
@@ -368,12 +379,23 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
       return;
     }
 
+    try {
+      if (window.sessionStorage.getItem(SKIP_JOB_RESTORE_ONCE_KEY) === "true") {
+        window.sessionStorage.removeItem(SKIP_JOB_RESTORE_ONCE_KEY);
+        setJobRestoreLoading(false);
+        return;
+      }
+    } catch {
+      // Ignore storage failures.
+    }
+
     let cancelled = false;
 
     const restoreCurrentRun = async () => {
       try {
         const currentJob = await getCurrentScrapeJob();
         if (cancelled || !currentJob) return;
+        if (!canRestoreCurrentJob(currentJob)) return;
 
         setErrorScreenshots(
           (currentJob.artifacts ?? [])
@@ -390,8 +412,8 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
         );
         setStatus(`Reconnected to ${currentJob.portalId.toUpperCase()} run in progress...`);
         setIsProcessing(true);
-        setSelectedPortalId(currentJob.portalId as PortalId);
-        navigateToPortalRoute(currentJob.portalId as PortalId);
+        setSelectedPortalId(currentJob.portalId);
+        navigateToPortalRoute(currentJob.portalId);
         setActiveView("portal-selection");
 
         if (currentJob.portalId === "iehp") {
@@ -472,7 +494,7 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
 
     try {
       const storedPortalId = window.localStorage.getItem(SELECTED_PORTAL_STORAGE_KEY);
-      if (storedPortalId === "iehp" || storedPortalId === "aerial" || storedPortalId === "regal" || storedPortalId === "blue-shield") {
+      if (storedPortalId && isPortalId(storedPortalId)) {
         setSelectedPortalId(storedPortalId);
         navigateToPortalRoute(storedPortalId);
       }
@@ -510,9 +532,13 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
     setActiveView("portal-selection");
     setSettingsOpen(false);
     if (forcedPortalId) {
-      if (typeof window !== "undefined") {
-        window.location.assign("/");
+      try {
+        window.localStorage.removeItem(SELECTED_PORTAL_STORAGE_KEY);
+        window.sessionStorage.setItem(SKIP_JOB_RESTORE_ONCE_KEY, "true");
+      } catch {
+        // Ignore storage failures.
       }
+      router.push("/");
       return;
     }
     setSelectedPortalId(null);
@@ -655,7 +681,7 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
     setAerialInputFile(null);
     setBlueShieldCredentialFile(null);
     setBlueShieldInputFile(null);
-    setBlueShieldGroup("Posada");
+    setBlueShieldGroup("");
     setBlueShieldResetCheckpoint(false);
     setIsProcessing(false);
     setStatus("");

@@ -4,6 +4,38 @@ import { envText, loadBlueShieldEnvironment } from "./env";
 import type { BlueShieldCredentials, BlueShieldInput, BlueShieldInputRow, BlueShieldMemberWorkItem } from "./types";
 import { blueShieldConfig } from "./config";
 
+const MAIL_CONFIGURATION_SHEET_NAME = "mailconfigurations";
+const MAIL_CONFIGURATION_KEYS = new Set([
+  "SHARED_MFA_MAILBOX",
+  "PORTAL_BLUE_SHIELD_IUMG_MFA_OWNER_MAILBOXES",
+  "PORTAL_BLUE_SHIELD_POSADA_MFA_OWNER_MAILBOXES",
+  "PORTAL_BLUE_SHIELD_IPMG_MFA_OWNER_MAILBOXES",
+  "PORTAL_BLUE_SHIELD_NUR_MFA_OWNER_MAILBOXES",
+  "PORTAL_BLUE_SHIELD_WMGU_MFA_OWNER_MAILBOXES",
+  "PORTAL_BLUE_SHIELD_MFA_OWNER_MAILBOXES",
+  "PORTAL_BLUE_SHIELD_OTP_SENDER_DOMAINS",
+]);
+
+const IUMG_LOGIN_GROUP_KEY = normalizeGroupName("IUMG");
+const IUMG_LOGIN_SHARED_GROUP_KEYS = new Set([
+  "AHK",
+  "BPH",
+  "ESC",
+  "FASC",
+  "IENT",
+  "IUMG",
+  "KS-PC",
+  "LCS",
+  "MMG",
+  "NUR",
+  "SMHR",
+  "SSCE",
+  "TAJ",
+  "TAT",
+  "TWL",
+  "WMGU",
+].map(normalizeGroupName));
+
 function asText(value: unknown): string {
   if (value instanceof Date) {
     const month = String(value.getMonth() + 1).padStart(2, "0");
@@ -75,8 +107,45 @@ const DOS_ALIASES = [
   "Date Service",
 ];
 
+const CPT_ALIASES = [
+  "CPT",
+  "CPT Code",
+  "CPT_CODE",
+  "Procedure Code",
+  "Procedure",
+  "Proc Code",
+  "PROC_CODE",
+  "Service Code",
+  "HCPCS",
+  "HCPCS Code",
+];
+
 function normalizeGroupName(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, "");
+}
+
+function credentialGroupKeysForSelectedGroup(selectedGroup: string): string[] {
+  const selectedGroupKey = normalizeGroupName(selectedGroup);
+  return IUMG_LOGIN_SHARED_GROUP_KEYS.has(selectedGroupKey) && selectedGroupKey !== IUMG_LOGIN_GROUP_KEY
+    ? [selectedGroupKey, IUMG_LOGIN_GROUP_KEY]
+    : [selectedGroupKey];
+}
+
+function normalizeSheetName(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, "");
+}
+
+function normalizeEnvKey(value: string): string {
+  return value.trim().toUpperCase();
+}
+
+function splitEnvAssignment(value: string): [string, string] | null {
+  const separatorIndex = value.indexOf("=");
+  if (separatorIndex === -1) return null;
+  return [
+    normalizeEnvKey(value.slice(0, separatorIndex)),
+    value.slice(separatorIndex + 1).trim(),
+  ];
 }
 
 function normalizeMemberId(value: string): string {
@@ -94,19 +163,21 @@ function normalizeDosKey(value: string): string {
   return `${year}-${month}-${day}`;
 }
 
-function loadCredentialsFromWorkbook(buffer: ArrayBuffer, selectedGroup: string): BlueShieldCredentials | null {
+export function loadCredentialsFromWorkbook(buffer: ArrayBuffer, selectedGroup: string): BlueShieldCredentials | null {
   const workbook = XLSX.read(buffer, { type: "array" });
   const sheet = workbook.Sheets[workbook.SheetNames[0]];
   if (!sheet) return null;
 
   const rows = XLSX.utils.sheet_to_json(sheet) as Record<string, unknown>[];
-  const selectedGroupKey = normalizeGroupName(selectedGroup);
-  for (const row of rows) {
-    const group = findValue(row, ["Group", "Payer", "Portal", "Portal Group"]);
-    if (!group || normalizeGroupName(group) !== selectedGroupKey) {
-      continue;
-    }
+  const selectedGroupKeys = credentialGroupKeysForSelectedGroup(selectedGroup);
+  for (const selectedGroupKey of selectedGroupKeys) {
+    const row = rows.find((candidate) => {
+      const group = findValue(candidate, ["Group", "Payer", "Portal", "Portal Group"]);
+      return group && normalizeGroupName(group) === selectedGroupKey;
+    });
+    if (!row) continue;
 
+    const group = findValue(row, ["Group", "Payer", "Portal", "Portal Group"]);
     const loginUrl = normalizeUrl(findValue(row, ["URL", "Portal Link", "Login URL", "Blue Shield URL"]));
     const username = findValue(row, ["User Name", "Username", "PORTAL_BLUE_SHIELD_USERNAME"]);
     const password = findValue(row, ["Password", "PORTAL_BLUE_SHIELD_PASSWORD"]);
@@ -123,6 +194,29 @@ function loadCredentialsFromWorkbook(buffer: ArrayBuffer, selectedGroup: string)
   return null;
 }
 
+export function loadBlueShieldMailConfigurationFromWorkbook(buffer: ArrayBuffer): void {
+  const workbook = XLSX.read(buffer, { type: "array" });
+  const sheetName = workbook.SheetNames.find((name) => normalizeSheetName(name) === MAIL_CONFIGURATION_SHEET_NAME);
+  const sheet = sheetName ? workbook.Sheets[sheetName] : null;
+  if (!sheet) return;
+
+  const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "", raw: false }) as unknown[][];
+  for (const row of rows) {
+    const cells = row.map(asText);
+    const firstCell = cells[0] ?? "";
+    const secondCell = cells[1] ?? "";
+    const assignment = splitEnvAssignment(firstCell);
+    const key = assignment ? assignment[0] : normalizeEnvKey(firstCell);
+    const value = assignment ? assignment[1] : secondCell.trim();
+
+    if (!MAIL_CONFIGURATION_KEYS.has(key) || !value) {
+      continue;
+    }
+
+    process.env[key] = value;
+  }
+}
+
 async function loadOptionalWorkbookBuffer(file: FormDataEntryValue | null): Promise<ArrayBuffer | null> {
   return file instanceof File ? file.arrayBuffer() : null;
 }
@@ -135,6 +229,7 @@ function resolveCredentials(
     throw new Error("Missing Blue Shield login Excel file.");
   }
 
+  loadBlueShieldMailConfigurationFromWorkbook(credentialWorkbook);
   const workbookCredentials = loadCredentialsFromWorkbook(credentialWorkbook, selectedGroup);
   if (workbookCredentials) return workbookCredentials;
 
@@ -145,7 +240,7 @@ export async function parseBlueShieldInput(formData: FormData): Promise<BlueShie
   loadBlueShieldEnvironment();
   const credentialWorkbook = await loadOptionalWorkbookBuffer(formData.get("credentialExcel"));
   const inputExcel = formData.get("inputExcel");
-  const selectedGroup = asText(formData.get("group")) || "Posada";
+  const selectedGroup = asText(formData.get("group")) || "AST";
 
   if (!(inputExcel instanceof File)) {
     throw new Error("Missing Blue Shield input Excel file.");
@@ -174,6 +269,7 @@ export function readBlueShieldInputWorkbook(buffer: ArrayBuffer): BlueShieldInpu
     .map((row, index) => {
       const memberId = normalizeMemberId(findValue(row, MEMBER_ID_ALIASES));
       const dos = findValue(row, DOS_ALIASES);
+      const cptCode = findValue(row, CPT_ALIASES).replace(/\s+/g, "").trim();
       const missing = [
         !memberId ? "Member ID" : "",
         !dos ? "DOS" : "",
@@ -183,6 +279,7 @@ export function readBlueShieldInputWorkbook(buffer: ArrayBuffer): BlueShieldInpu
         inputRowId: index + 2,
         memberId,
         dos,
+        cptCode,
         validationStatus: missing.length ? "invalid" : "valid",
         validationMessage: missing.length ? `Missing ${missing.join(" and ")}.` : "",
       } satisfies BlueShieldInputRow;
@@ -195,10 +292,15 @@ export function createUniqueMemberWorkItems(rows: BlueShieldInputRow[]): BlueShi
   for (const row of rows.filter((inputRow) => inputRow.validationStatus === "valid")) {
     const memberId = normalizeMemberId(row.memberId);
     const dos = row.dos.trim();
-    const key = `${memberId.toUpperCase()}::${normalizeDosKey(dos)}`;
+    const key = memberId.toUpperCase();
     const existing = workItems.get(key);
     if (existing) {
-      existing.duplicateRowIds.push(row.inputRowId);
+      const dosKey = normalizeDosKey(dos);
+      const existingDosKeys = new Set(existing.dosValues.map(normalizeDosKey));
+      if (!existingDosKeys.has(dosKey)) {
+        existing.dosValues.push(dos);
+      }
+      existing.rowIds.push(row.inputRowId);
       continue;
     }
     workItems.set(key, { memberId, dosValues: [dos], rowIds: [row.inputRowId], duplicateRowIds: [] });

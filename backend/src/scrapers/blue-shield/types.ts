@@ -11,6 +11,7 @@ export type BlueShieldInputRow = Record<string, unknown> & {
   inputRowId: number;
   memberId: string;
   dos: string;
+  cptCode: string;
   validationStatus: "valid" | "invalid";
   validationMessage: string;
 };
@@ -52,6 +53,7 @@ export type BlueShieldClaimSummary = {
   providerNumber: string;
   nationalProviderIdentifier: string;
   ipaMedGroup: string;
+  planType: string;
   detailAmountBilled: string;
   allowedAmount: string;
   detailPatientResponsibility: string;
@@ -83,6 +85,28 @@ export type BlueShieldClaimSummary = {
   paidAmount: string;
   detailsText: string;
   sourceUrl: string;
+};
+
+export type BlueShieldOutputRow = {
+  inputRowId: number;
+  inputData: Record<string, unknown>;
+  botStatus: string;
+  botMessage: string;
+  botPlanType: string;
+  botClaimNumber: string;
+  botClaimStatus: string;
+  botProcedureCode: string;
+  botModifier: string;
+  botServiceLineNumber: string;
+  botServiceLineDatesOfService: string;
+  botAmountBilled: string;
+  botAllowedAmount: string;
+  botDeductible: string;
+  botCopay: string;
+  botCoInsurance: string;
+  botAmountPaid: string;
+  botClaimNotes: string;
+  finalStatus: string;
 };
 
 export type BlueShieldAuditRow = {

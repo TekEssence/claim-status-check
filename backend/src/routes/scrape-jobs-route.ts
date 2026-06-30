@@ -213,8 +213,19 @@ async function getNormalizedActiveScrapeJobForUser(userId: string) {
   if (!activeJob) return null;
 
   const inMemoryJob = getScrapeJob(activeJob.jobId);
+  if (activeJob.status === "waiting_resume" && activeJob.portalId !== "iehp") {
+    await updateScrapeJobSnapshot({
+      jobId: activeJob.jobId,
+      status: "failed",
+      currentCompleted: activeJob.currentCompleted,
+      totalRows: activeJob.totalRows,
+    }).catch(() => {});
+
+    return null;
+  }
+
   if (activeJob.status === "running" && !inMemoryJob) {
-    if (activeJob.totalRows > 0 && activeJob.currentCompleted < activeJob.totalRows) {
+    if (activeJob.portalId === "iehp" && activeJob.totalRows > 0 && activeJob.currentCompleted < activeJob.totalRows) {
       await updateScrapeJobSnapshot({
         jobId: activeJob.jobId,
         status: "waiting_resume",

@@ -47,7 +47,7 @@ async function visibleCount(page: Page, selector: string): Promise<number> {
 export async function navigateToBlueShieldClaimStatus(page: Page, credentials: BlueShieldCredentials): Promise<void> {
   await page.evaluate(() => window.scrollTo(0, 0)).catch(() => {});
   await page.goto(credentials.claimStatusUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
-  await page.waitForLoadState("networkidle", { timeout: 30000 }).catch(() => {});
+  await page.locator(blueShieldConfig.selectors.memberIdInput).first().waitFor({ state: "visible", timeout: 12000 }).catch(() => {});
   await assertNoSecurityBlock(page);
 
   if (await visibleCount(page, blueShieldConfig.selectors.memberIdInput) > 0) {
@@ -73,7 +73,7 @@ export async function navigateToBlueShieldClaimStatus(page: Page, credentials: B
   await claimStatusLink.waitFor({ state: "visible", timeout: 5000 }).catch(() => {});
   if (await claimStatusLink.isVisible().catch(() => false)) {
     await claimStatusLink.click();
-    await page.waitForLoadState("networkidle", { timeout: 30000 }).catch(() => {});
+    await page.locator(blueShieldConfig.selectors.memberIdInput).first().waitFor({ state: "visible", timeout: 12000 }).catch(() => {});
     await assertNoSecurityBlock(page);
   }
 
@@ -105,7 +105,7 @@ export async function searchBlueShieldClaims(options: {
   }
 
   await page.locator(selectors.searchSubmit).first().click();
-  await page.waitForLoadState("networkidle", { timeout: 30000 }).catch(() => {});
+  await page.locator(blueShieldConfig.selectors.resultRows).first().waitFor({ state: "visible", timeout: 15000 }).catch(() => {});
   await assertNoSecurityBlock(page);
 
   return { dosSearched: filledRange ? `${dosRange.start} - ${dosRange.end}` : dosRange.start };
