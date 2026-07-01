@@ -1,9 +1,12 @@
 import type { FormEvent } from "react";
+import { FileSpreadsheet, KeyRound, Play } from "lucide-react";
+import { PortalUploadCard } from "../../components/portal-workflow/PortalUploadCard";
 import type { FileSystemFileHandle } from "../../types/file-system-access";
 
 export function IehpInputForm({
   canSubmit,
   claimFileName,
+  loginFileName,
   isProcessing,
   isResumePending,
   onLoginFileChange,
@@ -12,6 +15,7 @@ export function IehpInputForm({
 }: {
   canSubmit: boolean;
   claimFileName: string;
+  loginFileName?: string;
   isProcessing: boolean;
   isResumePending?: boolean;
   onLoginFileChange: (file: File | null) => void;
@@ -19,46 +23,42 @@ export function IehpInputForm({
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
 }) {
   return (
-    <form className="mt-6 space-y-5" onSubmit={onSubmit}>
-      <div>
-        <label className="mb-2 block text-sm font-medium" htmlFor="loginExcel">
-          1. Provide Login excel
-        </label>
-        <input
-          id="loginExcel"
-          type="file"
+    <form className="space-y-5" onSubmit={onSubmit}>
+      <div className="grid gap-5 xl:grid-cols-2">
+        <PortalUploadCard
+          mode="file"
           accept=".xlsx,.xls,.csv"
-          onChange={(event) => onLoginFileChange(event.target.files?.[0] ?? null)}
-          className="block w-full rounded-md border border-slate-300 p-2 text-sm"
+          acceptedFormats=".xlsx, .xls, .csv"
+          description="Upload the IEHP login workbook to begin the secure claim status automation flow."
+          fileName={loginFileName}
+          icon={KeyRound}
+          inputId="loginExcel"
+          onFileSelect={onLoginFileChange}
+          sizeHint="10 MB"
+          title="Upload Login File"
+        />
+        <PortalUploadCard
+          mode="action"
+          acceptedFormats=".xlsx, .xls"
+          actionLabel="Select Claim File"
+          description="Choose the exact claims workbook that will be updated in place as processing continues."
+          fileName={claimFileName}
+          helperText="Browser file-system access keeps the workbook linked for live write-back updates."
+          icon={FileSpreadsheet}
+          onAction={() => void onSelectClaimFile()}
+          sizeHint="25 MB"
+          title="Upload Claim File"
         />
       </div>
-
-      <div>
-        <label className="mb-2 block text-sm font-medium">
-          2. Select Claim details sheet (Requires Chrome/Edge)
-        </label>
-        <div className="flex items-center gap-4">
-          <button
-            type="button"
-            onClick={() => void onSelectClaimFile()}
-            className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium hover:bg-slate-50"
-          >
-            Choose File
-          </button>
-          <span className="text-sm text-slate-600">
-            {claimFileName || "No file chosen"}
-          </span>
-        </div>
-        <p className="mt-1 text-xs text-slate-500">We will update this exact file as processing continues.</p>
-      </div>
-
       <button
         type="submit"
         disabled={!canSubmit}
-        className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:bg-slate-400"
+        className="inline-flex w-full items-center justify-center gap-2 rounded-[1.2rem] bg-[linear-gradient(90deg,#1f8bff_0%,#2563eb_44%,#2347ef_100%)] px-5 py-3.5 text-sm font-semibold text-white shadow-[0_18px_34px_rgba(37,99,235,0.24)] transition hover:shadow-[0_22px_40px_rgba(37,99,235,0.32)] disabled:cursor-not-allowed disabled:bg-slate-400 disabled:shadow-none"
       >
+        <Play className="h-4 w-4" strokeWidth={2.2} />
         {isProcessing ? "Processing..." : isResumePending ? "Allow And Continue" : "Start processing"}
       </button>
+      <p className="text-center text-sm text-slate-500">Estimated processing time: 2-5 minutes</p>
     </form>
   );
 }
