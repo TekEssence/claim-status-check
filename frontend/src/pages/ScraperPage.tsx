@@ -21,6 +21,9 @@ import { regalFrontendPortalConfig } from "../portals/regal/portal-config";
 import { BlueShieldInputForm } from "../portals/blue-shield/BlueShieldInputForm";
 import { BlueShieldResultView } from "../portals/blue-shield/BlueShieldResultView";
 import { blueShieldFrontendPortalConfig } from "../portals/blue-shield/portal-config";
+import { OptumProInputForm } from "../portals/optum-pro/OptumProInputForm";
+import { OptumProResultView } from "../portals/optum-pro/OptumProResultView";
+import { optumProFrontendPortalConfig } from "../portals/optum-pro/portal-config";
 
 type AuthUser = {
   userId: string;
@@ -46,7 +49,7 @@ type IehpWorkbookBundle = {
   worksheet: ExcelJS.Worksheet;
 };
 
-export type PortalId = "iehp" | "aerial" | "regal" | "blue-shield";
+export type PortalId = "iehp" | "aerial" | "regal" | "blue-shield" | "optum-pro";
 
 const SELECTED_PORTAL_STORAGE_KEY = "iehp-selected-portal";
 const DOWNLOADED_ARTIFACTS_PREFIX = "iehp-downloaded-artifacts:";
@@ -55,6 +58,7 @@ const PORTAL_ROUTE_MAP: Record<PortalId, string> = {
   aerial: "/aerial",
   regal: "/regal",
   "blue-shield": "/blue-shield",
+  "optum-pro": "/optum-pro",
 };
 
 function getErrorMessage(error: unknown): string {
@@ -294,6 +298,11 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
   const [regalJobId, setRegalJobId] = useState<string>("");
   const [regalOtpRequest, setRegalOtpRequest] = useState<{ inputName: string; label: string; message: string } | null>(null);
   const [regalOtpValue, setRegalOtpValue] = useState<string>("");
+  const [optumProLoginFile, setOptumProLoginFile] = useState<File | null>(null);
+  const [optumProInputFile, setOptumProInputFile] = useState<File | null>(null);
+  const [optumProJobId, setOptumProJobId] = useState<string>("");
+  const [optumProOtpRequest, setOptumProOtpRequest] = useState<{ inputName: string; label: string; message: string } | null>(null);
+  const [optumProOtpValue, setOptumProOtpValue] = useState<string>("");
   const [isProcessing, setIsProcessing] = useState(false);
   const [status, setStatus] = useState<string>("");
   const [logs, setLogs] = useState<string[]>([]);
@@ -312,7 +321,9 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
           ? regalFrontendPortalConfig
           : effectivePortalId === "blue-shield"
             ? blueShieldFrontendPortalConfig
-            : null;
+            : effectivePortalId === "optum-pro"
+              ? optumProFrontendPortalConfig
+              : null;
   const canSubmitIehp = useMemo(
     () => Boolean(iehpLoginFile && claimFileHandle && !isProcessing),
     [iehpLoginFile, claimFileHandle, isProcessing],
@@ -328,6 +339,10 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
   const canSubmitBlueShield = useMemo(
     () => Boolean(blueShieldCredentialFile && blueShieldInputFile && !isProcessing),
     [blueShieldCredentialFile, blueShieldInputFile, isProcessing],
+  );
+  const canSubmitOptumPro = useMemo(
+    () => Boolean(optumProLoginFile && optumProInputFile && !isProcessing),
+    [optumProLoginFile, optumProInputFile, isProcessing],
   );
 
   function navigateToPortalRoute(portalId: PortalId) {
@@ -434,6 +449,8 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
           await reconnectRegalRun(currentJob);
         } else if (currentJob.portalId === "blue-shield") {
           await reconnectBlueShieldRun(currentJob);
+        } else if (currentJob.portalId === "optum-pro") {
+          await reconnectOptumProRun(currentJob);
         }
       } catch (error) {
         if (!cancelled) {
@@ -472,7 +489,7 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
 
     try {
       const storedPortalId = window.localStorage.getItem(SELECTED_PORTAL_STORAGE_KEY);
-      if (storedPortalId === "iehp" || storedPortalId === "aerial" || storedPortalId === "regal" || storedPortalId === "blue-shield") {
+      if (storedPortalId === "iehp" || storedPortalId === "aerial" || storedPortalId === "regal" || storedPortalId === "blue-shield" || storedPortalId === "optum-pro") {
         setSelectedPortalId(storedPortalId);
         navigateToPortalRoute(storedPortalId);
       }
@@ -504,6 +521,9 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
     setRegalJobId("");
     setRegalOtpRequest(null);
     setRegalOtpValue("");
+    setOptumProJobId("");
+    setOptumProOtpRequest(null);
+    setOptumProOtpValue("");
   }
 
   function resetPortalSelection() {
@@ -528,6 +548,9 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
     setRegalJobId("");
     setRegalOtpRequest(null);
     setRegalOtpValue("");
+    setOptumProJobId("");
+    setOptumProOtpRequest(null);
+    setOptumProOtpValue("");
   }
 
   async function loadManagedUsers() {
@@ -657,6 +680,11 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
     setBlueShieldInputFile(null);
     setBlueShieldGroup("Posada");
     setBlueShieldResetCheckpoint(false);
+    setOptumProLoginFile(null);
+    setOptumProInputFile(null);
+    setOptumProJobId("");
+    setOptumProOtpRequest(null);
+    setOptumProOtpValue("");
     setIsProcessing(false);
     setStatus("");
     setLogs([]);
@@ -1189,6 +1217,55 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
     }
   }
 
+  async function reconnectOptumProRun(currentJob: CurrentScrapeJob) {
+    setIsProcessing(true);
+    setSelectedPortalId("optum-pro");
+    setOptumProJobId(currentJob.jobId);
+    setLogs(currentJob.logs ?? []);
+    setErrorScreenshots(
+      (currentJob.artifacts ?? [])
+        .filter((artifact) => artifact.artifactType === "error_screenshot" && artifact.contentBase64)
+        .map((artifact) => ({
+          index: artifact.rowIndex ?? -1,
+          image: artifact.contentBase64 ?? "",
+        })),
+    );
+    setProgress(currentJob.totalRows > 0 ? { completed: currentJob.currentCompleted, total: currentJob.totalRows } : null);
+    setStatus("Reconnecting to current Optum Pro processing run...");
+
+    let hasError = false;
+    let finalErrorMessage = "";
+    const streamAbortController = new AbortController();
+
+    try {
+      await subscribeToScrapeJobEvents({
+        jobId: currentJob.jobId,
+        signal: streamAbortController.signal,
+        onEvent: async (eventData) => {
+          await handleOptumProJobEvent(eventData, currentJob.jobId, (message) => {
+            finalErrorMessage = message;
+            hasError = true;
+          });
+        },
+        onStreamError(error) {
+          console.error("Optum Pro stream error:", error);
+          finalErrorMessage = getErrorMessage(error);
+          setLogs((prev) => [...prev, `STREAM ERROR: ${finalErrorMessage}`]);
+          setStatus(`Stream error: ${finalErrorMessage}`);
+          hasError = true;
+        },
+      });
+
+      setStatus(
+        hasError
+          ? `Optum Pro processing finished with errors${finalErrorMessage ? `: ${finalErrorMessage}` : "."}`
+          : "Optum Pro processing completed.",
+      );
+    } finally {
+      setIsProcessing(false);
+    }
+  }
+
   async function handleRegalJobEvent(
     eventData: ScrapeJobEvent,
     jobId: string,
@@ -1219,6 +1296,48 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
       const artifactKey = buildDownloadArtifactKey(eventData);
       if (!hasDownloadedArtifact(jobId, artifactKey)) {
         downloadTextFile(eventData.filename || `regal_debug_row_${eventData.index + 1}.html`, eventData.html, "text/html");
+        rememberDownloadedArtifact(jobId, artifactKey);
+      }
+    } else if (eventData.type === "warning" && eventData.message) {
+      setLogs((prev) => [...prev, eventData.message ?? ""]);
+      setStatus(eventData.message);
+    } else if (eventData.type === "error" && eventData.message) {
+      onError(eventData.message);
+      setLogs((prev) => [...prev, `ERROR: ${eventData.message}`]);
+      setStatus(`Error: ${eventData.message}`);
+    }
+  }
+
+  async function handleOptumProJobEvent(
+    eventData: ScrapeJobEvent,
+    jobId: string,
+    onError: (message: string) => void,
+  ) {
+    if (eventData.type === "log" && eventData.message) {
+      setLogs((prev) => [...prev, eventData.message ?? ""]);
+    } else if (eventData.type === "progress" && typeof eventData.completed === "number" && typeof eventData.total === "number") {
+      setProgress({ completed: eventData.completed, total: eventData.total });
+    } else if (eventData.type === "input_request" && eventData.inputName) {
+      setOptumProOtpRequest({
+        inputName: eventData.inputName,
+        label: eventData.label || "Enter Optum Pro verification code",
+        message: eventData.message || "Enter the One Healthcare ID text-message OTP.",
+      });
+      setOptumProOtpValue("");
+      setStatus(eventData.message || "Waiting for Optum Pro verification code.");
+    } else if (eventData.type === "error_screenshot" && typeof eventData.index === "number" && eventData.image) {
+      setErrorScreenshots((prev) => [...prev, { index: eventData.index ?? -1, image: eventData.image ?? "" }]);
+    } else if (eventData.type === "file_download" && eventData.filename && eventData.base64) {
+      const artifactKey = buildDownloadArtifactKey(eventData);
+      if (!hasDownloadedArtifact(jobId, artifactKey)) {
+        downloadBase64File(eventData.filename, eventData.base64, eventData.mimeType || "application/octet-stream");
+        rememberDownloadedArtifact(jobId, artifactKey);
+        setStatus(`Downloaded ${eventData.filename}`);
+      }
+    } else if (eventData.type === "debug_html" && typeof eventData.index === "number" && eventData.html) {
+      const artifactKey = buildDownloadArtifactKey(eventData);
+      if (!hasDownloadedArtifact(jobId, artifactKey)) {
+        downloadTextFile(eventData.filename || `optum_pro_debug_${eventData.index + 1}.html`, eventData.html, "text/html");
         rememberDownloadedArtifact(jobId, artifactKey);
       }
     } else if (eventData.type === "warning" && eventData.message) {
@@ -1484,6 +1603,76 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
       setStatus("Regal verification code submitted.");
     } catch (error) {
       setStatus(`Failed to submit Regal OTP: ${getErrorMessage(error)}`);
+    }
+  }
+
+  async function submitOptumPro(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+
+    if (!optumProLoginFile || !optumProInputFile) {
+      setStatus("Please provide both the Optum Pro login Excel and claim Excel files.");
+      return;
+    }
+
+    resetRunState("Starting Optum Pro processing...");
+
+    const formData = new FormData();
+    formData.append("portalId", "optum-pro");
+    formData.append("loginExcel", optumProLoginFile);
+    formData.append("inputExcel", optumProInputFile);
+    formData.append("loginFileName", optumProLoginFile.name);
+    formData.append("claimFileName", optumProInputFile.name);
+
+    let hasError = false;
+    let finalErrorMessage = "";
+    const streamAbortController = new AbortController();
+
+    try {
+      const jobId = await startScrapeJob(formData);
+      setOptumProJobId(jobId);
+      await subscribeToScrapeJobEvents({
+        jobId,
+        signal: streamAbortController.signal,
+        onEvent: async (eventData) => {
+          await handleOptumProJobEvent(eventData, jobId, (message) => {
+            finalErrorMessage = message;
+            hasError = true;
+          });
+        },
+        onStreamError(error) {
+          console.error("Optum Pro stream error:", error);
+          finalErrorMessage = getErrorMessage(error);
+          setLogs((prev) => [...prev, `STREAM ERROR: ${finalErrorMessage}`]);
+          setStatus(`Stream error: ${finalErrorMessage}`);
+          hasError = true;
+        },
+      });
+      setStatus(
+        hasError
+          ? `Optum Pro processing finished with errors${finalErrorMessage ? `: ${finalErrorMessage}` : "."}`
+          : "Optum Pro processing completed.",
+      );
+    } catch (error) {
+      setStatus(`Failed to process Optum Pro claims: ${getErrorMessage(error)}`);
+    } finally {
+      setIsProcessing(false);
+    }
+  }
+
+  async function submitOptumProOtp() {
+    if (!optumProJobId || !optumProOtpRequest || !optumProOtpValue.trim()) return;
+
+    try {
+      await submitScrapeJobInput({
+        jobId: optumProJobId,
+        inputName: optumProOtpRequest.inputName,
+        value: optumProOtpValue.trim(),
+      });
+      setOptumProOtpRequest(null);
+      setOptumProOtpValue("");
+      setStatus("Optum Pro verification code submitted.");
+    } catch (error) {
+      setStatus(`Failed to submit Optum Pro OTP: ${getErrorMessage(error)}`);
     }
   }
 
@@ -1900,7 +2089,7 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
               <p className="mt-2 text-sm text-slate-600">Choose the portal scraper you want to run.</p>
 
               <div className="mt-6 grid gap-4 sm:grid-cols-2">
-                {([iehpFrontendPortalConfig, aerialFrontendPortalConfig, regalFrontendPortalConfig, blueShieldFrontendPortalConfig] as const).map((portal) => (
+                {([iehpFrontendPortalConfig, aerialFrontendPortalConfig, regalFrontendPortalConfig, blueShieldFrontendPortalConfig, optumProFrontendPortalConfig] as const).map((portal) => (
                   <button
                     key={portal.id}
                     type="button"
@@ -1971,7 +2160,7 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
                     status={status}
                   />
                 </>
-              ) : (
+              ) : effectivePortalId === "blue-shield" ? (
                 <>
                   <BlueShieldInputForm
                     canSubmit={canSubmitBlueShield}
@@ -1985,6 +2174,26 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
                     onSubmit={submitBlueShield}
                   />
                   <BlueShieldResultView errorScreenshots={errorScreenshots} logs={logs} progress={progress} status={status} />
+                </>
+              ) : (
+                <>
+                  <OptumProInputForm
+                    canSubmit={canSubmitOptumPro}
+                    isProcessing={isProcessing}
+                    onInputFileChange={setOptumProInputFile}
+                    onLoginFileChange={setOptumProLoginFile}
+                    onSubmit={submitOptumPro}
+                  />
+                  <OptumProResultView
+                    errorScreenshots={errorScreenshots}
+                    logs={logs}
+                    onOtpChange={setOptumProOtpValue}
+                    onOtpSubmit={submitOptumProOtp}
+                    otpRequest={optumProOtpRequest}
+                    otpValue={optumProOtpValue}
+                    progress={progress}
+                    status={status}
+                  />
                 </>
               )}
             </>
