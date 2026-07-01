@@ -30,6 +30,14 @@ export type PersistentScrapeJobArtifact = {
   contentBase64?: string;
 };
 
+export type UserDashboardStats = {
+  availablePortals: number;
+  completedClaimsToday: number;
+  failedJobsToday: number;
+  portalsRunToday: number;
+  runningJobs: number;
+};
+
 let pool: Pool | null = null;
 let schemaReady: Promise<void> | null = null;
 const DB_CONNECT_TIMEOUT_MS = 5000;
@@ -359,4 +367,33 @@ export async function updateScrapeJobSnapshot(params: {
     `,
     [params.jobId, params.status ?? null, params.currentCompleted ?? null, params.totalRows ?? null],
   );
+}
+
+export async function getDashboardStatsForUser(userId: string, availablePortals: number): Promise<UserDashboardStats> {
+  const result = await queryWithRetry<{
+    completed_claims_today: string | number | null;
+    failed_jobs_today: string | number | null;
+    portals_run_today: string | number | null;
+    running_jobs: string | number | null;
+  }>(
+    `
+      SELECT
+        COALESCE(COUNT(DISTINCT portal_id) FILTER (WHERE created_at >= CURRENT_DATE), 0) AS portals_run_today,
+        COALESCE(SUM(current_completed) FILTER (WHERE status = 'completed' AND updated_at >= CURRENT_DATE), 0) AS completed_claims_today,
+        COALESCE(COUNT(*) FILTER (WHERE status = 'failed' AND updated_at >= CURRENT_DATE), 0) AS failed_jobs_today,
+        COALESCE(COUNT(*) FILTER (WHERE status IN ('running', 'waiting_resume')), 0) AS running_jobs
+      FROM iehp_scrape_jobs
+      WHERE user_id = $1
+    `,
+    [userId],
+  );
+
+  const row = result.rows[0];
+  return {
+    availablePortals,
+    completedClaimsToday: Number(row?.completed_claims_today ?? 0),
+    failedJobsToday: Number(row?.failed_jobs_today ?? 0),
+    portalsRunToday: Number(row?.portals_run_today ?? 0),
+    runningJobs: Number(row?.running_jobs ?? 0),
+  };
 }

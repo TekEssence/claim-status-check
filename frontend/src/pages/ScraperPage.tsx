@@ -60,6 +60,14 @@ type ManagedUser = {
   mustResetPassword: boolean;
 };
 
+type DashboardStatsData = {
+  availablePortals: number;
+  completedClaimsToday: number;
+  failedJobsToday: number;
+  portalsRunToday: number;
+  runningJobs: number;
+};
+
 type IehpWorkbookBundle = {
   claimRows: ClaimRow[];
   totalRows: number;
@@ -83,38 +91,23 @@ const PORTAL_UI_META: Record<
   {
     shortCode: string;
     logoClassName: string;
-    lastRun: string;
-    averageProcessingTime: string;
-    automationType: string;
   }
 > = {
   iehp: {
     shortCode: "IEHP",
     logoClassName: "bg-[linear-gradient(180deg,#dbeafe_0%,#bfdbfe_100%)] text-blue-700",
-    lastRun: "Today, 10:30 AM",
-    averageProcessingTime: "2.3 mins",
-    automationType: "Excel update",
   },
   aerial: {
     shortCode: "AC",
     logoClassName: "bg-[linear-gradient(180deg,#e0ecff_0%,#c7ddff_100%)] text-blue-700",
-    lastRun: "Today, 08:45 AM",
-    averageProcessingTime: "1.8 mins",
-    automationType: "Excel + server",
   },
   regal: {
     shortCode: "RP",
     logoClassName: "bg-[linear-gradient(180deg,#f3e8ff_0%,#e9d5ff_100%)] text-violet-700",
-    lastRun: "Yesterday, 04:12 PM",
-    averageProcessingTime: "3.0 mins",
-    automationType: "Web automation",
   },
   "blue-shield": {
     shortCode: "BS",
     logoClassName: "bg-[linear-gradient(180deg,#dbeafe_0%,#d9e8ff_100%)] text-blue-700",
-    lastRun: "Today, 11:05 AM",
-    averageProcessingTime: "2.7 mins",
-    automationType: "Excel upload",
   },
 };
 
@@ -392,6 +385,13 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
   const [progress, setProgress] = useState<JobProgressValue | null>(null);
   const [jobRestoreLoading, setJobRestoreLoading] = useState(true);
   const [pendingIehpRestoreJob, setPendingIehpRestoreJob] = useState<CurrentScrapeJob | null>(null);
+  const [dashboardStatsData, setDashboardStatsData] = useState<DashboardStatsData>({
+    availablePortals: 0,
+    completedClaimsToday: 0,
+    failedJobsToday: 0,
+    portalsRunToday: 0,
+    runningJobs: 0,
+  });
 
   const isProtectedRoute = pathname !== "/";
   const effectivePortalId = forcedPortalId ?? selectedPortalId;
@@ -431,41 +431,41 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
     () => [
       {
         label: "Available Portals",
-        value: String(availablePortals.length).padStart(2, "0"),
+        value: String(dashboardStatsData.availablePortals || availablePortals.length).padStart(2, "0"),
         note: "Ready to use",
         icon: Grid2x2,
         iconClassName: "bg-blue-50 text-blue-700",
       },
       {
-        label: "Today's Runs",
-        value: "128",
-        note: "Across all portals",
+        label: "Portals Run Today",
+        value: String(dashboardStatsData.portalsRunToday).padStart(2, "0"),
+        note: "Unique portals used",
         icon: PlayCircle,
         iconClassName: "bg-emerald-50 text-emerald-600",
       },
       {
         label: "Completed Claims",
-        value: "342",
+        value: String(dashboardStatsData.completedClaimsToday).padStart(2, "0"),
         note: "Today",
         icon: ShieldCheck,
         iconClassName: "bg-violet-50 text-violet-600",
       },
       {
         label: "Running Jobs",
-        value: isProcessing ? "01" : "06",
+        value: String(Math.max(dashboardStatsData.runningJobs, isProcessing ? 1 : 0)).padStart(2, "0"),
         note: "In progress",
         icon: TimerReset,
         iconClassName: "bg-amber-50 text-amber-600",
       },
       {
         label: "Failed Jobs",
-        value: "02",
+        value: String(dashboardStatsData.failedJobsToday).padStart(2, "0"),
         note: "Today",
         icon: ShieldAlert,
         iconClassName: "bg-rose-50 text-rose-600",
       },
     ],
-    [availablePortals.length, isProcessing],
+    [availablePortals.length, dashboardStatsData, isProcessing],
   );
   const userDisplayName = useMemo(() => {
     const raw = authUser?.email || authUser?.username || "Afrin";
@@ -745,6 +745,44 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
       // Ignore storage failures.
     }
   }, [authUser, selectedPortalId, forcedPortalId]);
+
+  useEffect(() => {
+    if (!authUser) {
+      setDashboardStatsData({
+        availablePortals: availablePortals.length,
+        completedClaimsToday: 0,
+        failedJobsToday: 0,
+        portalsRunToday: 0,
+        runningJobs: 0,
+      });
+      return;
+    }
+
+    let cancelled = false;
+
+    fetch("/api/dashboard/stats")
+      .then(async (response) => {
+        if (!response.ok) {
+          throw new Error(`Failed to load dashboard stats: ${response.status}`);
+        }
+        const data = (await response.json()) as { stats?: DashboardStatsData };
+        if (!cancelled && data.stats) {
+          setDashboardStatsData(data.stats);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setDashboardStatsData((current) => ({
+            ...current,
+            availablePortals: availablePortals.length,
+          }));
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [authUser, availablePortals.length]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -2617,20 +2655,6 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
                           <span className={`block ${portalLayout === "list" ? "flex-1" : ""}`}>
                             <span className={`${portalLayout === "grid" ? "mt-4" : ""} block text-base font-semibold tracking-[-0.03em] text-slate-950`}>{portal.name}</span>
                             <span className="mt-2 block text-[0.72rem] leading-5 text-slate-600">{portal.description}</span>
-                            <div className="mt-4 grid grid-cols-2 gap-x-3 gap-y-2 text-[0.68rem] text-slate-500">
-                              <div>
-                                <p className="font-medium text-slate-400">Last Run</p>
-                                <p className="mt-1 text-slate-600">{meta.lastRun}</p>
-                              </div>
-                              <div>
-                                <p className="font-medium text-slate-400">Avg Processing Time</p>
-                                <p className="mt-1 text-slate-600">{meta.averageProcessingTime}</p>
-                              </div>
-                              <div className="col-span-2">
-                                <p className="font-medium text-slate-400">Automation Type</p>
-                                <p className="mt-1 text-slate-600">{meta.automationType}</p>
-                              </div>
-                            </div>
                             <span className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-[0.9rem] bg-[linear-gradient(90deg,#1f8bff_0%,#2563eb_44%,#2347ef_100%)] px-3 py-2.5 text-sm font-medium text-white shadow-[0_14px_26px_rgba(37,99,235,0.22)]">
                               Open Portal
                               <span aria-hidden="true">&rarr;</span>
