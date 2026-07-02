@@ -336,6 +336,10 @@ function moneyValue(value: string): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function isDashValue(value: string): boolean {
+  return /^[-–—]+$/.test(normalizeText(value));
+}
+
 function computeClaimStatus(args: {
   detailAmountPaid: string;
   listAmountPaid: string;
@@ -347,6 +351,10 @@ function computeClaimStatus(args: {
   const lineNotes = args.lineNotes.toLowerCase();
   if (/\bden(?:ied|ial)\b/.test(lineNotes)) return "Denied";
   if (/\bpaid\b/.test(lineNotes) && !/\bnot\s+paid\b/.test(lineNotes)) return "Paid";
+
+  if (args.hasServiceLine && [args.serviceLineAmountPaid, args.serviceLineCoInsurance].some(isDashValue)) {
+    return "Claim pending";
+  }
 
   const paidAmount = args.hasServiceLine
     ? moneyValue(args.serviceLineAmountPaid)
@@ -361,17 +369,43 @@ function computeClaimStatus(args: {
   return hasZeroPaid || hasZeroCoInsurance ? "Denied" : "";
 }
 
+function isBlueShieldChromeText(value: string): boolean {
+  const normalized = normalizeText(value).toLowerCase();
+  return (
+    normalized.startsWith("skip to content") ||
+    normalized.includes("contact us site help") ||
+    normalized.includes("provider connection account") ||
+    normalized === "contact us" ||
+    normalized === "site help" ||
+    normalized === "provider connection" ||
+    normalized === "account eligibility"
+  );
+}
+
+function sanitizeClaimNoteLines(lines: string[]): string[] {
+  return lines
+    .map((line) => normalizeText(line))
+    .filter(Boolean)
+    .filter((line) => !/^there are no notes for this claim\.?$/i.test(line))
+    .filter((line) => !isBlueShieldChromeText(line));
+}
+
+function sanitizeClaimNotesText(value: string): string {
+  return sanitizeClaimNoteLines(value.split(/\r?\n/)).join(" ");
+}
+
 function noteForServiceLine(claimNotes: string, serviceLineNumber: string): string {
+  const cleanClaimNotes = sanitizeClaimNotesText(claimNotes);
   const lineNumber = serviceLineNumber.trim();
-  if (!claimNotes || !lineNumber) return claimNotes;
+  if (!cleanClaimNotes || !lineNumber) return cleanClaimNotes;
 
   const escapedLineNumber = lineNumber.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const linePattern = new RegExp(
     `\\bLINE\\s*(?:NUMBER\\s*)?#?\\s*${escapedLineNumber}\\b\\s*[:.-]?\\s*([\\s\\S]*?)(?=\\bLINE\\s*(?:NUMBER\\s*)?#?\\s*\\d+\\b|$)`,
     "i",
   );
-  const match = claimNotes.match(linePattern);
-  return normalizeText(match?.[1] ?? "") || claimNotes;
+  const match = cleanClaimNotes.match(linePattern);
+  return sanitizeClaimNotesText(match?.[1] ?? "") || cleanClaimNotes;
 }
 
 function dateKeysFromText(value: string): Set<string> {
@@ -386,6 +420,19 @@ function dateKeysFromText(value: string): Set<string> {
   return keys;
 }
 
+function dateRangesFromText(value: string): Array<{ start: string; end: string }> {
+  const ranges: Array<{ start: string; end: string }> = [];
+  const matches = value.matchAll(/\b(\d{1,2}\/\d{1,2}\/(?:\d{2}|\d{4}))\s*[-â€“]\s*(\d{1,2}\/\d{1,2}\/(?:\d{2}|\d{4}))\b/g);
+  for (const match of matches) {
+    const start = Array.from(dateKeysFromText(match[1]))[0];
+    const end = Array.from(dateKeysFromText(match[2]))[0];
+    if (start && end) {
+      ranges.push(start <= end ? { start, end } : { start: end, end: start });
+    }
+  }
+  return ranges;
+}
+
 function requestedDosKeys(workItem: BlueShieldMemberWorkItem, dosSearched: string): Set<string> {
   const keys = new Set<string>();
   for (const value of [...workItem.dosValues, dosSearched]) {
@@ -397,7 +444,12 @@ function requestedDosKeys(workItem: BlueShieldMemberWorkItem, dosSearched: strin
 function textMatchesRequestedDos(value: string, requestedKeys: Set<string>): boolean {
   if (!requestedKeys.size) return true;
   const candidateKeys = dateKeysFromText(value);
-  return Array.from(candidateKeys).some((key) => requestedKeys.has(key));
+  if (Array.from(candidateKeys).some((key) => requestedKeys.has(key))) return true;
+
+  const candidateRanges = dateRangesFromText(value);
+  return Array.from(requestedKeys).some((key) =>
+    candidateRanges.some((range) => key >= range.start && key <= range.end),
+  );
 }
 
 function serviceLineMatchesRequestedDos(serviceLine: BlueShieldServiceLine, requestedKeys: Set<string>): boolean {
@@ -657,6 +709,9 @@ async function extractClaimNotes(page: Page, text: string): Promise<string> {
     if (inNotes && /^there are no notes for this claim\.?$/i.test(line)) {
       return "";
     }
+    if (inNotes && isBlueShieldChromeText(line)) {
+      continue;
+    }
     if (inNotes && /^line\s*\d+/i.test(line)) {
       noteLines.push(line.toUpperCase().replace(/\s+/g, " "));
       continue;
@@ -668,15 +723,10 @@ async function extractClaimNotes(page: Page, text: string): Promise<string> {
 
   if (!noteLines.length) {
     const inlineNotes = sourceText.match(/Claim\s+notes?\s*([\s\S]*?)(?:Claim details|Payment details|Service and procedure details|$)/i)?.[1] ?? "";
-    return inlineNotes
-      .split(/\r?\n/)
-      .map((line) => normalizeText(line))
-      .filter((line) => !/^there are no notes for this claim\.?$/i.test(line))
-      .filter(Boolean)
-      .join(" ");
+    return sanitizeClaimNotesText(inlineNotes);
   }
 
-  return noteLines.filter(Boolean).join(" ");
+  return sanitizeClaimNoteLines(noteLines).join(" ");
 }
 
 async function extractDetailData(page: Page, text: string): Promise<BlueShieldDetailData> {
@@ -997,4 +1047,6 @@ export const blueShieldClaimExtractionTestHooks = {
   mergeServiceLineSources,
   parseServiceLinesFromRows,
   parseServiceLinesFromText,
+  sanitizeClaimNotesText,
+  textMatchesRequestedDos,
 };

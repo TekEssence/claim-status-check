@@ -300,6 +300,9 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
   const [blueShieldInputFile, setBlueShieldInputFile] = useState<File | null>(null);
   const [blueShieldGroup, setBlueShieldGroup] = useState("");
   const [blueShieldResetCheckpoint, setBlueShieldResetCheckpoint] = useState(false);
+  const [blueShieldJobId, setBlueShieldJobId] = useState<string>("");
+  const [blueShieldOtpRequest, setBlueShieldOtpRequest] = useState<{ inputName: string; label: string; message: string } | null>(null);
+  const [blueShieldOtpValue, setBlueShieldOtpValue] = useState<string>("");
   const [regalLoginFile, setRegalLoginFile] = useState<File | null>(null);
   const [regalClaimFile, setRegalClaimFile] = useState<File | null>(null);
   const [regalJobId, setRegalJobId] = useState<string>("");
@@ -526,6 +529,9 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
     setRegalJobId("");
     setRegalOtpRequest(null);
     setRegalOtpValue("");
+    setBlueShieldJobId("");
+    setBlueShieldOtpRequest(null);
+    setBlueShieldOtpValue("");
   }
 
   function resetPortalSelection() {
@@ -554,6 +560,9 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
     setRegalJobId("");
     setRegalOtpRequest(null);
     setRegalOtpValue("");
+    setBlueShieldJobId("");
+    setBlueShieldOtpRequest(null);
+    setBlueShieldOtpValue("");
   }
 
   async function loadManagedUsers() {
@@ -683,6 +692,9 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
     setBlueShieldInputFile(null);
     setBlueShieldGroup("");
     setBlueShieldResetCheckpoint(false);
+    setBlueShieldJobId("");
+    setBlueShieldOtpRequest(null);
+    setBlueShieldOtpValue("");
     setIsProcessing(false);
     setStatus("");
     setLogs([]);
@@ -1103,6 +1115,7 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
   async function reconnectBlueShieldRun(currentJob: CurrentScrapeJob) {
     setIsProcessing(true);
     setSelectedPortalId("blue-shield");
+    setBlueShieldJobId(currentJob.jobId);
     setLogs(currentJob.logs ?? []);
     setErrorScreenshots(
       (currentJob.artifacts ?? [])
@@ -1128,6 +1141,14 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
             setLogs((prev) => [...prev, eventData.message ?? ""]);
           } else if (eventData.type === "progress" && typeof eventData.completed === "number" && typeof eventData.total === "number") {
             setProgress({ completed: eventData.completed, total: eventData.total });
+          } else if (eventData.type === "input_request" && eventData.inputName) {
+            setBlueShieldOtpRequest({
+              inputName: eventData.inputName,
+              label: eventData.label || "Enter verification code",
+              message: eventData.message || "Enter the verification code sent by Blue Shield.",
+            });
+            setBlueShieldOtpValue("");
+            setStatus(eventData.message || "Waiting for Blue Shield verification code.");
           } else if (eventData.type === "error_screenshot" && typeof eventData.index === "number" && eventData.image) {
             setErrorScreenshots((prev) => [...prev, { index: eventData.index ?? -1, image: eventData.image ?? "" }]);
           } else if (eventData.type === "file_download" && eventData.filename && eventData.base64) {
@@ -1394,6 +1415,14 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
         setLogs((prev) => [...prev, eventData.message ?? ""]);
       } else if (eventData.type === "progress" && typeof eventData.completed === "number" && typeof eventData.total === "number") {
         setProgress({ completed: eventData.completed, total: eventData.total });
+      } else if (eventData.type === "input_request" && eventData.inputName) {
+        setBlueShieldOtpRequest({
+          inputName: eventData.inputName,
+          label: eventData.label || "Enter verification code",
+          message: eventData.message || "Enter the verification code sent by Blue Shield.",
+        });
+        setBlueShieldOtpValue("");
+        setStatus(eventData.message || "Waiting for Blue Shield verification code.");
       } else if (eventData.type === "error_screenshot" && typeof eventData.index === "number" && eventData.image) {
         setErrorScreenshots((prev) => [...prev, { index: eventData.index ?? -1, image: eventData.image ?? "" }]);
       } else if (eventData.type === "file_download" && eventData.filename && eventData.base64) {
@@ -1417,6 +1446,7 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
     try {
       const jobId = await startScrapeJob(formData);
       subscribedJobId = jobId;
+      setBlueShieldJobId(jobId);
       await subscribeToScrapeJobEvents({
         jobId,
         signal: streamAbortController.signal,
@@ -1438,6 +1468,23 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
       setStatus(`Failed to process Blue Shield claims: ${getErrorMessage(error)}`);
     } finally {
       setIsProcessing(false);
+    }
+  }
+
+  async function submitBlueShieldOtp() {
+    if (!blueShieldJobId || !blueShieldOtpRequest || !blueShieldOtpValue.trim()) return;
+
+    try {
+      await submitScrapeJobInput({
+        jobId: blueShieldJobId,
+        inputName: blueShieldOtpRequest.inputName,
+        value: blueShieldOtpValue.trim(),
+      });
+      setBlueShieldOtpRequest(null);
+      setBlueShieldOtpValue("");
+      setStatus("Blue Shield verification code submitted.");
+    } catch (error) {
+      setStatus(`Failed to submit Blue Shield OTP: ${getErrorMessage(error)}`);
     }
   }
 
@@ -2010,7 +2057,16 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
                     onResetCheckpointChange={setBlueShieldResetCheckpoint}
                     onSubmit={submitBlueShield}
                   />
-                  <BlueShieldResultView errorScreenshots={errorScreenshots} logs={logs} progress={progress} status={status} />
+                  <BlueShieldResultView
+                    errorScreenshots={errorScreenshots}
+                    logs={logs}
+                    onOtpChange={setBlueShieldOtpValue}
+                    onOtpSubmit={submitBlueShieldOtp}
+                    otpRequest={blueShieldOtpRequest}
+                    otpValue={blueShieldOtpValue}
+                    progress={progress}
+                    status={status}
+                  />
                 </>
               )}
             </>

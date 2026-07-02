@@ -205,6 +205,15 @@ function isPaidClaim(claim: BlueShieldClaimSummary): boolean {
   return moneyToNumber(paidAmount) > 0;
 }
 
+function isPendingClaim(claim: BlueShieldClaimSummary): boolean {
+  return /pending/i.test(claim.claimStatus);
+}
+
+function outputBotStatusForClaim(claim: BlueShieldClaimSummary): "Paid" | "Denied" | "Claim pending" {
+  if (isPendingClaim(claim)) return "Claim pending";
+  return isPaidClaim(claim) ? "Paid" : "Denied";
+}
+
 export function buildBlueShieldFinalStatus(row: BlueShieldInputRow, claim: BlueShieldClaimSummary): string {
   const dos = row.dos || claim.serviceLineDatesOfService || claim.detailDatesOfService || claim.datesOfService || "";
   const received = claim.receivedDate || claim.claimReceived || "";
@@ -216,6 +225,10 @@ export function buildBlueShieldFinalStatus(row: BlueShieldInputRow, claim: BlueS
     return `DOS ${dos}: Checked BSC portal claim received on ${received} paid on ${paidDate} paid amount ${paidAmount} EFT/Check # ${claim.checkEftNumber || ""}. Claim # ${claimNumber}.`;
   }
 
+  if (isPendingClaim(claim)) {
+    return `DOS ${dos}: Checked BSC portal claim received on ${received} claim pending. Claim# ${claimNumber}.`;
+  }
+
   const deniedDate = claim.listClaimStatusLastModified || claim.paidDate || claim.checkEftDate || "";
   const denialReason = cleanFinalStatusPart(claim.claimNotes || claim.claimStatus || "");
   const denialReasonSuffix = denialReason.endsWith(".") ? "" : ".";
@@ -223,14 +236,15 @@ export function buildBlueShieldFinalStatus(row: BlueShieldInputRow, claim: BlueS
 }
 
 function outputRowForClaim(row: BlueShieldInputRow, claim: BlueShieldClaimSummary, message = ""): BlueShieldOutputRow {
+  const botStatus = outputBotStatusForClaim(claim);
   return {
     inputRowId: row.inputRowId,
     inputData: inputData(row),
-    botStatus: claim.claimStatus || "Matched",
+    botStatus,
     botMessage: message,
     botPlanType: claim.planType || claim.ipaMedGroup,
     botClaimNumber: claim.claimNumber,
-    botClaimStatus: claim.claimStatus,
+    botClaimStatus: claim.claimStatus || botStatus,
     botProcedureCode: claim.procedureCode,
     botModifier: claim.modifier,
     botServiceLineNumber: claim.serviceLineNumber,
@@ -371,7 +385,7 @@ export async function runBlueShieldClaimStatusJob(formData: FormData, context: S
     page = contextHandle.pages()[0] ?? await contextHandle.newPage();
     attachBlueShieldDetectionMonitor(page);
 
-    await loginToBlueShield({ page, credentials: input.credentials, log });
+    await loginToBlueShield({ page, credentials: input.credentials, context, log });
 
     for (const member of workItems) {
       const currentWorkItemKey = workItemKey(member);

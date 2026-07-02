@@ -1,7 +1,8 @@
 import type { Page } from "playwright-core";
+import { waitForScrapeJobInput } from "@/backend/src/jobs/job-store";
+import type { ScraperContext } from "@/backend/src/scrapers/types";
 import { blueShieldConfig } from "./config";
 import { assertNoSecurityBlock } from "./detection-monitor";
-import { waitForBlueShieldOtp } from "./otp-service";
 import type { BlueShieldCredentials } from "./types";
 
 async function firstVisible(page: Page, selector: string) {
@@ -179,25 +180,25 @@ async function handleOptionalBookmarkPage(page: Page, log: (message: string) => 
   return false;
 }
 
-async function waitForManualOtpCompletion(page: Page, log: (message: string) => Promise<void>): Promise<void> {
-  await log("Blue Shield OTP page detected. Please enter the OTP manually in the visible browser.");
-  await Promise.race([
-    page.locator(blueShieldConfig.selectors.otpInput).first().waitFor({ state: "hidden", timeout: 300000 }).catch(() => {}),
-    page.locator(blueShieldConfig.selectors.otpContinue).first().waitFor({ state: "visible", timeout: 300000 }).catch(() => {}),
-    page.locator(blueShieldConfig.selectors.bookmarkProvider).first().waitFor({ state: "visible", timeout: 300000 }).catch(() => {}),
-    page.locator(blueShieldConfig.selectors.hamburgerMenu).first().waitFor({ state: "visible", timeout: 300000 }).catch(() => {}),
-  ]);
-  await page.waitForLoadState("networkidle", { timeout: 30000 }).catch(() => {});
-  await assertNoSecurityBlock(page);
-  await log("Manual Blue Shield OTP step completed or timed out; continuing.");
+async function requestBlueShieldOtpFromUser(context: ScraperContext, log: (message: string) => Promise<void>): Promise<string> {
+  await log("Blue Shield OTP page detected. Waiting for user to enter OTP in frontend. Timeout: 5 minutes.");
+  await context.emit({
+    type: "input_request",
+    inputName: "blue_shield_otp",
+    label: "Blue Shield OTP",
+    message: "Enter the Blue Shield verification code within 5 minutes.",
+    timeoutMs: 300000,
+  });
+  return waitForScrapeJobInput(context.jobId, "blue_shield_otp", 300000);
 }
 
 export async function loginToBlueShield(options: {
   page: Page;
   credentials: BlueShieldCredentials;
+  context: ScraperContext;
   log: (message: string) => Promise<void>;
 }): Promise<void> {
-  const { page, credentials, log } = options;
+  const { page, credentials, context, log } = options;
   const selectors = blueShieldConfig.selectors;
 
   await log(`Opening Blue Shield login URL: ${credentials.loginUrl}`);
@@ -235,19 +236,12 @@ export async function loginToBlueShield(options: {
 
   const otpInput = await waitForVisible(page, selectors.otpInput, 12000);
   if (otpInput) {
-    await waitForManualOtpCompletion(page, log);
-    /*
-    Auto-OTP flow is paused temporarily while OTP is entered manually.
-    Uncomment this block when automatic shared-mailbox OTP should be re-enabled.
-
-    await log("Blue Shield OTP page detected. Waiting for forwarded MFA email.");
-    const otp = await waitForBlueShieldOtp({ group: credentials.group, mailbox: credentials.mailbox, log });
+    const otp = await requestBlueShieldOtpFromUser(context, log);
     await otpInput.fill(otp);
     await page.locator(selectors.otpSubmit).first().click();
     await page.waitForLoadState("networkidle", { timeout: 30000 }).catch(() => {});
     await assertNoSecurityBlock(page);
     await log("Blue Shield OTP verification submitted.");
-    */
     await clickIfVisible(page, selectors.otpContinue, 5000);
     if (await handleOptionalBookmarkPage(page, log)) {
       await log("Blue Shield returned to bookmark page after OTP. Restarting from Provider login page.");
