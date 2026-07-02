@@ -9,18 +9,14 @@ import ExcelJS from "exceljs";
 import {
   Activity,
   CheckCheck,
-  Grid2x2,
   LayoutDashboard,
   LogOut,
-  PlayCircle,
-  ShieldAlert,
   ShieldEllipsis,
   Search,
-  Settings,
   ShieldCheck,
   SlidersHorizontal,
   Stethoscope,
-  TimerReset,
+  Users,
   Zap,
 } from "lucide-react";
 import claimStatusHeroImage from "../Assets/ChatGPT Image Jun 30, 2026, 12_47_57 PM.png";
@@ -343,7 +339,6 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
   const [authStatus, setAuthStatus] = useState("");
   const [authSubmitting, setAuthSubmitting] = useState(false);
   const [forgotPasswordMode, setForgotPasswordMode] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const [activeView, setActiveView] = useState<"portal-selection" | "manage-users" | "reset-password">("portal-selection");
   const [manageTab, setManageTab] = useState<"add" | "employees">("add");
   const [managedUsers, setManagedUsers] = useState<ManagedUser[]>([]);
@@ -379,12 +374,15 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
   const [regalOtpRequest, setRegalOtpRequest] = useState<{ inputName: string; label: string; message: string } | null>(null);
   const [regalOtpValue, setRegalOtpValue] = useState<string>("");
   const [isProcessing, setIsProcessing] = useState(false);
+  const [isCancellingJob, setIsCancellingJob] = useState(false);
   const [status, setStatus] = useState<string>("");
   const [logs, setLogs] = useState<string[]>([]);
   const [errorScreenshots, setErrorScreenshots] = useState<ErrorScreenshot[]>([]);
   const [progress, setProgress] = useState<JobProgressValue | null>(null);
+  const [activeJobId, setActiveJobId] = useState<string>("");
   const [jobRestoreLoading, setJobRestoreLoading] = useState(true);
   const [pendingIehpRestoreJob, setPendingIehpRestoreJob] = useState<CurrentScrapeJob | null>(null);
+  const [pendingBlueShieldRestoreJob, setPendingBlueShieldRestoreJob] = useState<CurrentScrapeJob | null>(null);
   const [dashboardStatsData, setDashboardStatsData] = useState<DashboardStatsData>({
     availablePortals: 0,
     completedClaimsToday: 0,
@@ -427,46 +425,6 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
     );
   }, [availablePortals, portalFilter, portalSearch, portalSort]);
   const recentPortals = useMemo(() => availablePortals.slice(0, 4), [availablePortals]);
-  const dashboardStats = useMemo(
-    () => [
-      {
-        label: "Available Portals",
-        value: String(dashboardStatsData.availablePortals || availablePortals.length).padStart(2, "0"),
-        note: "Ready to use",
-        icon: Grid2x2,
-        iconClassName: "bg-blue-50 text-blue-700",
-      },
-      {
-        label: "Portals Run Today",
-        value: String(dashboardStatsData.portalsRunToday).padStart(2, "0"),
-        note: "Unique portals used",
-        icon: PlayCircle,
-        iconClassName: "bg-emerald-50 text-emerald-600",
-      },
-      {
-        label: "Completed Claims",
-        value: String(dashboardStatsData.completedClaimsToday).padStart(2, "0"),
-        note: "Today",
-        icon: ShieldCheck,
-        iconClassName: "bg-violet-50 text-violet-600",
-      },
-      {
-        label: "Running Jobs",
-        value: String(Math.max(dashboardStatsData.runningJobs, isProcessing ? 1 : 0)).padStart(2, "0"),
-        note: "In progress",
-        icon: TimerReset,
-        iconClassName: "bg-amber-50 text-amber-600",
-      },
-      {
-        label: "Failed Jobs",
-        value: String(dashboardStatsData.failedJobsToday).padStart(2, "0"),
-        note: "Today",
-        icon: ShieldAlert,
-        iconClassName: "bg-rose-50 text-rose-600",
-      },
-    ],
-    [availablePortals.length, dashboardStatsData, isProcessing],
-  );
   const userDisplayName = useMemo(() => {
     const raw = authUser?.email || authUser?.username || "Afrin";
     const candidate = raw.split("@")[0].replace(/[._-]+/g, " ").trim();
@@ -581,6 +539,10 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
     if (portalFileState.claimReady) return 1;
     return 0;
   }, [currentCanSubmit, isProcessing, portalFileState.claimReady, status]);
+  const hasCompletedRun = useMemo(
+    () => !isProcessing && Boolean(status.trim()) && /(complete|completed|success|finished|done|saved|updated)/i.test(status.toLowerCase()),
+    [isProcessing, status],
+  );
   const portalWorkflowSteps = [
     "Upload Login File",
     "Upload Claim File",
@@ -653,11 +615,22 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
             ? { completed: currentJob.currentCompleted, total: currentJob.totalRows }
             : null,
         );
+        setActiveView("portal-selection");
+
+        if (currentJob.portalId === "blue-shield") {
+          setActiveJobId(currentJob.jobId);
+          setPendingBlueShieldRestoreJob(currentJob);
+          setSelectedPortalId("blue-shield");
+          setIsProcessing(false);
+          setStatus("A previous Blue Shield run is still active. Click Start processing to replace it, or Cancel Processing to stop it.");
+          return;
+        }
+
         setStatus(`Reconnected to ${currentJob.portalId.toUpperCase()} run in progress...`);
         setIsProcessing(true);
+        setActiveJobId(currentJob.jobId);
         setSelectedPortalId(currentJob.portalId as PortalId);
         navigateToPortalRoute(currentJob.portalId as PortalId);
-        setActiveView("portal-selection");
 
         if (currentJob.portalId === "iehp") {
           const [storedClaimHandle, storedLoginFile] = await Promise.all([loadClaimFileHandle(), loadIehpLoginFile()]);
@@ -697,8 +670,6 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
           await reconnectAerialRun(currentJob);
         } else if (currentJob.portalId === "regal") {
           await reconnectRegalRun(currentJob);
-        } else if (currentJob.portalId === "blue-shield") {
-          await reconnectBlueShieldRun(currentJob);
         }
       } catch (error) {
         if (!cancelled) {
@@ -731,19 +702,10 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
       return;
     }
 
-    if (!authUser || selectedPortalId) {
-      return;
-    }
+    if (!authUser || selectedPortalId) return;
 
-    try {
-      const storedPortalId = window.localStorage.getItem(SELECTED_PORTAL_STORAGE_KEY);
-      if (storedPortalId === "iehp" || storedPortalId === "aerial" || storedPortalId === "regal" || storedPortalId === "blue-shield") {
-        setSelectedPortalId(storedPortalId);
-        navigateToPortalRoute(storedPortalId);
-      }
-    } catch {
-      // Ignore storage failures.
-    }
+    // Keep /portal on the neutral portal-selection screen after login.
+    setSelectedPortalId(null);
   }, [authUser, selectedPortalId, forcedPortalId]);
 
   useEffect(() => {
@@ -800,10 +762,12 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
 
   function resetRunState(message: string) {
     setIsProcessing(true);
+    setIsCancellingJob(false);
     setStatus(message);
     setLogs([]);
     setErrorScreenshots([]);
     setProgress(null);
+    setActiveJobId("");
     setRegalJobId("");
     setRegalOtpRequest(null);
     setRegalOtpValue("");
@@ -811,7 +775,6 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
 
   function resetPortalSelection() {
     setActiveView("portal-selection");
-    setSettingsOpen(false);
     setSelectedPortalId(null);
     try {
       window.localStorage.removeItem(SELECTED_PORTAL_STORAGE_KEY);
@@ -822,6 +785,11 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
     setLogs([]);
     setErrorScreenshots([]);
     setProgress(null);
+    setIsProcessing(false);
+    setIsCancellingJob(false);
+    setActiveJobId("");
+    setPendingIehpRestoreJob(null);
+    setPendingBlueShieldRestoreJob(null);
     setRegalJobId("");
     setRegalOtpRequest(null);
     setRegalOtpValue("");
@@ -841,7 +809,6 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
   }
 
   async function openManageUsers() {
-    setSettingsOpen(false);
     setActiveView("manage-users");
     setManageStatus("");
     try {
@@ -852,7 +819,6 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
   }
 
   async function openResetPassword() {
-    setSettingsOpen(false);
     setActiveView("reset-password");
     setSettingsPassword("");
     setSettingsConfirmPassword("");
@@ -933,7 +899,6 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
     setAuthError("");
     setAuthStatus("");
     setForgotPasswordMode(false);
-    setSettingsOpen(false);
     setActiveView("portal-selection");
     setManagedUsers([]);
     setManageError("");
@@ -958,10 +923,53 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
     setBlueShieldGroup("Posada");
     setBlueShieldResetCheckpoint(false);
     setIsProcessing(false);
+    setIsCancellingJob(false);
     setStatus("");
     setLogs([]);
     setErrorScreenshots([]);
     setProgress(null);
+    setActiveJobId("");
+    setPendingIehpRestoreJob(null);
+    setPendingBlueShieldRestoreJob(null);
+  }
+
+  async function cancelActiveJob() {
+    const jobId = pendingBlueShieldRestoreJob?.jobId || pendingIehpRestoreJob?.jobId || activeJobId || regalJobId;
+    if (!jobId || isCancellingJob) return;
+
+    setIsCancellingJob(true);
+    setStatus("Cancelling current processing run...");
+
+    try {
+      await cancelScrapeJobRequest(jobId);
+      setPendingBlueShieldRestoreJob(null);
+      setPendingIehpRestoreJob(null);
+      setActiveJobId("");
+      setRegalJobId("");
+      setRegalOtpRequest(null);
+      setRegalOtpValue("");
+      setIsProcessing(false);
+      setStatus("Processing cancelled.");
+      await clearStoredRunContext().catch(() => {});
+    } catch (error) {
+      setStatus(`Failed to cancel processing: ${getErrorMessage(error)}`);
+    } finally {
+      setIsCancellingJob(false);
+    }
+  }
+
+  function resetBlueShieldWorkflow() {
+    setBlueShieldCredentialFile(null);
+    setBlueShieldInputFile(null);
+    setBlueShieldResetCheckpoint(false);
+    setStatus("");
+    setLogs([]);
+    setErrorScreenshots([]);
+    setProgress(null);
+    setActiveJobId("");
+    setPendingBlueShieldRestoreJob(null);
+    setIsProcessing(false);
+    setIsCancellingJob(false);
   }
 
   async function resetPasswordFromSettings(e: FormEvent<HTMLFormElement>) {
@@ -1133,6 +1141,7 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
     await saveIehpLoginFile(options.loginFile).catch(() => {});
 
     setIsProcessing(true);
+    setActiveJobId(options.existingJobId ?? "");
     setLogs(options.initialLogs ?? []);
     setProgress(options.initialProgress ?? null);
     setErrorScreenshots([]);
@@ -1216,6 +1225,11 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
           } else if (eventData.type === "error" && eventData.message) {
             setStatus(`Error: ${eventData.message}`);
             chunkHasError = true;
+          } else if (eventData.type === "cancelled") {
+            cancellationRequested = true;
+            chunkHasError = true;
+            setStatus(eventData.message || "Processing cancelled.");
+            setLogs((prev) => [...prev, eventData.message || "Processing cancelled."]);
           }
         };
 
@@ -1232,6 +1246,7 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
             formData.append("existingJobId", logicalJobId);
           }
           subscribedJobId = await startScrapeJob(formData);
+          setActiveJobId(subscribedJobId);
         }
 
         await subscribeToScrapeJobEvents({
@@ -1273,11 +1288,13 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
           setStatus(`Processing succeeded but post-processing failed: ${getErrorMessage(postError)}`);
         } finally {
           setIsProcessing(false);
+          setActiveJobId("");
         }
       }
     };
 
     await processChunk(options.initialStartIndex ?? 0, options.existingJobId ?? "", options.attachToRunningJob ? "attach" : "start");
+    setActiveJobId("");
   }
 
   async function resumeExistingIehpRun(currentJob: CurrentScrapeJob, storedClaimHandle: FileSystemFileHandle, storedLoginFile: File) {
@@ -1307,6 +1324,7 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
 
   async function reconnectAerialRun(currentJob: CurrentScrapeJob) {
     setIsProcessing(true);
+    setActiveJobId(currentJob.jobId);
     setSelectedPortalId("aerial");
     setLogs([]);
     setErrorScreenshots(
@@ -1321,6 +1339,7 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
     setStatus("Reconnecting to current Aerial run...");
 
     let hasError = false;
+    let wasCancelled = false;
     let finalErrorMessage = "";
     let subscribedJobId = "";
     const streamAbortController = new AbortController();
@@ -1351,6 +1370,10 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
             setLogs((prev) => [...prev, `ERROR: ${eventData.message}`]);
             setStatus(`Error: ${eventData.message}`);
             hasError = true;
+          } else if (eventData.type === "cancelled") {
+            wasCancelled = true;
+            setStatus(eventData.message || "Processing cancelled.");
+            setLogs((prev) => [...prev, eventData.message || "Processing cancelled."]);
           }
         },
         onStreamError(error) {
@@ -1363,12 +1386,15 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
       });
 
       setStatus(
-        hasError
+        wasCancelled
+          ? "Aerial processing cancelled."
+          : hasError
           ? `Aerial processing finished with errors${finalErrorMessage ? `: ${finalErrorMessage}` : "."}`
           : "Aerial processing completed.",
       );
     } finally {
       setIsProcessing(false);
+      setActiveJobId("");
     }
   }
 
@@ -1376,6 +1402,8 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
 
   async function reconnectBlueShieldRun(currentJob: CurrentScrapeJob) {
     setIsProcessing(true);
+    setActiveJobId(currentJob.jobId);
+    setPendingBlueShieldRestoreJob(null);
     setSelectedPortalId("blue-shield");
     setLogs(currentJob.logs ?? []);
     setErrorScreenshots(
@@ -1390,6 +1418,7 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
     setStatus("Reconnecting to current Blue Shield run...");
 
     let hasError = false;
+    let wasCancelled = false;
     let finalErrorMessage = "";
     const streamAbortController = new AbortController();
 
@@ -1419,6 +1448,10 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
             setLogs((prev) => [...prev, `ERROR: ${eventData.message}`]);
             setStatus(`Error: ${eventData.message}`);
             hasError = true;
+          } else if (eventData.type === "cancelled") {
+            wasCancelled = true;
+            setStatus(eventData.message || "Processing cancelled.");
+            setLogs((prev) => [...prev, eventData.message || "Processing cancelled."]);
           }
         },
         onStreamError(error) {
@@ -1431,17 +1464,21 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
       });
 
       setStatus(
-        hasError
+        wasCancelled
+          ? "Blue Shield processing cancelled."
+          : hasError
           ? `Blue Shield processing finished with errors${finalErrorMessage ? `: ${finalErrorMessage}` : "."}`
           : "Blue Shield processing completed.",
       );
     } finally {
       setIsProcessing(false);
+      setActiveJobId("");
     }
   }
 
   async function reconnectRegalRun(currentJob: CurrentScrapeJob) {
     setIsProcessing(true);
+    setActiveJobId(currentJob.jobId);
     setSelectedPortalId("regal");
     setRegalJobId(currentJob.jobId);
     setLogs(currentJob.logs ?? []);
@@ -1457,6 +1494,7 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
     setStatus("Reconnecting to current Regal run...");
 
     let hasError = false;
+    let wasCancelled = false;
     let finalErrorMessage = "";
     const streamAbortController = new AbortController();
 
@@ -1469,6 +1507,9 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
             finalErrorMessage = message;
             hasError = true;
           });
+          if (eventData.type === "cancelled") {
+            wasCancelled = true;
+          }
         },
         onStreamError(error) {
           console.error("Regal stream error:", error);
@@ -1480,12 +1521,15 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
       });
 
       setStatus(
-        hasError
+        wasCancelled
+          ? "Regal processing cancelled."
+          : hasError
           ? `Regal processing finished with errors${finalErrorMessage ? `: ${finalErrorMessage}` : "."}`
           : "Regal processing completed.",
       );
     } finally {
       setIsProcessing(false);
+      setActiveJobId("");
     }
   }
 
@@ -1528,6 +1572,9 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
       onError(eventData.message);
       setLogs((prev) => [...prev, `ERROR: ${eventData.message}`]);
       setStatus(`Error: ${eventData.message}`);
+    } else if (eventData.type === "cancelled") {
+      setLogs((prev) => [...prev, eventData.message || "Processing cancelled."]);
+      setStatus(eventData.message || "Processing cancelled.");
     }
   }
 
@@ -1582,6 +1629,7 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
     formData.append("inputExcel", aerialInputFile);
 
     let hasError = false;
+    let wasCancelled = false;
     let finalErrorMessage = "";
     let subscribedJobId = "";
     const streamAbortController = new AbortController();
@@ -1608,12 +1656,17 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
         setLogs((prev) => [...prev, `ERROR: ${eventData.message}`]);
         setStatus(`Error: ${eventData.message}`);
         hasError = true;
+      } else if (eventData.type === "cancelled") {
+        wasCancelled = true;
+        setLogs((prev) => [...prev, eventData.message || "Processing cancelled."]);
+        setStatus(eventData.message || "Processing cancelled.");
       }
     };
 
     try {
       const jobId = await startScrapeJob(formData);
       subscribedJobId = jobId;
+      setActiveJobId(jobId);
       await subscribeToScrapeJobEvents({
         jobId,
         signal: streamAbortController.signal,
@@ -1627,7 +1680,9 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
         },
       });
       setStatus(
-        hasError
+        wasCancelled
+          ? "Aerial processing cancelled."
+          : hasError
           ? `Aerial processing finished with errors${finalErrorMessage ? `: ${finalErrorMessage}` : "."}`
           : "Aerial processing completed.",
       );
@@ -1635,6 +1690,7 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
       setStatus(`Failed to process Aerial claims: ${getErrorMessage(error)}`);
     } finally {
       setIsProcessing(false);
+      setActiveJobId("");
     }
   }
 
@@ -1648,7 +1704,25 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
       return;
     }
 
-    resetRunState("Starting Blue Shield scraper...");
+    const activeBlueShieldJob = pendingBlueShieldRestoreJob
+      ?? await getCurrentScrapeJob().then((job) => (job?.portalId === "blue-shield" && (job.status === "running" || job.status === "waiting_resume") ? job : null)).catch(() => null);
+
+    if (activeBlueShieldJob) {
+      setIsCancellingJob(true);
+      setStatus("Replacing previous Blue Shield run and starting a new one...");
+      try {
+        await cancelScrapeJobRequest(activeBlueShieldJob.jobId);
+      } catch (error) {
+        setIsCancellingJob(false);
+        setStatus(`Failed to replace previous Blue Shield run: ${getErrorMessage(error)}`);
+        return;
+      } finally {
+        setIsCancellingJob(false);
+      }
+    }
+
+    setPendingBlueShieldRestoreJob(null);
+    resetRunState(activeBlueShieldJob ? "Starting new Blue Shield scraper..." : "Starting Blue Shield scraper...");
 
     const formData = new FormData();
     formData.append("portalId", "blue-shield");
@@ -1659,6 +1733,7 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
     formData.append("resetCheckpoint", blueShieldResetCheckpoint ? "true" : "false");
 
     let hasError = false;
+    let wasCancelled = false;
     let finalErrorMessage = "";
     let subscribedJobId = "";
     const streamAbortController = new AbortController();
@@ -1685,12 +1760,17 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
         setLogs((prev) => [...prev, `ERROR: ${eventData.message}`]);
         setStatus(`Error: ${eventData.message}`);
         hasError = true;
+      } else if (eventData.type === "cancelled") {
+        wasCancelled = true;
+        setLogs((prev) => [...prev, eventData.message || "Processing cancelled."]);
+        setStatus(eventData.message || "Processing cancelled.");
       }
     };
 
     try {
       const jobId = await startScrapeJob(formData);
       subscribedJobId = jobId;
+      setActiveJobId(jobId);
       await subscribeToScrapeJobEvents({
         jobId,
         signal: streamAbortController.signal,
@@ -1704,14 +1784,27 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
         },
       });
       setStatus(
-        hasError
+        wasCancelled
+          ? "Blue Shield processing cancelled."
+          : hasError
           ? `Blue Shield processing finished with errors${finalErrorMessage ? `: ${finalErrorMessage}` : "."}`
           : "Blue Shield processing completed.",
       );
     } catch (error) {
-      setStatus(`Failed to process Blue Shield claims: ${getErrorMessage(error)}`);
+      const errorMessage = getErrorMessage(error);
+      const currentJob = await getCurrentScrapeJob().catch(() => null);
+
+      if (currentJob?.portalId === "blue-shield" && (currentJob.status === "running" || currentJob.status === "waiting_resume")) {
+        setActiveJobId(currentJob.jobId);
+        setPendingBlueShieldRestoreJob(currentJob);
+        setSelectedPortalId("blue-shield");
+        setStatus("A previous Blue Shield run is still active. Click Start processing to replace it, or Cancel Processing to stop it.");
+      } else {
+        setStatus(`Failed to process Blue Shield claims: ${errorMessage}`);
+      }
     } finally {
       setIsProcessing(false);
+      setActiveJobId("");
     }
   }
 
@@ -1735,12 +1828,14 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
     formData.append("claimFileName", regalClaimFile.name);
 
     let hasError = false;
+    let wasCancelled = false;
     let finalErrorMessage = "";
     const streamAbortController = new AbortController();
 
     try {
       const jobId = await startScrapeJob(formData);
       setRegalJobId(jobId);
+      setActiveJobId(jobId);
       await subscribeToScrapeJobEvents({
         jobId,
         signal: streamAbortController.signal,
@@ -1749,6 +1844,9 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
             finalErrorMessage = message;
             hasError = true;
           });
+          if (eventData.type === "cancelled") {
+            wasCancelled = true;
+          }
         },
         onStreamError(error) {
           console.error("Regal stream error:", error);
@@ -1759,7 +1857,9 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
         },
       });
       setStatus(
-        hasError
+        wasCancelled
+          ? "Regal processing cancelled."
+          : hasError
           ? `Regal processing finished with errors${finalErrorMessage ? `: ${finalErrorMessage}` : "."}`
           : "Regal processing completed.",
       );
@@ -1767,6 +1867,7 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
       setStatus(`Failed to process Regal claims: ${getErrorMessage(error)}`);
     } finally {
       setIsProcessing(false);
+      setActiveJobId("");
     }
   }
 
@@ -2143,48 +2244,6 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
               </button>
             )}
 
-            <div className="relative z-40">
-              <button
-                type="button"
-                aria-label="Settings"
-                onClick={() => setSettingsOpen((open) => !open)}
-                className="flex h-11 w-11 items-center justify-center rounded-xl border border-sky-200 bg-white/90 shadow-sm transition hover:border-blue-400 hover:bg-blue-50"
-              >
-                <svg aria-hidden="true" viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2">
-                  <circle cx="12" cy="12" r="3" />
-                  <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 0 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6V21a2 2 0 0 1-4 0v-.1a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1A2 2 0 0 1 4.2 17l.1-.1A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.6-1H3a2 2 0 0 1 0-4h.1a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1A2 2 0 0 1 7 4.2l.1.1a1.7 1.7 0 0 0 1.9.3A1.7 1.7 0 0 0 10 3V3a2 2 0 0 1 4 0v.1a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1A2 2 0 0 1 19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.1a2 2 0 0 1 0 4H21a1.7 1.7 0 0 0-1.6 1Z" />
-                </svg>
-              </button>
-
-              {settingsOpen && (
-                <div className="absolute right-0 top-full z-50 mt-3 w-52 rounded-2xl border border-sky-100 bg-white/98 py-1.5 text-sm shadow-[0_22px_55px_rgba(15,23,42,0.18)] backdrop-blur-xl">
-                  <button
-                    type="button"
-                    onClick={openResetPassword}
-                    className="block w-full px-4 py-2.5 text-left hover:bg-sky-50"
-                  >
-                    Reset Password
-                  </button>
-                  {authUser.role === "ADMIN" && (
-                    <button
-                      type="button"
-                      onClick={openManageUsers}
-                      className="block w-full px-4 py-2.5 text-left hover:bg-sky-50"
-                    >
-                      Manage Users
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    onClick={logout}
-                    disabled={isProcessing}
-                    className="block w-full px-4 py-2.5 text-left hover:bg-sky-50 disabled:cursor-not-allowed disabled:text-slate-400"
-                  >
-                    Logout
-                  </button>
-                </div>
-              )}
-            </div>
           </div>
         </div>
       </nav>
@@ -2219,6 +2278,16 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
                 <ShieldEllipsis className="h-4 w-4" strokeWidth={2} />
                 Reset Password
               </button>
+              {authUser.role === "ADMIN" && (
+                <button
+                  type="button"
+                  onClick={openManageUsers}
+                  className="flex w-full items-center gap-3 rounded-[1rem] px-3 py-2.5 text-left text-sm font-medium text-slate-600 transition hover:bg-sky-50 hover:text-slate-900"
+                >
+                  <Users className="h-4 w-4" strokeWidth={2} />
+                  Manage Users
+                </button>
+              )}
               <button
                 type="button"
                 onClick={logout}
@@ -2251,7 +2320,6 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
                 type="button"
                 onClick={() => {
                   setActiveView("portal-selection");
-                  setSettingsOpen(false);
                 }}
                 className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium hover:bg-slate-50"
               >
@@ -2317,7 +2385,6 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
                 type="button"
                 onClick={() => {
                   setActiveView("portal-selection");
-                  setSettingsOpen(false);
                 }}
                 className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium hover:bg-slate-50"
               >
@@ -2517,32 +2584,6 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
                 </div>
               </motion.div>
 
-              <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-                {dashboardStats.map((item, index) => {
-                  const Icon = item.icon;
-
-                  return (
-                    <motion.div
-                      key={item.label}
-                      initial={{ opacity: 0, y: 16 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      transition={{ duration: 0.4, delay: index * 0.05 }}
-                      whileHover={{ y: -2 }}
-                      className="rounded-[1.2rem] border border-sky-100 bg-white/95 p-4 shadow-[0_12px_30px_rgba(148,163,184,0.1)]"
-                    >
-                      <div className={`flex h-10 w-10 items-center justify-center rounded-2xl ${item.iconClassName}`}>
-                        <Icon className="h-4 w-4" strokeWidth={2.2} />
-                      </div>
-                      <div className="mt-3 flex items-end gap-2">
-                        <span className="text-2xl font-semibold tracking-[-0.05em] text-slate-950">{item.value}</span>
-                      </div>
-                      <p className="mt-1 text-sm font-medium text-slate-700">{item.label}</p>
-                      <p className="mt-1 text-[0.7rem] text-slate-400">{item.note}</p>
-                    </motion.div>
-                  );
-                })}
-              </div>
-
               <div className="mt-5">
                 <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
                   <label className="flex h-12 w-full items-center gap-3 rounded-[1rem] border border-sky-100 bg-white/95 px-4 shadow-[0_10px_28px_rgba(148,163,184,0.1)] lg:max-w-[24rem]">
@@ -2737,13 +2778,29 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
                 <div className="rounded-[1.7rem] border border-sky-100 bg-white/92 p-5 shadow-[0_16px_38px_rgba(148,163,184,0.12)]">
                   <div className="mb-5">
                     <p className="text-[0.7rem] font-semibold uppercase tracking-[0.22em] text-sky-600">Portal Workflow</p>
-                    <h2 className="mt-3 text-xl font-semibold tracking-[-0.04em] text-slate-950">Upload and Validate Files</h2>
+                    <h2 className="mt-3 text-xl font-semibold tracking-[-0.04em] text-slate-950">
+                      {effectivePortalId === "blue-shield" && hasCompletedRun ? "Processing Completed" : "Upload and Validate Files"}
+                    </h2>
                     <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">
-                      Use the guided upload workflow below to validate workbooks, secure the transfer, and launch automation.
+                      {effectivePortalId === "blue-shield" && hasCompletedRun
+                        ? "This Blue Shield run has finished. You can review the status and logs below, or reset the workflow to start another run."
+                        : "Use the guided upload workflow below to validate workbooks, secure the transfer, and launch automation."}
                     </p>
                   </div>
 
-                  {effectivePortalId === "iehp" ? (
+                  {effectivePortalId === "blue-shield" && hasCompletedRun ? (
+                    <div className="rounded-[1.2rem] border border-emerald-100 bg-emerald-50/70 p-5">
+                      <p className="text-sm font-semibold text-emerald-800">Blue Shield processing is complete.</p>
+                      <p className="mt-2 text-sm text-emerald-700">{status}</p>
+                      <button
+                        type="button"
+                        onClick={resetBlueShieldWorkflow}
+                        className="mt-4 inline-flex items-center justify-center rounded-[1rem] border border-emerald-200 bg-white px-4 py-2.5 text-sm font-semibold text-emerald-800 shadow-sm transition hover:bg-emerald-50"
+                      >
+                        Start Another Run
+                      </button>
+                    </div>
+                  ) : effectivePortalId === "iehp" ? (
                     <IehpInputForm
                       canSubmit={canSubmitIehp}
                       claimFileName={claimFileName}
@@ -2788,6 +2845,19 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
                       onResetCheckpointChange={setBlueShieldResetCheckpoint}
                       onSubmit={submitBlueShield}
                     />
+                  )}
+
+                  {(activeJobId || pendingBlueShieldRestoreJob || pendingIehpRestoreJob) && (
+                    <div className="mt-4 flex flex-col gap-3 rounded-[1.2rem] border border-sky-100 bg-sky-50/70 p-4 sm:flex-row">
+                      <button
+                        type="button"
+                        onClick={() => void cancelActiveJob()}
+                        disabled={isCancellingJob}
+                        className="inline-flex flex-1 items-center justify-center rounded-[1rem] border border-red-200 bg-white px-4 py-3 text-sm font-semibold text-red-700 shadow-sm transition hover:bg-red-50 disabled:cursor-not-allowed disabled:text-slate-400"
+                      >
+                        {isCancellingJob ? "Cancelling..." : "Cancel Processing"}
+                      </button>
+                    </div>
                   )}
                 </div>
               </div>
