@@ -5,7 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 import * as XLSX from "xlsx";
 import ExcelJS from "exceljs";
 import { applyClaimRowUpdateToWorksheet, postProcessWorksheet } from "../portals/iehp/workbook";
-import { cancelScrapeJob as cancelScrapeJobRequest, getCurrentScrapeJob, startScrapeJob, subscribeToScrapeJobEvents, submitScrapeJobInput, type CurrentScrapeJob } from "../api/scrape-jobs-api";
+import { cancelScrapeJob as cancelScrapeJobRequest, getActiveScrapeJobErrorId, getCurrentScrapeJob, startScrapeJob, subscribeToScrapeJobEvents, submitScrapeJobInput, type CurrentScrapeJob } from "../api/scrape-jobs-api";
 import { clearStoredRunContext, loadClaimFileHandle, loadIehpLoginFile, saveClaimFileHandle, saveIehpLoginFile } from "../lib/run-context-store";
 import type { FileSystemFileHandle, WindowWithFilePicker } from "../types/file-system-access";
 import type { ClaimRow, ErrorScreenshot, JobProgressValue, ScrapeJobEvent } from "../types/job";
@@ -303,6 +303,8 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
   const [optumProJobId, setOptumProJobId] = useState<string>("");
   const [optumProOtpRequest, setOptumProOtpRequest] = useState<{ inputName: string; label: string; message: string } | null>(null);
   const [optumProOtpValue, setOptumProOtpValue] = useState<string>("");
+  const [optumProStopping, setOptumProStopping] = useState(false);
+  const [optumProStaleRunAvailable, setOptumProStaleRunAvailable] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [status, setStatus] = useState<string>("");
   const [logs, setLogs] = useState<string[]>([]);
@@ -524,6 +526,8 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
     setOptumProJobId("");
     setOptumProOtpRequest(null);
     setOptumProOtpValue("");
+    setOptumProStopping(false);
+    setOptumProStaleRunAvailable(false);
   }
 
   function resetPortalSelection() {
@@ -551,6 +555,8 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
     setOptumProJobId("");
     setOptumProOtpRequest(null);
     setOptumProOtpValue("");
+    setOptumProStopping(false);
+    setOptumProStaleRunAvailable(false);
   }
 
   async function loadManagedUsers() {
@@ -1221,6 +1227,7 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
     setIsProcessing(true);
     setSelectedPortalId("optum-pro");
     setOptumProJobId(currentJob.jobId);
+    setOptumProStaleRunAvailable(false);
     setLogs(currentJob.logs ?? []);
     setErrorScreenshots(
       (currentJob.artifacts ?? [])
@@ -1343,6 +1350,14 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
     } else if (eventData.type === "warning" && eventData.message) {
       setLogs((prev) => [...prev, eventData.message ?? ""]);
       setStatus(eventData.message);
+    } else if (eventData.type === "cancelled") {
+      const message = eventData.message || "Optum Pro scraping stopped.";
+      setOptumProStopping(false);
+      setOptumProStaleRunAvailable(false);
+      setIsProcessing(false);
+      setOptumProOtpRequest(null);
+      setLogs((prev) => [...prev, message]);
+      setStatus(message);
     } else if (eventData.type === "error" && eventData.message) {
       onError(eventData.message);
       setLogs((prev) => [...prev, `ERROR: ${eventData.message}`]);
@@ -1615,6 +1630,8 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
     }
 
     resetRunState("Starting Optum Pro processing...");
+    setOptumProStopping(false);
+    setOptumProStaleRunAvailable(false);
 
     const formData = new FormData();
     formData.append("portalId", "optum-pro");
@@ -1653,9 +1670,34 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
           : "Optum Pro processing completed.",
       );
     } catch (error) {
-      setStatus(`Failed to process Optum Pro claims: ${getErrorMessage(error)}`);
+      const activeJobId = getActiveScrapeJobErrorId(error);
+      if (activeJobId) {
+        setOptumProJobId(activeJobId);
+        setOptumProStaleRunAvailable(true);
+        setStatus(`Failed to process Optum Pro claims: ${getErrorMessage(error)} Use Stop Optum Pro scraping to cancel that active run.`);
+      } else {
+        setStatus(`Failed to process Optum Pro claims: ${getErrorMessage(error)}`);
+      }
     } finally {
       setIsProcessing(false);
+      setOptumProStopping(false);
+    }
+  }
+
+  async function stopOptumPro() {
+    if (!optumProJobId || optumProStopping) return;
+
+    setOptumProStopping(true);
+    setStatus("Stopping Optum Pro scraping...");
+    try {
+      await cancelScrapeJobRequest(optumProJobId);
+      setOptumProStaleRunAvailable(false);
+      setOptumProOtpRequest(null);
+      setOptumProOtpValue("");
+      setStatus("Stop requested for Optum Pro scraping.");
+    } catch (error) {
+      setOptumProStopping(false);
+      setStatus(`Failed to stop Optum Pro scraping: ${getErrorMessage(error)}`);
     }
   }
 
@@ -2187,8 +2229,11 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
                   <OptumProResultView
                     errorScreenshots={errorScreenshots}
                     logs={logs}
+                    canStop={Boolean(optumProJobId && (isProcessing || optumProStaleRunAvailable))}
+                    isStopping={optumProStopping}
                     onOtpChange={setOptumProOtpValue}
                     onOtpSubmit={submitOptumProOtp}
+                    onStop={stopOptumPro}
                     otpRequest={optumProOtpRequest}
                     otpValue={optumProOtpValue}
                     progress={progress}

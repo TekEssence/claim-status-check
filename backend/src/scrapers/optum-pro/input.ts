@@ -16,7 +16,7 @@ export type OptumProInput = {
 export type OptumProInputRow = {
   raw: Record<string, unknown>;
   rowNumber: number;
-  groupName: string;
+  medicalGroupName: string;
   patient: string;
   dos: string;
   cpt: string;
@@ -49,7 +49,7 @@ function findValue(row: Record<string, unknown>, aliases: string[]): string {
   return "";
 }
 
-const GROUP_NAME_ALIASES = ["Group Name", "Medical Group Name", "Group", "Provider Group"];
+const MEDICAL_GROUP_NAME_ALIASES = ["Medical Group Name"];
 const PATIENT_ALIASES = ["Patient", "Patient Name", "Member Name"];
 const DOS_ALIASES = ["DOS", "Date Of Service", "Date of Service", "Service Date", "First Service Date"];
 const CPT_ALIASES = ["CPT", "CPT Code", "Procedure Code", "Proc Code"];
@@ -67,18 +67,18 @@ export function readOptumProInputRowsFromBuffer(buffer: ArrayBuffer): OptumProIn
     .map((row, index) => ({
       raw: row,
       rowNumber: index + 2,
-      groupName: findValue(row, GROUP_NAME_ALIASES),
+      medicalGroupName: findValue(row, MEDICAL_GROUP_NAME_ALIASES),
       patient: findValue(row, PATIENT_ALIASES),
       dos: findValue(row, DOS_ALIASES),
       cpt: findValue(row, CPT_ALIASES),
       memberId: findValue(row, MEMBER_ID_ALIASES).replace(/\s+/g, ""),
     }))
-    .filter((row) => row.groupName || row.patient || row.dos || row.cpt || row.memberId);
+    .filter((row) => row.medicalGroupName || row.patient || row.dos || row.cpt || row.memberId);
 
   const invalidRows = inputRows
     .map((row) => {
       const missing = [
-        !row.groupName ? "Group Name" : "",
+        !row.medicalGroupName ? "Medical Group Name" : "",
         !row.patient ? "Patient" : "",
         !row.dos ? "DOS" : "",
         !row.cpt ? "CPT" : "",
@@ -141,7 +141,7 @@ function credentialsFromEnv(): OptumProCredentials | null {
 export async function parseOptumProInput(formData: FormData): Promise<OptumProInput> {
   const inputExcel = formData.get("inputExcel");
   if (!(inputExcel instanceof File)) {
-    throw new Error("Missing Optum Pro claim Excel file. Required columns: Group Name, Patient, DOS, CPT, Member Id.");
+    throw new Error("Missing Optum Pro claim Excel file. Required columns: Medical Group Name, Patient, DOS, CPT, Member Id.");
   }
 
   const rows = readOptumProInputRowsFromBuffer(await inputExcel.arrayBuffer());

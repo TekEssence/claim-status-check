@@ -30,7 +30,7 @@ test("reads Optum Pro credentials from login workbook", () => {
 test("reads Optum Pro claim rows with mandatory columns", () => {
   const rows = readOptumProInputRowsFromBuffer(workbookBuffer([
     {
-      "Group Name": "NAMM MEDICAL GROUP",
+      "Medical Group Name": "NAMM MEDICAL GROUP",
       Patient: "Isabel Bravo",
       DOS: "02/16/2026",
       CPT: "99204",
@@ -40,7 +40,7 @@ test("reads Optum Pro claim rows with mandatory columns", () => {
   ]));
 
   assert.equal(rows.length, 1);
-  assert.equal(rows[0].groupName, "NAMM MEDICAL GROUP");
+  assert.equal(rows[0].medicalGroupName, "NAMM MEDICAL GROUP");
   assert.equal(rows[0].patient, "Isabel Bravo");
   assert.equal(rows[0].dos, "02/16/2026");
   assert.equal(rows[0].cpt, "99204");
@@ -52,7 +52,7 @@ test("rejects Optum Pro claim rows missing mandatory values", () => {
   assert.throws(
     () => readOptumProInputRowsFromBuffer(workbookBuffer([
       {
-        "Group Name": "NAMM MEDICAL GROUP",
+        "Medical Group Name": "NAMM MEDICAL GROUP",
         Patient: "Isabel Bravo",
         DOS: "02/16/2026",
         CPT: "",
@@ -60,5 +60,20 @@ test("rejects Optum Pro claim rows missing mandatory values", () => {
       },
     ])),
     /row 2: CPT/,
+  );
+});
+
+test("requires Medical Group Name instead of generic Group Name", () => {
+  assert.throws(
+    () => readOptumProInputRowsFromBuffer(workbookBuffer([
+      {
+        "Group Name": "NAMM MEDICAL GROUP",
+        Patient: "Isabel Bravo",
+        DOS: "02/16/2026",
+        CPT: "99204",
+        "Member Id": "40028917901",
+      },
+    ])),
+    /row 2: Medical Group Name/,
   );
 });

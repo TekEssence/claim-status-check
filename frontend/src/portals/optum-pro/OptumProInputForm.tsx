@@ -43,7 +43,7 @@ export function OptumProInputForm({
           className="block w-full rounded-md border border-slate-300 p-2 text-sm"
         />
         <p className="mt-2 text-sm text-slate-600">
-          Required columns: Group Name, Patient, DOS, CPT, Member Id. Extra columns are preserved in the upload.
+          Required columns: Medical Group Name, Patient, DOS, CPT, Member Id. Extra columns are preserved in the upload.
         </p>
       </div>
 
