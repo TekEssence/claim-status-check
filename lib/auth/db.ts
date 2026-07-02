@@ -1,4 +1,7 @@
-import { Pool, type QueryResult, type QueryResultRow } from "pg";
+import { randomUUID } from "node:crypto";
+import { and, eq, or } from "drizzle-orm";
+import { getDb, isRetryableDbError, runDbWithRetry } from "@/db";
+import { authAccounts, authUsers } from "@/db/schema/better-auth";
 import { hashPassword, verifyPassword } from "./password";
 
 export type AuthUser = {
@@ -23,32 +26,8 @@ export type ChangePasswordResult =
   | { status: "same_password" }
   | { status: "not_found" };
 
-let pool: Pool | null = null;
-const DB_CONNECT_TIMEOUT_MS = 5000;
-const DB_QUERY_TIMEOUT_MS = 6000;
-
-function getPool(): Pool {
-  if (pool) return pool;
-  if (!process.env.DATABASE_URL) {
-    throw new Error("DATABASE_URL must be configured for database authentication.");
-  }
-
-  pool = new Pool({
-    connectionString: process.env.DATABASE_URL,
-    ssl: process.env.DB_SSL === "false" ? undefined : { rejectUnauthorized: false },
-    connectionTimeoutMillis: DB_CONNECT_TIMEOUT_MS,
-    idleTimeoutMillis: 10000,
-    query_timeout: DB_QUERY_TIMEOUT_MS,
-    statement_timeout: DB_QUERY_TIMEOUT_MS,
-  });
-
-  return pool;
-}
-
-function isRetryableDbError(error: unknown): boolean {
-  const code = typeof error === "object" && error !== null && "code" in error ? String((error as { code?: unknown }).code ?? "") : "";
-  return ["ECONNRESET", "ETIMEDOUT", "ECONNREFUSED", "57P01"].includes(code);
-}
+type AuthUserRow = typeof authUsers.$inferSelect;
+type AuthAccountRow = typeof authAccounts.$inferSelect;
 
 export function isAuthDbConnectionError(error: unknown): boolean {
   const code = typeof error === "object" && error !== null && "code" in error ? String((error as { code?: unknown }).code ?? "") : "";
@@ -66,259 +45,269 @@ export function isAuthDbConnectionError(error: unknown): boolean {
   );
 }
 
-async function resetPool(): Promise<void> {
-  if (!pool) return;
-  const currentPool = pool;
-  pool = null;
-  await currentPool.end().catch(() => {});
+function normalizeLogin(login: string): string {
+  return login.trim().toLowerCase();
 }
 
-async function queryWithRetry<T extends QueryResultRow>(text: string, params: unknown[]): Promise<QueryResult<T>> {
-  for (let attempt = 1; attempt <= 2; attempt++) {
-    try {
-      return await getPool().query<T>(text, params);
-    } catch (error) {
-      if (attempt < 2 && isRetryableDbError(error)) {
-        await resetPool();
-        await new Promise((resolve) => setTimeout(resolve, 300));
-        continue;
-      }
-      throw error;
-    }
-  }
-
-  throw new Error("Database query failed after retry.");
+function parseUserIdSequence(userId: string): number | null {
+  const match = /^USR(\d+)$/i.exec(userId.trim());
+  return match ? Number.parseInt(match[1], 10) : null;
 }
 
-export async function authenticateUser(username: string, password: string): Promise<AuthUser | null> {
-  const result = await queryWithRetry<{ user_id: string; username: string; email: string; role: "ADMIN" | "USER"; password_hash: string; must_reset_password: boolean }>(
-    `
-      SELECT user_id, username, email, role, password_hash, must_reset_password
-      FROM iehp_auth_users
-      WHERE (LOWER(username) = LOWER($1) OR LOWER(email) = LOWER($1))
-        AND is_active = TRUE
-      LIMIT 1
-    `,
-    [username.trim()],
-  );
-
-  const row = result.rows[0];
-  if (!row || !(await verifyPassword(password, row.password_hash))) {
-    return null;
-  }
-
-  await queryWithRetry(
-    `
-      UPDATE iehp_auth_users
-      SET last_login_at = NOW(),
-          updated_at = NOW()
-      WHERE user_id = $1
-    `,
-    [row.user_id],
-  );
-
+function mapAuthUser(row: AuthUserRow): AuthUser {
   return {
-    userId: row.user_id,
-    username: row.username,
+    userId: row.legacyUserId || row.id,
+    username: row.username || row.email,
     email: row.email,
     role: row.role,
-    mustResetPassword: row.must_reset_password,
+    mustResetPassword: row.mustResetPassword,
   };
+}
+
+async function findActiveUserByLogin(login: string): Promise<AuthUserRow | null> {
+  const normalizedLogin = normalizeLogin(login);
+  const rows = await runDbWithRetry((db) =>
+    db
+      .select()
+      .from(authUsers)
+      .where(
+        and(
+          eq(authUsers.isActive, true),
+          or(
+            eq(authUsers.username, normalizedLogin),
+            eq(authUsers.email, normalizedLogin),
+          ),
+        ),
+      )
+      .limit(1),
+  );
+
+  return rows[0] ?? null;
+}
+
+async function findActiveUserByUserId(userId: string): Promise<AuthUserRow | null> {
+  const rows = await runDbWithRetry((db) =>
+    db
+      .select()
+      .from(authUsers)
+      .where(
+        and(
+          eq(authUsers.isActive, true),
+          or(eq(authUsers.id, userId), eq(authUsers.legacyUserId, userId)),
+        ),
+      )
+      .limit(1),
+  );
+
+  return rows[0] ?? null;
+}
+
+async function findCredentialAccount(userId: string): Promise<AuthAccountRow | null> {
+  const rows = await runDbWithRetry((db) =>
+    db
+      .select()
+      .from(authAccounts)
+      .where(and(eq(authAccounts.userId, userId), eq(authAccounts.providerId, "credential")))
+      .limit(1),
+  );
+
+  return rows[0] ?? null;
+}
+
+async function generateNextUserId(): Promise<string> {
+  const rows = await runDbWithRetry((db) =>
+    db
+      .select({
+        id: authUsers.id,
+        legacyUserId: authUsers.legacyUserId,
+      })
+      .from(authUsers),
+  );
+
+  const maxSequence = rows.reduce((max, row) => {
+    const sequenceFromId = parseUserIdSequence(row.id);
+    const sequenceFromLegacy = row.legacyUserId ? parseUserIdSequence(row.legacyUserId) : null;
+    const sequence = Math.max(sequenceFromId ?? 0, sequenceFromLegacy ?? 0);
+    return sequence > max ? sequence : max;
+  }, 0);
+
+  return `USR${String(maxSequence + 1).padStart(3, "0")}`;
 }
 
 export async function getActiveAuthUser(userId: string): Promise<AuthUser | null> {
-  const result = await queryWithRetry<{ user_id: string; username: string; email: string; role: "ADMIN" | "USER"; must_reset_password: boolean }>(
-    `
-      SELECT user_id, username, email, role, must_reset_password
-      FROM iehp_auth_users
-      WHERE user_id = $1
-        AND is_active = TRUE
-      LIMIT 1
-    `,
-    [userId],
-  );
-
-  const row = result.rows[0];
-  if (!row) return null;
-
-  return {
-    userId: row.user_id,
-    username: row.username,
-    email: row.email,
-    role: row.role,
-    mustResetPassword: row.must_reset_password,
-  };
+  const row = await findActiveUserByUserId(userId);
+  return row ? mapAuthUser(row) : null;
 }
 
 export async function resetPasswordByUsername(username: string, password: string): Promise<AuthUser | null> {
-  const passwordHash = await hashPassword(password);
-  const result = await queryWithRetry<{ user_id: string; username: string; email: string; role: "ADMIN" | "USER"; must_reset_password: boolean }>(
-    `
-      UPDATE iehp_auth_users
-      SET password_hash = $2,
-          must_reset_password = FALSE,
-          updated_at = NOW()
-      WHERE (LOWER(username) = LOWER($1) OR LOWER(email) = LOWER($1))
-        AND is_active = TRUE
-      RETURNING user_id, username, email, role, must_reset_password
-    `,
-    [username.trim(), passwordHash],
-  );
+  const user = await findActiveUserByLogin(username);
+  if (!user) {
+    return null;
+  }
 
-  const row = result.rows[0];
-  if (!row) return null;
+  const result = await changePasswordForUser(user.id, password);
+  if (result.status !== "updated") {
+    return mapAuthUser(user);
+  }
 
-  return {
-    userId: row.user_id,
-    username: row.username,
-    email: row.email,
-    role: row.role,
-    mustResetPassword: row.must_reset_password,
-  };
+  return result.user;
 }
 
 export async function changePasswordForUser(userId: string, password: string): Promise<ChangePasswordResult> {
-  const existingUserResult = await queryWithRetry<{
-    user_id: string;
-    username: string;
-    email: string;
-    role: "ADMIN" | "USER";
-    password_hash: string;
-    must_reset_password: boolean;
-  }>(
-    `
-      SELECT user_id, username, email, role, password_hash, must_reset_password
-      FROM iehp_auth_users
-      WHERE user_id = $1
-        AND is_active = TRUE
-      LIMIT 1
-    `,
-    [userId],
-  );
-
-  const existingUser = existingUserResult.rows[0];
-  if (!existingUser) {
+  const user = await findActiveUserByUserId(userId);
+  if (!user) {
     return { status: "not_found" };
   }
 
-  if (await verifyPassword(password, existingUser.password_hash)) {
+  const account = await findCredentialAccount(user.id);
+  if (account?.password && await verifyPassword(password, account.password)) {
     return { status: "same_password" };
   }
 
   const passwordHash = await hashPassword(password);
-  const updatedUserResult = await queryWithRetry<{
-    user_id: string;
-    username: string;
-    email: string;
-    role: "ADMIN" | "USER";
-    must_reset_password: boolean;
-  }>(
-    `
-      UPDATE iehp_auth_users
-      SET password_hash = $2,
-          must_reset_password = FALSE,
-          updated_at = NOW()
-      WHERE user_id = $1
-        AND is_active = TRUE
-      RETURNING user_id, username, email, role, must_reset_password
-    `,
-    [userId, passwordHash],
-  );
+  const now = new Date();
 
-  const updatedUser = updatedUserResult.rows[0];
-  if (!updatedUser) {
-    return { status: "not_found" };
-  }
+  await runDbWithRetry(async (db) => {
+    if (account) {
+      await db
+        .update(authAccounts)
+        .set({
+          password: passwordHash,
+          updatedAt: now,
+        })
+        .where(eq(authAccounts.id, account.id));
+    } else {
+      await db
+        .insert(authAccounts)
+        .values({
+          id: `${user.id}:credential`,
+          accountId: user.id,
+          providerId: "credential",
+          userId: user.id,
+          password: passwordHash,
+          createdAt: now,
+          updatedAt: now,
+        });
+    }
 
-  return {
-    status: "updated",
-    user: {
-      userId: updatedUser.user_id,
-      username: updatedUser.username,
-      email: updatedUser.email,
-      role: updatedUser.role,
-      mustResetPassword: updatedUser.must_reset_password,
-    },
-  };
+    await db
+      .update(authUsers)
+      .set({
+        mustResetPassword: false,
+        updatedAt: now,
+      })
+      .where(eq(authUsers.id, user.id));
+  });
+
+  const refreshed = await findActiveUserByUserId(user.id);
+  return refreshed
+    ? { status: "updated", user: mapAuthUser(refreshed) }
+    : { status: "not_found" };
 }
 
 export async function listManagedUsers(): Promise<ManagedUser[]> {
-  const result = await queryWithRetry<{
-    user_id: string;
-    username: string;
-    email: string | null;
-    role: "ADMIN" | "USER";
-    is_active: boolean;
-    must_reset_password: boolean;
-  }>(
-    `
-      SELECT user_id, username, email, role, is_active, must_reset_password
-      FROM iehp_auth_users
-      ORDER BY user_id
-    `,
-    [],
+  const rows = await runDbWithRetry((db) =>
+    db
+      .select()
+      .from(authUsers)
+      .orderBy(authUsers.id),
   );
 
-  return result.rows.map((row) => ({
-    userId: row.user_id,
-    username: row.username,
-    email: row.email || row.username,
+  return rows.map((row) => ({
+    userId: row.legacyUserId || row.id,
+    username: row.username || row.email,
+    email: row.email,
     role: row.role,
-    isActive: row.is_active,
-    mustResetPassword: row.must_reset_password,
+    isActive: row.isActive,
+    mustResetPassword: row.mustResetPassword,
   }));
 }
 
 export async function createManagedUser(email: string, temporaryPassword: string): Promise<AuthUser> {
   const normalizedEmail = email.trim().toLowerCase();
+  const userId = await generateNextUserId();
   const passwordHash = await hashPassword(temporaryPassword);
-  const result = await queryWithRetry<{
-    user_id: string;
-    username: string;
-    email: string;
-    role: "ADMIN" | "USER";
-    must_reset_password: boolean;
-  }>(
-    `
-      INSERT INTO iehp_auth_users (username, email, password_hash, role, must_reset_password, is_active, created_at, updated_at)
-      VALUES ($1, $1, $2, 'USER', TRUE, TRUE, NOW(), NOW())
-      RETURNING user_id, username, email, role, must_reset_password
-    `,
-    [normalizedEmail, passwordHash],
-  );
+  const now = new Date();
 
-  const row = result.rows[0];
-  return {
-    userId: row.user_id,
-    username: row.username,
-    email: row.email,
-    role: row.role,
-    mustResetPassword: row.must_reset_password,
-  };
+  const rows = await runDbWithRetry(async (db) => {
+    const insertedUsers = await db
+      .insert(authUsers)
+      .values({
+        id: userId,
+        legacyUserId: userId,
+        name: normalizedEmail,
+        email: normalizedEmail,
+        emailVerified: true,
+        username: normalizedEmail,
+        displayUsername: normalizedEmail,
+        role: "USER",
+        mustResetPassword: true,
+        isActive: true,
+        createdAt: now,
+        updatedAt: now,
+      })
+      .returning();
+
+    await db.insert(authAccounts).values({
+      id: `${userId}:credential`,
+      accountId: userId,
+      providerId: "credential",
+      userId,
+      password: passwordHash,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    return insertedUsers;
+  });
+
+  return mapAuthUser(rows[0]);
 }
 
 export async function updateManagedUserEmail(userId: string, email: string): Promise<void> {
   const normalizedEmail = email.trim().toLowerCase();
-  await queryWithRetry(
-    `
-      UPDATE iehp_auth_users
-      SET username = $2,
-          email = $2,
-          updated_at = NOW()
-      WHERE user_id = $1
-    `,
-    [userId, normalizedEmail],
+  const user = await findActiveUserByUserId(userId);
+  if (!user) {
+    return;
+  }
+
+  await runDbWithRetry((db) =>
+    db
+      .update(authUsers)
+      .set({
+        email: normalizedEmail,
+        username: normalizedEmail,
+        displayUsername: normalizedEmail,
+        name: normalizedEmail,
+        updatedAt: new Date(),
+      })
+      .where(eq(authUsers.id, user.id)),
   );
 }
 
 export async function deactivateManagedUser(userId: string): Promise<void> {
-  await queryWithRetry(
-    `
-      UPDATE iehp_auth_users
-      SET is_active = FALSE,
-          updated_at = NOW()
-      WHERE user_id = $1
-    `,
-    [userId],
+  const user = await findActiveUserByUserId(userId);
+  if (!user) {
+    return;
+  }
+
+  await runDbWithRetry((db) =>
+    db
+      .update(authUsers)
+      .set({
+        isActive: false,
+        updatedAt: new Date(),
+      })
+      .where(eq(authUsers.id, user.id)),
   );
+}
+
+export async function getCredentialPasswordHashByLogin(username: string): Promise<string | null> {
+  const user = await findActiveUserByLogin(username);
+  if (!user) {
+    return null;
+  }
+
+  const account = await findCredentialAccount(user.id);
+  return account?.password ?? null;
 }

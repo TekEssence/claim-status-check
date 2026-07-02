@@ -7,11 +7,17 @@
     "test": "tsx --test backend/**/*.test.ts frontend/**/*.test.ts",
     "build": "npm test && next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate",
+    "db:studio": "drizzle-kit studio",
+    "auth:migrate": "node --env-file=.env.local --import tsx ./scripts/migrate-better-auth.ts"
   },
   "dependencies": {
     "@microsoft/fetch-event-source": "^2.0.1",
     "@sparticuz/chromium": "^148.0.0",
+    "better-auth": "^1.6.23",
+    "drizzle-orm": "^0.45.2",
     "exceljs": "^4.4.0",
     "next": "16.2.4",
     "pdf-lib": "^1.17.1",
@@ -28,6 +34,7 @@
     "@types/pg": "^8.20.0",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "drizzle-kit": "^0.31.10",
     "eslint": "^9",
     "eslint-config-next": "16.2.4",
     "playwright": "^1.59.1",

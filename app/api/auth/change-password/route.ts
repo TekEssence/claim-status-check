@@ -1,12 +1,12 @@
 import { changePasswordForUser, isAuthDbConnectionError } from "@/lib/auth/db";
-import { getSessionFromCookies, setSessionCookie } from "@/lib/auth/session";
+import { getSessionFromCookies } from "@/lib/auth/session";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function POST(req: Request) {
   try {
-    const session = await getSessionFromCookies();
+    const session = await getSessionFromCookies(req.headers);
     if (!session) {
       return Response.json({ error: "You must be logged in to reset the password." }, { status: 401 });
     }
@@ -27,7 +27,6 @@ export async function POST(req: Request) {
       return Response.json({ error: "New password must be different from the old password." }, { status: 400 });
     }
 
-    await setSessionCookie(result.user);
     return Response.json({ ok: true, user: result.user });
   } catch (error) {
     console.error("Change password failed", error);

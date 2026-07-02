@@ -461,12 +461,29 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
   }, [authUser]);
 
   useEffect(() => {
+    if (!authUser) {
+      return;
+    }
+
+    if (authUser.mustResetPassword) {
+      setSettingsOpen(false);
+      setSelectedPortalId(null);
+      setActiveView("reset-password");
+      return;
+    }
+
+    if (activeView === "reset-password") {
+      setActiveView("portal-selection");
+    }
+  }, [authUser, activeView]);
+
+  useEffect(() => {
     if (forcedPortalId) {
       setSelectedPortalId(forcedPortalId);
       return;
     }
 
-    if (!authUser || selectedPortalId) {
+    if (!authUser || authUser.mustResetPassword || selectedPortalId) {
       return;
     }
 
@@ -578,11 +595,20 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
         throw new Error(data.error || "Login failed.");
       }
 
-      setAuthUser(data.user ?? null);
+      const nextUser = data.user ?? null;
+      setAuthUser(nextUser);
       setAuthUsername("");
       setAuthPassword("");
       setAuthConfirmPassword("");
-      resetPortalSelection();
+      if (nextUser?.mustResetPassword) {
+        setSelectedPortalId(null);
+        setSettingsOpen(false);
+        setForgotPasswordMode(false);
+        setActiveView("reset-password");
+        setAuthStatus("Please update your password before continuing.");
+      } else {
+        resetPortalSelection();
+      }
     } catch (error) {
       setAuthError(getErrorMessage(error));
     } finally {
@@ -685,10 +711,14 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
         throw new Error(data.error || "Password reset failed.");
       }
 
-      setAuthUser(data.user ?? authUser);
+      const nextUser = data.user ?? authUser;
+      setAuthUser(nextUser);
       setSettingsPassword("");
       setSettingsConfirmPassword("");
       setSettingsPasswordStatus("Password updated successfully.");
+      if (nextUser && !nextUser.mustResetPassword) {
+        setActiveView("portal-selection");
+      }
     } catch (error) {
       setSettingsPasswordError(getErrorMessage(error));
     } finally {
@@ -1606,7 +1636,7 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
           </button>
 
           <div className="flex items-center gap-3">
-            {effectivePortalId && (
+            {effectivePortalId && !authUser.mustResetPassword && (
               <button
                 type="button"
                 disabled={isProcessing}
@@ -1667,17 +1697,24 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
         {activeView === "reset-password" ? (
           <div className="mx-auto w-full max-w-xl rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
             <div className="flex flex-wrap items-center justify-between gap-4">
-              <h1 className="text-xl font-semibold">Reset Password</h1>
-              <button
-                type="button"
-                onClick={() => {
-                  setActiveView("portal-selection");
-                  setSettingsOpen(false);
-                }}
-                className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium hover:bg-slate-50"
-              >
-                Back
-              </button>
+              <div>
+                <h1 className="text-xl font-semibold">Reset Password</h1>
+                {authUser.mustResetPassword && (
+                  <p className="mt-1 text-sm text-slate-600">You need to reset your password before accessing the portal.</p>
+                )}
+              </div>
+              {!authUser.mustResetPassword && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveView("portal-selection");
+                    setSettingsOpen(false);
+                  }}
+                  className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium hover:bg-slate-50"
+                >
+                  Back
+                </button>
+              )}
             </div>
 
             <form className="mt-5 space-y-4" onSubmit={resetPasswordFromSettings}>
