@@ -2,7 +2,7 @@
 
 import { motion } from "framer-motion";
 import { FormEvent, useEffect, useMemo, useState } from "react";
-import Image from "next/image";
+import Image, { type StaticImageData } from "next/image";
 import { usePathname, useRouter } from "next/navigation";
 import * as XLSX from "xlsx";
 import ExcelJS from "exceljs";
@@ -21,6 +21,9 @@ import {
 } from "lucide-react";
 import claimStatusHeroImage from "../Assets/ChatGPT Image Jun 30, 2026, 12_47_57 PM.png";
 import dashboardWelcomeImage from "../Assets/ChatGPT Image Jul 1, 2026, 10_55_01 AM.png";
+import blueShieldCaliforniaLogo from "../Assets/customerlogo-blue-shield-california-clr.svg";
+import iehpLogo from "../Assets/channels4_profile.jpg";
+import regalLogo from "../Assets/channels4_profile (1).jpg";
 import { applyClaimRowUpdateToWorksheet, postProcessWorksheet } from "../portals/iehp/workbook";
 import { cancelScrapeJob as cancelScrapeJobRequest, getCurrentScrapeJob, startScrapeJob, subscribeToScrapeJobEvents, submitScrapeJobInput, type CurrentScrapeJob } from "../api/scrape-jobs-api";
 import { clearStoredRunContext, loadClaimFileHandle, loadIehpLoginFile, saveClaimFileHandle, saveIehpLoginFile } from "../lib/run-context-store";
@@ -87,11 +90,37 @@ const PORTAL_UI_META: Record<
   {
     shortCode: string;
     logoClassName: string;
+    logoSrc?: string | StaticImageData;
+    cardLogoFrameClassName?: string;
+    cardLogoImageClassName?: string;
+    cardLogoSize?: {
+      width: number;
+      height: number;
+    };
+    heroLogoFrameClassName?: string;
+    heroLogoImageClassName?: string;
+    heroLogoSize?: {
+      width: number;
+      height: number;
+    };
   }
 > = {
   iehp: {
     shortCode: "IEHP",
-    logoClassName: "bg-[linear-gradient(180deg,#dbeafe_0%,#bfdbfe_100%)] text-blue-700",
+    logoClassName: "bg-white text-blue-700",
+    logoSrc: iehpLogo,
+    cardLogoFrameClassName: "h-10 w-[5.4rem] rounded-[1rem] px-1.5",
+    cardLogoImageClassName: "h-full w-full scale-[2.2] object-contain",
+    cardLogoSize: {
+      width: 72,
+      height: 28,
+    },
+    heroLogoFrameClassName: "h-14 w-[7.6rem] rounded-[1.15rem] px-2.5",
+    heroLogoImageClassName: "h-full w-full scale-[2.2] object-contain",
+    heroLogoSize: {
+      width: 104,
+      height: 40,
+    },
   },
   aerial: {
     shortCode: "AC",
@@ -99,11 +128,37 @@ const PORTAL_UI_META: Record<
   },
   regal: {
     shortCode: "RP",
-    logoClassName: "bg-[linear-gradient(180deg,#f3e8ff_0%,#e9d5ff_100%)] text-violet-700",
+    logoClassName: "bg-white text-violet-700",
+    logoSrc: regalLogo,
+    cardLogoFrameClassName: "h-11 w-11 rounded-[1.1rem] p-0.5",
+    cardLogoImageClassName: "h-full w-full scale-[1.08] rounded-[1rem] object-cover",
+    cardLogoSize: {
+      width: 44,
+      height: 44,
+    },
+    heroLogoFrameClassName: "h-16 w-16 rounded-[1.35rem] p-0.5",
+    heroLogoImageClassName: "h-full w-full scale-[1.08] rounded-[1.2rem] object-cover",
+    heroLogoSize: {
+      width: 64,
+      height: 64,
+    },
   },
   "blue-shield": {
     shortCode: "BS",
-    logoClassName: "bg-[linear-gradient(180deg,#dbeafe_0%,#d9e8ff_100%)] text-blue-700",
+    logoClassName: "bg-white text-blue-700",
+    logoSrc: blueShieldCaliforniaLogo,
+    cardLogoFrameClassName: "h-10 w-[4.4rem] rounded-[1rem] px-2",
+    cardLogoImageClassName: "h-5 w-full object-contain",
+    cardLogoSize: {
+      width: 56,
+      height: 20,
+    },
+    heroLogoFrameClassName: "h-14 w-[6.25rem] rounded-[1.15rem] px-3",
+    heroLogoImageClassName: "h-7 w-full object-contain",
+    heroLogoSize: {
+      width: 84,
+      height: 28,
+    },
   },
 };
 
@@ -2685,8 +2740,22 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
                           }`}
                         >
                           <div className="flex items-start justify-between gap-3">
-                            <span className={`flex h-10 w-10 items-center justify-center rounded-2xl text-xs font-semibold shadow-inner ${meta.logoClassName}`}>
-                              {meta.shortCode}
+                            <span
+                              className={`flex items-center justify-center overflow-hidden text-xs font-semibold shadow-inner ${
+                                meta.logoSrc ? (meta.cardLogoFrameClassName ?? "h-10 w-[4.4rem] rounded-[1rem] px-2") : "h-10 w-10 rounded-2xl"
+                              } ${meta.logoClassName}`}
+                            >
+                              {meta.logoSrc ? (
+                                <Image
+                                  src={meta.logoSrc}
+                                  alt={`${portal.name} logo`}
+                                  width={meta.cardLogoSize?.width ?? 56}
+                                  height={meta.cardLogoSize?.height ?? 20}
+                                  className={meta.cardLogoImageClassName ?? "h-5 w-full object-contain"}
+                                />
+                              ) : (
+                                meta.shortCode
+                              )}
                             </span>
                             <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-1 text-[0.65rem] font-semibold text-emerald-600">
                               <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
@@ -2719,8 +2788,24 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
                 <div className="grid gap-6 lg:grid-cols-[minmax(0,1.1fr)_25rem] lg:items-center">
                   <div className="max-w-2xl">
                     <div className="flex flex-wrap items-center gap-3">
-                      <span className={`flex h-14 w-14 items-center justify-center rounded-[1.25rem] text-sm font-semibold shadow-inner ${selectedPortalUiMeta?.logoClassName ?? "bg-blue-50 text-blue-700"}`}>
-                        {selectedPortalUiMeta?.shortCode ?? "PRT"}
+                      <span
+                        className={`flex items-center justify-center overflow-hidden text-sm font-semibold shadow-inner ${
+                          selectedPortalUiMeta?.logoSrc
+                            ? (selectedPortalUiMeta.heroLogoFrameClassName ?? "h-14 w-[6.25rem] rounded-[1.15rem] px-3")
+                            : "h-14 w-14 rounded-[1.25rem]"
+                        } ${selectedPortalUiMeta?.logoClassName ?? "bg-blue-50 text-blue-700"}`}
+                      >
+                        {selectedPortalUiMeta?.logoSrc ? (
+                          <Image
+                            src={selectedPortalUiMeta.logoSrc}
+                            alt={`${selectedPortal.name} logo`}
+                            width={selectedPortalUiMeta.heroLogoSize?.width ?? 84}
+                            height={selectedPortalUiMeta.heroLogoSize?.height ?? 28}
+                            className={selectedPortalUiMeta.heroLogoImageClassName ?? "h-7 w-full object-contain"}
+                          />
+                        ) : (
+                          selectedPortalUiMeta?.shortCode ?? "PRT"
+                        )}
                       </span>
                       <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-600">
                         <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
