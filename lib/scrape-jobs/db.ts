@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, or } from "drizzle-orm";
+import { and, asc, desc, eq, or, sql } from "drizzle-orm";
 import { isRetryableDbError, runDbWithRetry } from "@/db";
 import { scrapeJobArtifacts, scrapeJobLogs, scrapeJobs } from "@/db/schema/scrape-jobs";
 
@@ -33,6 +33,13 @@ export type PersistentScrapeJobArtifact = {
 };
 
 type ScrapeJobRow = typeof scrapeJobs.$inferSelect;
+export type UserDashboardStats = {
+  availablePortals: number;
+  completedClaimsToday: number;
+  failedJobsToday: number;
+  portalsRunToday: number;
+  runningJobs: number;
+};
 
 export function isScrapeJobDbConnectionError(error: unknown): boolean {
   const code = typeof error === "object" && error !== null && "code" in error ? String((error as { code?: unknown }).code ?? "") : "";
@@ -256,4 +263,27 @@ export async function updateScrapeJobSnapshot(params: {
       })
       .where(eq(scrapeJobs.jobId, params.jobId)),
   );
+}
+
+export async function getDashboardStatsForUser(userId: string, availablePortals: number): Promise<UserDashboardStats> {
+  const rows = await runDbWithRetry((db) =>
+    db
+      .select({
+        portalsRunToday: sql<number>`COALESCE(COUNT(DISTINCT ${scrapeJobs.portalId}) FILTER (WHERE ${scrapeJobs.createdAt} >= CURRENT_DATE), 0)`,
+        completedClaimsToday: sql<number>`COALESCE(SUM(${scrapeJobs.currentCompleted}) FILTER (WHERE ${scrapeJobs.status} = 'completed' AND ${scrapeJobs.updatedAt} >= CURRENT_DATE), 0)`,
+        failedJobsToday: sql<number>`COALESCE(COUNT(*) FILTER (WHERE ${scrapeJobs.status} = 'failed' AND ${scrapeJobs.updatedAt} >= CURRENT_DATE), 0)`,
+        runningJobs: sql<number>`COALESCE(COUNT(*) FILTER (WHERE ${scrapeJobs.status} IN ('running', 'waiting_resume')), 0)`,
+      })
+      .from(scrapeJobs)
+      .where(eq(scrapeJobs.userId, userId)),
+  );
+
+  const row = rows[0];
+  return {
+    availablePortals,
+    completedClaimsToday: Number(row?.completedClaimsToday ?? 0),
+    failedJobsToday: Number(row?.failedJobsToday ?? 0),
+    portalsRunToday: Number(row?.portalsRunToday ?? 0),
+    runningJobs: Number(row?.runningJobs ?? 0),
+  };
 }

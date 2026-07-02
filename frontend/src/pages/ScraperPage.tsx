@@ -1,9 +1,29 @@
 "use client";
 
+import { motion } from "framer-motion";
 import { FormEvent, useEffect, useMemo, useState } from "react";
+import Image, { type StaticImageData } from "next/image";
 import { usePathname, useRouter } from "next/navigation";
 import * as XLSX from "xlsx";
 import ExcelJS from "exceljs";
+import {
+  Activity,
+  CheckCheck,
+  LayoutDashboard,
+  LogOut,
+  ShieldEllipsis,
+  Search,
+  ShieldCheck,
+  SlidersHorizontal,
+  Stethoscope,
+  Users,
+  Zap,
+} from "lucide-react";
+import claimStatusHeroImage from "../Assets/ChatGPT Image Jun 30, 2026, 12_47_57 PM.png";
+import dashboardWelcomeImage from "../Assets/ChatGPT Image Jul 1, 2026, 10_55_01 AM.png";
+import blueShieldCaliforniaLogo from "../Assets/customerlogo-blue-shield-california-clr.svg";
+import iehpLogo from "../Assets/channels4_profile.jpg";
+import regalLogo from "../Assets/channels4_profile (1).jpg";
 import { applyClaimRowUpdateToWorksheet, postProcessWorksheet } from "../portals/iehp/workbook";
 import { cancelScrapeJob as cancelScrapeJobRequest, getCurrentScrapeJob, startScrapeJob, subscribeToScrapeJobEvents, submitScrapeJobInput, type CurrentScrapeJob } from "../api/scrape-jobs-api";
 import { clearStoredRunContext, loadClaimFileHandle, loadIehpLoginFile, saveClaimFileHandle, saveIehpLoginFile } from "../lib/run-context-store";
@@ -37,6 +57,14 @@ type ManagedUser = {
   role: "ADMIN" | "USER";
   isActive: boolean;
   mustResetPassword: boolean;
+};
+
+type DashboardStatsData = {
+  availablePortals: number;
+  completedClaimsToday: number;
+  failedJobsToday: number;
+  portalsRunToday: number;
+  runningJobs: number;
 };
 
 type IehpWorkbookBundle = {
@@ -79,6 +107,107 @@ function canRestoreCurrentJob(job: CurrentScrapeJob): job is CurrentScrapeJob & 
   if (job.status === "running") return true;
   return job.portalId === "iehp" && job.status === "waiting_resume";
 }
+const PORTAL_UI_META: Record<
+  PortalId,
+  {
+    shortCode: string;
+    logoClassName: string;
+    logoSrc?: string | StaticImageData;
+    cardLogoFrameClassName?: string;
+    cardLogoImageClassName?: string;
+    cardLogoSize?: {
+      width: number;
+      height: number;
+    };
+    heroLogoFrameClassName?: string;
+    heroLogoImageClassName?: string;
+    heroLogoSize?: {
+      width: number;
+      height: number;
+    };
+  }
+> = {
+  iehp: {
+    shortCode: "IEHP",
+    logoClassName: "bg-white text-blue-700",
+    logoSrc: iehpLogo,
+    cardLogoFrameClassName: "h-10 w-[5.4rem] rounded-[1rem] px-1.5",
+    cardLogoImageClassName: "h-full w-full scale-[2.2] object-contain",
+    cardLogoSize: {
+      width: 72,
+      height: 28,
+    },
+    heroLogoFrameClassName: "h-14 w-[7.6rem] rounded-[1.15rem] px-2.5",
+    heroLogoImageClassName: "h-full w-full scale-[2.2] object-contain",
+    heroLogoSize: {
+      width: 104,
+      height: 40,
+    },
+  },
+  aerial: {
+    shortCode: "AC",
+    logoClassName: "bg-[linear-gradient(180deg,#e0ecff_0%,#c7ddff_100%)] text-blue-700",
+  },
+  regal: {
+    shortCode: "RP",
+    logoClassName: "bg-white text-violet-700",
+    logoSrc: regalLogo,
+    cardLogoFrameClassName: "h-11 w-11 rounded-[1.1rem] p-0.5",
+    cardLogoImageClassName: "h-full w-full scale-[1.08] rounded-[1rem] object-cover",
+    cardLogoSize: {
+      width: 44,
+      height: 44,
+    },
+    heroLogoFrameClassName: "h-16 w-16 rounded-[1.35rem] p-0.5",
+    heroLogoImageClassName: "h-full w-full scale-[1.08] rounded-[1.2rem] object-cover",
+    heroLogoSize: {
+      width: 64,
+      height: 64,
+    },
+  },
+  "blue-shield": {
+    shortCode: "BS",
+    logoClassName: "bg-white text-blue-700",
+    logoSrc: blueShieldCaliforniaLogo,
+    cardLogoFrameClassName: "h-10 w-[4.4rem] rounded-[1rem] px-2",
+    cardLogoImageClassName: "h-5 w-full object-contain",
+    cardLogoSize: {
+      width: 56,
+      height: 20,
+    },
+    heroLogoFrameClassName: "h-14 w-[6.25rem] rounded-[1.15rem] px-3",
+    heroLogoImageClassName: "h-7 w-full object-contain",
+    heroLogoSize: {
+      width: 84,
+      height: 28,
+    },
+  },
+};
+
+const PORTAL_WORKSPACE_META: Record<
+  PortalId,
+  {
+    heroDescription: string;
+    processingDescription: string;
+  }
+> = {
+  iehp: {
+    heroDescription: "Upload your login workbook and claim workbook to begin automated claim status verification with live workbook updates.",
+    processingDescription: "Your files are validated before processing and the linked workbook is updated in place as claim checks complete.",
+  },
+  aerial: {
+    heroDescription: "Upload your login workbook and claim details workbook to begin automated claim status verification.",
+    processingDescription: "The platform validates workbook structure, secures the upload, and starts payer automation with live status tracking.",
+  },
+  regal: {
+    heroDescription: "Upload the Regal workbook package to start a guided automation workflow with secure validation and live progress tracking.",
+    processingDescription: "If needed, you can override environment credentials and continue the Regal flow with secure OTP-assisted verification.",
+  },
+  "blue-shield": {
+    heroDescription: "Upload your login workbook and input workbook to begin Blue Shield claim status verification grouped by member-ready processing.",
+    processingDescription: "Blue Shield requests are validated by group, encrypted during upload, and processed with checkpoint-aware automation.",
+  },
+};
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -404,12 +533,17 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
   const [authStatus, setAuthStatus] = useState("");
   const [authSubmitting, setAuthSubmitting] = useState(false);
   const [forgotPasswordMode, setForgotPasswordMode] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const [activeView, setActiveView] = useState<"portal-selection" | "manage-users" | "reset-password">("portal-selection");
   const [manageTab, setManageTab] = useState<"add" | "employees">("add");
   const [managedUsers, setManagedUsers] = useState<ManagedUser[]>([]);
   const [manageError, setManageError] = useState("");
   const [manageStatus, setManageStatus] = useState("");
+  const [portalSearch, setPortalSearch] = useState("");
+  const [portalFilter, setPortalFilter] = useState<"all" | PortalId>("all");
+  const [portalSort, setPortalSort] = useState<"name-asc" | "name-desc">("name-asc");
+  const [portalLayout, setPortalLayout] = useState<"grid" | "list">("grid");
+  const [filterMenuOpen, setFilterMenuOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [newUserEmail, setNewUserEmail] = useState("");
   const [temporaryPassword, setTemporaryPassword] = useState("");
   const [editingUserId, setEditingUserId] = useState("");
@@ -446,15 +580,30 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
   const [regalOtpValue, setRegalOtpValue] = useState<string>("");
   const [latestRegalOutput, setLatestRegalOutput] = useState<DownloadableArtifact | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [isCancellingJob, setIsCancellingJob] = useState(false);
   const [status, setStatus] = useState<string>("");
   const [logs, setLogs] = useState<string[]>([]);
   const [errorScreenshots, setErrorScreenshots] = useState<ErrorScreenshot[]>([]);
   const [progress, setProgress] = useState<JobProgressValue | null>(null);
+  const [activeJobId, setActiveJobId] = useState<string>("");
   const [jobRestoreLoading, setJobRestoreLoading] = useState(true);
   const [pendingIehpRestoreJob, setPendingIehpRestoreJob] = useState<CurrentScrapeJob | null>(null);
   const [pendingRegalRestoreJob, setPendingRegalRestoreJob] = useState<CurrentScrapeJob | null>(null);
+  const [pendingBlueShieldRestoreJob, setPendingBlueShieldRestoreJob] = useState<CurrentScrapeJob | null>(null);
+  const [dashboardStatsData, setDashboardStatsData] = useState<DashboardStatsData>({
+    availablePortals: 0,
+    completedClaimsToday: 0,
+    failedJobsToday: 0,
+    portalsRunToday: 0,
+    runningJobs: 0,
+  });
 
+  const isProtectedRoute = pathname !== "/";
   const effectivePortalId = forcedPortalId ?? selectedPortalId;
+  const availablePortals = useMemo(
+    () => [iehpFrontendPortalConfig, aerialFrontendPortalConfig, regalFrontendPortalConfig, blueShieldFrontendPortalConfig] as const,
+    [],
+  );
   const selectedPortal =
     effectivePortalId === "iehp"
       ? iehpFrontendPortalConfig
@@ -465,6 +614,44 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
           : effectivePortalId === "blue-shield"
             ? blueShieldFrontendPortalConfig
             : null;
+  const selectedPortalUiMeta = effectivePortalId ? PORTAL_UI_META[effectivePortalId] : null;
+  const filteredPortals = useMemo(() => {
+    const normalizedQuery = portalSearch.trim().toLowerCase();
+    const matches = availablePortals.filter((portal) => {
+      const matchesSearch =
+        !normalizedQuery ||
+        `${portal.name} ${portal.description} ${portal.id}`.toLowerCase().includes(normalizedQuery);
+      const matchesFilter = portalFilter === "all" || portal.id === portalFilter;
+      return matchesSearch && matchesFilter;
+    });
+
+    return [...matches].sort((left, right) =>
+      portalSort === "name-asc"
+        ? left.name.localeCompare(right.name)
+        : right.name.localeCompare(left.name),
+    );
+  }, [availablePortals, portalFilter, portalSearch, portalSort]);
+  const recentPortals = useMemo(() => availablePortals.slice(0, 4), [availablePortals]);
+  const userDisplayName = useMemo(() => {
+    const raw = authUser?.email || authUser?.username || "Afrin";
+    const candidate = raw.split("@")[0].replace(/[._-]+/g, " ").trim();
+    return candidate
+      .split(" ")
+      .filter(Boolean)
+      .map((part) => part[0]?.toUpperCase() + part.slice(1))
+      .join(" ");
+  }, [authUser]);
+  const userInitials = useMemo(
+    () =>
+      userDisplayName
+        .split(" ")
+        .filter(Boolean)
+        .slice(0, 2)
+        .map((part) => part[0])
+        .join("")
+        .toUpperCase(),
+    [userDisplayName],
+  );
   const canSubmitIehp = useMemo(
     () => Boolean(iehpLoginFile && claimFileHandle && !isProcessing),
     [iehpLoginFile, claimFileHandle, isProcessing],
@@ -481,6 +668,95 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
     () => Boolean(blueShieldCredentialFile && blueShieldInputFile && blueShieldGroup && !isProcessing),
     [blueShieldCredentialFile, blueShieldInputFile, blueShieldGroup, isProcessing],
   );
+  const currentCanSubmit =
+    effectivePortalId === "iehp"
+      ? canSubmitIehp
+      : effectivePortalId === "aerial"
+        ? canSubmitAerial
+        : effectivePortalId === "regal"
+          ? canSubmitRegal
+          : effectivePortalId === "blue-shield"
+            ? canSubmitBlueShield
+            : false;
+  const portalWorkflowMeta = effectivePortalId ? PORTAL_WORKSPACE_META[effectivePortalId] : null;
+  const portalFileState = useMemo(() => {
+    if (effectivePortalId === "iehp") {
+      return {
+        claimFileLabel: claimFileName,
+        claimReady: Boolean(claimFileName),
+        loginFileLabel: iehpLoginFile?.name ?? "",
+        loginReady: Boolean(iehpLoginFile),
+      };
+    }
+
+    if (effectivePortalId === "aerial") {
+      return {
+        claimFileLabel: aerialInputFile?.name ?? "",
+        claimReady: Boolean(aerialInputFile),
+        loginFileLabel: aerialCredentialFile?.name ?? "",
+        loginReady: Boolean(aerialCredentialFile),
+      };
+    }
+
+    if (effectivePortalId === "regal") {
+      return {
+        claimFileLabel: regalClaimFile?.name ?? "",
+        claimReady: Boolean(regalClaimFile),
+        loginFileLabel: regalLoginFile?.name ?? "",
+        loginReady: Boolean(regalLoginFile),
+      };
+    }
+
+    if (effectivePortalId === "blue-shield") {
+      return {
+        claimFileLabel: blueShieldInputFile?.name ?? "",
+        claimReady: Boolean(blueShieldInputFile),
+        loginFileLabel: blueShieldCredentialFile?.name ?? "",
+        loginReady: Boolean(blueShieldCredentialFile),
+      };
+    }
+
+    return {
+      claimFileLabel: "",
+      claimReady: false,
+      loginFileLabel: "",
+      loginReady: false,
+    };
+  }, [
+    aerialCredentialFile,
+    aerialInputFile,
+    blueShieldCredentialFile,
+    blueShieldInputFile,
+    claimFileName,
+    effectivePortalId,
+    iehpLoginFile,
+    regalClaimFile,
+    regalLoginFile,
+  ]);
+  const portalWorkflowStepIndex = useMemo(() => {
+    const normalizedStatus = status.toLowerCase();
+    const isCompleted =
+      !isProcessing &&
+      Boolean(status.trim()) &&
+      /(complete|completed|success|finished|done|saved|updated)/i.test(normalizedStatus);
+
+    if (isCompleted) return 4;
+    if (isProcessing) return 3;
+    if (currentCanSubmit) return 2;
+    if (portalFileState.claimReady) return 1;
+    return 0;
+  }, [currentCanSubmit, isProcessing, portalFileState.claimReady, status]);
+  const hasCompletedRun = useMemo(
+    () => !isProcessing && Boolean(status.trim()) && /(complete|completed|success|finished|done|saved|updated)/i.test(status.toLowerCase()),
+    [isProcessing, status],
+  );
+  const portalWorkflowSteps = [
+    "Upload Login File",
+    "Upload Claim File",
+    "Validate Files",
+    "Processing",
+    "Completed",
+  ];
 
   function navigateToPortalRoute(portalId: PortalId) {
     const targetRoute = PORTAL_ROUTE_MAP[portalId];
@@ -513,6 +789,12 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
       mounted = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (!authLoading && !authUser && isProtectedRoute) {
+      router.replace("/");
+    }
+  }, [authLoading, authUser, isProtectedRoute, router]);
 
   useEffect(() => {
     if (!authUser) {
@@ -551,10 +833,22 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
             ? { completed: currentJob.currentCompleted, total: currentJob.totalRows }
             : null,
         );
+        setActiveView("portal-selection");
+
+        if (currentJob.portalId === "blue-shield") {
+          setActiveJobId(currentJob.jobId);
+          setPendingBlueShieldRestoreJob(currentJob);
+          setSelectedPortalId("blue-shield");
+          setIsProcessing(false);
+          setStatus("A previous Blue Shield run is still active. Click Start processing to replace it, or Cancel Processing to stop it.");
+          return;
+        }
+
         setStatus(`Reconnected to ${currentJob.portalId.toUpperCase()} run in progress...`);
         setIsProcessing(true);
-        setSelectedPortalId(currentJob.portalId);
-        navigateToPortalRoute(currentJob.portalId);
+        setActiveJobId(currentJob.jobId);
+        setSelectedPortalId(currentJob.portalId as PortalId);
+        navigateToPortalRoute(currentJob.portalId as PortalId);
         setActiveView("portal-selection");
 
         if (currentJob.portalId === "iehp") {
@@ -595,8 +889,6 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
           await reconnectAerialRun(currentJob);
         } else if (currentJob.portalId === "regal") {
           await reconnectRegalRun(currentJob);
-        } else if (currentJob.portalId === "blue-shield") {
-          await reconnectBlueShieldRun(currentJob);
         }
       } catch (error) {
         if (!cancelled) {
@@ -662,6 +954,44 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
   }, [authUser, selectedPortalId, forcedPortalId]);
 
   useEffect(() => {
+    if (!authUser) {
+      setDashboardStatsData({
+        availablePortals: availablePortals.length,
+        completedClaimsToday: 0,
+        failedJobsToday: 0,
+        portalsRunToday: 0,
+        runningJobs: 0,
+      });
+      return;
+    }
+
+    let cancelled = false;
+
+    fetch("/api/dashboard/stats")
+      .then(async (response) => {
+        if (!response.ok) {
+          throw new Error(`Failed to load dashboard stats: ${response.status}`);
+        }
+        const data = (await response.json()) as { stats?: DashboardStatsData };
+        if (!cancelled && data.stats) {
+          setDashboardStatsData(data.stats);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setDashboardStatsData((current) => ({
+            ...current,
+            availablePortals: availablePortals.length,
+          }));
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [authUser, availablePortals.length]);
+
+  useEffect(() => {
     if (typeof window === "undefined") return;
     if (forcedPortalId) return;
     try {
@@ -677,10 +1007,12 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
 
   function resetRunState(message: string) {
     setIsProcessing(true);
+    setIsCancellingJob(false);
     setStatus(message);
     setLogs([]);
     setErrorScreenshots([]);
     setProgress(null);
+    setActiveJobId("");
     setRegalJobId("");
     setRegalMfaRequest(null);
     setRegalMfaValue("");
@@ -715,6 +1047,11 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
     setLogs([]);
     setErrorScreenshots([]);
     setProgress(null);
+    setIsProcessing(false);
+    setIsCancellingJob(false);
+    setActiveJobId("");
+    setPendingIehpRestoreJob(null);
+    setPendingBlueShieldRestoreJob(null);
     setRegalJobId("");
     setRegalMfaRequest(null);
     setRegalMfaValue("");
@@ -736,7 +1073,6 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
   }
 
   async function openManageUsers() {
-    setSettingsOpen(false);
     setActiveView("manage-users");
     setManageStatus("");
     try {
@@ -747,7 +1083,6 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
   }
 
   async function openResetPassword() {
-    setSettingsOpen(false);
     setActiveView("reset-password");
     setSettingsPassword("");
     setSettingsConfirmPassword("");
@@ -837,7 +1172,6 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
     setAuthError("");
     setAuthStatus("");
     setForgotPasswordMode(false);
-    setSettingsOpen(false);
     setActiveView("portal-selection");
     setManagedUsers([]);
     setManageError("");
@@ -865,10 +1199,53 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
     setBlueShieldOtpRequest(null);
     setBlueShieldOtpValue("");
     setIsProcessing(false);
+    setIsCancellingJob(false);
     setStatus("");
     setLogs([]);
     setErrorScreenshots([]);
     setProgress(null);
+    setActiveJobId("");
+    setPendingIehpRestoreJob(null);
+    setPendingBlueShieldRestoreJob(null);
+  }
+
+  async function cancelActiveJob() {
+    const jobId = pendingBlueShieldRestoreJob?.jobId || pendingIehpRestoreJob?.jobId || activeJobId || regalJobId;
+    if (!jobId || isCancellingJob) return;
+
+    setIsCancellingJob(true);
+    setStatus("Cancelling current processing run...");
+
+    try {
+      await cancelScrapeJobRequest(jobId);
+      setPendingBlueShieldRestoreJob(null);
+      setPendingIehpRestoreJob(null);
+      setActiveJobId("");
+      setRegalJobId("");
+      setRegalOtpRequest(null);
+      setRegalOtpValue("");
+      setIsProcessing(false);
+      setStatus("Processing cancelled.");
+      await clearStoredRunContext().catch(() => {});
+    } catch (error) {
+      setStatus(`Failed to cancel processing: ${getErrorMessage(error)}`);
+    } finally {
+      setIsCancellingJob(false);
+    }
+  }
+
+  function resetBlueShieldWorkflow() {
+    setBlueShieldCredentialFile(null);
+    setBlueShieldInputFile(null);
+    setBlueShieldResetCheckpoint(false);
+    setStatus("");
+    setLogs([]);
+    setErrorScreenshots([]);
+    setProgress(null);
+    setActiveJobId("");
+    setPendingBlueShieldRestoreJob(null);
+    setIsProcessing(false);
+    setIsCancellingJob(false);
   }
 
   async function resetPasswordFromSettings(e: FormEvent<HTMLFormElement>) {
@@ -1044,6 +1421,7 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
     await saveIehpLoginFile(options.loginFile).catch(() => {});
 
     setIsProcessing(true);
+    setActiveJobId(options.existingJobId ?? "");
     setLogs(options.initialLogs ?? []);
     setProgress(options.initialProgress ?? null);
     setErrorScreenshots([]);
@@ -1127,6 +1505,11 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
           } else if (eventData.type === "error" && eventData.message) {
             setStatus(`Error: ${eventData.message}`);
             chunkHasError = true;
+          } else if (eventData.type === "cancelled") {
+            cancellationRequested = true;
+            chunkHasError = true;
+            setStatus(eventData.message || "Processing cancelled.");
+            setLogs((prev) => [...prev, eventData.message || "Processing cancelled."]);
           }
         };
 
@@ -1143,6 +1526,7 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
             formData.append("existingJobId", logicalJobId);
           }
           subscribedJobId = await startScrapeJob(formData);
+          setActiveJobId(subscribedJobId);
         }
 
         await subscribeToScrapeJobEvents({
@@ -1184,11 +1568,13 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
           setStatus(`Processing succeeded but post-processing failed: ${getErrorMessage(postError)}`);
         } finally {
           setIsProcessing(false);
+          setActiveJobId("");
         }
       }
     };
 
     await processChunk(options.initialStartIndex ?? 0, options.existingJobId ?? "", options.attachToRunningJob ? "attach" : "start");
+    setActiveJobId("");
   }
 
   async function resumeExistingIehpRun(currentJob: CurrentScrapeJob, storedClaimHandle: FileSystemFileHandle, storedLoginFile: File) {
@@ -1218,6 +1604,7 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
 
   async function reconnectAerialRun(currentJob: CurrentScrapeJob) {
     setIsProcessing(true);
+    setActiveJobId(currentJob.jobId);
     setSelectedPortalId("aerial");
     setLogs([]);
     setErrorScreenshots(
@@ -1232,6 +1619,7 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
     setStatus("Reconnecting to current Aerial run...");
 
     let hasError = false;
+    let wasCancelled = false;
     let finalErrorMessage = "";
     let subscribedJobId = "";
     const streamAbortController = new AbortController();
@@ -1262,6 +1650,10 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
             setLogs((prev) => [...prev, `ERROR: ${eventData.message}`]);
             setStatus(`Error: ${eventData.message}`);
             hasError = true;
+          } else if (eventData.type === "cancelled") {
+            wasCancelled = true;
+            setStatus(eventData.message || "Processing cancelled.");
+            setLogs((prev) => [...prev, eventData.message || "Processing cancelled."]);
           }
         },
         onStreamError(error) {
@@ -1274,12 +1666,15 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
       });
 
       setStatus(
-        hasError
+        wasCancelled
+          ? "Aerial processing cancelled."
+          : hasError
           ? `Aerial processing finished with errors${finalErrorMessage ? `: ${finalErrorMessage}` : "."}`
           : "Aerial processing completed.",
       );
     } finally {
       setIsProcessing(false);
+      setActiveJobId("");
     }
   }
 
@@ -1287,6 +1682,8 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
 
   async function reconnectBlueShieldRun(currentJob: CurrentScrapeJob) {
     setIsProcessing(true);
+    setActiveJobId(currentJob.jobId);
+    setPendingBlueShieldRestoreJob(null);
     setSelectedPortalId("blue-shield");
     setBlueShieldJobId(currentJob.jobId);
     setLogs(currentJob.logs ?? []);
@@ -1302,6 +1699,7 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
     setStatus("Reconnecting to current Blue Shield run...");
 
     let hasError = false;
+    let wasCancelled = false;
     let finalErrorMessage = "";
     const streamAbortController = new AbortController();
 
@@ -1339,6 +1737,10 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
             setLogs((prev) => [...prev, `ERROR: ${eventData.message}`]);
             setStatus(`Error: ${eventData.message}`);
             hasError = true;
+          } else if (eventData.type === "cancelled") {
+            wasCancelled = true;
+            setStatus(eventData.message || "Processing cancelled.");
+            setLogs((prev) => [...prev, eventData.message || "Processing cancelled."]);
           }
         },
         onStreamError(error) {
@@ -1351,17 +1753,21 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
       });
 
       setStatus(
-        hasError
+        wasCancelled
+          ? "Blue Shield processing cancelled."
+          : hasError
           ? `Blue Shield processing finished with errors${finalErrorMessage ? `: ${finalErrorMessage}` : "."}`
           : "Blue Shield processing completed.",
       );
     } finally {
       setIsProcessing(false);
+      setActiveJobId("");
     }
   }
 
   async function reconnectRegalRun(currentJob: CurrentScrapeJob) {
     setIsProcessing(true);
+    setActiveJobId(currentJob.jobId);
     setSelectedPortalId("regal");
     setRegalJobId(currentJob.jobId);
     setLogs(currentJob.logs ?? []);
@@ -1406,6 +1812,7 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
     setStatus("Reconnecting to current Regal run...");
 
     let hasError = false;
+    let wasCancelled = false;
     let finalErrorMessage = "";
     const diagnosticFiles: DownloadFile[] = [];
     const streamAbortController = new AbortController();
@@ -1439,6 +1846,9 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
             finalErrorMessage = message;
             hasError = true;
           }, diagnosticFiles);
+          if (eventData.type === "cancelled") {
+            wasCancelled = true;
+          }
         },
         onStreamError(error) {
           console.error("Regal stream error:", error);
@@ -1451,12 +1861,15 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
       downloadZip(`regal-diagnostics-${currentJob.jobId}.zip`, diagnosticFiles);
 
       setStatus(
-        hasError
+        wasCancelled
+          ? "Regal processing cancelled."
+          : hasError
           ? `Regal processing finished with errors${finalErrorMessage ? `: ${finalErrorMessage}` : "."}`
           : "Regal processing completed.",
       );
     } finally {
       setIsProcessing(false);
+      setActiveJobId("");
     }
   }
 
@@ -1542,6 +1955,9 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
       onError(eventData.message);
       setLogs((prev) => [...prev, `ERROR: ${eventData.message}`]);
       setStatus(`Error: ${eventData.message}`);
+    } else if (eventData.type === "cancelled") {
+      setLogs((prev) => [...prev, eventData.message || "Processing cancelled."]);
+      setStatus(eventData.message || "Processing cancelled.");
     }
   }
 
@@ -1596,6 +2012,7 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
     formData.append("inputExcel", aerialInputFile);
 
     let hasError = false;
+    let wasCancelled = false;
     let finalErrorMessage = "";
     let subscribedJobId = "";
     const streamAbortController = new AbortController();
@@ -1622,12 +2039,17 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
         setLogs((prev) => [...prev, `ERROR: ${eventData.message}`]);
         setStatus(`Error: ${eventData.message}`);
         hasError = true;
+      } else if (eventData.type === "cancelled") {
+        wasCancelled = true;
+        setLogs((prev) => [...prev, eventData.message || "Processing cancelled."]);
+        setStatus(eventData.message || "Processing cancelled.");
       }
     };
 
     try {
       const jobId = await startScrapeJob(formData);
       subscribedJobId = jobId;
+      setActiveJobId(jobId);
       await subscribeToScrapeJobEvents({
         jobId,
         signal: streamAbortController.signal,
@@ -1641,7 +2063,9 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
         },
       });
       setStatus(
-        hasError
+        wasCancelled
+          ? "Aerial processing cancelled."
+          : hasError
           ? `Aerial processing finished with errors${finalErrorMessage ? `: ${finalErrorMessage}` : "."}`
           : "Aerial processing completed.",
       );
@@ -1649,6 +2073,7 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
       setStatus(`Failed to process Aerial claims: ${getErrorMessage(error)}`);
     } finally {
       setIsProcessing(false);
+      setActiveJobId("");
     }
   }
 
@@ -1662,7 +2087,25 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
       return;
     }
 
-    resetRunState("Starting Blue Shield scraper...");
+    const activeBlueShieldJob = pendingBlueShieldRestoreJob
+      ?? await getCurrentScrapeJob().then((job) => (job?.portalId === "blue-shield" && (job.status === "running" || job.status === "waiting_resume") ? job : null)).catch(() => null);
+
+    if (activeBlueShieldJob) {
+      setIsCancellingJob(true);
+      setStatus("Replacing previous Blue Shield run and starting a new one...");
+      try {
+        await cancelScrapeJobRequest(activeBlueShieldJob.jobId);
+      } catch (error) {
+        setIsCancellingJob(false);
+        setStatus(`Failed to replace previous Blue Shield run: ${getErrorMessage(error)}`);
+        return;
+      } finally {
+        setIsCancellingJob(false);
+      }
+    }
+
+    setPendingBlueShieldRestoreJob(null);
+    resetRunState(activeBlueShieldJob ? "Starting new Blue Shield scraper..." : "Starting Blue Shield scraper...");
 
     const formData = new FormData();
     formData.append("portalId", "blue-shield");
@@ -1673,6 +2116,7 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
     formData.append("resetCheckpoint", blueShieldResetCheckpoint ? "true" : "false");
 
     let hasError = false;
+    let wasCancelled = false;
     let finalErrorMessage = "";
     let subscribedJobId = "";
     const streamAbortController = new AbortController();
@@ -1707,6 +2151,10 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
         setLogs((prev) => [...prev, `ERROR: ${eventData.message}`]);
         setStatus(`Error: ${eventData.message}`);
         hasError = true;
+      } else if (eventData.type === "cancelled") {
+        wasCancelled = true;
+        setLogs((prev) => [...prev, eventData.message || "Processing cancelled."]);
+        setStatus(eventData.message || "Processing cancelled.");
       }
     };
 
@@ -1714,6 +2162,7 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
       const jobId = await startScrapeJob(formData);
       subscribedJobId = jobId;
       setBlueShieldJobId(jobId);
+      setActiveJobId(jobId);
       await subscribeToScrapeJobEvents({
         jobId,
         signal: streamAbortController.signal,
@@ -1727,14 +2176,27 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
         },
       });
       setStatus(
-        hasError
+        wasCancelled
+          ? "Blue Shield processing cancelled."
+          : hasError
           ? `Blue Shield processing finished with errors${finalErrorMessage ? `: ${finalErrorMessage}` : "."}`
           : "Blue Shield processing completed.",
       );
     } catch (error) {
-      setStatus(`Failed to process Blue Shield claims: ${getErrorMessage(error)}`);
+      const errorMessage = getErrorMessage(error);
+      const currentJob = await getCurrentScrapeJob().catch(() => null);
+
+      if (currentJob?.portalId === "blue-shield" && (currentJob.status === "running" || currentJob.status === "waiting_resume")) {
+        setActiveJobId(currentJob.jobId);
+        setPendingBlueShieldRestoreJob(currentJob);
+        setSelectedPortalId("blue-shield");
+        setStatus("A previous Blue Shield run is still active. Click Start processing to replace it, or Cancel Processing to stop it.");
+      } else {
+        setStatus(`Failed to process Blue Shield claims: ${errorMessage}`);
+      }
     } finally {
       setIsProcessing(false);
+      setActiveJobId("");
     }
   }
 
@@ -1779,6 +2241,7 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
     formData.append("claimFileName", regalClaimFile.name);
 
     let hasError = false;
+    let wasCancelled = false;
     let finalErrorMessage = "";
     const diagnosticFiles: DownloadFile[] = [];
     const streamAbortController = new AbortController();
@@ -1787,6 +2250,7 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
       const jobId = await startScrapeJob(formData);
       setPendingRegalRestoreJob(null);
       setRegalJobId(jobId);
+      setActiveJobId(jobId);
       await subscribeToScrapeJobEvents({
         jobId,
         signal: streamAbortController.signal,
@@ -1795,6 +2259,9 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
             finalErrorMessage = message;
             hasError = true;
           }, diagnosticFiles);
+          if (eventData.type === "cancelled") {
+            wasCancelled = true;
+          }
         },
         onStreamError(error) {
           console.error("Regal stream error:", error);
@@ -1806,7 +2273,9 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
       });
       downloadZip(`regal-diagnostics-${jobId}.zip`, diagnosticFiles);
       setStatus(
-        hasError
+        wasCancelled
+          ? "Regal processing cancelled."
+          : hasError
           ? `Regal processing finished with errors${finalErrorMessage ? `: ${finalErrorMessage}` : "."}`
           : "Regal processing completed.",
       );
@@ -1814,6 +2283,7 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
       setStatus(`Failed to process Regal claims: ${getErrorMessage(error)}`);
     } finally {
       setIsProcessing(false);
+      setActiveJobId("");
     }
   }
 
@@ -1864,119 +2334,345 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
 
   if (authLoading || jobRestoreLoading) {
     return (
-      <main className="flex min-h-screen items-center justify-center bg-slate-50 px-4 text-slate-900">
-        <div className="rounded-md border border-slate-200 bg-white px-5 py-4 text-sm font-medium shadow-sm">
-          Loading...
+      <main className="relative flex min-h-screen items-center justify-center overflow-hidden bg-[radial-gradient(circle_at_top_left,_rgba(255,255,255,0.98)_0%,_rgba(240,246,255,0.98)_40%,_rgba(223,236,255,0.95)_100%)] px-4 text-slate-900">
+        <div className="pointer-events-none absolute inset-0 opacity-60">
+          <div className="absolute left-[10%] top-[18%] h-20 w-20 rounded-full bg-blue-100/70 blur-2xl" />
+          <div className="absolute right-[12%] top-[12%] h-32 w-32 rounded-full bg-sky-100/80 blur-3xl" />
+          <div className="absolute bottom-[16%] left-[18%] h-24 w-24 rounded-full bg-cyan-100/70 blur-3xl" />
+          <div className="absolute right-[18%] bottom-[18%] h-px w-48 bg-sky-200" />
+          <div className="absolute right-[13%] bottom-[18%] h-10 w-10 rounded-full border border-sky-200/80" />
         </div>
+
+        <motion.div
+          initial={{ opacity: 0, y: 14 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.4 }}
+          className="relative w-full max-w-md rounded-[2rem] border border-sky-100 bg-white/88 p-8 shadow-[0_26px_70px_rgba(148,163,184,0.18)] backdrop-blur-xl"
+        >
+          <div className="flex items-center gap-4">
+            <div className="relative flex h-16 w-16 items-center justify-center overflow-hidden rounded-[1.25rem] border border-sky-100 bg-white shadow-[0_16px_32px_rgba(37,99,235,0.16)]">
+              <Image
+                src="/opus-logo-2.jfif"
+                alt="OPUS logo"
+                fill
+                className="object-contain p-1.5"
+              />
+            </div>
+            <div>
+              <p className="text-xl font-semibold tracking-[-0.04em] text-slate-950">Claim Status Portal</p>
+              <p className="text-sm text-slate-500">Preparing your healthcare workspace</p>
+            </div>
+          </div>
+
+          <div className="mt-8 flex items-center gap-4">
+            <div className="relative h-12 w-12">
+              <div className="absolute inset-0 rounded-full border-4 border-sky-100" />
+              <div className="absolute inset-0 animate-spin rounded-full border-4 border-transparent border-t-[#2563EB] border-r-[#3B82F6]" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-semibold uppercase tracking-[0.22em] text-sky-600">Loading</p>
+              <p className="mt-1 text-base font-medium text-slate-800">Checking session, restoring portal state, and loading your dashboard.</p>
+            </div>
+          </div>
+
+          <div className="mt-6 overflow-hidden rounded-full bg-sky-100/80">
+            <motion.div
+              initial={{ x: "-100%" }}
+              animate={{ x: "100%" }}
+              transition={{ duration: 1.6, repeat: Number.POSITIVE_INFINITY, ease: "easeInOut" }}
+              className="h-2 w-1/2 rounded-full bg-[linear-gradient(90deg,#1f8bff_0%,#2563eb_55%,#38bdf8_100%)]"
+            />
+          </div>
+
+          <div className="mt-6 grid gap-3 sm:grid-cols-3">
+            {["Secure session", "Portal restore", "UI loading"].map((item) => (
+              <div key={item} className="rounded-[1rem] border border-sky-100 bg-sky-50/70 px-3 py-3 text-center text-xs font-medium text-slate-600">
+                {item}
+              </div>
+            ))}
+          </div>
+        </motion.div>
       </main>
     );
   }
 
   if (!authUser) {
+    if (isProtectedRoute) {
+      return (
+        <main className="flex min-h-screen items-center justify-center bg-[radial-gradient(circle_at_top_left,_rgba(255,255,255,0.98)_0%,_rgba(240,246,255,0.98)_44%,_rgba(227,238,255,0.95)_100%)] px-4 text-slate-900">
+          <div className="rounded-2xl border border-sky-100 bg-white/90 px-5 py-4 text-sm font-medium shadow-[0_18px_40px_rgba(148,163,184,0.14)] backdrop-blur-xl">
+            Redirecting to login...
+          </div>
+        </main>
+      );
+    }
+
     return (
-      <main className="flex min-h-screen items-center justify-center bg-slate-50 px-4 text-slate-900">
-        <div className="w-full max-w-sm rounded-md border border-slate-200 bg-white p-6 shadow-sm">
-          <h1 className="text-xl font-semibold">IEHP Claim Status Check</h1>
+      <main className="h-screen w-screen overflow-hidden bg-[#f5faff] text-slate-900">
+        {forgotPasswordMode ? (
+          <div className="relative flex h-full w-full items-center justify-center bg-[linear-gradient(135deg,#edf5ff_0%,#d9eaff_52%,#3b82f6_100%)] px-4">
+            <div className="w-full max-w-md rounded-[28px] border border-white/80 bg-white/92 p-6 shadow-[0_32px_80px_rgba(15,23,42,0.14)]">
+              <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Reset Password</h1>
+              <p className="mt-2 text-sm text-slate-500">Update your password to continue.</p>
 
-          <form className="mt-5 space-y-4" onSubmit={forgotPasswordMode ? onForgotPasswordSubmit : onAuthSubmit}>
-            <div>
-              <label className="mb-2 block text-sm font-medium" htmlFor="authUsername">
-                Username
-              </label>
-              <input
-                id="authUsername"
-                type="text"
-                autoComplete="username"
-                value={authUsername}
-                onChange={(event) => setAuthUsername(event.target.value)}
-                className="block w-full rounded-md border border-slate-300 p-2 text-sm"
-              />
+              <form className="mt-6 space-y-4" onSubmit={onForgotPasswordSubmit}>
+                <div>
+                  <label className="mb-2 block text-xs font-semibold uppercase tracking-[0.18em] text-slate-500" htmlFor="authUsername">
+                    Username
+                  </label>
+                  <input
+                    id="authUsername"
+                    type="text"
+                    autoComplete="username"
+                    value={authUsername}
+                    onChange={(event) => setAuthUsername(event.target.value)}
+                    className="block w-full rounded-2xl border border-blue-100 bg-white px-4 py-3 text-sm text-slate-900 shadow-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100/70"
+                  />
+                </div>
+
+                <div>
+                  <label className="mb-2 block text-xs font-semibold uppercase tracking-[0.18em] text-slate-500" htmlFor="authPassword">
+                    New Password
+                  </label>
+                  <input
+                    id="authPassword"
+                    type="password"
+                    autoComplete="new-password"
+                    value={authPassword}
+                    onChange={(event) => setAuthPassword(event.target.value)}
+                    className="block w-full rounded-2xl border border-blue-100 bg-white px-4 py-3 text-sm text-slate-900 shadow-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100/70"
+                  />
+                </div>
+
+                <div>
+                  <label className="mb-2 block text-xs font-semibold uppercase tracking-[0.18em] text-slate-500" htmlFor="authConfirmPassword">
+                    Confirm Password
+                  </label>
+                  <input
+                    id="authConfirmPassword"
+                    type="password"
+                    autoComplete="new-password"
+                    value={authConfirmPassword}
+                    onChange={(event) => setAuthConfirmPassword(event.target.value)}
+                    className="block w-full rounded-2xl border border-blue-100 bg-white px-4 py-3 text-sm text-slate-900 shadow-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100/70"
+                  />
+                </div>
+
+                {authError && (
+                  <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700 shadow-sm">
+                    {authError}
+                  </div>
+                )}
+
+                {authStatus && (
+                  <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-700 shadow-sm">
+                    {authStatus}
+                  </div>
+                )}
+
+                <button
+                  type="submit"
+                  disabled={authSubmitting}
+                  className="w-full rounded-2xl bg-[linear-gradient(135deg,#2563eb,#1d4ed8_55%,#0ea5e9)] px-5 py-3 text-sm font-semibold text-white shadow-[0_18px_35px_rgba(37,99,235,0.32)] disabled:cursor-not-allowed disabled:bg-slate-400"
+                >
+                  {authSubmitting ? "Please wait..." : "Update Password"}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setForgotPasswordMode(false);
+                    setAuthError("");
+                    setAuthStatus("");
+                    setAuthPassword("");
+                    setAuthConfirmPassword("");
+                  }}
+                  className="w-full text-center text-sm font-medium text-blue-600 hover:text-blue-700"
+                >
+                  Back to login
+                </button>
+              </form>
             </div>
-
-            <div>
-              <label className="mb-2 block text-sm font-medium" htmlFor="authPassword">
-                {forgotPasswordMode ? "New Password" : "Password"}
-              </label>
-              <input
-                id="authPassword"
-                type="password"
-                autoComplete="current-password"
-                value={authPassword}
-                onChange={(event) => setAuthPassword(event.target.value)}
-                className="block w-full rounded-md border border-slate-300 p-2 text-sm"
+          </div>
+        ) : (
+          <>
+            <div className="relative hidden h-full w-full md:block">
+              <Image
+                src={claimStatusHeroImage}
+                alt="Claim Status Portal login background"
+                fill
+                priority
+                className="pointer-events-none object-cover object-center select-none"
               />
-            </div>
 
-            {forgotPasswordMode && (
-              <div>
-                <label className="mb-2 block text-sm font-medium" htmlFor="authConfirmPassword">
-                  Confirm Password
+              <form className="absolute inset-0" onSubmit={onAuthSubmit}>
+                <label className="sr-only" htmlFor="authUsername">
+                  Username
                 </label>
                 <input
-                  id="authConfirmPassword"
-                  type="password"
-                  autoComplete="new-password"
-                  value={authConfirmPassword}
-                  onChange={(event) => setAuthConfirmPassword(event.target.value)}
-                  className="block w-full rounded-md border border-slate-300 p-2 text-sm"
+                  id="authUsername"
+                  type="text"
+                  autoComplete="off"
+                  value={authUsername}
+                  onChange={(event) => setAuthUsername(event.target.value)}
+                  className="absolute right-[9.65%] top-[43.45%] h-[4.7%] w-[34.3%] rounded-[14px] border-none bg-transparent px-[10.5%] text-[clamp(0.95rem,1vw,1.05rem)] font-medium text-slate-800 outline-none placeholder-transparent focus:bg-white/6"
                 />
+
+                <label className="sr-only" htmlFor="authPassword">
+                  Password
+                </label>
+                <input
+                  id="authPassword"
+                  type="password"
+                  autoComplete="off"
+                  value={authPassword}
+                  onChange={(event) => setAuthPassword(event.target.value)}
+                  className="absolute right-[9.65%] top-[59.25%] h-[4.7%] w-[34.3%] rounded-[14px] border-none bg-transparent px-[10.5%] text-[clamp(0.95rem,1vw,1.05rem)] font-medium text-slate-800 outline-none placeholder-transparent focus:bg-white/6"
+                />
+
+                <label className="absolute right-[31.9%] top-[69.05%] flex items-center gap-2 text-[clamp(0.82rem,0.86vw,0.92rem)] text-transparent">
+                  <input className="h-5 w-5 cursor-pointer opacity-0" type="checkbox" defaultChecked aria-label="Remember me" />
+                  <span className="select-none">Remember me</span>
+                </label>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setForgotPasswordMode(true);
+                    setAuthError("");
+                    setAuthStatus("");
+                    setAuthPassword("");
+                    setAuthConfirmPassword("");
+                  }}
+                  className="absolute right-[9.55%] top-[68.7%] h-[3.8%] w-[13.4%] text-transparent"
+                >
+                  Forgot password?
+                </button>
+
+                {authError && (
+                  <div className="absolute right-[9.65%] top-[74.7%] w-[34.3%] rounded-2xl border border-red-200 bg-red-50/95 px-4 py-3 text-sm font-medium text-red-700 shadow-sm">
+                    {authError}
+                  </div>
+                )}
+
+                {authStatus && (
+                  <div className="absolute right-[9.65%] top-[74.7%] w-[34.3%] rounded-2xl border border-emerald-200 bg-emerald-50/95 px-4 py-3 text-sm font-medium text-emerald-700 shadow-sm">
+                    {authStatus}
+                  </div>
+                )}
+
+                <button
+                  type="submit"
+                  disabled={authSubmitting}
+                  className="absolute right-[9.65%] top-[74.15%] h-[6.7%] w-[34.3%] rounded-[18px] bg-transparent text-transparent disabled:cursor-not-allowed"
+                >
+                  {authSubmitting ? "Please wait..." : "Login"}
+                </button>
+              </form>
+            </div>
+
+            <div className="flex h-full items-center justify-center bg-[linear-gradient(135deg,#edf5ff_0%,#d9eaff_52%,#3b82f6_100%)] px-4 md:hidden">
+              <div className="w-full max-w-sm rounded-[28px] border border-white/80 bg-white/95 p-6 shadow-[0_32px_80px_rgba(15,23,42,0.14)]">
+                <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Claim Status Portal</h1>
+                <p className="mt-2 text-sm text-slate-500">Sign in to continue to your dashboard.</p>
+
+                <form className="mt-6 space-y-4" onSubmit={onAuthSubmit}>
+                  <div>
+                    <label className="mb-2 block text-sm font-semibold text-slate-700" htmlFor="authUsernameMobile">
+                      Username
+                    </label>
+                    <input
+                      id="authUsernameMobile"
+                      type="text"
+                      autoComplete="off"
+                      value={authUsername}
+                      onChange={(event) => setAuthUsername(event.target.value)}
+                      className="block h-12 w-full rounded-2xl border border-blue-100 bg-white px-4 text-sm text-slate-900 shadow-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100/70"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="mb-2 block text-sm font-semibold text-slate-700" htmlFor="authPasswordMobile">
+                      Password
+                    </label>
+                    <input
+                      id="authPasswordMobile"
+                      type="password"
+                      autoComplete="off"
+                      value={authPassword}
+                      onChange={(event) => setAuthPassword(event.target.value)}
+                      className="block h-12 w-full rounded-2xl border border-blue-100 bg-white px-4 text-sm text-slate-900 shadow-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100/70"
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-between gap-4 text-sm">
+                    <label className="flex items-center gap-2 text-slate-600">
+                      <input className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500" type="checkbox" defaultChecked />
+                      <span>Remember me</span>
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setForgotPasswordMode(true);
+                        setAuthError("");
+                        setAuthStatus("");
+                        setAuthPassword("");
+                        setAuthConfirmPassword("");
+                      }}
+                      className="font-medium text-blue-600 hover:text-blue-700"
+                    >
+                      Forgot password?
+                    </button>
+                  </div>
+
+                  {authError && (
+                    <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700 shadow-sm">
+                      {authError}
+                    </div>
+                  )}
+
+                  {authStatus && (
+                    <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-700 shadow-sm">
+                      {authStatus}
+                    </div>
+                  )}
+
+                  <button
+                    type="submit"
+                    disabled={authSubmitting}
+                    className="h-12 w-full rounded-2xl bg-[linear-gradient(135deg,#1692ff,#214edc_55%,#1e40d4)] text-base font-semibold text-white shadow-[0_16px_28px_rgba(29,78,216,0.28)] transition hover:brightness-[1.03] disabled:cursor-not-allowed disabled:opacity-70"
+                  >
+                    {authSubmitting ? "Please wait..." : "Login"}
+                  </button>
+                </form>
               </div>
-            )}
-
-            {authError && (
-              <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm font-medium text-red-700">
-                {authError}
-              </div>
-            )}
-
-            {authStatus && (
-              <div className="rounded-md border border-green-200 bg-green-50 p-3 text-sm font-medium text-green-700">
-                {authStatus}
-              </div>
-            )}
-
-            <button
-              type="submit"
-              disabled={authSubmitting}
-              className="w-full rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:bg-slate-400"
-            >
-              {authSubmitting ? "Please wait..." : forgotPasswordMode ? "Update Password" : "Login"}
-            </button>
-
-            <button
-              type="button"
-              onClick={() => {
-                setForgotPasswordMode((prev) => !prev);
-                setAuthError("");
-                setAuthStatus("");
-                setAuthPassword("");
-                setAuthConfirmPassword("");
-              }}
-              className="w-full text-sm font-medium text-blue-600 hover:text-blue-700"
-            >
-              {forgotPasswordMode ? "Back to login" : "Forgot password?"}
-            </button>
-          </form>
-        </div>
+            </div>
+          </>
+        )}
       </main>
     );
   }
 
   return (
-    <main className="min-h-screen bg-slate-50 text-slate-900">
-      <nav className="border-b border-slate-200 bg-white px-4 py-3 shadow-sm">
-        <div className="mx-auto flex max-w-5xl items-center justify-between gap-4">
+    <main className="min-h-screen bg-[radial-gradient(circle_at_top_left,_rgba(255,255,255,0.98)_0%,_rgba(240,246,255,0.98)_44%,_rgba(227,238,255,0.95)_100%)] text-slate-900">
+      <nav className="relative z-30 border-b border-sky-100/80 bg-white/80 px-4 py-4 shadow-[0_10px_35px_rgba(148,163,184,0.12)] backdrop-blur-xl">
+        <div className="mx-auto flex max-w-6xl items-center justify-between gap-4">
           <button
             type="button"
             onClick={resetPortalSelection}
             className="flex items-center gap-3 text-left"
           >
-            <span className="flex h-10 w-16 items-center justify-center rounded-md bg-blue-600 text-sm font-bold text-white">
-              IEHP
+            <span className="relative flex h-14 w-14 items-center justify-center overflow-hidden rounded-[1.15rem] border border-sky-200 bg-white shadow-[0_18px_36px_rgba(37,99,235,0.2)]">
+              <Image
+                src="/opus-logo-2.jfif"
+                alt="OPUS logo"
+                fill
+                className="object-contain p-1"
+              />
             </span>
             <span>
-              <span className="block text-base font-semibold">Portal Scraper</span>
-              <span className="block text-xs text-slate-500">Signed in as {authUser.email || authUser.username}</span>
+              <span className="block text-lg font-semibold tracking-[-0.03em] text-slate-950">Claim Status Portal</span>
+              <span className="block text-xs text-slate-500">Multi-portal workspace | Signed in as {authUser.email || authUser.username}</span>
             </span>
           </button>
 
@@ -1986,59 +2682,80 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
                 type="button"
                 disabled={isProcessing}
                 onClick={resetPortalSelection}
-                className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium hover:bg-slate-50 disabled:text-slate-400"
+                className="rounded-xl border border-sky-200 bg-white/90 px-4 py-2 text-sm font-medium text-slate-700 shadow-sm transition hover:border-blue-400 hover:bg-blue-50 disabled:text-slate-400"
               >
                 Change portal
               </button>
             )}
 
-            <div className="relative">
-              <button
-                type="button"
-                aria-label="Settings"
-                onClick={() => setSettingsOpen((open) => !open)}
-                className="flex h-10 w-10 items-center justify-center rounded-md border border-slate-300 bg-white hover:bg-slate-50"
-              >
-                <svg aria-hidden="true" viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2">
-                  <circle cx="12" cy="12" r="3" />
-                  <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 0 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6V21a2 2 0 0 1-4 0v-.1a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1A2 2 0 0 1 4.2 17l.1-.1A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.6-1H3a2 2 0 0 1 0-4h.1a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1A2 2 0 0 1 7 4.2l.1.1a1.7 1.7 0 0 0 1.9.3A1.7 1.7 0 0 0 10 3V3a2 2 0 0 1 4 0v.1a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1A2 2 0 0 1 19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.1a2 2 0 0 1 0 4H21a1.7 1.7 0 0 0-1.6 1Z" />
-                </svg>
-              </button>
-
-              {settingsOpen && (
-                <div className="absolute right-0 z-10 mt-2 w-44 rounded-md border border-slate-200 bg-white py-1 text-sm shadow-lg">
-                  <button
-                    type="button"
-                    onClick={openResetPassword}
-                    className="block w-full px-3 py-2 text-left hover:bg-slate-50"
-                  >
-                    Reset Password
-                  </button>
-                  {authUser.role === "ADMIN" && (
-                    <button
-                      type="button"
-                      onClick={openManageUsers}
-                      className="block w-full px-3 py-2 text-left hover:bg-slate-50"
-                    >
-                      Manage Users
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    onClick={logout}
-                    disabled={isProcessing}
-                    className="block w-full px-3 py-2 text-left hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-400"
-                  >
-                    Logout
-                  </button>
-                </div>
-              )}
-            </div>
           </div>
         </div>
       </nav>
 
-      <div className="px-4 py-12">
+      <div className="mx-auto max-w-7xl px-4 py-8">
+        <div className="grid gap-6 xl:grid-cols-[240px_minmax(0,1fr)]">
+          <aside className="hidden rounded-[2rem] border border-sky-100 bg-white/82 p-5 shadow-[0_18px_60px_rgba(148,163,184,0.14)] backdrop-blur-xl xl:flex xl:min-h-[calc(100vh-10rem)] xl:flex-col">
+            <div className="flex items-center gap-3 rounded-[1.4rem] bg-[linear-gradient(135deg,rgba(239,246,255,0.98)_0%,rgba(219,234,254,0.82)_100%)] p-4">
+              <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-[linear-gradient(135deg,#1473ff_0%,#2563eb_60%,#183db9_100%)] text-white shadow-[0_16px_34px_rgba(37,99,235,0.22)]">
+                <Stethoscope className="h-5 w-5" strokeWidth={2.1} />
+              </div>
+              <div>
+                <p className="text-sm font-semibold text-slate-950">Claim Status Portal</p>
+                <p className="text-xs text-slate-500">Healthcare Automation Platform</p>
+              </div>
+            </div>
+
+            <nav className="mt-6 space-y-1.5">
+              <button
+                type="button"
+                onClick={resetPortalSelection}
+                className="flex w-full items-center gap-3 rounded-[1rem] bg-[linear-gradient(90deg,rgba(37,99,235,0.12)_0%,rgba(37,99,235,0.04)_100%)] px-3 py-2.5 text-left text-sm font-medium text-blue-700 transition"
+              >
+                <LayoutDashboard className="h-4 w-4" strokeWidth={2} />
+                Dashboard
+              </button>
+              <button
+                type="button"
+                onClick={openResetPassword}
+                className="flex w-full items-center gap-3 rounded-[1rem] px-3 py-2.5 text-left text-sm font-medium text-slate-600 transition hover:bg-sky-50 hover:text-slate-900"
+              >
+                <ShieldEllipsis className="h-4 w-4" strokeWidth={2} />
+                Reset Password
+              </button>
+              {authUser.role === "ADMIN" && (
+                <button
+                  type="button"
+                  onClick={openManageUsers}
+                  className="flex w-full items-center gap-3 rounded-[1rem] px-3 py-2.5 text-left text-sm font-medium text-slate-600 transition hover:bg-sky-50 hover:text-slate-900"
+                >
+                  <Users className="h-4 w-4" strokeWidth={2} />
+                  Manage Users
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={logout}
+                disabled={isProcessing}
+                className="flex w-full items-center gap-3 rounded-[1rem] px-3 py-2.5 text-left text-sm font-medium text-slate-600 transition hover:bg-sky-50 hover:text-slate-900 disabled:cursor-not-allowed disabled:text-slate-400"
+              >
+                <LogOut className="h-4 w-4" strokeWidth={2} />
+                Logout
+              </button>
+            </nav>
+
+            <div className="mt-auto rounded-[1.4rem] border border-sky-100 bg-[linear-gradient(180deg,rgba(245,250,255,0.98)_0%,rgba(233,243,255,0.92)_100%)] p-4 shadow-[0_14px_35px_rgba(148,163,184,0.12)]">
+              <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-[linear-gradient(180deg,#e2fbf7_0%,#c4f1e8_100%)] text-emerald-600">
+                <ShieldCheck className="h-5 w-5" strokeWidth={2.1} />
+              </div>
+              <p className="mt-4 text-sm font-semibold text-slate-900">HIPAA Compliant</p>
+              <p className="mt-2 text-xs leading-5 text-slate-600">
+                Your data is protected with enterprise-grade security and encrypted session controls.
+              </p>
+              <p className="mt-8 text-[0.7rem] text-slate-400">Copyright 2026 Claim Status Portal</p>
+            </div>
+          </aside>
+
+          <div className="min-w-0">
         {activeView === "reset-password" ? (
           <div className="mx-auto w-full max-w-xl rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
             <div className="flex flex-wrap items-center justify-between gap-4">
@@ -2120,7 +2837,6 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
                 type="button"
                 onClick={() => {
                   setActiveView("portal-selection");
-                  setSettingsOpen(false);
                 }}
                 className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium hover:bg-slate-50"
               >
@@ -2275,73 +2991,387 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
             )}
           </div>
         ) : (
-          <div className="mx-auto w-full max-w-3xl rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+          <div className="mx-auto w-full max-w-5xl rounded-[2rem] border border-sky-100 bg-white/86 p-6 shadow-[0_24px_80px_rgba(148,163,184,0.16)] backdrop-blur-xl md:p-8">
             {!selectedPortal ? (
             <>
-              <h1 className="text-2xl font-semibold">Select Portal</h1>
-              <p className="mt-2 text-sm text-slate-600">Choose the portal scraper you want to run.</p>
+              <div className="mb-4 flex items-center justify-between gap-4">
+                <div>
+                  <p className="text-[0.7rem] font-semibold uppercase tracking-[0.22em] text-sky-600">Multi-Portal Dashboard</p>
+                </div>
+                <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-3 rounded-[1rem] border border-sky-100 bg-white/95 px-3 py-2 shadow-[0_10px_24px_rgba(148,163,184,0.08)]">
+                    <div className="flex h-9 w-9 items-center justify-center rounded-full bg-[linear-gradient(135deg,#dbeafe_0%,#bfdbfe_100%)] text-xs font-semibold text-blue-700">
+                      {userInitials || "AF"}
+                    </div>
+                    <div className="hidden sm:block">
+                      <p className="text-sm font-semibold text-slate-900">{userDisplayName || "Afrin"}</p>
+                      <p className="text-[0.7rem] text-slate-500">{authUser.role === "ADMIN" ? "Administrator" : "User"}</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
 
-              <div className="mt-6 grid gap-4 sm:grid-cols-2">
-                {([iehpFrontendPortalConfig, aerialFrontendPortalConfig, regalFrontendPortalConfig, blueShieldFrontendPortalConfig] as const).map((portal) => (
-                  <button
-                    key={portal.id}
-                    type="button"
-                    onClick={() => {
-                      setSelectedPortalId(portal.id as PortalId);
-                      navigateToPortalRoute(portal.id as PortalId);
-                      setStatus("");
-                      setLogs([]);
-                      setErrorScreenshots([]);
-                      setProgress(null);
-                    }}
-                    className="rounded-lg border border-slate-300 bg-white p-5 text-left shadow-sm hover:border-blue-500 hover:bg-blue-50"
-                  >
-                    <span className="block text-lg font-semibold">{portal.name}</span>
-                    <span className="mt-2 block text-sm text-slate-600">{portal.description}</span>
-                  </button>
-                ))}
+              <motion.div
+                initial={{ opacity: 0, y: 18 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.55, ease: [0.22, 1, 0.36, 1] }}
+                className="relative overflow-hidden rounded-[1.7rem] border border-sky-100 bg-[linear-gradient(135deg,rgba(239,246,255,0.96)_0%,rgba(221,235,255,0.82)_50%,rgba(255,255,255,0.94)_100%)] px-6 py-7 shadow-[0_18px_44px_rgba(148,163,184,0.12)]"
+              >
+                <div className="max-w-[25rem]">
+                  <h1 className="text-[2rem] font-semibold tracking-[-0.05em] text-slate-950">
+                    Welcome Back, <span className="text-[#2563EB]">{userDisplayName || "Afrin"}</span> 👋
+                  </h1>
+                  <p className="mt-3 max-w-md text-sm leading-6 text-slate-600">
+                    Select a healthcare payer portal to automate claim status verification.
+                  </p>
+                </div>
+                <div className="pointer-events-none absolute right-0 top-0 hidden h-full w-[40%] overflow-hidden rounded-l-[1.6rem] border-l border-sky-100/70 bg-white/35 shadow-[0_18px_42px_rgba(59,130,246,0.12)] lg:block">
+                  <Image
+                    src={dashboardWelcomeImage}
+                    alt="Medical clipboard illustration"
+                    fill
+                    className="object-cover object-center opacity-100 scale-[1.08]"
+                  />
+                  <div className="absolute inset-0 bg-[linear-gradient(90deg,rgba(244,248,255,0.12)_0%,rgba(244,248,255,0)_22%,rgba(244,248,255,0)_100%)]" />
+                </div>
+              </motion.div>
+
+              <div className="mt-5">
+                <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+                  <label className="flex h-12 w-full items-center gap-3 rounded-[1rem] border border-sky-100 bg-white/95 px-4 shadow-[0_10px_28px_rgba(148,163,184,0.1)] lg:max-w-[24rem]">
+                    <Search className="h-4 w-4 text-slate-400" strokeWidth={2.2} />
+                    <input
+                      type="text"
+                      value={portalSearch}
+                      onChange={(event) => setPortalSearch(event.target.value)}
+                      placeholder="Search portals..."
+                      className="w-full bg-transparent text-sm text-slate-800 outline-none placeholder:text-slate-400"
+                    />
+                  </label>
+                  <div className="flex items-center gap-3 text-sm text-slate-500">
+                    <div className="relative">
+                      <button
+                        type="button"
+                        onClick={() => setFilterMenuOpen((open) => !open)}
+                        className="inline-flex h-10 items-center gap-2 rounded-[0.95rem] border border-sky-100 bg-white/95 px-4 text-sm font-medium text-slate-700 shadow-[0_10px_24px_rgba(148,163,184,0.08)]"
+                      >
+                        <SlidersHorizontal className="h-4 w-4" strokeWidth={2.1} />
+                        Filters
+                      </button>
+                      {filterMenuOpen && (
+                        <div className="absolute right-0 top-full z-20 mt-2 w-52 rounded-[1rem] border border-sky-100 bg-white/98 p-2 shadow-[0_18px_44px_rgba(15,23,42,0.12)] backdrop-blur-xl">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setPortalFilter("all");
+                              setFilterMenuOpen(false);
+                            }}
+                            className={`block w-full rounded-[0.8rem] px-3 py-2 text-left text-sm ${
+                              portalFilter === "all" ? "bg-blue-50 text-blue-700" : "text-slate-700 hover:bg-sky-50"
+                            }`}
+                          >
+                            All portals
+                          </button>
+                          {availablePortals.map((portal) => (
+                            <button
+                              key={`filter-${portal.id}`}
+                              type="button"
+                              onClick={() => {
+                                setPortalFilter(portal.id as PortalId);
+                                setFilterMenuOpen(false);
+                              }}
+                              className={`block w-full rounded-[0.8rem] px-3 py-2 text-left text-sm ${
+                                portalFilter === portal.id ? "bg-blue-50 text-blue-700" : "text-slate-700 hover:bg-sky-50"
+                              }`}
+                            >
+                              {portal.name}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setPortalSort((current) => (current === "name-asc" ? "name-desc" : "name-asc"))
+                      }
+                      className="inline-flex h-10 items-center gap-2 rounded-[0.95rem] border border-sky-100 bg-white/95 px-4 text-sm font-medium text-slate-700 shadow-[0_10px_24px_rgba(148,163,184,0.08)]"
+                    >
+                      Sort by
+                      <span className="text-slate-500">{portalSort === "name-asc" ? "A-Z" : "Z-A"}</span>
+                    </button>
+                  </div>
+                </div>
+
+                <div className="mb-4 flex items-center justify-between gap-4">
+                  <div>
+                    <h2 className="text-sm font-semibold text-slate-900">Available Portals</h2>
+                    <p className="mt-1 text-xs text-slate-500">Launch claim status automation workspaces</p>
+                  </div>
+                  <div className="text-xs text-slate-400">Showing {filteredPortals.length} of {availablePortals.length}</div>
+                </div>
+
+                {filteredPortals.length === 0 ? (
+                  <div className="rounded-[1.4rem] border border-dashed border-sky-200 bg-white/80 px-6 py-10 text-center text-sm text-slate-500">
+                    No portals matched your search. Try another keyword.
+                  </div>
+                ) : (
+                  <div className={portalLayout === "grid" ? "grid gap-4 md:grid-cols-2 xl:grid-cols-4" : "space-y-4"}>
+                    {filteredPortals.map((portal) => {
+                      const meta = PORTAL_UI_META[portal.id as PortalId];
+
+                      return (
+                        <button
+                          key={portal.id}
+                          type="button"
+                          onClick={() => {
+                            setSelectedPortalId(portal.id as PortalId);
+                            navigateToPortalRoute(portal.id as PortalId);
+                            setStatus("");
+                            setLogs([]);
+                            setErrorScreenshots([]);
+                            setProgress(null);
+                          }}
+                          className={`group rounded-[1.35rem] border border-sky-100 bg-[linear-gradient(180deg,rgba(255,255,255,0.99)_0%,rgba(246,250,255,0.97)_100%)] p-4 text-left shadow-[0_16px_36px_rgba(148,163,184,0.12)] transition hover:-translate-y-0.5 hover:border-blue-400 hover:shadow-[0_22px_44px_rgba(59,130,246,0.14)] ${
+                            portalLayout === "list" ? "flex items-start gap-4" : ""
+                          }`}
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <span
+                              className={`flex items-center justify-center overflow-hidden text-xs font-semibold shadow-inner ${
+                                meta.logoSrc ? (meta.cardLogoFrameClassName ?? "h-10 w-[4.4rem] rounded-[1rem] px-2") : "h-10 w-10 rounded-2xl"
+                              } ${meta.logoClassName}`}
+                            >
+                              {meta.logoSrc ? (
+                                <Image
+                                  src={meta.logoSrc}
+                                  alt={`${portal.name} logo`}
+                                  width={meta.cardLogoSize?.width ?? 56}
+                                  height={meta.cardLogoSize?.height ?? 20}
+                                  className={meta.cardLogoImageClassName ?? "h-5 w-full object-contain"}
+                                />
+                              ) : (
+                                meta.shortCode
+                              )}
+                            </span>
+                            <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-1 text-[0.65rem] font-semibold text-emerald-600">
+                              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                              Ready
+                            </span>
+                          </div>
+                          <span className={`block ${portalLayout === "list" ? "flex-1" : ""}`}>
+                            <span className={`${portalLayout === "grid" ? "mt-4" : ""} block text-base font-semibold tracking-[-0.03em] text-slate-950`}>{portal.name}</span>
+                            <span className="mt-2 block text-[0.72rem] leading-5 text-slate-600">{portal.description}</span>
+                            <span className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-[0.9rem] bg-[linear-gradient(90deg,#1f8bff_0%,#2563eb_44%,#2347ef_100%)] px-3 py-2.5 text-sm font-medium text-white shadow-[0_14px_26px_rgba(37,99,235,0.22)]">
+                              Open Portal
+                              <span aria-hidden="true">&rarr;</span>
+                            </span>
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             </>
             ) : (
             <>
-              <div>
-                <h1 className="text-2xl font-semibold">{selectedPortal.name}</h1>
-                <p className="mt-2 max-w-xl text-sm text-slate-600">{selectedPortal.description}</p>
+              <motion.div
+                initial={{ opacity: 0, y: 18 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.45 }}
+                className="relative overflow-hidden rounded-[1.8rem] border border-sky-100 bg-[linear-gradient(135deg,rgba(239,246,255,0.96)_0%,rgba(221,235,255,0.84)_55%,rgba(255,255,255,0.96)_100%)] p-6 shadow-[0_20px_46px_rgba(148,163,184,0.14)]"
+              >
+                <div className="grid gap-6 lg:grid-cols-[minmax(0,1.1fr)_25rem] lg:items-center">
+                  <div className="max-w-2xl">
+                    <div className="flex flex-wrap items-center gap-3">
+                      <span
+                        className={`flex items-center justify-center overflow-hidden text-sm font-semibold shadow-inner ${
+                          selectedPortalUiMeta?.logoSrc
+                            ? (selectedPortalUiMeta.heroLogoFrameClassName ?? "h-14 w-[6.25rem] rounded-[1.15rem] px-3")
+                            : "h-14 w-14 rounded-[1.25rem]"
+                        } ${selectedPortalUiMeta?.logoClassName ?? "bg-blue-50 text-blue-700"}`}
+                      >
+                        {selectedPortalUiMeta?.logoSrc ? (
+                          <Image
+                            src={selectedPortalUiMeta.logoSrc}
+                            alt={`${selectedPortal.name} logo`}
+                            width={selectedPortalUiMeta.heroLogoSize?.width ?? 84}
+                            height={selectedPortalUiMeta.heroLogoSize?.height ?? 28}
+                            className={selectedPortalUiMeta.heroLogoImageClassName ?? "h-7 w-full object-contain"}
+                          />
+                        ) : (
+                          selectedPortalUiMeta?.shortCode ?? "PRT"
+                        )}
+                      </span>
+                      <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-600">
+                        <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                        Ready
+                      </span>
+                    </div>
+                    <h1 className="mt-5 text-[2rem] font-semibold tracking-[-0.05em] text-slate-950">{selectedPortal.name}</h1>
+                    <p className="mt-3 max-w-2xl text-sm leading-7 text-slate-600">
+                      {portalWorkflowMeta?.heroDescription ?? selectedPortal.description}
+                    </p>
+                  </div>
+
+                  <div className="relative hidden h-[17rem] overflow-hidden rounded-[1.6rem] border border-sky-100/80 bg-white/55 shadow-[0_18px_40px_rgba(59,130,246,0.12)] lg:block">
+                    <Image
+                      src={dashboardWelcomeImage}
+                      alt="Healthcare workflow illustration"
+                      fill
+                      className="object-cover object-center opacity-100"
+                    />
+                    <div className="absolute inset-0 bg-[linear-gradient(90deg,rgba(244,248,255,0.02)_0%,rgba(244,248,255,0)_28%,rgba(244,248,255,0.12)_100%)]" />
+                  </div>
+                </div>
+              </motion.div>
+
+              <div className="mt-5 rounded-[1.5rem] border border-sky-100 bg-white/88 p-5 shadow-[0_16px_34px_rgba(148,163,184,0.1)]">
+                <div className="flex flex-wrap items-center gap-3 md:flex-nowrap">
+                  {portalWorkflowSteps.map((step, index) => {
+                    const isActive = index === portalWorkflowStepIndex;
+                    const isComplete = index < portalWorkflowStepIndex;
+
+                    return (
+                      <div key={step} className="flex min-w-0 flex-1 items-center gap-3">
+                        <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-sm font-semibold ${
+                          isComplete
+                            ? "bg-emerald-100 text-emerald-700"
+                            : isActive
+                              ? "bg-[linear-gradient(135deg,#2563eb_0%,#3b82f6_100%)] text-white shadow-[0_12px_24px_rgba(37,99,235,0.24)]"
+                              : "bg-sky-50 text-slate-500"
+                        }`}>
+                          {index + 1}
+                        </div>
+                        <div className="min-w-0">
+                          <p className={`truncate text-sm font-medium ${isActive || isComplete ? "text-slate-900" : "text-slate-500"}`}>{step}</p>
+                        </div>
+                        {index < portalWorkflowSteps.length - 1 ? (
+                          <div className={`hidden h-px flex-1 md:block ${isComplete ? "bg-emerald-300" : "bg-sky-100"}`} />
+                        ) : null}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="mt-5">
+                <div className="rounded-[1.7rem] border border-sky-100 bg-white/92 p-5 shadow-[0_16px_38px_rgba(148,163,184,0.12)]">
+                  <div className="mb-5">
+                    <p className="text-[0.7rem] font-semibold uppercase tracking-[0.22em] text-sky-600">Portal Workflow</p>
+                    <h2 className="mt-3 text-xl font-semibold tracking-[-0.04em] text-slate-950">
+                      {effectivePortalId === "blue-shield" && hasCompletedRun ? "Processing Completed" : "Upload and Validate Files"}
+                    </h2>
+                    <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">
+                      {effectivePortalId === "blue-shield" && hasCompletedRun
+                        ? "This Blue Shield run has finished. You can review the status and logs below, or reset the workflow to start another run."
+                        : "Use the guided upload workflow below to validate workbooks, secure the transfer, and launch automation."}
+                    </p>
+                  </div>
+
+                  {effectivePortalId === "blue-shield" && hasCompletedRun ? (
+                    <div className="rounded-[1.2rem] border border-emerald-100 bg-emerald-50/70 p-5">
+                      <p className="text-sm font-semibold text-emerald-800">Blue Shield processing is complete.</p>
+                      <p className="mt-2 text-sm text-emerald-700">{status}</p>
+                      <button
+                        type="button"
+                        onClick={resetBlueShieldWorkflow}
+                        className="mt-4 inline-flex items-center justify-center rounded-[1rem] border border-emerald-200 bg-white px-4 py-2.5 text-sm font-semibold text-emerald-800 shadow-sm transition hover:bg-emerald-50"
+                      >
+                        Start Another Run
+                      </button>
+                    </div>
+                  ) : effectivePortalId === "iehp" ? (
+                    <IehpInputForm
+                      canSubmit={canSubmitIehp}
+                      claimFileName={claimFileName}
+                      isProcessing={isProcessing}
+                      isResumePending={Boolean(pendingIehpRestoreJob)}
+                      loginFileName={iehpLoginFile?.name ?? ""}
+                      onLoginFileChange={handleLoginFileChange}
+                      onSelectClaimFile={selectClaimFile}
+                      onSubmit={submitIehp}
+                    />
+                  ) : effectivePortalId === "aerial" ? (
+                    <AerialInputForm
+                      canSubmit={canSubmitAerial}
+                      credentialFileName={aerialCredentialFile?.name ?? ""}
+                      inputFileName={aerialInputFile?.name ?? ""}
+                      isProcessing={isProcessing}
+                      onCredentialFileChange={setAerialCredentialFile}
+                      onInputFileChange={setAerialInputFile}
+                      onSubmit={submitAerial}
+                    />
+                  ) : effectivePortalId === "regal" ? (
+                    <RegalInputForm
+                      canSubmit={canSubmitRegal}
+                      claimFileName={regalClaimFile?.name ?? ""}
+                      isProcessing={isProcessing}
+                      loginFileName={regalLoginFile?.name ?? ""}
+                      onClaimFileChange={setRegalClaimFile}
+                      onLoginFileChange={setRegalLoginFile}
+                      onSubmit={submitRegal}
+                    />
+                  ) : (
+                    <BlueShieldInputForm
+                      canSubmit={canSubmitBlueShield}
+                      credentialFileName={blueShieldCredentialFile?.name ?? ""}
+                      group={blueShieldGroup}
+                      inputFileName={blueShieldInputFile?.name ?? ""}
+                      isProcessing={isProcessing}
+                      resetCheckpoint={blueShieldResetCheckpoint}
+                      onCredentialFileChange={setBlueShieldCredentialFile}
+                      onGroupChange={setBlueShieldGroup}
+                      onInputFileChange={setBlueShieldInputFile}
+                      onResetCheckpointChange={setBlueShieldResetCheckpoint}
+                      onSubmit={submitBlueShield}
+                    />
+                  )}
+
+                  {(activeJobId || pendingBlueShieldRestoreJob || pendingIehpRestoreJob) && (
+                    <div className="mt-4 flex flex-col gap-3 rounded-[1.2rem] border border-sky-100 bg-sky-50/70 p-4 sm:flex-row">
+                      <button
+                        type="button"
+                        onClick={() => void cancelActiveJob()}
+                        disabled={isCancellingJob}
+                        className="inline-flex flex-1 items-center justify-center rounded-[1rem] border border-red-200 bg-white px-4 py-3 text-sm font-semibold text-red-700 shadow-sm transition hover:bg-red-50 disabled:cursor-not-allowed disabled:text-slate-400"
+                      >
+                        {isCancellingJob ? "Cancelling..." : "Cancel Processing"}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="mt-5 rounded-[1.7rem] border border-sky-100 bg-white/92 p-5 shadow-[0_16px_38px_rgba(148,163,184,0.12)]">
+                <p className="text-[0.7rem] font-semibold uppercase tracking-[0.22em] text-sky-600">Workflow Status</p>
+                <div className="mt-4 grid gap-3 md:grid-cols-3">
+                  <div className="rounded-[1rem] border border-sky-100 bg-sky-50/70 px-4 py-3">
+                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-sky-700">Login File</p>
+                    <p className="mt-1 text-sm font-medium text-slate-800">{portalFileState.loginFileLabel || "Waiting for upload"}</p>
+                  </div>
+                  <div className="rounded-[1rem] border border-sky-100 bg-sky-50/70 px-4 py-3">
+                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-sky-700">Claim File</p>
+                    <p className="mt-1 text-sm font-medium text-slate-800">{portalFileState.claimFileLabel || "Waiting for upload"}</p>
+                  </div>
+                  <div className="rounded-[1rem] border border-sky-100 bg-sky-50/70 px-4 py-3">
+                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-sky-700">Processing State</p>
+                    <p className="mt-1 text-sm font-medium text-slate-800">{status || (isProcessing ? "Processing is currently running." : "Waiting for file validation.")}</p>
+                  </div>
+                </div>
               </div>
 
               {effectivePortalId === "iehp" ? (
-                <>
-                  <IehpInputForm
-                    canSubmit={canSubmitIehp}
-                    claimFileName={claimFileName}
-                    isProcessing={isProcessing}
-                    isResumePending={Boolean(pendingIehpRestoreJob)}
-                    onLoginFileChange={handleLoginFileChange}
-                    onSelectClaimFile={selectClaimFile}
-                    onSubmit={submitIehp}
-                  />
+                <div className="mt-5">
                   <IehpResultView errorScreenshots={errorScreenshots} logs={logs} progress={progress} status={status} />
-                </>
+                </div>
               ) : effectivePortalId === "aerial" ? (
-                <>
-                  <AerialInputForm
-                    canSubmit={canSubmitAerial}
-                    isProcessing={isProcessing}
-                    onCredentialFileChange={setAerialCredentialFile}
-                    onInputFileChange={setAerialInputFile}
-                    onSubmit={submitAerial}
-                  />
+                <div className="mt-5">
                   <AerialResultView errorScreenshots={errorScreenshots} logs={logs} progress={progress} status={status} />
-                </>
+                </div>
               ) : effectivePortalId === "regal" ? (
-                <>
-                  <RegalInputForm
-                    canSubmit={canSubmitRegal}
-                    isProcessing={isProcessing}
-                    onClaimFileChange={setRegalClaimFile}
-                    onLoginFileChange={setRegalLoginFile}
-                    onSubmit={submitRegal}
-                  />
+                <div className="mt-5">
                   <RegalResultView
                     canDownloadOutput={Boolean(latestRegalOutput)}
                     errorScreenshots={errorScreenshots}
@@ -2360,20 +3390,9 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
                     outputTotal={latestRegalOutput?.total}
                     status={status}
                   />
-                </>
+                </div>
               ) : (
-                <>
-                  <BlueShieldInputForm
-                    canSubmit={canSubmitBlueShield}
-                    group={blueShieldGroup}
-                    isProcessing={isProcessing}
-                    resetCheckpoint={blueShieldResetCheckpoint}
-                    onCredentialFileChange={setBlueShieldCredentialFile}
-                    onGroupChange={setBlueShieldGroup}
-                    onInputFileChange={setBlueShieldInputFile}
-                    onResetCheckpointChange={setBlueShieldResetCheckpoint}
-                    onSubmit={submitBlueShield}
-                  />
+                <div className="mt-5">
                   <BlueShieldResultView
                     errorScreenshots={errorScreenshots}
                     logs={logs}
@@ -2384,12 +3403,14 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
                     progress={progress}
                     status={status}
                   />
-                </>
+                </div>
               )}
             </>
             )}
           </div>
         )}
+          </div>
+        </div>
       </div>
     </main>
   );

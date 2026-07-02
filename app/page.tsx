@@ -1,3 +1,3 @@
-import { ScraperPage } from "@/frontend/src/pages/ScraperPage";
+import { LoginPage } from "@/frontend/src/pages/LoginPage";
 
-export default ScraperPage;
+export default LoginPage;

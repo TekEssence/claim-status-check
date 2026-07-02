@@ -198,10 +198,6 @@ export async function DELETE(req: Request) {
   }
 
   const cancelled = cancelScrapeJob(jobId, "Scrape job cancelled because Excel could not be updated.");
-  if (!cancelled) {
-    return Response.json({ ok: true, alreadyStopped: true });
-  }
-
   await updateScrapeJobSnapshot({
     jobId,
     status: "cancelled",
@@ -209,7 +205,7 @@ export async function DELETE(req: Request) {
     totalRows: ownedJob.totalRows,
   }).catch(() => {});
 
-  return Response.json({ ok: true });
+  return Response.json(cancelled ? { ok: true } : { ok: true, alreadyStopped: true });
 }
 
 function getLastEventId(req: Request, url: URL): number {
