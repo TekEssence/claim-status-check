@@ -18,17 +18,28 @@ type DiagnosticEvent = {
 };
 
 type FileDownloadEvent = {
-  type: "file_download";
+  type: "file_download" | "output_snapshot";
   filename: string;
   base64: string;
   mimeType: string;
+  completed?: number;
+  total?: number;
 };
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+class RegalJobCancelledError extends Error {
+  constructor() {
+    super("Regal processing stopped by user.");
+    this.name = "RegalJobCancelledError";
+  }
+}
+
 async function emitPageDiagnostics(context: ScraperContext, page: Page, label: string, options: { error?: boolean } = {}): Promise<void> {
+  if (!options.error) return;
+
   const safeLabel = label.replace(/[^a-z0-9_-]+/gi, "-").slice(0, 80) || "regal";
   const html = await page.content().catch(() => "");
   if (html) {
@@ -43,7 +54,7 @@ async function emitPageDiagnostics(context: ScraperContext, page: Page, label: s
   const screenshot = await page.screenshot({ type: "jpeg", quality: 80, fullPage: true }).catch(() => null);
   if (screenshot) {
     await context.emit({
-      type: options.error ? "error_screenshot" : "diagnostic_screenshot",
+      type: "error_screenshot",
       index: 0,
       image: screenshot.toString("base64"),
       filename: `regal_${safeLabel}.jpg`,
@@ -100,12 +111,14 @@ function downloadableTextFileEvent(filename: string, content: string): FileDownl
   };
 }
 
-function downloadableWorkbookEvent(filename: string, buffer: Buffer): FileDownloadEvent {
+function downloadableWorkbookEvent(filename: string, buffer: Buffer, options: { snapshot?: boolean; completed?: number; total?: number } = {}): FileDownloadEvent {
   return {
-    type: "file_download",
+    type: options.snapshot ? "output_snapshot" : "file_download",
     filename,
     base64: buffer.toString("base64"),
     mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    completed: options.completed,
+    total: options.total,
   };
 }
 
@@ -210,19 +223,136 @@ async function openRegalPhoneCodeEntryIfPresent(page: Page, stageLog: (level: Re
   return false;
 }
 
-async function selectRegalOtpIfNeeded(page: Page, stageLog: (level: RegalLogEntry["level"], stage: string, message: string, currentPage?: Page) => Promise<void>): Promise<string> {
+type RegalMfaMethodOption = {
+  value: string;
+  methodKey: string;
+  rowIndex: number;
+  label: string;
+  description: string;
+  disabled?: boolean;
+  disabledReason?: string;
+};
+
+function normalizeMfaMethodValue(value: string): string {
+  return normalizeText(value).toLowerCase().replace(/[^a-z0-9_-]+/g, "_").replace(/^_+|_+$/g, "");
+}
+
+async function extractRegalMfaOptions(page: Page): Promise<RegalMfaMethodOption[]> {
+  const rows = page.locator(".authenticator-verify-list .authenticator-row");
+  const count = await rows.count();
+  const options: RegalMfaMethodOption[] = [];
+
+  for (let index = 0; index < count; index += 1) {
+    const row = rows.nth(index);
+    const buttonContainer = row.locator(".authenticator-button").first();
+    const dataSe = normalizeText(await buttonContainer.getAttribute("data-se").catch(() => ""));
+    const label = normalizeText(await row.locator(".authenticator-label").first().innerText().catch(() => ""));
+    const description = normalizeText(await row.locator(".authenticator-description--text").first().innerText().catch(() => ""));
+    const ariaLabel = normalizeText(await row.locator("a[data-se='button']").first().getAttribute("aria-label").catch(() => ""));
+    const methodKey = dataSe || normalizeMfaMethodValue(`${label} ${description}`);
+    const value = `${methodKey}__${index}`;
+    if (!methodKey || !label) continue;
+
+    const isPush = methodKey === "okta_verify-push" || /push notification/i.test(`${label} ${description} ${ariaLabel}`);
+    options.push({
+      value,
+      methodKey,
+      rowIndex: index,
+      label,
+      description,
+      disabled: isPush,
+      disabledReason: isPush ? "Push notification is not implemented for this scraper yet." : undefined,
+    });
+  }
+
+  return options;
+}
+
+async function requestRegalMfaMethodFromUser(
+  context: ScraperContext,
+  stageLog: (level: RegalLogEntry["level"], stage: string, message: string, currentPage?: Page) => Promise<void>,
+  page: Page,
+  options: RegalMfaMethodOption[],
+): Promise<string> {
+  const enabledOptions = options.filter((option) => !option.disabled);
+  if (enabledOptions.length === 0) {
+    throw new Error("Regal displayed MFA methods, but none of the available methods are supported yet.");
+  }
+
+  await stageLog("info", "mfa", `Waiting for user to select Regal MFA method in frontend. Timeout: 1 minute. Options: ${options.map((option) => `${option.label}${option.description ? ` (${option.description})` : ""}`).join(", ")}.`, page);
+  await context.emit({
+    type: "input_request",
+    inputName: "regal_mfa_method",
+    label: "Select Regal verification method",
+    message: "Choose the Regal verification method to use. Push notification is shown for visibility but is not implemented.",
+    options,
+    timeoutMs: 60000,
+  });
+  const selected = await waitForScrapeJobInput(context.jobId, "regal_mfa_method", 60000);
+  const selectedOption = options.find((option) => option.value === selected);
+  if (!selectedOption) {
+    throw new Error(`Unsupported Regal MFA selection "${selected}".`);
+  }
+  if (selectedOption.disabled) {
+    throw new Error(`${selectedOption.label} is not implemented for Regal automation yet.`);
+  }
+
+  return selectedOption.value;
+}
+
+function getRegalMfaMethodKey(methodValue: string): string {
+  return methodValue.split("__", 1)[0] || methodValue;
+}
+
+async function clickSelectedRegalMfaMethod(page: Page, methodValue: string): Promise<void> {
+  const methodKey = getRegalMfaMethodKey(methodValue);
+  const rowIndex = Number(methodValue.match(/__(\d+)$/)?.[1]);
+  const methodButton = Number.isFinite(rowIndex)
+    ? page.locator(".authenticator-verify-list .authenticator-row").nth(rowIndex).locator("a[data-se='button']").first()
+    : page.locator(`.authenticator-button[data-se='${methodKey}'] a[data-se='button']`).first();
+  await methodButton.waitFor({ state: "visible", timeout: 30000 });
+  await Promise.all([
+    page.waitForLoadState("domcontentloaded").catch(() => {}),
+    methodButton.click(),
+  ]);
+  await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
+}
+
+function otpLabelForRegalMfaMethod(methodValue: string): string {
+  const methodKey = getRegalMfaMethodKey(methodValue);
+  if (methodKey === "okta_email") return "Regal email OTP";
+  if (methodKey === "phone_number") return "Regal SMS OTP";
+  if (methodKey === "google_otp") return "Regal Google Authenticator OTP";
+  if (methodKey === "okta_verify-totp") return "Regal Okta Verify OTP";
+  return "Regal OTP";
+}
+
+async function prepareSelectedRegalMfaMethod(page: Page, methodValue: string, stageLog: (level: RegalLogEntry["level"], stage: string, message: string, currentPage?: Page) => Promise<void>): Promise<string> {
+  const methodKey = getRegalMfaMethodKey(methodValue);
+  await clickSelectedRegalMfaMethod(page, methodValue);
+
+  if (methodKey === "okta_email") {
+    if (!(await openRegalEmailCodeEntryIfPresent(page, stageLog))) {
+      await stageLog("warn", "mfa", "Regal email MFA controls did not reach a visible verification code field within 30 seconds.", page);
+      throw new Error("Regal email MFA was selected, but the verification code field did not appear.");
+    }
+  } else if (methodKey === "phone_number") {
+    if (!(await openRegalPhoneCodeEntryIfPresent(page, stageLog))) {
+      await stageLog("warn", "mfa", "Regal SMS MFA controls did not reach a visible verification code field within 30 seconds.", page);
+      throw new Error("Regal SMS MFA was selected, but the verification code field did not appear.");
+    }
+  } else {
+    await page.locator(regalConfig.selectors.googleAuthenticatorCode).first().waitFor({ state: "visible", timeout: 30000 });
+  }
+
+  return otpLabelForRegalMfaMethod(methodValue);
+}
+
+async function selectRegalOtpIfNeeded(page: Page, context: ScraperContext, stageLog: (level: RegalLogEntry["level"], stage: string, message: string, currentPage?: Page) => Promise<void>): Promise<string> {
   const codeInputVisible = await isVisible(page, regalConfig.selectors.googleAuthenticatorCode);
   if (codeInputVisible) {
     await stageLog("info", "mfa", "OTP code page is already visible.", page);
     return "Regal OTP";
-  }
-
-  if (await openRegalEmailCodeEntryIfPresent(page, stageLog)) {
-    return "Regal email OTP";
-  }
-
-  if (await openRegalPhoneCodeEntryIfPresent(page, stageLog)) {
-    return "Regal SMS OTP";
   }
 
   const switchAuthenticatorVisible = await isVisible(page, regalConfig.selectors.switchAuthenticator);
@@ -235,43 +365,43 @@ async function selectRegalOtpIfNeeded(page: Page, stageLog: (level: RegalLogEntr
     await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
   }
 
-  const emailOption = page.locator(regalConfig.selectors.emailAuthenticatorSelect).first();
-  const emailVisible = await emailOption.isVisible({ timeout: 5000 }).catch(() => false);
-  const phoneOption = page.locator(regalConfig.selectors.phoneAuthenticatorSelect).first();
-  const phoneVisible = !emailVisible && await phoneOption.isVisible({ timeout: 3000 }).catch(() => false);
-  const googleOption = page.locator(regalConfig.selectors.googleAuthenticatorSelect).first();
-  const option = emailVisible ? emailOption : phoneVisible ? phoneOption : googleOption;
-  const selectedMethod = emailVisible ? "Regal email OTP" : phoneVisible ? "Regal SMS OTP" : "Regal OTP";
-  await option.waitFor({ state: "visible", timeout: 30000 });
-  await stageLog(
-    "info",
-    "mfa",
-    emailVisible
-      ? "Selecting Email from available security methods."
-      : phoneVisible
-        ? "Email MFA not found; selecting Phone/SMS from available security methods."
-        : "Email/SMS MFA not found; selecting available authenticator for manual OTP.",
-    page,
-  );
-  await Promise.all([
-    page.waitForLoadState("domcontentloaded").catch(() => {}),
-    option.click(),
-  ]);
-  await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
+  const authenticatorListVisible = await page
+    .locator(".authenticator-verify-list .authenticator-row")
+    .first()
+    .waitFor({ state: "visible", timeout: 3000 })
+    .then(() => true, () => false);
 
-  if (emailVisible) {
-    if (!(await openRegalEmailCodeEntryIfPresent(page, stageLog))) {
-      await stageLog("warn", "mfa", "Regal email MFA controls did not reach a visible verification code field within 30 seconds.", page);
-      throw new Error("Regal email MFA was selected, but the verification code field did not appear.");
-    }
-  } else if (phoneVisible) {
-    if (!(await openRegalPhoneCodeEntryIfPresent(page, stageLog))) {
-      await stageLog("warn", "mfa", "Regal SMS MFA controls did not reach a visible verification code field within 30 seconds.", page);
-      throw new Error("Regal SMS MFA was selected, but the verification code field did not appear.");
-    }
+  if (authenticatorListVisible) {
+    await stageLog("info", "mfa", "Regal authenticator selection page reached; reading available methods for frontend selection.", page);
+    const options = await extractRegalMfaOptions(page);
+    const selectedMethod = await requestRegalMfaMethodFromUser(context, stageLog, page, options);
+    await stageLog("info", "mfa", `User selected Regal MFA method: ${selectedMethod}.`, page);
+    return prepareSelectedRegalMfaMethod(page, selectedMethod, stageLog);
   }
 
-  return selectedMethod;
+  const emailSendVisible = await isVisible(page, regalConfig.selectors.emailSendSubmit, 1000);
+  const emailEnterCodeVisible = await isVisible(page, regalConfig.selectors.emailEnterCodeInstead, 1000);
+  if (emailSendVisible || emailEnterCodeVisible) {
+    if (await openRegalEmailCodeEntryIfPresent(page, stageLog)) {
+      return "Regal email OTP";
+    }
+    throw new Error("Regal email MFA page was visible, but the verification code field did not appear.");
+  }
+
+  const phoneSendVisible = await isVisible(page, regalConfig.selectors.phoneSendSubmit, 1000);
+  if (phoneSendVisible) {
+    if (await openRegalPhoneCodeEntryIfPresent(page, stageLog)) {
+      return "Regal SMS OTP";
+    }
+    throw new Error("Regal SMS MFA page was visible, but the verification code field did not appear.");
+  }
+
+  await page.locator(".authenticator-verify-list .authenticator-row").first().waitFor({ state: "visible", timeout: 30000 });
+  await stageLog("info", "mfa", "Regal authenticator selection page reached after wait; reading available methods for frontend selection.", page);
+  const options = await extractRegalMfaOptions(page);
+  const selectedMethod = await requestRegalMfaMethodFromUser(context, stageLog, page, options);
+  await stageLog("info", "mfa", `User selected Regal MFA method: ${selectedMethod}.`, page);
+  return prepareSelectedRegalMfaMethod(page, selectedMethod, stageLog);
 }
 
 async function requestRegalOtpFromUser(context: ScraperContext, stageLog: (level: RegalLogEntry["level"], stage: string, message: string, currentPage?: Page) => Promise<void>, page: Page, otpLabel: string): Promise<string> {
@@ -391,6 +521,51 @@ function normalizeRegalSiteText(value: string): string {
   return normalizeText(value).toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
+async function getVisibleRegalSiteText(page: Page): Promise<string> {
+  const frameTexts = await Promise.all(
+    page.frames().map((frame) =>
+      frame.evaluate(() => {
+        const normalize = (value: unknown) => String(value || "").replace(/\s+/g, " ").trim();
+        const selectedSite = Array.from(document.querySelectorAll("select[id$='_header_ddlSite'], select[name$='$header$ddlSite'], select[id*='ddlSite'], select[name*='ddlSite']"))
+          .map((select) => (select as HTMLSelectElement).selectedOptions?.[0]?.textContent || "")
+          .map(normalize)
+          .find(Boolean);
+        const hiddenSite = Array.from(document.querySelectorAll("span[id$='_header_lblSite'], span[id*='lblSite']"))
+          .map((span) => span.textContent || "")
+          .map(normalize)
+          .find(Boolean);
+        const siteLabel = Array.from(document.querySelectorAll("td, span, label, div"))
+          .find((element) => normalize(element.textContent).toLowerCase() === "site:");
+        const siteLabelSibling = siteLabel?.nextElementSibling ? normalize(siteLabel.nextElementSibling.textContent) : "";
+        const siteLine = (document.body?.innerText || "").split(/\r?\n/)
+          .map(normalize)
+          .find((line) => /^site:\s*\S/i.test(line) || /\bsite:\s*\S/i.test(line));
+        return [selectedSite, hiddenSite, siteLabelSibling, siteLine].filter(Boolean).join("\n");
+      }).catch(() => "")
+    ),
+  );
+  const locatorText = await page.locator("body").innerText({ timeout: 3000 }).catch(() => "");
+  const siteLine = locatorText.split(/\r?\n/).map((line) => normalizeText(line)).find((line) => /^site:\s*\S/i.test(line) || /\bsite:\s*\S/i.test(line)) || "";
+  const combined = `${siteLine}\n${frameTexts.join("\n")}`;
+  const siteMatch = combined.match(/Site:\s*([^\n\r]+)/i);
+  return normalizeText(siteMatch?.[1] || combined);
+}
+
+async function waitForRegalSiteHeader(page: Page, timeout = 30000): Promise<void> {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    if (await findRegalLocator(page, regalConfig.selectors.siteSelect, { state: "attached", timeout: 1000 }).then(() => true, () => false)) {
+      return;
+    }
+    const visibleSiteText = await getVisibleRegalSiteText(page);
+    if (visibleSiteText) {
+      return;
+    }
+    await page.waitForTimeout(500);
+  }
+  throw new Error("Regal site header/dropdown did not load within 30 seconds.");
+}
+
 function resolveRegalGroupName(group: string): string {
   const groupCode = normalizeText(group).replace(/\s+/g, "").toUpperCase();
   const groupName = regalGroupMap[groupCode];
@@ -417,7 +592,25 @@ function groupRegalClaimRows(rows: RegalClaimSearchInput[]): Array<{ group: stri
 
 async function selectRegalGroupSite(page: Page, group: string, stageLog: (level: RegalLogEntry["level"], stage: string, message: string, currentPage?: Page) => Promise<void>): Promise<void> {
   const groupName = resolveRegalGroupName(group);
-  const siteSelect = await findRegalLocator(page, regalConfig.selectors.siteSelect, { state: "visible", timeout: 30000 });
+  await waitForRegalSiteHeader(page, 30000);
+  const siteSelect =
+    await findRegalLocator(page, regalConfig.selectors.siteSelect, { state: "visible", timeout: 5000 }).catch(() => null) ??
+    await findRegalLocator(page, regalConfig.selectors.siteSelect, { state: "attached", timeout: 5000 }).catch(() => null);
+  if (!siteSelect) {
+    const visibleSiteText = await getVisibleRegalSiteText(page);
+    if (normalizeRegalSiteText(visibleSiteText).includes(normalizeRegalSiteText(groupName))) {
+      await stageLog("info", "group", `Regal group ${group} confirmed from fixed site text: ${groupName}.`, page);
+      return;
+    }
+
+    if (normalizeText(group).replace(/\s+/g, "").toUpperCase() === "USA") {
+      await stageLog("warn", "group", `Regal site dropdown was not available and site text could not be confirmed, but this login appears to be fixed-site. Continuing with ${group}: ${groupName}.`, page);
+      return;
+    }
+
+    throw new Error(`Regal site dropdown was not available, and current site did not match group ${group}. Expected "${groupName}". Current page showed "${visibleSiteText.slice(0, 120) || "(unknown)"}".`);
+  }
+
   const selectedText = await siteSelect.locator("option:checked").innerText().catch(() => "");
 
   if (normalizeRegalSiteText(selectedText).includes(normalizeRegalSiteText(groupName))) {
@@ -454,7 +647,10 @@ async function returnToRegalHomeForGroupSelection(page: Page, stageLog: (level: 
   await stageLog("info", "group", `Returning to Regal home page before changing group: ${homeUrl}.`, page);
   await page.goto(homeUrl, { waitUntil: "domcontentloaded" });
   await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
-  await findRegalLocator(page, regalConfig.selectors.siteSelect, { state: "visible", timeout: 30000 });
+  await Promise.race([
+    findRegalLocator(page, regalConfig.selectors.siteSelect, { state: "visible", timeout: 30000 }),
+    findRegalLocator(page, regalConfig.selectors.viewClaimsLink, { state: "attached", timeout: 30000 }),
+  ]);
 }
 
 function createRegalNoClaimsOutputRow(claimInput: { rowNumber: number; group: string; memberName: string; dos: string }): Record<string, unknown> {
@@ -775,19 +971,26 @@ async function extractRegalClaimSummary(page: Page): Promise<RegalClaimSummary> 
 
 async function showRegalLineDetail(page: Page): Promise<void> {
   if (await findRegalLocator(page, regalConfig.selectors.lineDetailHideSubmit, { state: "visible", timeout: 3000 }).then(() => true, () => false)) {
+    await findRegalLocator(page, regalConfig.selectors.lineDetailTable, { state: "visible", timeout: 30000 });
+    await findRegalLocator(page, regalConfig.selectors.lineDetailAdjustmentTable, { state: "visible", timeout: 5000 }).catch(() => {});
     return;
   }
 
-  const button = await findRegalLocator(page, regalConfig.selectors.lineDetailShowSubmit, { state: "attached", timeout: 5000 });
-  if (await button.isVisible({ timeout: 5000 }).catch(() => false)) {
+  const showButton = await findRegalLocator(page, regalConfig.selectors.lineDetailShowSubmit, { state: "attached", timeout: 30000 });
+  const showValue = normalizeText(await showButton.inputValue().catch(async () => String(await showButton.evaluate((element) => (element as HTMLInputElement).value || "").catch(() => ""))));
+  if (!/show line detail/i.test(showValue)) {
+    await findRegalLocator(page, regalConfig.selectors.lineDetailHideSubmit, { state: "visible", timeout: 30000 });
+  } else {
     await Promise.all([
       page.waitForLoadState("domcontentloaded").catch(() => {}),
-      button.click(),
+      showButton.click({ force: true }),
     ]);
     await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
     await findRegalLocator(page, regalConfig.selectors.lineDetailHideSubmit, { state: "visible", timeout: 30000 });
   }
+
   await findRegalLocator(page, regalConfig.selectors.lineDetailTable, { state: "visible", timeout: 30000 });
+  await findRegalLocator(page, regalConfig.selectors.lineDetailAdjustmentTable, { state: "visible", timeout: 5000 }).catch(() => {});
 }
 
 async function extractRegalLineDetails(page: Page): Promise<RegalLineDetailRow[]> {
@@ -834,12 +1037,28 @@ async function extractRegalLineDetails(page: Page): Promise<RegalLineDetailRow[]
       const finalAdjustment = finalHeaderIndex >= 0 ? rows[finalHeaderIndex + 1] || [] : [];
       const finalAdjustmentHeaders = finalHeaderIndex >= 0 ? rows[finalHeaderIndex].map(normalizeColumn) : [];
       const values: Record<string, string> = {};
+      const expectedAdjustmentColumns = [
+        "deductible",
+        "copay",
+        "coinsurance",
+        "adjustment",
+        "adjustment_reason",
+        "final_adj",
+        "final_adj_reason",
+      ];
+      expectedAdjustmentColumns.forEach((column) => {
+        values[column] = "";
+      });
 
       firstAdjustmentHeaders.forEach((header, index) => {
-        if (header) values[header] = firstAdjustment[index] || "";
+        if (!header) return;
+        if (!Object.prototype.hasOwnProperty.call(values, header)) return;
+        values[header] = firstAdjustment[index] || "";
       });
       finalAdjustmentHeaders.forEach((header, index) => {
-        if (header) values[header] = finalAdjustment[index] || "";
+        if (!header) return;
+        if (!Object.prototype.hasOwnProperty.call(values, header)) return;
+        values[header] = finalAdjustment[index] || "";
       });
 
       return values;
@@ -917,8 +1136,24 @@ export async function runRegalLoginJob(formData: FormData, context: ScraperConte
 
   const emitOutputWorkbook = async () => {
     if (outputWorkbookEmitted || outputRows.length === 0) return;
-    await context.emit(downloadableWorkbookEvent("regal_output.xlsx", createRegalOutputWorkbookBuffer(outputRows)));
+    await context.emit(downloadableWorkbookEvent("regal_output.xlsx", createRegalOutputWorkbookBuffer(outputRows, { auditLog: logEntries })));
     outputWorkbookEmitted = true;
+  };
+
+  const emitOutputSnapshot = async (completed: number, total: number) => {
+    if (outputRows.length === 0) return;
+    await context.emit(downloadableWorkbookEvent(
+      "regal_output_snapshot.xlsx",
+      createRegalOutputWorkbookBuffer(outputRows, { auditLog: logEntries }),
+      { snapshot: true, completed, total },
+    ));
+  };
+
+  const throwIfCancelled = async () => {
+    if (context.isCancelled?.()) {
+      await stageLog("warn", "cancelled", "Regal processing stopped because the active scrape job was cancelled.");
+      throw new RegalJobCancelledError();
+    }
   };
 
   const signOutFromDashboard = async () => {
@@ -940,8 +1175,9 @@ export async function runRegalLoginJob(formData: FormData, context: ScraperConte
   };
 
   const runFlow = async (attempt: number) => {
-    const progressTotal = input.claimRows.length;
-    await context.emit({ type: "progress", completed: 0, total: progressTotal });
+    const progressTotal = input.totalRows;
+    let completedRows = input.startIndex;
+    await context.emit({ type: "progress", completed: completedRows, total: progressTotal });
     if (!browserContext) {
       const session = await launchRegalBrowser((message) => context.log({ level: "info", message }));
       browser = session.browser;
@@ -980,13 +1216,11 @@ export async function runRegalLoginJob(formData: FormData, context: ScraperConte
     dashboardPage = page;
     await stageLog("info", "dashboard", "Confirmed Okta dashboard by Dashboard heading and Sign out link.");
 
-    await emitPageDiagnostics(context, page, "okta-dashboard-confirmed");
     await stageLog("info", "launch-rea", "Finding and clicking Regal Express Access (REA).");
     page = await launchRegalExpressAccess(page, browserContext);
     await stageLog("info", "launch-rea", "Regal Express Access click completed; checking reached page.", page);
 
-    await emitPageDiagnostics(context, page, "after-regal-express-access-before-mfa");
-    const otpLabel = await selectRegalOtpIfNeeded(page, stageLog);
+    const otpLabel = await selectRegalOtpIfNeeded(page, context, stageLog);
     if (!(await isPastRegalMfa(page))) {
       const regalOtp = await requestRegalOtpFromUser(context, stageLog, page, otpLabel);
       if (await isPastRegalMfa(page)) {
@@ -1003,13 +1237,12 @@ export async function runRegalLoginJob(formData: FormData, context: ScraperConte
       throw new Error(`Regal OTP step failed: ${mfaStepError}`);
     }
     await stageLog("info", "mfa", "Regal OTP submitted; checking next page.", page);
-    await emitPageDiagnostics(context, page, "after-otp-verify");
 
     let totalSearchResults = 0;
-    let completedRows = 0;
     const groupedClaimRows = groupRegalClaimRows(input.claimRows);
 
     for (const [groupBatchIndex, groupBatch] of groupedClaimRows.entries()) {
+      await throwIfCancelled();
       if (groupBatchIndex > 0) {
         await returnToRegalHomeForGroupSelection(page, stageLog);
       }
@@ -1020,6 +1253,7 @@ export async function runRegalLoginJob(formData: FormData, context: ScraperConte
       const claimsSearchUrl = page.url();
 
       for (const claimInput of groupBatch.rows) {
+        await throwIfCancelled();
         await stageLog(
           "info",
           "claim-search",
@@ -1027,6 +1261,7 @@ export async function runRegalLoginJob(formData: FormData, context: ScraperConte
           page,
         );
         await searchRegalClaims(page, claimInput);
+        await throwIfCancelled();
         const rawClaimRows = await extractRegalClaimRows(page);
         const claimRows = rawClaimRows.filter((row) => regalRowMatchesInput(row, claimInput));
         if (rawClaimRows.length === 0 && await hasRegalNoClaimsMessage(page)) {
@@ -1048,11 +1283,12 @@ export async function runRegalLoginJob(formData: FormData, context: ScraperConte
           page,
         );
       }
-      await emitPageDiagnostics(context, page, `after-claim-search-row-${claimInput.rowNumber}`);
 
       for (const claimRow of claimRows) {
+        await throwIfCancelled();
         await stageLog("info", "claim-detail", `Opening Regal claim result ${claimRow.index + 1} for input row ${claimInput.rowNumber}.`, page);
         await openRegalClaimResult(page, claimRow);
+        await throwIfCancelled();
         await stageLog("info", "claim-detail", `Regal claim detail page opened for input row ${claimInput.rowNumber}, result ${claimRow.index + 1}. Iframe URL: ${regalContentUrl(page)}.`, page);
 
         const detailRows = await extractRegalClaimDetailRows(page);
@@ -1062,7 +1298,6 @@ export async function runRegalLoginJob(formData: FormData, context: ScraperConte
           `Extracted Regal claim summary and ${detailRows.lineDetails.length} line detail row(s) for claim ${detailRows.summary.claimNumber || claimRow.claimNumber}.`,
           page,
         );
-        await emitPageDiagnostics(context, page, `after-claim-detail-row-${claimInput.rowNumber}-result-${claimRow.index + 1}`);
 
         const lines = detailRows.lineDetails.length ? detailRows.lineDetails : [{} as RegalLineDetailRow];
         for (const line of lines) {
@@ -1094,6 +1329,7 @@ export async function runRegalLoginJob(formData: FormData, context: ScraperConte
 
         completedRows += 1;
         await context.emit({ type: "progress", completed: completedRows, total: progressTotal });
+        await emitOutputSnapshot(completedRows, progressTotal);
 
         if (claimInput !== groupBatch.rows[groupBatch.rows.length - 1]) {
           await returnToRegalClaimSearch(page, claimsSearchUrl);
@@ -1115,6 +1351,9 @@ export async function runRegalLoginJob(formData: FormData, context: ScraperConte
     } catch (firstError) {
       const firstMessage = errorMessage(firstError);
       await stageLog("warn", "retry", `First Regal attempt failed: ${firstMessage}`);
+      if (firstError instanceof RegalJobCancelledError) {
+        throw firstError;
+      }
       if (page) {
         await emitPageDiagnostics(context, page, "first-attempt-error", { error: true }).catch(() => {});
       }
@@ -1129,6 +1368,17 @@ export async function runRegalLoginJob(formData: FormData, context: ScraperConte
     await context.emit({ type: "done" });
   } catch (error) {
     const message = errorMessage(error);
+    if (error instanceof RegalJobCancelledError) {
+      await emitOutputWorkbook().catch((outputError) => {
+        void context.log({ level: "error", message: `Failed to create Regal partial output workbook after cancellation: ${errorMessage(outputError)}` });
+      });
+      await emitLatestLog().catch((logError) => {
+        void context.log({ level: "error", message: `Failed to create Regal latest log after cancellation: ${errorMessage(logError)}` });
+      });
+      await context.emit({ type: "cancelled", message });
+      await context.emit({ type: "done" });
+      return;
+    }
     await stageLog("error", "failed", message);
     if (page) {
       await emitPageDiagnostics(context, page, "login-error", { error: true });

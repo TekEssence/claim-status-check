@@ -26,6 +26,13 @@ export type ScrapeJobEvent = {
   path?: string;
   inputName?: string;
   label?: string;
+  options?: Array<{
+    value: string;
+    label: string;
+    description?: string;
+    disabled?: boolean;
+    disabledReason?: string;
+  }>;
   timeoutMs?: number;
   update?: Record<string, unknown>;
 };

@@ -93,7 +93,7 @@ export async function subscribeToScrapeJobEvents(options: {
     },
     onerror(error) {
       options.onStreamError(error);
-      throw error;
+      return 2000;
     },
   });
 }

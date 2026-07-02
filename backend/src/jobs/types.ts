@@ -13,6 +13,7 @@ export type ScrapeJob = {
   currentCompleted: number;
   events: ScrapeJobEvent[];
   subscribers: Set<(event: ScrapeJobEvent) => void>;
+  cancelRequested?: boolean;
   inputWaiters: Map<string, {
     resolve: (value: string) => void;
     reject: (error: Error) => void;

@@ -18,6 +18,7 @@ import {
   createPersistentScrapeJob,
   getActiveScrapeJobForUser,
   getScrapeJobByIdForUser,
+  isScrapeJobDbConnectionError,
   updateScrapeJobSnapshot,
 } from "@/lib/scrape-jobs/db";
 import { getScraper } from "@/backend/src/scrapers/registry";
@@ -38,92 +39,105 @@ function ensurePersistenceListenerRegistered() {
 }
 
 export async function POST(req: Request) {
-  ensurePersistenceListenerRegistered();
-  const session = await getSessionFromCookies();
-  if (!session) {
-    return Response.json({ error: "Authentication required." }, { status: 401 });
-  }
-
-  const formData = await req.formData();
-  const portalId = getPortalId(formData);
-  const scraper = getScraper(portalId);
-  const input = scraper.validateInput(formData);
-  const requestedJobId = getRequestedJobId(formData);
-  const totalRows = getTotalRows(formData);
-  const startIndex = getStartIndex(formData);
-  const existingActiveJob = await getNormalizedActiveScrapeJobForUser(session.userId);
-
-  if (!requestedJobId && existingActiveJob) {
-    return Response.json(
-      { error: "Another run is already active for this user. Please wait for it to finish or reconnect to it.", jobId: existingActiveJob.jobId },
-      { status: 409 },
-    );
-  }
-
-  if (requestedJobId) {
-    if (!existingActiveJob || existingActiveJob.jobId !== requestedJobId) {
-      return Response.json({ error: "The requested run is no longer active for this user." }, { status: 409 });
+  try {
+    ensurePersistenceListenerRegistered();
+    const session = await getSessionFromCookies();
+    if (!session) {
+      return Response.json({ error: "Authentication required." }, { status: 401 });
     }
-    const ownedJob = await getScrapeJobByIdForUser(requestedJobId, session.userId);
-    if (!ownedJob) {
-      return Response.json({ error: "Run not found for this user." }, { status: 404 });
+
+    const formData = await req.formData();
+    const portalId = getPortalId(formData);
+    const scraper = getScraper(portalId);
+    const input = scraper.validateInput(formData);
+    const requestedJobId = getRequestedJobId(formData);
+    const totalRows = getTotalRows(formData);
+    const startIndex = getStartIndex(formData);
+    const existingActiveJob = await getNormalizedActiveScrapeJobForUser(session.userId);
+
+    if (!requestedJobId && existingActiveJob) {
+      return Response.json(
+        { error: "Another run is already active for this user. Please wait for it to finish or reconnect to it.", jobId: existingActiveJob.jobId },
+        { status: 409 },
+      );
     }
-  }
 
-  const job = createScrapeJob(requestedJobId || undefined);
-  await createPersistentScrapeJob({
-    jobId: job.id,
-    userId: session.userId,
-    portalId,
-    claimFileName: getOptionalString(formData, "claimFileName"),
-    loginFileName: getOptionalString(formData, "loginFileName"),
-    totalRows,
-    currentCompleted: startIndex,
-  });
+    if (requestedJobId) {
+      if (!existingActiveJob || existingActiveJob.jobId !== requestedJobId) {
+        return Response.json({ error: "The requested run is no longer active for this user." }, { status: 409 });
+      }
+      const ownedJob = await getScrapeJobByIdForUser(requestedJobId, session.userId);
+      if (!ownedJob) {
+        return Response.json({ error: "Run not found for this user." }, { status: 404 });
+      }
+    }
 
-  scraper.run(input, {
-    jobId: job.id,
-    portalId,
-    emit: async (event) => {
-      emitScrapeJobEvent(job.id, event);
-    },
-    isCancelled: () => {
+    const job = createScrapeJob(requestedJobId || undefined);
+    await createPersistentScrapeJob({
+      jobId: job.id,
+      userId: session.userId,
+      portalId,
+      claimFileName: getOptionalString(formData, "claimFileName"),
+      loginFileName: getOptionalString(formData, "loginFileName"),
+      totalRows,
+      currentCompleted: startIndex,
+    });
+
+    scraper.run(input, {
+      jobId: job.id,
+      portalId,
+      emit: async (event) => {
+        emitScrapeJobEvent(job.id, event);
+      },
+      isCancelled: () => {
+        const currentJob = getScrapeJob(job.id);
+        return currentJob?.status === "cancelled" || currentJob?.cancelRequested === true;
+      },
+      log: async (event) => {
+        emitScrapeJobEvent(job.id, {
+          type: "log",
+          message: event.message,
+          level: event.level,
+          eventName: event.eventName,
+          rowIndex: event.rowIndex,
+          meta: event.meta,
+        });
+      },
+    }).then(async () => {
       const currentJob = getScrapeJob(job.id);
-      return currentJob?.status === "cancelled";
-    },
-    log: async (event) => {
-      emitScrapeJobEvent(job.id, {
-        type: "log",
-        message: event.message,
-        level: event.level,
-        eventName: event.eventName,
-        rowIndex: event.rowIndex,
-        meta: event.meta,
-      });
-    },
-  }).then(async () => {
-    const currentJob = getScrapeJob(job.id);
-    const completed = currentJob?.currentCompleted ?? startIndex;
-    const finalStatus = completed < totalRows ? "waiting_resume" : "completed";
-    await updateScrapeJobSnapshot({
-      jobId: job.id,
-      status: finalStatus,
-      currentCompleted: completed,
-      totalRows,
-    }).catch(() => {});
-  }).catch(async (error) => {
-    const message = error instanceof Error ? error.message : "Unexpected automation error.";
-    emitScrapeJobEvent(job.id, { type: "error", message });
-    emitScrapeJobEvent(job.id, { type: "done" });
-    await updateScrapeJobSnapshot({
-      jobId: job.id,
-      status: "failed",
-      currentCompleted: getScrapeJob(job.id)?.currentCompleted ?? startIndex,
-      totalRows,
-    }).catch(() => {});
-  });
+      const completed = currentJob?.currentCompleted ?? startIndex;
+      const finalStatus = currentJob?.status === "cancelled" || currentJob?.cancelRequested
+        ? "cancelled"
+        : completed < totalRows
+          ? "waiting_resume"
+          : "completed";
+      await updateScrapeJobSnapshot({
+        jobId: job.id,
+        status: finalStatus,
+        currentCompleted: completed,
+        totalRows,
+      }).catch(() => {});
+    }).catch(async (error) => {
+      const message = error instanceof Error ? error.message : "Unexpected automation error.";
+      emitScrapeJobEvent(job.id, { type: "error", message });
+      emitScrapeJobEvent(job.id, { type: "done" });
+      await updateScrapeJobSnapshot({
+        jobId: job.id,
+        status: "failed",
+        currentCompleted: getScrapeJob(job.id)?.currentCompleted ?? startIndex,
+        totalRows,
+      }).catch(() => {});
+    });
 
-  return Response.json({ jobId: job.id, portalId });
+    return Response.json({ jobId: job.id, portalId });
+  } catch (error) {
+    console.error("Start scrape job failed", error);
+    if (isScrapeJobDbConnectionError(error)) {
+      return Response.json({ error: "Scrape job database connection timed out. Check DATABASE_URL and restart the dev server." }, { status: 503 });
+    }
+
+    return Response.json({ error: error instanceof Error ? error.message : "Failed to start scrape job." }, { status: 500 });
+  }
 }
 
 export async function GET(req: Request) {
@@ -290,7 +304,7 @@ async function persistScrapeJobEvent(jobId: string, data: Record<string, unknown
     return;
   }
 
-  if (data.type === "error_screenshot" || data.type === "debug_html" || data.type === "pdf_download" || data.type === "file_download") {
+  if (data.type === "error_screenshot" || data.type === "debug_html" || data.type === "pdf_download" || data.type === "file_download" || data.type === "output_snapshot") {
     const persistedPath = getArtifactPathForPersistence(jobId, data);
     await appendScrapeJobArtifact({
       jobId,
@@ -349,7 +363,7 @@ function persistArtifactPayload(jobId: string, data: Record<string, unknown>): s
       return filePath;
     }
 
-    if ((artifactType === "pdf_download" || artifactType === "file_download") && typeof data.base64 === "string" && data.base64) {
+    if ((artifactType === "pdf_download" || artifactType === "file_download" || artifactType === "output_snapshot") && typeof data.base64 === "string" && data.base64) {
       const fallbackExt = artifactType === "pdf_download" ? ".pdf" : ".bin";
       const filePath = path.join(
         artifactDir,

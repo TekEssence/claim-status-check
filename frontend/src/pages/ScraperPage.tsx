@@ -43,6 +43,19 @@ type IehpWorkbookBundle = {
   worksheet: ExcelJS.Worksheet;
 };
 
+type DownloadFile = {
+  filename: string;
+  bytes: Uint8Array;
+};
+
+type DownloadableArtifact = {
+  filename: string;
+  base64: string;
+  mimeType: string;
+  completed?: number;
+  total?: number;
+};
+
 export type PortalId = "iehp" | "aerial" | "regal";
 
 const SELECTED_PORTAL_STORAGE_KEY = "iehp-selected-portal";
@@ -80,6 +93,123 @@ function base64ToBytes(base64: string): Uint8Array {
     bytes[i] = binaryString.charCodeAt(i);
   }
   return bytes;
+}
+
+function textToBytes(text: string): Uint8Array {
+  return new TextEncoder().encode(text);
+}
+
+function writeUint16(bytes: Uint8Array, offset: number, value: number): void {
+  bytes[offset] = value & 0xff;
+  bytes[offset + 1] = (value >>> 8) & 0xff;
+}
+
+function writeUint32(bytes: Uint8Array, offset: number, value: number): void {
+  bytes[offset] = value & 0xff;
+  bytes[offset + 1] = (value >>> 8) & 0xff;
+  bytes[offset + 2] = (value >>> 16) & 0xff;
+  bytes[offset + 3] = (value >>> 24) & 0xff;
+}
+
+function concatBytes(parts: Uint8Array[]): Uint8Array {
+  const totalLength = parts.reduce((sum, part) => sum + part.length, 0);
+  const output = new Uint8Array(totalLength);
+  let offset = 0;
+  for (const part of parts) {
+    output.set(part, offset);
+    offset += part.length;
+  }
+  return output;
+}
+
+function crc32(bytes: Uint8Array): number {
+  let crc = 0xffffffff;
+  for (const byte of bytes) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit++) {
+      crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1));
+    }
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function getZipDateTime(date = new Date()): { zipDate: number; zipTime: number } {
+  const year = Math.max(1980, date.getFullYear());
+  return {
+    zipDate: ((year - 1980) << 9) | ((date.getMonth() + 1) << 5) | date.getDate(),
+    zipTime: (date.getHours() << 11) | (date.getMinutes() << 5) | Math.floor(date.getSeconds() / 2),
+  };
+}
+
+function createZip(files: DownloadFile[]): Uint8Array {
+  const localParts: Uint8Array[] = [];
+  const centralParts: Uint8Array[] = [];
+  let offset = 0;
+  const { zipDate, zipTime } = getZipDateTime();
+
+  for (const file of files) {
+    const filenameBytes = textToBytes(file.filename.replace(/\\/g, "/"));
+    const checksum = crc32(file.bytes);
+
+    const localHeader = new Uint8Array(30 + filenameBytes.length);
+    writeUint32(localHeader, 0, 0x04034b50);
+    writeUint16(localHeader, 4, 20);
+    writeUint16(localHeader, 6, 0);
+    writeUint16(localHeader, 8, 0);
+    writeUint16(localHeader, 10, zipTime);
+    writeUint16(localHeader, 12, zipDate);
+    writeUint32(localHeader, 14, checksum);
+    writeUint32(localHeader, 18, file.bytes.length);
+    writeUint32(localHeader, 22, file.bytes.length);
+    writeUint16(localHeader, 26, filenameBytes.length);
+    writeUint16(localHeader, 28, 0);
+    localHeader.set(filenameBytes, 30);
+
+    localParts.push(localHeader, file.bytes);
+
+    const centralHeader = new Uint8Array(46 + filenameBytes.length);
+    writeUint32(centralHeader, 0, 0x02014b50);
+    writeUint16(centralHeader, 4, 20);
+    writeUint16(centralHeader, 6, 20);
+    writeUint16(centralHeader, 8, 0);
+    writeUint16(centralHeader, 10, 0);
+    writeUint16(centralHeader, 12, zipTime);
+    writeUint16(centralHeader, 14, zipDate);
+    writeUint32(centralHeader, 16, checksum);
+    writeUint32(centralHeader, 20, file.bytes.length);
+    writeUint32(centralHeader, 24, file.bytes.length);
+    writeUint16(centralHeader, 28, filenameBytes.length);
+    writeUint16(centralHeader, 30, 0);
+    writeUint16(centralHeader, 32, 0);
+    writeUint16(centralHeader, 34, 0);
+    writeUint16(centralHeader, 36, 0);
+    writeUint32(centralHeader, 38, 0);
+    writeUint32(centralHeader, 42, offset);
+    centralHeader.set(filenameBytes, 46);
+    centralParts.push(centralHeader);
+
+    offset += localHeader.length + file.bytes.length;
+  }
+
+  const centralDirectory = concatBytes(centralParts);
+  const endRecord = new Uint8Array(22);
+  writeUint32(endRecord, 0, 0x06054b50);
+  writeUint16(endRecord, 4, 0);
+  writeUint16(endRecord, 6, 0);
+  writeUint16(endRecord, 8, files.length);
+  writeUint16(endRecord, 10, files.length);
+  writeUint32(endRecord, 12, centralDirectory.length);
+  writeUint32(endRecord, 16, offset);
+  writeUint16(endRecord, 20, 0);
+
+  return concatBytes([...localParts, centralDirectory, endRecord]);
+}
+
+function downloadZip(filename: string, files: DownloadFile[]): void {
+  if (!files.length) return;
+  const zipBytes = createZip(files);
+  const arrayBuffer = zipBytes.buffer.slice(zipBytes.byteOffset, zipBytes.byteOffset + zipBytes.byteLength) as ArrayBuffer;
+  downloadBlob(filename, new Blob([arrayBuffer], { type: "application/zip" }));
 }
 
 function downloadBase64File(filename: string, base64: string, type: string): void {
@@ -284,8 +414,16 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
   const [regalLoginFile, setRegalLoginFile] = useState<File | null>(null);
   const [regalClaimFile, setRegalClaimFile] = useState<File | null>(null);
   const [regalJobId, setRegalJobId] = useState<string>("");
+  const [regalMfaRequest, setRegalMfaRequest] = useState<{
+    inputName: string;
+    label: string;
+    message: string;
+    options: NonNullable<ScrapeJobEvent["options"]>;
+  } | null>(null);
+  const [regalMfaValue, setRegalMfaValue] = useState<string>("");
   const [regalOtpRequest, setRegalOtpRequest] = useState<{ inputName: string; label: string; message: string } | null>(null);
   const [regalOtpValue, setRegalOtpValue] = useState<string>("");
+  const [latestRegalOutput, setLatestRegalOutput] = useState<DownloadableArtifact | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [status, setStatus] = useState<string>("");
   const [logs, setLogs] = useState<string[]>([]);
@@ -293,6 +431,7 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
   const [progress, setProgress] = useState<JobProgressValue | null>(null);
   const [jobRestoreLoading, setJobRestoreLoading] = useState(true);
   const [pendingIehpRestoreJob, setPendingIehpRestoreJob] = useState<CurrentScrapeJob | null>(null);
+  const [pendingRegalRestoreJob, setPendingRegalRestoreJob] = useState<CurrentScrapeJob | null>(null);
 
   const effectivePortalId = forcedPortalId ?? selectedPortalId;
   const selectedPortal =
@@ -486,8 +625,11 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
     setErrorScreenshots([]);
     setProgress(null);
     setRegalJobId("");
+    setRegalMfaRequest(null);
+    setRegalMfaValue("");
     setRegalOtpRequest(null);
     setRegalOtpValue("");
+    setLatestRegalOutput(null);
   }
 
   function resetPortalSelection() {
@@ -510,6 +652,8 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
     setErrorScreenshots([]);
     setProgress(null);
     setRegalJobId("");
+    setRegalMfaRequest(null);
+    setRegalMfaValue("");
     setRegalOtpRequest(null);
     setRegalOtpValue("");
   }
@@ -1065,14 +1209,64 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
           image: artifact.contentBase64 ?? "",
         })),
     );
+    for (const artifact of currentJob.artifacts ?? []) {
+      if (artifact.artifactType !== "file_download" || !artifact.contentBase64 || !artifact.filename) continue;
+      if (artifact.filename === "regal_output.xlsx") {
+        setLatestRegalOutput({
+          filename: artifact.filename,
+          base64: artifact.contentBase64,
+          mimeType: artifact.mimeType || "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          completed: currentJob.currentCompleted,
+          total: currentJob.totalRows,
+        });
+      }
+      const artifactKey = `restored|${artifact.id}|${artifact.filename}|${artifact.pathOrKey}`;
+      if (!hasDownloadedArtifact(currentJob.jobId, artifactKey)) {
+        downloadBase64File(artifact.filename, artifact.contentBase64, artifact.mimeType || "application/octet-stream");
+        rememberDownloadedArtifact(currentJob.jobId, artifactKey);
+      }
+    }
+    const latestSnapshot = [...(currentJob.artifacts ?? [])]
+      .reverse()
+      .find((artifact) => artifact.artifactType === "output_snapshot" && artifact.contentBase64 && artifact.filename);
+    if (latestSnapshot?.contentBase64 && latestSnapshot.filename) {
+      setLatestRegalOutput({
+        filename: latestSnapshot.filename,
+        base64: latestSnapshot.contentBase64,
+        mimeType: latestSnapshot.mimeType || "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        completed: currentJob.currentCompleted,
+        total: currentJob.totalRows,
+      });
+    }
     setProgress(currentJob.totalRows > 0 ? { completed: currentJob.currentCompleted, total: currentJob.totalRows } : null);
     setStatus("Reconnecting to current Regal run...");
 
     let hasError = false;
     let finalErrorMessage = "";
+    const diagnosticFiles: DownloadFile[] = [];
     const streamAbortController = new AbortController();
 
     try {
+      if (currentJob.status === "waiting_resume") {
+        if (!regalClaimFile) {
+          setPendingRegalRestoreJob(currentJob);
+          setStatus(`Previous Regal run paused at row ${currentJob.currentCompleted + 1}. Reselect the same Regal claim Excel and login Excel, then start again to continue.`);
+          return;
+        }
+
+        const formData = new FormData();
+        formData.append("portalId", "regal");
+        formData.append("existingJobId", currentJob.jobId);
+        formData.append("startIndex", String(currentJob.currentCompleted));
+        if (regalLoginFile) {
+          formData.append("loginExcel", regalLoginFile);
+          formData.append("loginFileName", regalLoginFile.name);
+        }
+        formData.append("claimExcel", regalClaimFile);
+        formData.append("claimFileName", regalClaimFile.name);
+        await startScrapeJob(formData);
+      }
+
       await subscribeToScrapeJobEvents({
         jobId: currentJob.jobId,
         signal: streamAbortController.signal,
@@ -1080,7 +1274,7 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
           await handleRegalJobEvent(eventData, currentJob.jobId, (message) => {
             finalErrorMessage = message;
             hasError = true;
-          });
+          }, diagnosticFiles);
         },
         onStreamError(error) {
           console.error("Regal stream error:", error);
@@ -1090,6 +1284,7 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
           hasError = true;
         },
       });
+      downloadZip(`regal-diagnostics-${currentJob.jobId}.zip`, diagnosticFiles);
 
       setStatus(
         hasError
@@ -1105,35 +1300,78 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
     eventData: ScrapeJobEvent,
     jobId: string,
     onError: (message: string) => void,
+    diagnosticFiles?: DownloadFile[],
   ) {
     if (eventData.type === "log" && eventData.message) {
       setLogs((prev) => [...prev, eventData.message ?? ""]);
     } else if (eventData.type === "progress" && typeof eventData.completed === "number" && typeof eventData.total === "number") {
       setProgress({ completed: eventData.completed, total: eventData.total });
     } else if (eventData.type === "input_request" && eventData.inputName) {
-      setRegalOtpRequest({
-        inputName: eventData.inputName,
-        label: eventData.label || "Enter verification code",
-        message: eventData.message || "Enter the verification code sent by Regal/Okta.",
-      });
-      setRegalOtpValue("");
-      setStatus(eventData.message || "Waiting for Regal verification code.");
+      if (eventData.inputName === "regal_mfa_method") {
+        const options = eventData.options ?? [];
+        setRegalMfaRequest({
+          inputName: eventData.inputName,
+          label: eventData.label || "Select Regal verification method",
+          message: eventData.message || "Choose one available verification method.",
+          options,
+        });
+        setRegalMfaValue(options.find((option) => !option.disabled)?.value ?? "");
+      } else {
+        setRegalOtpRequest({
+          inputName: eventData.inputName,
+          label: eventData.label || "Enter verification code",
+          message: eventData.message || "Enter the verification code sent by Regal/Okta.",
+        });
+        setRegalOtpValue("");
+      }
+      setStatus(eventData.message || (eventData.inputName === "regal_mfa_method" ? "Waiting for Regal verification method selection." : "Waiting for Regal verification code."));
     } else if (eventData.type === "error_screenshot" && typeof eventData.index === "number" && eventData.image) {
       setErrorScreenshots((prev) => [...prev, { index: eventData.index ?? -1, image: eventData.image ?? "" }]);
+      const artifactKey = buildDownloadArtifactKey(eventData);
+      if (diagnosticFiles && !hasDownloadedArtifact(jobId, artifactKey)) {
+        diagnosticFiles.push({
+          filename: eventData.filename || `regal_error_screenshot_${eventData.index + 1}.jpg`,
+          bytes: base64ToBytes(eventData.image),
+        });
+        rememberDownloadedArtifact(jobId, artifactKey);
+      }
     } else if (eventData.type === "file_download" && eventData.filename && eventData.base64) {
+      if (eventData.filename === "regal_output.xlsx") {
+        setLatestRegalOutput({
+          filename: eventData.filename,
+          base64: eventData.base64,
+          mimeType: eventData.mimeType || "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          completed: eventData.completed,
+          total: eventData.total,
+        });
+      }
       const artifactKey = buildDownloadArtifactKey(eventData);
       if (!hasDownloadedArtifact(jobId, artifactKey)) {
         downloadBase64File(eventData.filename, eventData.base64, eventData.mimeType || "application/octet-stream");
         rememberDownloadedArtifact(jobId, artifactKey);
         setStatus(`Downloaded ${eventData.filename}`);
       }
+    } else if (eventData.type === "output_snapshot" && eventData.filename && eventData.base64) {
+      setLatestRegalOutput({
+        filename: eventData.filename,
+        base64: eventData.base64,
+        mimeType: eventData.mimeType || "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        completed: eventData.completed,
+        total: eventData.total,
+      });
     } else if (eventData.type === "debug_html" && typeof eventData.index === "number" && eventData.html) {
       const artifactKey = buildDownloadArtifactKey(eventData);
-      if (!hasDownloadedArtifact(jobId, artifactKey)) {
-        downloadTextFile(eventData.filename || `regal_debug_row_${eventData.index + 1}.html`, eventData.html, "text/html");
+      if (diagnosticFiles && !hasDownloadedArtifact(jobId, artifactKey)) {
+        diagnosticFiles.push({
+          filename: eventData.filename || `regal_error_page_${eventData.index + 1}.html`,
+          bytes: textToBytes(eventData.html),
+        });
         rememberDownloadedArtifact(jobId, artifactKey);
       }
     } else if (eventData.type === "warning" && eventData.message) {
+      setLogs((prev) => [...prev, eventData.message ?? ""]);
+      setStatus(eventData.message);
+    } else if (eventData.type === "cancelled" && eventData.message) {
       setLogs((prev) => [...prev, eventData.message ?? ""]);
       setStatus(eventData.message);
     } else if (eventData.type === "error" && eventData.message) {
@@ -1262,6 +1500,10 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
 
     const formData = new FormData();
     formData.append("portalId", "regal");
+    if (pendingRegalRestoreJob) {
+      formData.append("existingJobId", pendingRegalRestoreJob.jobId);
+      formData.append("startIndex", String(pendingRegalRestoreJob.currentCompleted));
+    }
     if (regalLoginFile) {
       formData.append("loginExcel", regalLoginFile);
       formData.append("loginFileName", regalLoginFile.name);
@@ -1271,10 +1513,12 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
 
     let hasError = false;
     let finalErrorMessage = "";
+    const diagnosticFiles: DownloadFile[] = [];
     const streamAbortController = new AbortController();
 
     try {
       const jobId = await startScrapeJob(formData);
+      setPendingRegalRestoreJob(null);
       setRegalJobId(jobId);
       await subscribeToScrapeJobEvents({
         jobId,
@@ -1283,7 +1527,7 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
           await handleRegalJobEvent(eventData, jobId, (message) => {
             finalErrorMessage = message;
             hasError = true;
-          });
+          }, diagnosticFiles);
         },
         onStreamError(error) {
           console.error("Regal stream error:", error);
@@ -1293,6 +1537,7 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
           hasError = true;
         },
       });
+      downloadZip(`regal-diagnostics-${jobId}.zip`, diagnosticFiles);
       setStatus(
         hasError
           ? `Regal processing finished with errors${finalErrorMessage ? `: ${finalErrorMessage}` : "."}`
@@ -1320,6 +1565,34 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
     } catch (error) {
       setStatus(`Failed to submit Regal OTP: ${getErrorMessage(error)}`);
     }
+  }
+
+  async function submitRegalMfaMethod() {
+    if (!regalJobId || !regalMfaRequest || !regalMfaValue.trim()) return;
+
+    try {
+      await submitScrapeJobInput({
+        jobId: regalJobId,
+        inputName: regalMfaRequest.inputName,
+        value: regalMfaValue.trim(),
+      });
+      setRegalMfaRequest(null);
+      setRegalMfaValue("");
+      setStatus("Regal verification method submitted.");
+    } catch (error) {
+      setStatus(`Failed to submit Regal verification method: ${getErrorMessage(error)}`);
+    }
+  }
+
+  function downloadLatestRegalOutput() {
+    if (!latestRegalOutput) return;
+    const completedSuffix = typeof latestRegalOutput.completed === "number" && typeof latestRegalOutput.total === "number"
+      ? `-${latestRegalOutput.completed}-of-${latestRegalOutput.total}`
+      : "";
+    const filename = latestRegalOutput.filename === "regal_output_snapshot.xlsx"
+      ? `regal_output_partial${completedSuffix}.xlsx`
+      : latestRegalOutput.filename;
+    downloadBase64File(filename, latestRegalOutput.base64, latestRegalOutput.mimeType);
   }
 
   if (authLoading || jobRestoreLoading) {
@@ -1796,13 +2069,21 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
                     onSubmit={submitRegal}
                   />
                   <RegalResultView
+                    canDownloadOutput={Boolean(latestRegalOutput)}
                     errorScreenshots={errorScreenshots}
                     logs={logs}
+                    mfaRequest={regalMfaRequest}
+                    mfaValue={regalMfaValue}
+                    onMfaChange={setRegalMfaValue}
+                    onMfaSubmit={submitRegalMfaMethod}
+                    onOutputDownload={downloadLatestRegalOutput}
                     onOtpChange={setRegalOtpValue}
                     onOtpSubmit={submitRegalOtp}
                     otpRequest={regalOtpRequest}
                     otpValue={regalOtpValue}
                     progress={progress}
+                    outputCompleted={latestRegalOutput?.completed}
+                    outputTotal={latestRegalOutput?.total}
                     status={status}
                   />
                 </>

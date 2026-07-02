@@ -10,6 +10,8 @@ export type RegalCredentials = {
 export type RegalInput = {
   credentials: RegalCredentials;
   claimRows: RegalClaimSearchInput[];
+  startIndex: number;
+  totalRows: number;
 };
 
 export type RegalClaimSearchInput = {
@@ -204,7 +206,12 @@ export async function parseRegalInput(formData: FormData): Promise<RegalInput> {
   loadRegalEnvironment();
 
   const claimExcel = formData.get("claimExcel");
-  const claimRows = claimExcel instanceof File ? await claimRowsFromWorkbook(claimExcel) : claimRowsFromEnv();
+  const allClaimRows = claimExcel instanceof File ? await claimRowsFromWorkbook(claimExcel) : claimRowsFromEnv();
+  const rawStartIndex = Number(formData.get("startIndex") ?? 0);
+  const startIndex = Number.isFinite(rawStartIndex) && rawStartIndex > 0
+    ? Math.min(Math.floor(rawStartIndex), allClaimRows.length)
+    : 0;
+  const claimRows = allClaimRows.slice(startIndex);
   if (claimRows.length === 0) {
     throw new Error("Missing Regal claim Excel. Upload an Excel file with Group, Member Name, and DOS columns.");
   }
@@ -213,13 +220,13 @@ export async function parseRegalInput(formData: FormData): Promise<RegalInput> {
   if (loginExcel instanceof File) {
     const workbookCredentials = await credentialsFromWorkbook(loginExcel);
     if (workbookCredentials) {
-      return { credentials: workbookCredentials, claimRows };
+      return { credentials: workbookCredentials, claimRows, startIndex, totalRows: allClaimRows.length };
     }
   }
 
   const envCredentials = credentialsFromEnv();
   if (envCredentials) {
-    return { credentials: envCredentials, claimRows };
+    return { credentials: envCredentials, claimRows, startIndex, totalRows: allClaimRows.length };
   }
 
   throw new Error(

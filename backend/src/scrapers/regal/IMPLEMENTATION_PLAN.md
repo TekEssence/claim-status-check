@@ -17,8 +17,14 @@ Implemented now:
 - Find and click the `Regal Express Access (REA)` app card.
 - Handle MFA after REA:
   - if the code page appears directly, request OTP from the frontend.
-  - if the security method selection page appears, choose Email, click `Send me an email`, click `Enter a verification code instead`, then request OTP from the frontend.
-  - if Email is not available and Phone/SMS is available, choose Phone/SMS, request the text-message code, then request OTP from the frontend.
+  - if the security method selection page appears, read all visible methods and send them to the frontend for user selection.
+- wait up to 1 minute for the user to select an MFA method.
+- after selection, click the corresponding Okta `Select` button.
+- if multiple authenticators have the same Okta key, for example multiple Phone numbers, the frontend option value is made unique by row index and the backend clicks the exact selected row.
+  - for Email, click `Send me an email`, click `Enter a verification code instead`, then request OTP from the frontend.
+  - for Phone/SMS, click `Receive a code via SMS`, then request OTP from the frontend.
+  - for Google Authenticator and Okta Verify code, request OTP from the frontend after the code field appears.
+  - show Push notification in the frontend list, but keep it disabled because push approval is not implemented yet.
   - if the direct code page has `Verify with something else`, it can switch to the method selection page.
   - wait up to 2 minutes for the user to submit the OTP; if not submitted, stop the job with an error.
   - if the user manually completes MFA in the headed automation browser during local testing, detect that Regal/REA has been reached and continue instead of submitting another OTP.
@@ -149,8 +155,18 @@ button.enter-auth-code-instead-link:has-text('Enter a verification code instead'
 [data-se='phone_number'] a[data-se='button'], a[aria-label*='Select Phone' i], a[aria-label*='phone' i]
 input[type='submit'][value*='SMS' i], input[type='submit'][value*='text' i], input[type='submit'][value*='code' i], input[type='submit'][value*='Send' i], button:has-text('Send code'), button:has-text('Send me a code'), button:has-text('Receive a code'), a:has-text('Send code')
 [data-se='google_otp'] a[data-se='button'], a[aria-label='Select Google Authenticator.']
-input[name='credentials.passcode'][type='text']
+[data-se='okta_verify-totp'] a[data-se='button'], a[aria-label*='Okta Verify app' i], a[aria-label*='enter a code' i]
+input[name='credentials.passcode'][type='text'], input[name='credentials.totp'][type='text']
 input[type='submit'][value='Verify']
+```
+
+When Regal reaches the MFA method list, the backend emits:
+
+```text
+type=input_request
+inputName=regal_mfa_method
+timeoutMs=60000
+options=[Email, Google Authenticator, Okta Verify code, Push disabled, Phone...]
 ```
 
 When Regal reaches the OTP input, the backend emits:
@@ -198,7 +214,13 @@ Before opening `View Claims`, the scraper selects the group/site dropdown from t
 IPHS  -> INLAND PHYSICIANS HOSPITALIST SERVICES
 IPPS  -> INLAND PHYSICIANS PULMONARY SERVICES
 IPPCS -> INLAND PHYSICIANS PRIMARY CARE SERVICES
+USA   -> UPLAND SURGICAL ASSOCIATES
+AST   -> ANDREA S. TIENG, MD
+CTH   -> C.T. HUNG
+URC   -> UPLAND RHEUMATOLOGY CENTER
 ```
+
+Some logins do not show a site dropdown. If the current page has fixed text like `Site: UPLAND SURGICAL ASSOCIATES`, the scraper accepts that as the selected group/site and continues to `View Claims`.
 
 The group mappings live in:
 
@@ -283,7 +305,18 @@ Regal page validation requires a four-digit year. The scraper normalizes DOS bef
 
 ## Output Workbook
 
-The backend emits `regal_output.xlsx`.
+The backend emits `regal_output.xlsx` at the end, on error, and on cancellation when any rows were extracted.
+
+During long runs, the backend also emits quiet `regal_output_snapshot.xlsx` events after each fully completed input row. The frontend stores the latest snapshot and exposes it through the `Download current results` button without auto-downloading every snapshot.
+
+Every Regal output workbook, final or snapshot, contains these sheets:
+
+```text
+Output
+Audit Log
+Error Log
+Run Summary
+```
 
 If a later claim fails after earlier rows were extracted, the backend still emits a partial `regal_output.xlsx` with the successfully extracted rows before emitting the error.
 

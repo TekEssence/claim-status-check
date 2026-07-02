@@ -58,6 +58,22 @@ function isRetryableDbError(error: unknown): boolean {
   return ["ECONNRESET", "ETIMEDOUT", "ECONNREFUSED", "57P01"].includes(code);
 }
 
+export function isScrapeJobDbConnectionError(error: unknown): boolean {
+  const code = typeof error === "object" && error !== null && "code" in error ? String((error as { code?: unknown }).code ?? "") : "";
+  const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+  const cause = error instanceof Error && error.cause instanceof Error ? error.cause.message.toLowerCase() : "";
+
+  return (
+    isRetryableDbError(error) ||
+    ["ECONNRESET", "ETIMEDOUT", "ECONNREFUSED", "57P01"].includes(code) ||
+    message.includes("connection timeout") ||
+    message.includes("connection terminated") ||
+    message.includes("terminating connection") ||
+    cause.includes("connection terminated") ||
+    cause.includes("connection timeout")
+  );
+}
+
 async function resetPool(): Promise<void> {
   if (!pool) return;
   const currentPool = pool;
@@ -71,7 +87,8 @@ async function queryWithRetry<T extends QueryResultRow>(text: string, params: un
       await ensureScrapeJobSchema();
       return await getPool().query<T>(text, params);
     } catch (error) {
-      if (attempt < 2 && isRetryableDbError(error)) {
+      if (attempt < 2 && isScrapeJobDbConnectionError(error)) {
+        schemaReady = null;
         await resetPool();
         await new Promise((resolve) => setTimeout(resolve, 300));
         continue;
@@ -131,7 +148,10 @@ async function ensureScrapeJobSchema(): Promise<void> {
       CREATE INDEX IF NOT EXISTS iehp_scrape_job_logs_job_id_idx
       ON iehp_scrape_job_logs (job_id, id)
     `);
-  })();
+  })().catch((error) => {
+    schemaReady = null;
+    throw error;
+  });
 
   return schemaReady;
 }
