@@ -8,6 +8,8 @@ const {
   noteForServiceLine,
   parseServiceLinesFromRows,
   parseServiceLinesFromText,
+  sanitizeClaimNotesText,
+  textMatchesRequestedDos,
 } = blueShieldClaimExtractionTestHooks;
 
 test("extracts the matching Blue Shield claim note for each service line", () => {
@@ -200,5 +202,41 @@ test("merges service-line sources and keeps both clean Blue Shield lines", () =>
       ["1", "99214", "$330.00", "$78.27"],
       ["2", "99051", "$60.00", "$0.00"],
     ],
+  );
+});
+
+test("computes Blue Shield pending status when service-line payment fields are dashes", () => {
+  assert.equal(
+    computeClaimStatus({
+      detailAmountPaid: "",
+      listAmountPaid: "",
+      serviceLineAmountPaid: "-",
+      serviceLineCoInsurance: "-",
+      lineNotes: "",
+      hasServiceLine: true,
+    }),
+    "Claim pending",
+  );
+});
+
+test("removes Blue Shield site navigation text from claim notes", () => {
+  assert.equal(
+    sanitizeClaimNotesText([
+      "Skip to content Contact us Site help Provider Connection Account Eligibility",
+      "LINE 1 DENIED - MEMBER NOT ELIGIBLE ON DATE OF SERVICE",
+      "Skip to content Contact us Site help Provider Connection Account Eligibility",
+    ].join("\n")),
+    "LINE 1 DENIED - MEMBER NOT ELIGIBLE ON DATE OF SERVICE",
+  );
+});
+
+test("allows Blue Shield result DOS ranges that contain the requested exact DOS", () => {
+  assert.equal(
+    textMatchesRequestedDos("09/07/2024-09/09/2024", new Set(["2024-09-08"])),
+    true,
+  );
+  assert.equal(
+    textMatchesRequestedDos("09/07/2024-09/09/2024", new Set(["2024-09-10"])),
+    false,
   );
 });

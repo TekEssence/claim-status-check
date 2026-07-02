@@ -13,8 +13,17 @@ export async function GET() {
   }
 
   let job = await getActiveScrapeJobForUser(session.userId);
+  if (job && job.status === "waiting_resume" && job.portalId !== "iehp") {
+    await updateScrapeJobSnapshot({
+      jobId: job.jobId,
+      status: "failed",
+      currentCompleted: job.currentCompleted,
+      totalRows: job.totalRows,
+    }).catch(() => {});
+    job = null;
+  }
   if (job && job.status === "running" && !getScrapeJob(job.jobId)) {
-    if (job.totalRows > 0 && job.currentCompleted < job.totalRows) {
+    if (job.portalId === "iehp" && job.totalRows > 0 && job.currentCompleted < job.totalRows) {
       await updateScrapeJobSnapshot({
         jobId: job.jobId,
         status: "waiting_resume",

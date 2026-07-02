@@ -25,6 +25,7 @@ type BlueShieldDetailData = {
     providerNumber: string;
     nationalProviderIdentifier: string;
     ipaMedGroup: string;
+    planType: string;
     amountBilled: string;
     allowedAmount: string;
     patientResponsibility: string;
@@ -335,6 +336,10 @@ function moneyValue(value: string): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function isDashValue(value: string): boolean {
+  return /^[-–—]+$/.test(normalizeText(value));
+}
+
 function computeClaimStatus(args: {
   detailAmountPaid: string;
   listAmountPaid: string;
@@ -346,6 +351,10 @@ function computeClaimStatus(args: {
   const lineNotes = args.lineNotes.toLowerCase();
   if (/\bden(?:ied|ial)\b/.test(lineNotes)) return "Denied";
   if (/\bpaid\b/.test(lineNotes) && !/\bnot\s+paid\b/.test(lineNotes)) return "Paid";
+
+  if (args.hasServiceLine && [args.serviceLineAmountPaid, args.serviceLineCoInsurance].some(isDashValue)) {
+    return "Claim pending";
+  }
 
   const paidAmount = args.hasServiceLine
     ? moneyValue(args.serviceLineAmountPaid)
@@ -360,17 +369,43 @@ function computeClaimStatus(args: {
   return hasZeroPaid || hasZeroCoInsurance ? "Denied" : "";
 }
 
+function isBlueShieldChromeText(value: string): boolean {
+  const normalized = normalizeText(value).toLowerCase();
+  return (
+    normalized.startsWith("skip to content") ||
+    normalized.includes("contact us site help") ||
+    normalized.includes("provider connection account") ||
+    normalized === "contact us" ||
+    normalized === "site help" ||
+    normalized === "provider connection" ||
+    normalized === "account eligibility"
+  );
+}
+
+function sanitizeClaimNoteLines(lines: string[]): string[] {
+  return lines
+    .map((line) => normalizeText(line))
+    .filter(Boolean)
+    .filter((line) => !/^there are no notes for this claim\.?$/i.test(line))
+    .filter((line) => !isBlueShieldChromeText(line));
+}
+
+function sanitizeClaimNotesText(value: string): string {
+  return sanitizeClaimNoteLines(value.split(/\r?\n/)).join(" ");
+}
+
 function noteForServiceLine(claimNotes: string, serviceLineNumber: string): string {
+  const cleanClaimNotes = sanitizeClaimNotesText(claimNotes);
   const lineNumber = serviceLineNumber.trim();
-  if (!claimNotes || !lineNumber) return claimNotes;
+  if (!cleanClaimNotes || !lineNumber) return cleanClaimNotes;
 
   const escapedLineNumber = lineNumber.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const linePattern = new RegExp(
     `\\bLINE\\s*(?:NUMBER\\s*)?#?\\s*${escapedLineNumber}\\b\\s*[:.-]?\\s*([\\s\\S]*?)(?=\\bLINE\\s*(?:NUMBER\\s*)?#?\\s*\\d+\\b|$)`,
     "i",
   );
-  const match = claimNotes.match(linePattern);
-  return normalizeText(match?.[1] ?? "") || claimNotes;
+  const match = cleanClaimNotes.match(linePattern);
+  return sanitizeClaimNotesText(match?.[1] ?? "") || cleanClaimNotes;
 }
 
 function dateKeysFromText(value: string): Set<string> {
@@ -385,6 +420,19 @@ function dateKeysFromText(value: string): Set<string> {
   return keys;
 }
 
+function dateRangesFromText(value: string): Array<{ start: string; end: string }> {
+  const ranges: Array<{ start: string; end: string }> = [];
+  const matches = value.matchAll(/\b(\d{1,2}\/\d{1,2}\/(?:\d{2}|\d{4}))\s*[-â€“]\s*(\d{1,2}\/\d{1,2}\/(?:\d{2}|\d{4}))\b/g);
+  for (const match of matches) {
+    const start = Array.from(dateKeysFromText(match[1]))[0];
+    const end = Array.from(dateKeysFromText(match[2]))[0];
+    if (start && end) {
+      ranges.push(start <= end ? { start, end } : { start: end, end: start });
+    }
+  }
+  return ranges;
+}
+
 function requestedDosKeys(workItem: BlueShieldMemberWorkItem, dosSearched: string): Set<string> {
   const keys = new Set<string>();
   for (const value of [...workItem.dosValues, dosSearched]) {
@@ -396,7 +444,12 @@ function requestedDosKeys(workItem: BlueShieldMemberWorkItem, dosSearched: strin
 function textMatchesRequestedDos(value: string, requestedKeys: Set<string>): boolean {
   if (!requestedKeys.size) return true;
   const candidateKeys = dateKeysFromText(value);
-  return Array.from(candidateKeys).some((key) => requestedKeys.has(key));
+  if (Array.from(candidateKeys).some((key) => requestedKeys.has(key))) return true;
+
+  const candidateRanges = dateRangesFromText(value);
+  return Array.from(requestedKeys).some((key) =>
+    candidateRanges.some((range) => key >= range.start && key <= range.end),
+  );
 }
 
 function serviceLineMatchesRequestedDos(serviceLine: BlueShieldServiceLine, requestedKeys: Set<string>): boolean {
@@ -428,6 +481,7 @@ function emptyDetailData(): BlueShieldDetailData {
       providerNumber: "",
       nationalProviderIdentifier: "",
       ipaMedGroup: "",
+      planType: "",
       amountBilled: "",
       allowedAmount: "",
       patientResponsibility: "",
@@ -655,6 +709,9 @@ async function extractClaimNotes(page: Page, text: string): Promise<string> {
     if (inNotes && /^there are no notes for this claim\.?$/i.test(line)) {
       return "";
     }
+    if (inNotes && isBlueShieldChromeText(line)) {
+      continue;
+    }
     if (inNotes && /^line\s*\d+/i.test(line)) {
       noteLines.push(line.toUpperCase().replace(/\s+/g, " "));
       continue;
@@ -666,15 +723,10 @@ async function extractClaimNotes(page: Page, text: string): Promise<string> {
 
   if (!noteLines.length) {
     const inlineNotes = sourceText.match(/Claim\s+notes?\s*([\s\S]*?)(?:Claim details|Payment details|Service and procedure details|$)/i)?.[1] ?? "";
-    return inlineNotes
-      .split(/\r?\n/)
-      .map((line) => normalizeText(line))
-      .filter((line) => !/^there are no notes for this claim\.?$/i.test(line))
-      .filter(Boolean)
-      .join(" ");
+    return sanitizeClaimNotesText(inlineNotes);
   }
 
-  return noteLines.filter(Boolean).join(" ");
+  return sanitizeClaimNoteLines(noteLines).join(" ");
 }
 
 async function extractDetailData(page: Page, text: string): Promise<BlueShieldDetailData> {
@@ -687,10 +739,16 @@ async function extractDetailData(page: Page, text: string): Promise<BlueShieldDe
     "National Provider Identifier (NPI)",
     "NPI",
     "IPA/Med group",
+    "Plan type",
+    "Plan Type",
     "Amount billed",
     "Allowed amount",
     "Patient responsibility",
     "Amount paid",
+  ]);
+  const memberDetails = await extractKeyValueSection(page, "Member details", [
+    "Plan type",
+    "Plan Type",
   ]);
   const paymentDetails = await extractKeyValueSection(page, "Payment details", [
     "Check/EFT number",
@@ -711,6 +769,12 @@ async function extractDetailData(page: Page, text: string): Promise<BlueShieldDe
       claimDetails.NPI ||
       valueAfterLabel(text, ["National Provider Identifier (NPI)", "NPI"]),
     ipaMedGroup: claimDetails["IPA/Med group"] || valueAfterLabel(text, ["IPA/Med group", "IPA Med group"]),
+    planType:
+      memberDetails["Plan type"] ||
+      memberDetails["Plan Type"] ||
+      claimDetails["Plan type"] ||
+      claimDetails["Plan Type"] ||
+      valueAfterLabel(text, ["Plan type", "Plan Type"]),
     amountBilled: claimDetails["Amount billed"] || valueAfterLabel(text, ["Amount billed"]),
     allowedAmount: claimDetails["Allowed amount"] || valueAfterLabel(text, ["Allowed amount"]),
     patientResponsibility: claimDetails["Patient responsibility"] || valueAfterLabel(text, ["Patient responsibility"]),
@@ -801,6 +865,7 @@ function extractClaimDetails(args: {
     providerNumber: detailData.claim.providerNumber,
     nationalProviderIdentifier: detailData.claim.nationalProviderIdentifier,
     ipaMedGroup: detailData.claim.ipaMedGroup,
+    planType: detailData.claim.planType,
     detailAmountBilled: detailData.claim.amountBilled,
     allowedAmount: detailData.claim.allowedAmount,
     detailPatientResponsibility: detailData.claim.patientResponsibility,
@@ -861,14 +926,14 @@ async function openClaimFromRow(page: Page, row: Locator, resultRowData: BlueShi
       : await claimDetailTarget.count().catch(() => 0) > 0
         ? claimDetailTarget
         : clickableTargets.first();
-  const popupPromise = page.waitForEvent("popup", { timeout: 5000 }).catch(() => null);
+  const popupPromise = page.waitForEvent("popup", { timeout: 1200 }).catch(() => null);
   await target.click();
   const popup = await popupPromise;
   if (popup) {
-    await popup.waitForLoadState("networkidle", { timeout: 30000 }).catch(() => {});
+    await popup.waitForLoadState("domcontentloaded", { timeout: 10000 }).catch(() => {});
     return popup;
   }
-  await page.waitForLoadState("networkidle", { timeout: 30000 }).catch(() => {});
+  await page.waitForLoadState("domcontentloaded", { timeout: 10000 }).catch(() => {});
   const afterPages = page.context().pages();
   return afterPages.find((candidate) => !beforePages.includes(candidate)) ?? page;
 }
@@ -879,15 +944,15 @@ async function expandFullView(page: Page): Promise<void> {
     "a:has-text('Full view')",
     "[role='button']:has-text('Full view')",
   ].join(", ")).first();
-  if (!await fullView.isVisible({ timeout: 3000 }).catch(() => false)) {
+  if (!await fullView.isVisible({ timeout: 700 }).catch(() => false)) {
     return;
   }
 
   await fullView.click().catch(async () => {
     await fullView.click({ force: true, timeout: 5000 });
   });
-  await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
-  await page.waitForTimeout(750);
+  await page.waitForLoadState("domcontentloaded", { timeout: 8000 }).catch(() => {});
+  await page.waitForTimeout(200);
 }
 
 export async function extractAllBlueShieldClaims(options: {
@@ -960,7 +1025,7 @@ export async function extractAllBlueShieldClaims(options: {
         if (detailPage && detailPage !== page) {
           await detailPage.close().catch(() => {});
         } else {
-          await page.goBack({ waitUntil: "networkidle", timeout: 15000 }).catch(() => {});
+          await page.goBack({ waitUntil: "domcontentloaded", timeout: 8000 }).catch(() => {});
         }
       }
     }
@@ -968,7 +1033,8 @@ export async function extractAllBlueShieldClaims(options: {
     const next = page.locator(blueShieldConfig.selectors.nextResultsPage).first();
     if ((await next.count()) === 0 || !await next.isEnabled().catch(() => false)) break;
     await next.click();
-    await page.waitForLoadState("networkidle", { timeout: 30000 }).catch(() => {});
+    await page.waitForLoadState("domcontentloaded", { timeout: 10000 }).catch(() => {});
+    await page.locator(blueShieldConfig.selectors.resultRows).first().waitFor({ state: "visible", timeout: 10000 }).catch(() => {});
     resultPage++;
   }
 
@@ -981,4 +1047,6 @@ export const blueShieldClaimExtractionTestHooks = {
   mergeServiceLineSources,
   parseServiceLinesFromRows,
   parseServiceLinesFromText,
+  sanitizeClaimNotesText,
+  textMatchesRequestedDos,
 };
