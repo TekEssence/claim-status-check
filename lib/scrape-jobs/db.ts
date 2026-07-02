@@ -1,5 +1,5 @@
 import { and, asc, desc, eq, or } from "drizzle-orm";
-import { runDbWithRetry } from "@/db";
+import { isRetryableDbError, runDbWithRetry } from "@/db";
 import { scrapeJobArtifacts, scrapeJobLogs, scrapeJobs } from "@/db/schema/scrape-jobs";
 
 export type PersistentScrapeJobStatus = "running" | "waiting_resume" | "completed" | "failed" | "cancelled";
@@ -33,6 +33,22 @@ export type PersistentScrapeJobArtifact = {
 };
 
 type ScrapeJobRow = typeof scrapeJobs.$inferSelect;
+
+export function isScrapeJobDbConnectionError(error: unknown): boolean {
+  const code = typeof error === "object" && error !== null && "code" in error ? String((error as { code?: unknown }).code ?? "") : "";
+  const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+  const cause = error instanceof Error && error.cause instanceof Error ? error.cause.message.toLowerCase() : "";
+
+  return (
+    isRetryableDbError(error) ||
+    ["ECONNRESET", "ETIMEDOUT", "ECONNREFUSED", "57P01"].includes(code) ||
+    message.includes("connection timeout") ||
+    message.includes("connection terminated") ||
+    message.includes("terminating connection") ||
+    cause.includes("connection terminated") ||
+    cause.includes("connection timeout")
+  );
+}
 
 function mapPersistentScrapeJob(
   row: ScrapeJobRow,
