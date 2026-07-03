@@ -44,6 +44,28 @@ type OptumProSearchResult = {
   notes: string;
 };
 
+type PatientSelectionMode = "loose" | "blank-subscriber";
+
+type PatientDropdownRow = {
+  index: number;
+  text: string;
+  subscriberId: string;
+  patientName: string;
+};
+
+type PatientSelection = {
+  text: string;
+  allowBlankSubscriberFallback: boolean;
+};
+
+type ClaimResultCandidate = {
+  index: number;
+  score: number;
+  text: string;
+  claimNumber: string;
+  resultStatus: string;
+};
+
 function normalize(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, "");
 }
@@ -144,7 +166,30 @@ function bestPatientRow(rows: Array<{ index: number; text: string }>, patient: s
   return best && best.score > 0 ? best.row : undefined;
 }
 
-async function selectPatient(page: Page, row: OptumProInputRow): Promise<string> {
+function patientNameMatches(candidate: string, wanted: string): boolean {
+  const candidateName = normalizeName(candidate);
+  const wantedName = normalizeName(wanted);
+  return Boolean(candidateName && wantedName && (candidateName === wantedName || candidateName.includes(wantedName) || wantedName.includes(candidateName)));
+}
+
+async function patientDropdownRows(page: Page): Promise<PatientDropdownRow[]> {
+  const rows = page.locator("tbody tr:visible");
+  const count = await rows.count().catch(() => 0);
+  const values: PatientDropdownRow[] = [];
+  for (let index = 0; index < count; index++) {
+    const row = rows.nth(index);
+    const cells = await row.locator("td").allInnerTexts().catch(() => []);
+    const text = (await row.innerText({ timeout: 1000 }).catch(() => "")).replace(/\s+/g, " ").trim();
+    const subscriberId = (cells[0] || "").replace(/\s+/g, " ").trim();
+    const patientName = (cells[1] || "").replace(/\s+/g, " ").trim();
+    if (text && !/subscriber id/i.test(text)) {
+      values.push({ index, text, subscriberId, patientName });
+    }
+  }
+  return values;
+}
+
+async function selectPatient(page: Page, row: OptumProInputRow, mode: PatientSelectionMode): Promise<PatientSelection> {
   const patientSelector = "input[placeholder*='Subscriber ID'], input[placeholder*='Patient Name'], input[placeholder*='Date of Birth']";
   const attempts = [row.memberId];
   const strippedMemberId = leadingThreeLettersStripped(row.memberId);
@@ -154,13 +199,31 @@ async function selectPatient(page: Page, row: OptumProInputRow): Promise<string>
     await fillInputLikeUser(page, patientSelector, memberId);
     await page.waitForTimeout(1400);
 
-    const rows = await visibleRows(page);
-    const match = bestPatientRow(rows, row.patient)
-      ?? rows.find((candidate) => normalize(candidate.text).includes(normalize(memberId)));
+    const parsedRows = await patientDropdownRows(page);
+    const samePatientRows = parsedRows.filter((candidate) => patientNameMatches(candidate.patientName, row.patient));
+    const exactSubscriberMatch = samePatientRows.find((candidate) => normalize(candidate.subscriberId) === normalize(memberId));
+    const blankSubscriberMatch = samePatientRows.find((candidate) => !candidate.subscriberId);
+    const duplicateSamePatientRows = samePatientRows.length >= 2;
+
+    const visibleDropdownRows = await visibleRows(page);
+    const looseMatch = bestPatientRow(visibleDropdownRows, row.patient)
+      ?? visibleDropdownRows.find((candidate) => normalize(candidate.text).includes(normalize(memberId)));
+
+    const match = mode === "blank-subscriber"
+      ? blankSubscriberMatch
+      : duplicateSamePatientRows && exactSubscriberMatch
+        ? exactSubscriberMatch
+        : looseMatch
+          ? { index: looseMatch.index, text: looseMatch.text, subscriberId: "", patientName: "" }
+          : exactSubscriberMatch ?? blankSubscriberMatch;
+
     if (match) {
       await page.locator("tbody tr:visible").nth(match.index).click();
       await page.waitForTimeout(700);
-      return match.text;
+      return {
+        text: match.text,
+        allowBlankSubscriberFallback: mode === "loose" && duplicateSamePatientRows && Boolean(exactSubscriberMatch && blankSubscriberMatch && match.index === exactSubscriberMatch.index),
+      };
     }
   }
 
@@ -172,36 +235,35 @@ async function selectMedicalGroup(page: Page, medicalGroupName: string): Promise
   const searchText = buildMedicalGroupSearch(medicalGroupName);
   if (!searchText) throw new Error(`Medical group not found for ${medicalGroupName}.`);
 
-  await fillInputLikeUser(page, selector, searchText);
-  await page.waitForTimeout(1500);
-
-  const options = page.locator("mat-option:visible, [role='option']:visible, li:visible, .dropdown-option:visible");
-  const count = await options.count().catch(() => 0);
-  if (!count) {
-    throw new Error(`Medical group not found for ${medicalGroupName}.`);
-  }
-
   const target = normalizeMedicalGroupForCompare(medicalGroupName);
   const targetWords = target.split(" ").filter(Boolean);
-  let bestIndex = -1;
-  let bestScore = 0;
-  let bestText = "";
 
-  for (let index = 0; index < count; index++) {
-    const optionText = (await options.nth(index).innerText({ timeout: 1000 }).catch(() => "")).replace(/\s+/g, " ").trim();
-    const score = medicalGroupOptionScore(optionText, targetWords);
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    await fillInputLikeUser(page, selector, searchText);
+    await page.waitForTimeout(1500);
 
-    if (score > bestScore) {
-      bestIndex = index;
-      bestScore = score;
-      bestText = optionText;
+    const options = page.locator("mat-option:visible, [role='option']:visible, li:visible, .dropdown-option:visible");
+    const count = await options.count().catch(() => 0);
+    let bestIndex = -1;
+    let bestScore = 0;
+    let bestText = "";
+
+    for (let index = 0; index < count; index++) {
+      const optionText = (await options.nth(index).innerText({ timeout: 1000 }).catch(() => "")).replace(/\s+/g, " ").trim();
+      const score = medicalGroupOptionScore(optionText, targetWords);
+
+      if (score > bestScore) {
+        bestIndex = index;
+        bestScore = score;
+        bestText = optionText;
+      }
     }
-  }
 
-  if (bestIndex >= 0 && bestScore >= 40) {
-    await options.nth(bestIndex).click();
-    await page.waitForTimeout(700);
-    return bestText;
+    if (bestIndex >= 0 && bestScore >= 40) {
+      await options.nth(bestIndex).click();
+      await page.waitForTimeout(700);
+      return bestText;
+    }
   }
 
   throw new Error(`Medical group not found for ${medicalGroupName}.`);
@@ -227,6 +289,11 @@ function medicalGroupOptionScore(optionText: string, targetWords: string[]): num
     score += 20;
   }
   if (lastWord && optionNorm.includes(lastWord)) {
+    score += 30;
+  }
+
+  const longestWord = targetWords.reduce((best, word) => word.length > best.length ? word : best, "");
+  if (longestWord && optionNorm.includes(longestWord)) {
     score += 30;
   }
 
@@ -330,28 +397,129 @@ function resultRowScore(text: string, row: OptumProInputRow): number {
   return score;
 }
 
-async function clickBestClaimResultRow(page: Page, row: OptumProInputRow): Promise<string> {
+async function claimResultCandidate(page: Page, index: number, row: OptumProInputRow): Promise<ClaimResultCandidate> {
+  const rows = await claimResultRows(page);
+  const resultRow = rows.nth(index);
+  const text = (await resultRow.innerText({ timeout: 1000 }).catch(() => "")).replace(/\s+/g, " ").trim();
+  const cells = (await resultRow.locator("td").allInnerTexts().catch(() => []))
+    .map((cell) => cell.replace(/\s+/g, " ").trim());
+  const nonEmptyCells = cells.filter(Boolean);
+  const claimNumber = await resultRow.locator("[class*='claimNumber'], [class*='claim-number']").first().innerText({ timeout: 500 })
+    .then((value) => value.replace(/\s+/g, " ").trim())
+    .catch(() => nonEmptyCells.find((cell) => /^\d{5,}$/.test(cell)) || "");
+  const resultStatus = await resultRow.locator("[class*='status']").last().innerText({ timeout: 500 }).then((value) => value.replace(/\s+/g, " ").trim()).catch(() => {
+    const knownStatus = nonEmptyCells.find((cell) => /^(in\s*(process|progress)|processed|paid|denied|pending)$/i.test(cell));
+    if (knownStatus) return knownStatus;
+    const parts = text.split(/\s+/).filter(Boolean);
+    return parts[parts.length - 1] || "";
+  });
+  return {
+    index,
+    score: resultRowScore(text, row),
+    text,
+    claimNumber,
+    resultStatus,
+  };
+}
+
+async function orderedClaimResultIndexes(page: Page, row: OptumProInputRow): Promise<ClaimResultCandidate[]> {
   const rows = await claimResultRows(page);
   const count = await rows.count().catch(() => 0);
-  if (!count) return "";
-
-  let bestIndex = 0;
-  let bestScore = -1;
-  let bestText = "";
+  const indexedRows: ClaimResultCandidate[] = [];
   for (let index = 0; index < count; index++) {
-    const text = (await rows.nth(index).innerText({ timeout: 1000 }).catch(() => "")).replace(/\s+/g, " ").trim();
-    const score = resultRowScore(text, row);
-    if (score > bestScore) {
-      bestIndex = index;
-      bestScore = score;
-      bestText = text;
-    }
+    indexedRows.push(await claimResultCandidate(page, index, row));
   }
+  return indexedRows.sort((left, right) => right.score - left.score);
+}
 
-  await rows.nth(bestIndex).click();
+function isInProgressStatus(status: string): boolean {
+  return /in\s*(process|progress)/i.test(status);
+}
+
+async function closeClaimDetailsUnavailablePopup(page: Page): Promise<boolean> {
+  const popup = page.locator("text=/Claim details unavailable|details.*not.*available/i").first();
+  if (!(await popup.isVisible({ timeout: 1500 }).catch(() => false))) return false;
+  await page.locator("button:has-text('Close'), [role='button']:has-text('Close')").last().click().catch(() => page.keyboard.press("Escape"));
+  await page.waitForTimeout(500);
+  return true;
+}
+
+async function openClaimResultRowByIndex(page: Page, index: number): Promise<{ text: string; detailsUnavailable: boolean }> {
+  const rows = await claimResultRows(page);
+  const row = rows.nth(index);
+  const text = (await row.innerText({ timeout: 1000 }).catch(() => "")).replace(/\s+/g, " ").trim();
+  await row.click();
+  if (await closeClaimDetailsUnavailablePopup(page)) {
+    return { text, detailsUnavailable: true };
+  }
   await page.locator("text=/Claim details/i").first().waitFor({ state: "visible", timeout: 45000 });
   await page.waitForTimeout(1500);
-  return bestText;
+  return { text, detailsUnavailable: false };
+}
+
+async function returnToClaimResults(page: Page): Promise<void> {
+  const backButton = page.locator("button:has-text('Back')").first();
+  if (await backButton.isVisible({ timeout: 3000 }).catch(() => false)) {
+    await backButton.click();
+  } else {
+    await page.goBack({ waitUntil: "domcontentloaded" }).catch(() => {});
+  }
+  await page.locator("text=/Summary|Results? Found/i").first().waitFor({ state: "visible", timeout: 45000 }).catch(() => {});
+  await claimResultRows(page).then((rows) => rows.first().waitFor({ state: "visible", timeout: 45000 })).catch(() => {});
+}
+
+async function findMatchingClaimDetails(
+  page: Page,
+  row: OptumProInputRow,
+  stageLog: StageLog,
+): Promise<{ clickedRowText: string; details: Partial<OptumProSearchResult>; status: string; notes?: string } | null> {
+  const candidates = await orderedClaimResultIndexes(page, row);
+  let unavailableResult: { clickedRowText: string; details: Partial<OptumProSearchResult>; notes: string } | null = null;
+  for (const candidate of candidates) {
+    if (isInProgressStatus(candidate.resultStatus)) {
+      return {
+        clickedRowText: candidate.text,
+        status: candidate.resultStatus || "In Progress",
+        details: {
+          claimNumber: candidate.claimNumber,
+          lineStatus: candidate.resultStatus || "In Progress",
+        },
+        notes: "Claim result is in progress; details were not opened.",
+      };
+    }
+
+    const opened = await openClaimResultRowByIndex(page, candidate.index);
+    if (opened.detailsUnavailable) {
+      unavailableResult ??= {
+        clickedRowText: opened.text,
+        details: {
+          claimNumber: candidate.claimNumber,
+          lineStatus: candidate.resultStatus,
+        },
+        notes: "Claim details unavailable popup was shown.",
+      };
+      await stageLog("info", "claim-search", `Skipping claim result row ${candidate.index + 1}: claim details unavailable popup was shown.`);
+      continue;
+    }
+
+    const details = await extractClaimDetails(page, row);
+    const serviceCode = typeof details.serviceCode === "string" ? details.serviceCode : "";
+    if (normalize(serviceCode) === normalize(row.cpt)) {
+      return { clickedRowText: opened.text, details, status: "Completed" };
+    }
+
+    await stageLog("info", "claim-search", `Skipping claim result row ${candidate.index + 1}: service code ${serviceCode || "-"} did not match CPT ${row.cpt}.`);
+    await returnToClaimResults(page);
+  }
+
+  if (unavailableResult) {
+    return {
+      ...unavailableResult,
+      status: "Claim details unavailable",
+    };
+  }
+
+  return null;
 }
 
 async function textAfterLabel(page: Page, label: string): Promise<string> {
@@ -398,6 +566,7 @@ function outputValue(value: string): string {
 }
 
 async function extractClaimDetails(page: Page, row: OptumProInputRow): Promise<Partial<OptumProSearchResult>> {
+  await acknowledgeFinancialInfoBanner(page);
   const lineDetails = await extractMatchedLineDetails(page, row.cpt);
   const payeeId = await textAfterLabel(page, "Payee ID");
   const payeeName = await textAfterLabel(page, "Payee name");
@@ -415,6 +584,10 @@ async function extractClaimDetails(page: Page, row: OptumProInputRow): Promise<P
     paymentName: await textAfterLabel(page, "Payment name") || payeeName,
     payeeName,
   };
+}
+
+async function acknowledgeFinancialInfoBanner(page: Page): Promise<void> {
+  await page.locator("text=/Some financial information is not available/i").first().isVisible({ timeout: 500 }).catch(() => false);
 }
 
 async function extractMatchedLineDetails(page: Page, cpt: string): Promise<Partial<OptumProSearchResult>> {
@@ -461,6 +634,16 @@ async function extractMatchedLineDetails(page: Page, cpt: string): Promise<Parti
         .map((element) => clean((element as HTMLElement).innerText))
         .filter(Boolean)
       : [];
+    const explanationCodes = detailRow
+      ? Array.from(detailRow.querySelectorAll(".denial-code"))
+        .map((element) => clean((element as HTMLElement).innerText))
+        .filter(Boolean)
+      : [];
+    const explanationDescriptions = detailRow
+      ? Array.from(detailRow.querySelectorAll(".denial-code-desc"))
+        .map((element) => clean((element as HTMLElement).innerText))
+        .filter(Boolean)
+      : [];
 
     return {
       serviceCode: cellText(matchedRow, "procedureCode"),
@@ -471,8 +654,8 @@ async function extractMatchedLineDetails(page: Page, cpt: string): Promise<Parti
       deniedAmount: cellText(matchedRow, "deniedAmt"),
       paidAmount: cellText(matchedRow, "amountPaid"),
       lineStatus: cellText(matchedRow, "status"),
-      explanationCode: detailRow ? clean((detailRow.querySelector(".denial-code") as HTMLElement | null)?.innerText) : "",
-      explanationDescription: detailRow ? clean((detailRow.querySelector(".denial-code-desc") as HTMLElement | null)?.innerText) : "",
+      explanationCode: explanationCodes.join(" | "),
+      explanationDescription: explanationDescriptions.join(" | "),
       copayAmount: patientResponsibilityValues[0] || "",
       coinsuranceAmount: patientResponsibilityValues[1] || "",
       deductibleAmount: patientResponsibilityValues[2] || "",
@@ -491,12 +674,23 @@ async function returnToClaimSearch(page: Page): Promise<void> {
   await page.locator("input[placeholder*='Subscriber ID'], input[placeholder*='Patient Name']").first().waitFor({ state: "visible", timeout: 45000 });
 }
 
-async function searchClaimRow(page: Page, row: OptumProInputRow, stageLog: StageLog): Promise<OptumProSearchResult> {
-  await stageLog("info", "claim-search", `Processing Optum Pro input row ${row.rowNumber}: member ${row.memberId}, DOS ${row.dos}, medical group ${row.medicalGroupName}.`);
+async function searchWithSelectedPatient(
+  page: Page,
+  row: OptumProInputRow,
+  matchedPatient: string,
+  stageLog: StageLog,
+): Promise<OptumProSearchResult> {
+  const matchedGroup = await selectMedicalGroup(page, row.medicalGroupName).catch(() => "");
+  if (!matchedGroup) {
+    await page.keyboard.press("Escape").catch(() => {});
+    return emptyClaimResult(row, {
+      matchedPatient,
+      resultSummary: "No payer/group found",
+      status: "No payer/group found",
+      notes: `No valid medical group dropdown option found for ${row.medicalGroupName}.`,
+    });
+  }
 
-  await clickFirstVisible(page, ["button:has-text('Clear all')"], 1000).catch(() => {});
-  const matchedPatient = await selectPatient(page, row);
-  const matchedGroup = await selectMedicalGroup(page, row.medicalGroupName);
   await setServiceDate(page, row.dos);
 
   const searchButton = page.locator("button:has-text('Search')").last();
@@ -506,30 +700,69 @@ async function searchClaimRow(page: Page, row: OptumProInputRow, stageLog: Stage
   const resultRows = await claimResultRows(page);
   const resultRowCount = await resultRows.count().catch(() => 0);
 
-  if (!resultRowCount || /no result|0 results|no claims/i.test(resultSummary)) {
+  if (!resultRowCount || /no result|0 results|no claims|no claims found/i.test(resultSummary) || await page.locator("text=/No Claims found/i").first().isVisible({ timeout: 500 }).catch(() => false)) {
     return emptyClaimResult(row, {
       matchedPatient,
       matchedGroup,
-      resultSummary,
-      status: "claim not found",
+      resultSummary: resultSummary || "No Claims found",
+      status: "No claims found",
       notes: "No claims found.",
     });
   }
 
-  const clickedRowText = await clickBestClaimResultRow(page, row);
-  const details = await extractClaimDetails(page, row);
-  await returnToClaimSearch(page).catch((error) => {
-    void stageLog("warn", "claim-search", `Could not return to Claim Search after detail extraction: ${error instanceof Error ? error.message : String(error)}`);
-  });
+  const matchingClaim = await findMatchingClaimDetails(page, row, stageLog);
+  if (!matchingClaim) {
+    return emptyClaimResult(row, {
+      matchedPatient,
+      matchedGroup,
+      resultSummary,
+      status: "No matching CPT/service code found",
+      notes: `No opened claim result contained CPT/service code ${row.cpt}.`,
+    });
+  }
+
+  if (matchingClaim.status === "Completed") {
+    await returnToClaimSearch(page).catch((error) => {
+      void stageLog("warn", "claim-search", `Could not return to Claim Search after detail extraction: ${error instanceof Error ? error.message : String(error)}`);
+    });
+  }
 
   return emptyClaimResult(row, {
     matchedPatient,
     matchedGroup,
-    resultSummary: resultSummary || clickedRowText,
-    status: "claim found",
-    notes: clickedRowText ? `Clicked result row: ${clickedRowText}` : "",
-    ...details,
+    resultSummary: resultSummary || matchingClaim.clickedRowText,
+    status: matchingClaim.status,
+    notes: matchingClaim.notes || (matchingClaim.clickedRowText ? `Clicked result row: ${matchingClaim.clickedRowText}` : ""),
+    ...matchingClaim.details,
   });
+}
+
+async function searchClaimRow(page: Page, row: OptumProInputRow, stageLog: StageLog): Promise<OptumProSearchResult> {
+  await stageLog("info", "claim-search", `Processing Optum Pro input row ${row.rowNumber}: member ${row.memberId}, DOS ${row.dos}, medical group ${row.medicalGroupName}.`);
+
+  await clickFirstVisible(page, ["button:has-text('Clear all')"], 1000).catch(() => {});
+  const selectedPatient = await selectPatient(page, row, "loose").catch(() => null);
+  if (!selectedPatient) {
+    await page.keyboard.press("Escape").catch(() => {});
+    return emptyClaimResult(row, {
+      resultSummary: "No patient found",
+      status: "No patient found",
+      notes: `No patient dropdown match found for Member Id ${row.memberId} / patient ${row.patient}.`,
+    });
+  }
+
+  const exactResult = await searchWithSelectedPatient(page, row, selectedPatient.text, stageLog);
+  if (exactResult.status !== "No claims found" || !selectedPatient.allowBlankSubscriberFallback) {
+    return exactResult;
+  }
+
+  await clickFirstVisible(page, ["button:has-text('Clear all')"], 1000).catch(() => {});
+  const blankSubscriberPatient = await selectPatient(page, row, "blank-subscriber").catch(() => null);
+  if (!blankSubscriberPatient) {
+    return exactResult;
+  }
+
+  return searchWithSelectedPatient(page, row, blankSubscriberPatient.text, stageLog);
 }
 
 async function openClaimsSearch(page: Page, stageLog: StageLog): Promise<void> {
