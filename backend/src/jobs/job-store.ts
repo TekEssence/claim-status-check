@@ -130,7 +130,8 @@ export function waitForScrapeJobInput(jobId: string, inputName: string, timeoutM
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       job.inputWaiters.delete(inputName);
-      reject(new Error("OTP was not sent within 2 minutes."));
+      const timeoutMinutes = Math.max(1, Math.round(timeoutMs / 60000));
+      reject(new Error(`OTP was not sent within ${timeoutMinutes} minutes.`));
     }, timeoutMs);
 
     job.inputWaiters.set(inputName, { resolve, reject, timer });

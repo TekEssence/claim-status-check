@@ -191,14 +191,15 @@ async function waitForNextAuthStep(page: Page, timeout = 60000): Promise<"verify
 }
 
 async function requestOptumOtp(context: ScraperContext): Promise<string> {
+  const timeoutMs = 300000;
   await context.emit({
     type: "input_request",
     inputName: "optum_pro_otp",
     label: "Optum Pro text message OTP",
-    message: "Enter the One Healthcare ID access code sent by text message.",
-    timeoutMs: 120000,
+    message: "Enter the One Healthcare ID access code sent by text message within 5 minutes.",
+    timeoutMs,
   });
-  return waitForScrapeJobInput(context.jobId, "optum_pro_otp", 120000);
+  return waitForScrapeJobInput(context.jobId, "optum_pro_otp", timeoutMs);
 }
 
 async function waitForPostLogin(page: Page): Promise<void> {

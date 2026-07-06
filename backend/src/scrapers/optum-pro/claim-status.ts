@@ -397,6 +397,19 @@ function resultRowScore(text: string, row: OptumProInputRow): number {
   return score;
 }
 
+function normalizeHeader(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, "");
+}
+
+async function resultTableHeaderIndexes(page: Page): Promise<{ claimNumberIndex: number; statusIndex: number }> {
+  const headers = (await page.locator("table:visible thead th:visible").allInnerTexts().catch(() => []))
+    .map((header) => normalizeHeader(header));
+  return {
+    claimNumberIndex: headers.findIndex((header) => header === "claimnumber"),
+    statusIndex: headers.findIndex((header) => header === "status"),
+  };
+}
+
 async function claimResultCandidate(page: Page, index: number, row: OptumProInputRow): Promise<ClaimResultCandidate> {
   const rows = await claimResultRows(page);
   const resultRow = rows.nth(index);
@@ -404,20 +417,25 @@ async function claimResultCandidate(page: Page, index: number, row: OptumProInpu
   const cells = (await resultRow.locator("td").allInnerTexts().catch(() => []))
     .map((cell) => cell.replace(/\s+/g, " ").trim());
   const nonEmptyCells = cells.filter(Boolean);
+  const headerIndexes = await resultTableHeaderIndexes(page);
+  const claimNumberFromHeader = headerIndexes.claimNumberIndex >= 0 ? cells[headerIndexes.claimNumberIndex] || "" : "";
+  const statusFromHeader = headerIndexes.statusIndex >= 0 ? cells[headerIndexes.statusIndex] || "" : "";
   const claimNumber = await resultRow.locator("[class*='claimNumber'], [class*='claim-number']").first().innerText({ timeout: 500 })
     .then((value) => value.replace(/\s+/g, " ").trim())
-    .catch(() => nonEmptyCells.find((cell) => /^\d{5,}$/.test(cell)) || "");
+    .catch(() => claimNumberFromHeader || nonEmptyCells.find((cell) => /^\d{5,}$/.test(cell)) || "");
   const resultStatus = await resultRow.locator("[class*='status']").last().innerText({ timeout: 500 }).then((value) => value.replace(/\s+/g, " ").trim()).catch(() => {
+    if (statusFromHeader) return statusFromHeader;
     const knownStatus = nonEmptyCells.find((cell) => /^(in\s*(process|progress)|processed|paid|denied|pending)$/i.test(cell));
     if (knownStatus) return knownStatus;
     const parts = text.split(/\s+/).filter(Boolean);
     return parts[parts.length - 1] || "";
   });
+  const claimNumberFromText = text.match(/\b\d{5,}\b/)?.[0] || "";
   return {
     index,
     score: resultRowScore(text, row),
     text,
-    claimNumber,
+    claimNumber: claimNumber || claimNumberFromText,
     resultStatus,
   };
 }
