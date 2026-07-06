@@ -24,6 +24,7 @@ import dashboardWelcomeImage from "../Assets/ChatGPT Image Jul 1, 2026, 10_55_01
 import blueShieldCaliforniaLogo from "../Assets/customerlogo-blue-shield-california-clr.svg";
 import iehpLogo from "../Assets/channels4_profile.jpg";
 import regalLogo from "../Assets/channels4_profile (1).jpg";
+import availityLogo from "../Assets/availity-logo.jpg";
 import { applyClaimRowUpdateToWorksheet, postProcessWorksheet } from "../portals/iehp/workbook";
 import { cancelScrapeJob as cancelScrapeJobRequest, getCurrentScrapeJob, startScrapeJob, subscribeToScrapeJobEvents, submitScrapeJobInput, type CurrentScrapeJob } from "../api/scrape-jobs-api";
 import { clearStoredRunContext, loadClaimFileHandle, loadIehpLoginFile, saveClaimFileHandle, saveIehpLoginFile } from "../lib/run-context-store";
@@ -41,6 +42,9 @@ import { regalFrontendPortalConfig } from "../portals/regal/portal-config";
 import { BlueShieldInputForm } from "../portals/blue-shield/BlueShieldInputForm";
 import { BlueShieldResultView } from "../portals/blue-shield/BlueShieldResultView";
 import { blueShieldFrontendPortalConfig } from "../portals/blue-shield/portal-config";
+import { AvailityInputForm } from "../portals/availity/AvailityInputForm";
+import { AvailityResultView } from "../portals/availity/AvailityResultView";
+import { availityFrontendPortalConfig } from "../portals/availity/portal-config";
 
 type AuthUser = {
   userId: string;
@@ -74,7 +78,7 @@ type IehpWorkbookBundle = {
   worksheet: ExcelJS.Worksheet;
 };
 
-export type PortalId = "iehp" | "aerial" | "regal" | "blue-shield";
+export type PortalId = "iehp" | "aerial" | "regal" | "blue-shield" | "availity";
 type DownloadFile = {
   filename: string;
   bytes: Uint8Array;
@@ -96,10 +100,11 @@ const PORTAL_ROUTE_MAP: Record<PortalId, string> = {
   aerial: "/aerial",
   regal: "/regal",
   "blue-shield": "/blue-shield",
+  availity: "/availity",
 };
 
 function isPortalId(value: string): value is PortalId {
-  return value === "iehp" || value === "aerial" || value === "regal" || value === "blue-shield";
+  return value === "iehp" || value === "aerial" || value === "regal" || value === "blue-shield" || value === "availity";
 }
 
 function canRestoreCurrentJob(job: CurrentScrapeJob): job is CurrentScrapeJob & { portalId: PortalId } {
@@ -182,6 +187,23 @@ const PORTAL_UI_META: Record<
       height: 28,
     },
   },
+  availity: {
+    shortCode: "AV",
+    logoClassName: "bg-white text-sky-700",
+    logoSrc: availityLogo,
+    cardLogoFrameClassName: "h-10 w-[5.2rem] rounded-[1rem] px-2",
+    cardLogoImageClassName: "h-6 w-full object-contain",
+    cardLogoSize: {
+      width: 72,
+      height: 24,
+    },
+    heroLogoFrameClassName: "h-14 w-[7rem] rounded-[1.15rem] px-3",
+    heroLogoImageClassName: "h-8 w-full object-contain",
+    heroLogoSize: {
+      width: 96,
+      height: 32,
+    },
+  },
 };
 
 const PORTAL_WORKSPACE_META: Record<
@@ -206,6 +228,10 @@ const PORTAL_WORKSPACE_META: Record<
   "blue-shield": {
     heroDescription: "Upload your login workbook and input workbook to begin Blue Shield claim status verification grouped by member-ready processing.",
     processingDescription: "Blue Shield requests are validated by group, encrypted during upload, and processed with checkpoint-aware automation.",
+  },
+  availity: {
+    heroDescription: "Upload your Availity login workbook and claim workbook to process Aetna and Blue Cross Blue Shield claim status checks.",
+    processingDescription: "Availity requests stream live status over SSE and automatically download the completed output workbook.",
   },
 };
 
@@ -559,6 +585,8 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
   const [claimFileName, setClaimFileName] = useState<string>("");
   const [aerialCredentialFile, setAerialCredentialFile] = useState<File | null>(null);
   const [aerialInputFile, setAerialInputFile] = useState<File | null>(null);
+  const [availityCredentialFile, setAvailityCredentialFile] = useState<File | null>(null);
+  const [availityInputFile, setAvailityInputFile] = useState<File | null>(null);
   const [blueShieldCredentialFile, setBlueShieldCredentialFile] = useState<File | null>(null);
   const [blueShieldInputFile, setBlueShieldInputFile] = useState<File | null>(null);
   const [blueShieldGroup, setBlueShieldGroup] = useState("");
@@ -601,7 +629,7 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
   const isProtectedRoute = pathname !== "/";
   const effectivePortalId = forcedPortalId ?? selectedPortalId;
   const availablePortals = useMemo(
-    () => [iehpFrontendPortalConfig, aerialFrontendPortalConfig, regalFrontendPortalConfig, blueShieldFrontendPortalConfig] as const,
+    () => [iehpFrontendPortalConfig, aerialFrontendPortalConfig, regalFrontendPortalConfig, blueShieldFrontendPortalConfig, availityFrontendPortalConfig] as const,
     [],
   );
   const selectedPortal =
@@ -613,6 +641,8 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
           ? regalFrontendPortalConfig
           : effectivePortalId === "blue-shield"
             ? blueShieldFrontendPortalConfig
+            : effectivePortalId === "availity"
+              ? availityFrontendPortalConfig
             : null;
   const selectedPortalUiMeta = effectivePortalId ? PORTAL_UI_META[effectivePortalId] : null;
   const filteredPortals = useMemo(() => {
@@ -660,6 +690,10 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
     () => Boolean(aerialInputFile && !isProcessing),
     [aerialInputFile, isProcessing],
   );
+  const canSubmitAvaility = useMemo(
+    () => Boolean(availityCredentialFile && availityInputFile && !isProcessing),
+    [availityCredentialFile, availityInputFile, isProcessing],
+  );
   const canSubmitRegal = useMemo(
     () => Boolean(regalClaimFile && !isProcessing),
     [regalClaimFile, isProcessing],
@@ -677,6 +711,8 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
           ? canSubmitRegal
           : effectivePortalId === "blue-shield"
             ? canSubmitBlueShield
+            : effectivePortalId === "availity"
+              ? canSubmitAvaility
             : false;
   const portalWorkflowMeta = effectivePortalId ? PORTAL_WORKSPACE_META[effectivePortalId] : null;
   const portalFileState = useMemo(() => {
@@ -707,6 +743,15 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
       };
     }
 
+    if (effectivePortalId === "availity") {
+      return {
+        claimFileLabel: availityInputFile?.name ?? "",
+        claimReady: Boolean(availityInputFile),
+        loginFileLabel: availityCredentialFile?.name ?? "",
+        loginReady: Boolean(availityCredentialFile),
+      };
+    }
+
     if (effectivePortalId === "blue-shield") {
       return {
         claimFileLabel: blueShieldInputFile?.name ?? "",
@@ -725,6 +770,8 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
   }, [
     aerialCredentialFile,
     aerialInputFile,
+    availityCredentialFile,
+    availityInputFile,
     blueShieldCredentialFile,
     blueShieldInputFile,
     claimFileName,
@@ -887,6 +934,8 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
           }
         } else if (currentJob.portalId === "aerial") {
           await reconnectAerialRun(currentJob);
+        } else if (currentJob.portalId === "availity") {
+          await reconnectDownloadOnlyRun(currentJob, "availity", "Availity");
         } else if (currentJob.portalId === "regal") {
           await reconnectRegalRun(currentJob);
         }
@@ -1678,6 +1727,81 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
     }
   }
 
+  async function reconnectDownloadOnlyRun(currentJob: CurrentScrapeJob, portalId: PortalId, portalName: string) {
+    setIsProcessing(true);
+    setActiveJobId(currentJob.jobId);
+    setSelectedPortalId(portalId);
+    setLogs(currentJob.logs ?? []);
+    setErrorScreenshots(
+      (currentJob.artifacts ?? [])
+        .filter((artifact) => artifact.artifactType === "error_screenshot" && artifact.contentBase64)
+        .map((artifact) => ({
+          index: artifact.rowIndex ?? -1,
+          image: artifact.contentBase64 ?? "",
+        })),
+    );
+    setProgress(currentJob.totalRows > 0 ? { completed: currentJob.currentCompleted, total: currentJob.totalRows } : null);
+    setStatus(`Reconnecting to current ${portalName} run...`);
+
+    let hasError = false;
+    let wasCancelled = false;
+    let finalErrorMessage = "";
+    const streamAbortController = new AbortController();
+
+    try {
+      await subscribeToScrapeJobEvents({
+        jobId: currentJob.jobId,
+        signal: streamAbortController.signal,
+        onEvent: async (eventData) => {
+          if (eventData.type === "log" && eventData.message) {
+            setLogs((prev) => [...prev, eventData.message ?? ""]);
+          } else if (eventData.type === "progress" && typeof eventData.completed === "number" && typeof eventData.total === "number") {
+            setProgress({ completed: eventData.completed, total: eventData.total });
+          } else if (eventData.type === "error_screenshot" && typeof eventData.index === "number" && eventData.image) {
+            setErrorScreenshots((prev) => [...prev, { index: eventData.index ?? -1, image: eventData.image ?? "" }]);
+          } else if (eventData.type === "file_download" && eventData.filename && eventData.base64) {
+            const artifactKey = buildDownloadArtifactKey(eventData);
+            if (!hasDownloadedArtifact(currentJob.jobId, artifactKey)) {
+              downloadBase64File(eventData.filename, eventData.base64, eventData.mimeType || "application/octet-stream");
+              rememberDownloadedArtifact(currentJob.jobId, artifactKey);
+              setStatus(`Downloaded ${eventData.filename}`);
+            }
+          } else if (eventData.type === "warning" && eventData.message) {
+            setLogs((prev) => [...prev, eventData.message ?? ""]);
+            setStatus(eventData.message);
+          } else if (eventData.type === "error" && eventData.message) {
+            finalErrorMessage = eventData.message;
+            setLogs((prev) => [...prev, `ERROR: ${eventData.message}`]);
+            setStatus(`Error: ${eventData.message}`);
+            hasError = true;
+          } else if (eventData.type === "cancelled") {
+            wasCancelled = true;
+            setStatus(eventData.message || "Processing cancelled.");
+            setLogs((prev) => [...prev, eventData.message || "Processing cancelled."]);
+          }
+        },
+        onStreamError(error) {
+          console.error(`${portalName} stream error:`, error);
+          finalErrorMessage = getErrorMessage(error);
+          setLogs((prev) => [...prev, `STREAM ERROR: ${finalErrorMessage}`]);
+          setStatus(`Stream error: ${finalErrorMessage}`);
+          hasError = true;
+        },
+      });
+
+      setStatus(
+        wasCancelled
+          ? `${portalName} processing cancelled.`
+          : hasError
+          ? `${portalName} processing finished with errors${finalErrorMessage ? `: ${finalErrorMessage}` : "."}`
+          : `${portalName} processing completed.`,
+      );
+    } finally {
+      setIsProcessing(false);
+      setActiveJobId("");
+    }
+  }
+
 
 
   async function reconnectBlueShieldRun(currentJob: CurrentScrapeJob) {
@@ -2071,6 +2195,87 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
       );
     } catch (error) {
       setStatus(`Failed to process Aerial claims: ${getErrorMessage(error)}`);
+    } finally {
+      setIsProcessing(false);
+      setActiveJobId("");
+    }
+  }
+
+  async function submitAvaility(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+
+    if (!availityCredentialFile || !availityInputFile) {
+      setStatus("Please provide both the Availity login Excel and claim Excel files.");
+      return;
+    }
+
+    resetRunState("Starting Availity scraper...");
+
+    const formData = new FormData();
+    formData.append("portalId", "availity");
+    formData.append("credentialExcel", availityCredentialFile);
+    formData.append("inputExcel", availityInputFile);
+
+    let hasError = false;
+    let wasCancelled = false;
+    let finalErrorMessage = "";
+    let subscribedJobId = "";
+    const streamAbortController = new AbortController();
+
+    const handleJobEvent = async (eventData: ScrapeJobEvent) => {
+      if (eventData.type === "log" && eventData.message) {
+        setLogs((prev) => [...prev, eventData.message ?? ""]);
+      } else if (eventData.type === "progress" && typeof eventData.completed === "number" && typeof eventData.total === "number") {
+        setProgress({ completed: eventData.completed, total: eventData.total });
+      } else if (eventData.type === "error_screenshot" && typeof eventData.index === "number" && eventData.image) {
+        setErrorScreenshots((prev) => [...prev, { index: eventData.index ?? -1, image: eventData.image ?? "" }]);
+      } else if (eventData.type === "file_download" && eventData.filename && eventData.base64) {
+        const artifactKey = buildDownloadArtifactKey(eventData);
+        if (!hasDownloadedArtifact(subscribedJobId, artifactKey)) {
+          downloadBase64File(eventData.filename, eventData.base64, eventData.mimeType || "application/octet-stream");
+          rememberDownloadedArtifact(subscribedJobId, artifactKey);
+          setStatus(`Downloaded ${eventData.filename}`);
+        }
+      } else if (eventData.type === "warning" && eventData.message) {
+        setLogs((prev) => [...prev, eventData.message ?? ""]);
+        setStatus(eventData.message);
+      } else if (eventData.type === "error" && eventData.message) {
+        finalErrorMessage = eventData.message;
+        setLogs((prev) => [...prev, `ERROR: ${eventData.message}`]);
+        setStatus(`Error: ${eventData.message}`);
+        hasError = true;
+      } else if (eventData.type === "cancelled") {
+        wasCancelled = true;
+        setLogs((prev) => [...prev, eventData.message || "Processing cancelled."]);
+        setStatus(eventData.message || "Processing cancelled.");
+      }
+    };
+
+    try {
+      const jobId = await startScrapeJob(formData);
+      subscribedJobId = jobId;
+      setActiveJobId(jobId);
+      await subscribeToScrapeJobEvents({
+        jobId,
+        signal: streamAbortController.signal,
+        onEvent: handleJobEvent,
+        onStreamError(error) {
+          console.error("Availity stream error:", error);
+          finalErrorMessage = getErrorMessage(error);
+          setLogs((prev) => [...prev, `STREAM ERROR: ${finalErrorMessage}`]);
+          setStatus(`Stream error: ${finalErrorMessage}`);
+          hasError = true;
+        },
+      });
+      setStatus(
+        wasCancelled
+          ? "Availity processing cancelled."
+          : hasError
+          ? `Availity processing finished with errors${finalErrorMessage ? `: ${finalErrorMessage}` : "."}`
+          : "Availity processing completed.",
+      );
+    } catch (error) {
+      setStatus(`Failed to process Availity claims: ${getErrorMessage(error)}`);
     } finally {
       setIsProcessing(false);
       setActiveJobId("");
@@ -3313,6 +3518,16 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
                       onLoginFileChange={setRegalLoginFile}
                       onSubmit={submitRegal}
                     />
+                  ) : effectivePortalId === "availity" ? (
+                    <AvailityInputForm
+                      canSubmit={canSubmitAvaility}
+                      credentialFileName={availityCredentialFile?.name ?? ""}
+                      inputFileName={availityInputFile?.name ?? ""}
+                      isProcessing={isProcessing}
+                      onCredentialFileChange={setAvailityCredentialFile}
+                      onInputFileChange={setAvailityInputFile}
+                      onSubmit={submitAvaility}
+                    />
                   ) : (
                     <BlueShieldInputForm
                       canSubmit={canSubmitBlueShield}
@@ -3390,6 +3605,10 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
                     outputTotal={latestRegalOutput?.total}
                     status={status}
                   />
+                </div>
+              ) : effectivePortalId === "availity" ? (
+                <div className="mt-5">
+                  <AvailityResultView errorScreenshots={errorScreenshots} logs={logs} progress={progress} status={status} />
                 </div>
               ) : (
                 <div className="mt-5">

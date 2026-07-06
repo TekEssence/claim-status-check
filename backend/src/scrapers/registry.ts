@@ -1,4 +1,5 @@
 import { aerialScraper } from "./aerial/scraper";
+import { availityScraper } from "./availity/scraper";
 import { blueShieldScraper } from "./blue-shield/scraper";
 import { iehpScraper } from "./iehp/scraper";
 import { regalScraper } from "./regal/scraper";
@@ -7,6 +8,7 @@ import type { PortalScraper } from "./types";
 
 export const scraperRegistry = {
   aerial: aerialScraper,
+  availity: availityScraper,
   "blue-shield": blueShieldScraper,
   iehp: iehpScraper,
   regal: regalScraper,
