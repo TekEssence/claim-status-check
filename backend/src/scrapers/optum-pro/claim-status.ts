@@ -242,31 +242,78 @@ async function selectMedicalGroup(page: Page, medicalGroupName: string): Promise
     await fillInputLikeUser(page, selector, searchText);
     await page.waitForTimeout(1500);
 
-    const options = page.locator("mat-option:visible, [role='option']:visible, li:visible, .dropdown-option:visible");
-    const count = await options.count().catch(() => 0);
-    let bestIndex = -1;
-    let bestScore = 0;
-    let bestText = "";
-
-    for (let index = 0; index < count; index++) {
-      const optionText = (await options.nth(index).innerText({ timeout: 1000 }).catch(() => "")).replace(/\s+/g, " ").trim();
-      const score = medicalGroupOptionScore(optionText, targetWords);
-
-      if (score > bestScore) {
-        bestIndex = index;
-        bestScore = score;
-        bestText = optionText;
-      }
-    }
-
-    if (bestIndex >= 0 && bestScore >= 40) {
-      await options.nth(bestIndex).click();
+    const bestOption = await bestMedicalGroupOption(page, targetWords);
+    if (bestOption.index >= 0 && bestOption.score >= 40) {
+      await medicalGroupOptions(page).nth(bestOption.index).click();
       await page.waitForTimeout(700);
-      return bestText;
+      return bestOption.text;
+    }
+  }
+
+  for (const fallbackSearchText of medicalGroupFallbackSearches(medicalGroupName)) {
+    await fillInputLikeUser(page, selector, fallbackSearchText);
+    await waitForStableMedicalGroupOptions(page);
+
+    const bestOption = await bestMedicalGroupOption(page, targetWords);
+    if (bestOption.index >= 0 && bestOption.score >= 40) {
+      await medicalGroupOptions(page).nth(bestOption.index).click();
+      await page.waitForTimeout(700);
+      return bestOption.text;
     }
   }
 
   throw new Error(`Medical group not found for ${medicalGroupName}.`);
+}
+
+function medicalGroupFallbackSearches(medicalGroupName: string): string[] {
+  const normalizedWords = normalizeMedicalGroupForCompare(medicalGroupName).split(" ").filter(Boolean);
+  const searches = [
+    normalizedWords.slice(0, 2).join(" "),
+    normalizedWords.slice(0, 3).join(" "),
+    normalizeMedicalGroupForCompare(medicalGroupName),
+  ].filter(Boolean);
+  return Array.from(new Set(searches));
+}
+
+function medicalGroupOptions(page: Page) {
+  return page.locator("mat-option:visible, [role='option']:visible, li:visible, .dropdown-option:visible");
+}
+
+async function waitForStableMedicalGroupOptions(page: Page): Promise<void> {
+  let previousCount = -1;
+  let stableChecks = 0;
+  for (let attempt = 0; attempt < 10; attempt++) {
+    await page.waitForTimeout(400);
+    const count = await medicalGroupOptions(page).count().catch(() => 0);
+    if (count > 0 && count === previousCount) {
+      stableChecks++;
+      if (stableChecks >= 2) return;
+    } else {
+      stableChecks = 0;
+      previousCount = count;
+    }
+  }
+}
+
+async function bestMedicalGroupOption(page: Page, targetWords: string[]): Promise<{ index: number; score: number; text: string }> {
+  const options = medicalGroupOptions(page);
+  const count = await options.count().catch(() => 0);
+  let bestIndex = -1;
+  let bestScore = 0;
+  let bestText = "";
+
+  for (let index = 0; index < count; index++) {
+    const optionText = (await options.nth(index).innerText({ timeout: 1000 }).catch(() => "")).replace(/\s+/g, " ").trim();
+    const score = medicalGroupOptionScore(optionText, targetWords);
+
+    if (score > bestScore) {
+      bestIndex = index;
+      bestScore = score;
+      bestText = optionText;
+    }
+  }
+
+  return { index: bestIndex, score: bestScore, text: bestText };
 }
 
 function commonPrefixLength(a: string, b: string): number {
@@ -385,7 +432,9 @@ function emptyClaimResult(input: OptumProInputRow, fields: Partial<OptumProSearc
 async function claimResultRows(page: Page) {
   const primary = page.locator("tr[data-name='Claims-View-Details']:visible");
   if ((await primary.count().catch(() => 0)) > 0) return primary;
-  return page.locator("tbody tr:visible").filter({ has: page.locator("[data-name='Claims-View-Details']") });
+  const dataNameRows = page.locator("tbody tr:visible").filter({ has: page.locator("[data-name='Claims-View-Details']") });
+  if ((await dataNameRows.count().catch(() => 0)) > 0) return dataNameRows;
+  return page.locator("table:visible tbody tr:visible").filter({ has: page.locator("td") });
 }
 
 function resultRowScore(text: string, row: OptumProInputRow): number {
@@ -466,7 +515,12 @@ async function openClaimResultRowByIndex(page: Page, index: number): Promise<{ t
   const rows = await claimResultRows(page);
   const row = rows.nth(index);
   const text = (await row.innerText({ timeout: 1000 }).catch(() => "")).replace(/\s+/g, " ").trim();
-  await row.click();
+  const openTarget = row.locator("a, button, [role='button'], [data-name='Claims-View-Details']").filter({ hasNot: page.locator("input[type='checkbox']") }).first();
+  if (await openTarget.isVisible({ timeout: 1000 }).catch(() => false)) {
+    await openTarget.click();
+  } else {
+    await row.click();
+  }
   if (await closeClaimDetailsUnavailablePopup(page)) {
     return { text, detailsUnavailable: true };
   }
@@ -612,6 +666,7 @@ async function extractMatchedLineDetails(page: Page, cpt: string): Promise<Parti
   return page.evaluate((targetCpt) => {
     const clean = (value: string | null | undefined) => (value || "").replace(/\s+/g, " ").trim();
     const normalizeCode = (value: string) => value.replace(/[^A-Za-z0-9]+/g, "").toLowerCase();
+    const normalizeHeader = (value: string) => value.replace(/[^A-Za-z0-9]+/g, "").toLowerCase();
     const isVisible = (element: Element) => {
       const style = window.getComputedStyle(element);
       const rect = element.getBoundingClientRect();
@@ -627,7 +682,7 @@ async function extractMatchedLineDetails(page: Page, cpt: string): Promise<Parti
 
     const matchedRow = rows.find((candidate) => normalizeCode(cellText(candidate, "procedureCode")) === normalizeCode(targetCpt));
     if (!matchedRow) {
-      return {
+      const empty = {
         serviceCode: "",
         billedAmount: "",
         planAllowedAmount: "",
@@ -642,6 +697,75 @@ async function extractMatchedLineDetails(page: Page, cpt: string): Promise<Parti
         coinsuranceAmount: "",
         deductibleAmount: "",
       };
+      const headerIncludes = (header: string, words: string[]) => words.some((word) => header.includes(word));
+      const tables = Array.from(document.querySelectorAll("table")).filter(isVisible);
+
+      for (const table of tables) {
+        const headers = Array.from(table.querySelectorAll("thead th"))
+          .map((header) => normalizeHeader(clean((header as HTMLElement).innerText)));
+        if (!headers.length) continue;
+
+        const serviceIndex = headers.findIndex((header) => header.includes("servicecode") || header.includes("procedurecode"));
+        if (serviceIndex < 0) continue;
+
+        const amountIndex = headers.findIndex((header) => header.includes("billedamount") && header.includes("paidamount"));
+        const indexes = {
+          billed: headers.findIndex((header) => headerIncludes(header, ["billedamount", "billedamt"])),
+          allowed: headers.findIndex((header) => header.includes("planallowed") || header.includes("allowedamount")),
+          patient: headers.findIndex((header) => header.includes("patientresponsibility")),
+          withhold: headers.findIndex((header) => header.includes("withhold")),
+          denied: headers.findIndex((header) => header.includes("denied")),
+          paid: headers.findIndex((header) => headerIncludes(header, ["paidamount", "amountpaid"])),
+          status: headers.findIndex((header) => header === "status"),
+        };
+
+        const tableRows = Array.from(table.querySelectorAll("tbody tr"))
+          .filter((candidate) => isVisible(candidate) && !candidate.className.includes("detail"));
+        const fallbackRow = tableRows.find((candidate) => {
+          const cells = Array.from(candidate.querySelectorAll("td"));
+          return normalizeCode(clean((cells[serviceIndex] as HTMLElement | undefined)?.innerText)) === normalizeCode(targetCpt);
+        });
+        if (!fallbackRow) continue;
+
+        const cells = Array.from(fallbackRow.querySelectorAll("td")).map((cell) => clean((cell as HTMLElement).innerText));
+        const combinedAmounts = amountIndex >= 0 ? (cells[amountIndex] || "").split(",").map(clean) : [];
+        const fallbackDetailRow = fallbackRow.nextElementSibling?.className.includes("detail")
+          ? fallbackRow.nextElementSibling
+          : null;
+        const patientResponsibilityValues = fallbackDetailRow
+          ? Array.from(fallbackDetailRow.querySelectorAll(".claims-card-content-address-text"))
+            .map((element) => clean((element as HTMLElement).innerText))
+            .filter(Boolean)
+          : [];
+        const explanationCodes = fallbackDetailRow
+          ? Array.from(fallbackDetailRow.querySelectorAll(".denial-code"))
+            .map((element) => clean((element as HTMLElement).innerText))
+            .filter(Boolean)
+          : [];
+        const explanationDescriptions = fallbackDetailRow
+          ? Array.from(fallbackDetailRow.querySelectorAll(".denial-code-desc"))
+            .map((element) => clean((element as HTMLElement).innerText))
+            .filter(Boolean)
+          : [];
+
+        return {
+          serviceCode: cells[serviceIndex] || "",
+          billedAmount: indexes.billed >= 0 ? cells[indexes.billed] || "" : combinedAmounts[0] || "",
+          planAllowedAmount: indexes.allowed >= 0 ? cells[indexes.allowed] || "" : combinedAmounts[1] || "",
+          patientResponsibility: indexes.patient >= 0 ? cells[indexes.patient] || "" : "",
+          withholdAmount: indexes.withhold >= 0 ? cells[indexes.withhold] || "" : combinedAmounts[3] || "",
+          deniedAmount: indexes.denied >= 0 ? cells[indexes.denied] || "" : combinedAmounts[4] || "",
+          paidAmount: indexes.paid >= 0 ? cells[indexes.paid] || "" : combinedAmounts[5] || "",
+          lineStatus: indexes.status >= 0 ? cells[indexes.status] || "" : "",
+          explanationCode: explanationCodes.join(" | "),
+          explanationDescription: explanationDescriptions.join(" | "),
+          copayAmount: patientResponsibilityValues[0] || "",
+          coinsuranceAmount: patientResponsibilityValues[1] || "",
+          deductibleAmount: patientResponsibilityValues[2] || "",
+        };
+      }
+
+      return empty;
     }
 
     const detailRow = matchedRow.nextElementSibling?.className.includes("detail")
