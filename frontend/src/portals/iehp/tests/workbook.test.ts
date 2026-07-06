@@ -670,3 +670,28 @@ test("postProcessWorksheet writes Final Status for paid RA rows using net paid s
   );
   assert.equal(worksheet.getRow(2).getCell(headers["RA Check Amount"]).value, 210.44);
 });
+
+test("postProcessWorksheet writes In Progress RA status and final status when Check # is N/A", () => {
+  const workbook = new ExcelJS.Workbook();
+  const worksheet = workbook.addWorksheet("Claims");
+  worksheet.addRow(["Member Policy ID", "Date Of Service"]);
+  worksheet.addRow(["40000135978100", "05/20/2026"]);
+
+  applyClaimRowUpdateToWorksheet(worksheet, {
+    index: 0,
+    update: {
+      BotClaimDetails:
+        "Summary: [05/20/2026 04/22/2026 $3,385.00] | Details: [Check #: [N/A]\nReceived Date: 04/22/2026\nCheck Date: N/A\nClaim #: 0100075750] | Status Info: [Pending]",
+      BotClaimStatusCheck: "Success",
+    },
+  });
+
+  postProcessWorksheet(worksheet);
+
+  const headers = headerMap(worksheet);
+  assert.equal(worksheet.getRow(2).getCell(headers["RA Status"]).value, "In Progress");
+  assert.equal(
+    worksheet.getRow(2).getCell(headers["Final Status"]).value,
+    "DOS 05/20/2026: Checked IEHP portal claim received on 04/22/2026 present as In Progress.",
+  );
+});

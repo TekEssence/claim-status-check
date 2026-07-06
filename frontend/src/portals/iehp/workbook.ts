@@ -193,20 +193,37 @@ function buildPaidAmountText(raRecord: RaDetailRecord): string {
   return `${formatCurrency(basePaidAmount)} with ${suffixParts.join(" and ")}`;
 }
 
+function isClaimInProgress(claimRecord: ParsedClaimDetailRecord | null): boolean {
+  if (!claimRecord) return false;
+  return /^n\/a$/i.test((claimRecord.CheckNumber || "").trim());
+}
+
 function buildFinalStatusText(
   claimRecord: ParsedClaimDetailRecord | null,
   raRecord: RaDetailRecord | null,
 ): string {
-  if (!claimRecord || !raRecord || !raRecord.RAStatus) return "";
+  if (!claimRecord) return "";
 
   const dos = claimRecord.SummaryBlockDOS || "";
   const receivedDate = claimRecord.ReceivedDate || "";
   const checkDate = claimRecord.CheckDate || receivedDate || "";
-  const checkNumber = raRecord.CheckNumber || claimRecord.CheckNumber || "";
+  const checkNumber = raRecord?.CheckNumber || claimRecord.CheckNumber || "";
   const claimNumber = claimRecord.ClaimNumber || "";
-  const raCheckAmount = raRecord.RACheckAmount || "";
+  const raCheckAmount = raRecord?.RACheckAmount || "";
   const claimSuffix = claimNumber ? ` Claim # ${claimNumber}.` : "";
   const checkAmountSuffix = raCheckAmount ? ` Check Amount: ${formatCurrency(parseCurrencyNumber(raCheckAmount))}.` : "";
+
+  /*
+  ###New Code -Start###
+  */
+  if ((!raRecord || !raRecord.RAStatus) && isClaimInProgress(claimRecord)) {
+    return `DOS ${dos}: Checked IEHP portal claim received on ${receivedDate} present as In Progress.`;
+  }
+  /*
+  ###New Code - End###
+  */
+
+  if (!raRecord || !raRecord.RAStatus) return "";
 
   if (/^paid$/i.test(raRecord.RAStatus)) {
     const paidAmountText = buildPaidAmountText(raRecord);
@@ -755,6 +772,18 @@ export function postProcessWorksheet(worksheet: ExcelJS.Worksheet): void {
           }
         });
       }
+
+      /*
+      ###New Code -Start###
+      */
+      if (!raRecord && record && isClaimInProgress(record)) {
+        const raStatusCell = targetRow.getCell(raColMap.RAStatus);
+        raStatusCell.value = "In Progress";
+        raStatusCell.style = cloneStyle(dataStyle);
+      }
+      /*
+      ###New Code - End###
+      */
 
       /*
       ###New Code -Start###
