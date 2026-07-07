@@ -765,6 +765,14 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
     }
   }
 
+  function markSkipJobRestoreOnce() {
+    try {
+      window.sessionStorage.setItem(SKIP_JOB_RESTORE_ONCE_KEY, "true");
+    } catch {
+      // Ignore storage failures.
+    }
+  }
+
   useEffect(() => {
     let mounted = true;
 
@@ -1030,14 +1038,15 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
     if (forcedPortalId) {
       try {
         window.localStorage.removeItem(SELECTED_PORTAL_STORAGE_KEY);
-        window.sessionStorage.setItem(SKIP_JOB_RESTORE_ONCE_KEY, "true");
       } catch {
         // Ignore storage failures.
       }
-      router.push("/");
+      markSkipJobRestoreOnce();
+      router.push("/portal");
       return;
     }
     setSelectedPortalId(null);
+    markSkipJobRestoreOnce();
     try {
       window.localStorage.removeItem(SELECTED_PORTAL_STORAGE_KEY);
     } catch {
@@ -1051,6 +1060,7 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
     setIsCancellingJob(false);
     setActiveJobId("");
     setPendingIehpRestoreJob(null);
+    setPendingRegalRestoreJob(null);
     setPendingBlueShieldRestoreJob(null);
     setRegalJobId("");
     setRegalMfaRequest(null);
@@ -2676,19 +2686,7 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
             </span>
           </button>
 
-          <div className="flex items-center gap-3">
-            {effectivePortalId && !authUser.mustResetPassword && (
-              <button
-                type="button"
-                disabled={isProcessing}
-                onClick={resetPortalSelection}
-                className="rounded-xl border border-sky-200 bg-white/90 px-4 py-2 text-sm font-medium text-slate-700 shadow-sm transition hover:border-blue-400 hover:bg-blue-50 disabled:text-slate-400"
-              >
-                Change portal
-              </button>
-            )}
-
-          </div>
+          <div className="flex items-center gap-3" />
         </div>
       </nav>
 
@@ -2714,6 +2712,17 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
                 <LayoutDashboard className="h-4 w-4" strokeWidth={2} />
                 Dashboard
               </button>
+              {effectivePortalId && !authUser.mustResetPassword ? (
+                <button
+                  type="button"
+                  disabled={isProcessing}
+                  onClick={resetPortalSelection}
+                  className="flex w-full items-center gap-3 rounded-[1rem] px-3 py-2.5 text-left text-sm font-medium text-slate-600 transition hover:bg-sky-50 hover:text-slate-900 disabled:cursor-not-allowed disabled:text-slate-400"
+                >
+                  <Activity className="h-4 w-4" strokeWidth={2} />
+                  Change Portal
+                </button>
+              ) : null}
               <button
                 type="button"
                 onClick={openResetPassword}
@@ -3415,3 +3424,5 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
     </main>
   );
 }
+
+
