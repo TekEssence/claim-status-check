@@ -6,6 +6,8 @@ export const regalConfig = {
     usernameSubmit: "input[type='submit'][value='Next']",
     password: "input[name='credentials.passcode'][type='password']",
     passwordSubmit: "input[type='submit'][value='Verify']",
+    passwordExpiryTitle: "h2[data-se='o-form-head']:has-text('Your password will expire'), h2:has-text('Your password will expire')",
+    passwordExpiryRemindLater: "a[data-se='skip']:has-text('Remind me later'), a.js-skip:has-text('Remind me later'), a:has-text('Remind me later')",
     errorContainer: "[data-se='o-form-error-container']",
     dashboardHeading: "h2:has-text('Dashboard')",
     dashboardText: "text=Dashboard",
