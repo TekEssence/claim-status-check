@@ -2673,9 +2673,9 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
         </div>
       </nav>
 
-      <div className="mx-auto max-w-7xl px-4 py-8">
-        <div className="grid gap-6 xl:grid-cols-[240px_minmax(0,1fr)]">
-          <aside className="hidden rounded-[2rem] border border-sky-100 bg-white/82 p-5 shadow-[0_18px_60px_rgba(148,163,184,0.14)] backdrop-blur-xl xl:flex xl:min-h-[calc(100vh-10rem)] xl:flex-col">
+      <div className="mx-auto w-full max-w-[96rem] px-3 py-8 sm:px-4 xl:px-5">
+        <div className="grid gap-5 xl:grid-cols-[280px_minmax(0,1fr)] 2xl:grid-cols-[300px_minmax(0,1fr)]">
+          <aside className="hidden rounded-[2rem] border border-sky-100 bg-white/82 p-4 shadow-[0_18px_60px_rgba(148,163,184,0.14)] backdrop-blur-xl xl:flex xl:min-h-[calc(100vh-10rem)] xl:flex-col 2xl:p-5">
             <div className="flex items-center gap-3 rounded-[1.4rem] bg-[linear-gradient(135deg,rgba(239,246,255,0.98)_0%,rgba(219,234,254,0.82)_100%)] p-4">
               <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-[linear-gradient(135deg,#1473ff_0%,#2563eb_60%,#183db9_100%)] text-white shadow-[0_16px_34px_rgba(37,99,235,0.22)]">
                 <Stethoscope className="h-5 w-5" strokeWidth={2.1} />
@@ -2735,16 +2735,6 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
               </button>
             </nav>
 
-            <div className="mt-auto rounded-[1.4rem] border border-sky-100 bg-[linear-gradient(180deg,rgba(245,250,255,0.98)_0%,rgba(233,243,255,0.92)_100%)] p-4 shadow-[0_14px_35px_rgba(148,163,184,0.12)]">
-              <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-[linear-gradient(180deg,#e2fbf7_0%,#c4f1e8_100%)] text-emerald-600">
-                <ShieldCheck className="h-5 w-5" strokeWidth={2.1} />
-              </div>
-              <p className="mt-4 text-sm font-semibold text-slate-900">HIPAA Compliant</p>
-              <p className="mt-2 text-xs leading-5 text-slate-600">
-                Your data is protected with enterprise-grade security and encrypted session controls.
-              </p>
-              <p className="mt-8 text-[0.7rem] text-slate-400">Copyright 2026 Claim Status Portal</p>
-            </div>
           </aside>
 
           <div className="min-w-0">
@@ -3108,7 +3098,7 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
                     No portals matched your search. Try another keyword.
                   </div>
                 ) : (
-                  <div className={portalLayout === "grid" ? "grid gap-4 md:grid-cols-2 xl:grid-cols-4" : "space-y-4"}>
+                  <div className={portalLayout === "grid" ? "grid gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4" : "space-y-4"}>
                     {filteredPortals.map((portal) => {
                       const meta = PORTAL_UI_META[portal.id as PortalId];
 
@@ -3172,16 +3162,16 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
                 initial={{ opacity: 0, y: 18 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ duration: 0.45 }}
-                className="relative overflow-hidden rounded-[1.8rem] border border-sky-100 bg-[linear-gradient(135deg,rgba(239,246,255,0.96)_0%,rgba(221,235,255,0.84)_55%,rgba(255,255,255,0.96)_100%)] p-6 shadow-[0_20px_46px_rgba(148,163,184,0.14)]"
+                className="relative overflow-hidden rounded-[1.6rem] border border-sky-100 bg-[linear-gradient(135deg,rgba(239,246,255,0.96)_0%,rgba(221,235,255,0.84)_55%,rgba(255,255,255,0.96)_100%)] p-5 shadow-[0_18px_40px_rgba(148,163,184,0.12)]"
               >
-                <div className="grid gap-6 lg:grid-cols-[minmax(0,1.1fr)_25rem] lg:items-center">
-                  <div className="max-w-2xl">
+                <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_19rem] lg:items-center">
+                  <div className="max-w-xl">
                     <div className="flex flex-wrap items-center gap-3">
                       <span
                         className={`flex items-center justify-center overflow-hidden text-sm font-semibold shadow-inner ${
                           selectedPortalUiMeta?.logoSrc
-                            ? (selectedPortalUiMeta.heroLogoFrameClassName ?? "h-14 w-[6.25rem] rounded-[1.15rem] px-3")
-                            : "h-14 w-14 rounded-[1.25rem]"
+                            ? (selectedPortalUiMeta.heroLogoFrameClassName ?? "h-12 w-[5.6rem] rounded-[1rem] px-2.5")
+                            : "h-12 w-12 rounded-[1rem]"
                         } ${selectedPortalUiMeta?.logoClassName ?? "bg-blue-50 text-blue-700"}`}
                       >
                         {selectedPortalUiMeta?.logoSrc ? (
@@ -3190,29 +3180,26 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
                             alt={`${selectedPortal.name} logo`}
                             width={selectedPortalUiMeta.heroLogoSize?.width ?? 84}
                             height={selectedPortalUiMeta.heroLogoSize?.height ?? 28}
-                            className={selectedPortalUiMeta.heroLogoImageClassName ?? "h-7 w-full object-contain"}
+                            className={selectedPortalUiMeta.heroLogoImageClassName ?? "h-6 w-full object-contain"}
                           />
                         ) : (
                           selectedPortalUiMeta?.shortCode ?? "PRT"
                         )}
                       </span>
-                      <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-600">
+                      <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-1 text-[0.72rem] font-semibold text-emerald-600">
                         <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
                         Ready
                       </span>
                     </div>
-                    <h1 className="mt-5 text-[2rem] font-semibold tracking-[-0.05em] text-slate-950">{selectedPortal.name}</h1>
-                    <p className="mt-3 max-w-2xl text-sm leading-7 text-slate-600">
-                      {portalWorkflowMeta?.heroDescription ?? selectedPortal.description}
-                    </p>
+                    <h1 className="mt-4 text-[1.8rem] font-semibold tracking-[-0.05em] text-slate-950">{selectedPortal.name}</h1>
                   </div>
 
-                  <div className="relative hidden h-[17rem] overflow-hidden rounded-[1.6rem] border border-sky-100/80 bg-white/55 shadow-[0_18px_40px_rgba(59,130,246,0.12)] lg:block">
+                  <div className="relative hidden h-[12rem] overflow-hidden rounded-[1.2rem] border border-sky-100/80 bg-white/55 shadow-[0_14px_28px_rgba(59,130,246,0.1)] lg:block">
                     <Image
                       src={dashboardWelcomeImage}
                       alt="Healthcare workflow illustration"
                       fill
-                      className="object-cover object-center opacity-100"
+                      className="object-cover object-center opacity-100 scale-[0.92]"
                     />
                     <div className="absolute inset-0 bg-[linear-gradient(90deg,rgba(244,248,255,0.02)_0%,rgba(244,248,255,0)_28%,rgba(244,248,255,0.12)_100%)]" />
                   </div>
@@ -3252,14 +3239,6 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
                 <div className="rounded-[1.7rem] border border-sky-100 bg-white/92 p-5 shadow-[0_16px_38px_rgba(148,163,184,0.12)]">
                   <div className="mb-5">
                     <p className="text-[0.7rem] font-semibold uppercase tracking-[0.22em] text-sky-600">Portal Workflow</p>
-                    <h2 className="mt-3 text-xl font-semibold tracking-[-0.04em] text-slate-950">
-                      {effectivePortalId === "blue-shield" && hasCompletedRun ? "Processing Completed" : "Upload and Validate Files"}
-                    </h2>
-                    <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">
-                      {effectivePortalId === "blue-shield" && hasCompletedRun
-                        ? "This Blue Shield run has finished. You can review the status and logs below, or reset the workflow to start another run."
-                        : "Use the guided upload workflow below to validate workbooks, secure the transfer, and launch automation."}
-                    </p>
                   </div>
 
                   {effectivePortalId === "blue-shield" && hasCompletedRun ? (
@@ -3312,11 +3291,9 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
                       group={blueShieldGroup}
                       inputFileName={blueShieldInputFile?.name ?? ""}
                       isProcessing={isProcessing}
-                      resetCheckpoint={blueShieldResetCheckpoint}
                       onCredentialFileChange={setBlueShieldCredentialFile}
                       onGroupChange={setBlueShieldGroup}
                       onInputFileChange={setBlueShieldInputFile}
-                      onResetCheckpointChange={setBlueShieldResetCheckpoint}
                       onSubmit={submitBlueShield}
                     />
                   )}

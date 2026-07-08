@@ -41,11 +41,9 @@ export function BlueShieldInputForm({
   group,
   inputFileName,
   isProcessing,
-  resetCheckpoint,
   onCredentialFileChange,
   onGroupChange,
   onInputFileChange,
-  onResetCheckpointChange,
   onSubmit,
 }: {
   canSubmit: boolean;
@@ -53,11 +51,9 @@ export function BlueShieldInputForm({
   group: string;
   inputFileName?: string;
   isProcessing: boolean;
-  resetCheckpoint: boolean;
   onCredentialFileChange: (file: File | null) => void;
   onGroupChange: (group: string) => void;
   onInputFileChange: (file: File | null) => void;
-  onResetCheckpointChange: (value: boolean) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
 }) {
   const dropdownRef = useRef<HTMLDivElement | null>(null);
@@ -178,15 +174,6 @@ export function BlueShieldInputForm({
         />
       </div>
 
-      <label className="flex items-center gap-3 rounded-[1.2rem] border border-sky-100 bg-white/80 px-4 py-3 text-sm text-slate-700 shadow-sm">
-        <input
-          type="checkbox"
-          checked={resetCheckpoint}
-          onChange={(event) => onResetCheckpointChange(event.target.checked)}
-          className="h-4 w-4 rounded border-slate-300 text-blue-600"
-        />
-        Reset saved checkpoint for this workbook
-      </label>
 
       <button
         type="submit"
