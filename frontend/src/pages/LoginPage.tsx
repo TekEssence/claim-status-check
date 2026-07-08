@@ -2,13 +2,13 @@
 
 import { motion } from "framer-motion";
 import { useEffect, useState, type FormEvent } from "react";
+import Image from "next/image";
 import { useRouter } from "next/navigation";
 import {
   Activity,
   ArrowRight,
   Eye,
   EyeOff,
-  HeartPulse,
   Lock,
   ShieldCheck,
   Stethoscope,
@@ -109,8 +109,15 @@ export function LoginPage() {
             custom={0.05}
             className="relative z-10 flex items-center gap-3"
           >
-            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[linear-gradient(135deg,#1473ff_0%,#2563eb_60%,#183db9_100%)] text-white shadow-[0_16px_34px_rgba(37,99,235,0.25)]">
-              <HeartPulse className="h-6 w-6" strokeWidth={2.1} />
+            <div className="relative flex h-12 w-12 items-center justify-center overflow-hidden rounded-2xl border border-sky-100 bg-white shadow-[0_16px_34px_rgba(37,99,235,0.18)]">
+              <Image
+                src="/opus-logo-2.jpg"
+                alt="OPUS logo"
+                fill
+                className="object-contain p-1.5"
+                sizes="48px"
+                priority
+              />
             </div>
             <div className="text-[1.75rem] font-extrabold tracking-[-0.04em] text-slate-900">
               Claim Status <span className="text-[#2563EB]">Portal</span>
@@ -136,9 +143,8 @@ export function LoginPage() {
               custom={0.18}
               className="mt-5 max-w-[28rem] text-[2.25rem] font-extrabold leading-[0.9] tracking-[-0.06em] text-slate-950 sm:text-[2.85rem] lg:text-[3.55rem] xl:text-[3.9rem] [@media(max-height:820px)]:text-[3.2rem]"
             >
-              Seamless
-              <span className="mt-2 block text-[#2563EB]">Claim Status</span>
-              <span className="mt-2 block">Automation</span>
+              <span className="text-[#2563EB]">Claim Status</span>
+              <span className="mt-2 block text-slate-950">Automation</span>
             </motion.h1>
 
             <motion.p
@@ -487,3 +493,6 @@ function MedicalCross({ className }: { className: string }) {
     </svg>
   );
 }
+
+
+

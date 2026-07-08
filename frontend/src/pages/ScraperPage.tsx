@@ -90,6 +90,7 @@ type DownloadableArtifact = {
 
 const SELECTED_PORTAL_STORAGE_KEY = "iehp-selected-portal";
 const SKIP_JOB_RESTORE_ONCE_KEY = "iehp-skip-job-restore-once";
+const AUTH_USER_STORAGE_KEY = "claim-status-auth-user";
 const DOWNLOADED_ARTIFACTS_PREFIX = "iehp-downloaded-artifacts:";
 const PORTAL_ROUTE_MAP: Record<PortalId, string> = {
   iehp: "/iehp",
@@ -106,6 +107,43 @@ function canRestoreCurrentJob(job: CurrentScrapeJob): job is CurrentScrapeJob & 
   if (!isPortalId(job.portalId)) return false;
   if (job.status === "running") return true;
   return job.portalId === "iehp" && job.status === "waiting_resume";
+}
+
+function isAuthUser(value: unknown): value is AuthUser {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate.userId === "string" &&
+    typeof candidate.username === "string" &&
+    typeof candidate.email === "string" &&
+    (candidate.role === "ADMIN" || candidate.role === "USER") &&
+    typeof candidate.mustResetPassword === "boolean"
+  );
+}
+
+function readCachedAuthUser(): AuthUser | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.sessionStorage.getItem(AUTH_USER_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed: unknown = JSON.parse(raw);
+    return isAuthUser(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function persistCachedAuthUser(user: AuthUser | null) {
+  if (typeof window === "undefined") return;
+  try {
+    if (user) {
+      window.sessionStorage.setItem(AUTH_USER_STORAGE_KEY, JSON.stringify(user));
+    } else {
+      window.sessionStorage.removeItem(AUTH_USER_STORAGE_KEY);
+    }
+  } catch {
+    // Ignore storage failures.
+  }
 }
 const PORTAL_UI_META: Record<
   PortalId,
@@ -524,8 +562,8 @@ async function writeWorkbookToClaimFile(claimFileHandle: FileSystemFileHandle, e
 export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: PortalId | null }) {
   const router = useRouter();
   const pathname = usePathname();
-  const [authLoading, setAuthLoading] = useState(true);
-  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
+  const [authUser, setAuthUser] = useState<AuthUser | null>(() => readCachedAuthUser());
+  const [authLoading, setAuthLoading] = useState(() => readCachedAuthUser() === null);
   const [authUsername, setAuthUsername] = useState("");
   const [authPassword, setAuthPassword] = useState("");
   const [authConfirmPassword, setAuthConfirmPassword] = useState("");
@@ -765,6 +803,11 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
     }
   }
 
+  function updateAuthUser(nextUser: AuthUser | null) {
+    setAuthUser(nextUser);
+    persistCachedAuthUser(nextUser);
+  }
+
   function markSkipJobRestoreOnce() {
     try {
       window.sessionStorage.setItem(SKIP_JOB_RESTORE_ONCE_KEY, "true");
@@ -780,14 +823,14 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
       .then(async (response) => {
         if (!mounted) return;
         if (!response.ok) {
-          setAuthUser(null);
+          updateAuthUser(null);
           return;
         }
         const data = await response.json();
-        setAuthUser(data.user ?? null);
+        updateAuthUser(data.user ?? null);
       })
       .catch(() => {
-        if (mounted) setAuthUser(null);
+        if (mounted) updateAuthUser(null);
       })
       .finally(() => {
         if (mounted) setAuthLoading(false);
@@ -1119,7 +1162,7 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
       }
 
       const nextUser = data.user ?? null;
-      setAuthUser(nextUser);
+      updateAuthUser(nextUser);
       setAuthUsername("");
       setAuthPassword("");
       setAuthConfirmPassword("");
@@ -1175,7 +1218,7 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
   async function logout() {
     await fetch("/api/auth/logout", { method: "POST" }).catch(() => {});
     await clearStoredRunContext().catch(() => {});
-    setAuthUser(null);
+    updateAuthUser(null);
     setAuthUsername("");
     setAuthPassword("");
     setAuthConfirmPassword("");
@@ -1280,7 +1323,7 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
       }
 
       const nextUser = data.user ?? authUser;
-      setAuthUser(nextUser);
+      updateAuthUser(nextUser);
       setSettingsPassword("");
       setSettingsConfirmPassword("");
       setSettingsPasswordStatus("Password updated successfully.");
@@ -2342,68 +2385,8 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
     downloadBase64File(filename, latestRegalOutput.base64, latestRegalOutput.mimeType);
   }
 
-  if (authLoading || jobRestoreLoading) {
-    return (
-      <main className="relative flex min-h-screen items-center justify-center overflow-hidden bg-[radial-gradient(circle_at_top_left,_rgba(255,255,255,0.98)_0%,_rgba(240,246,255,0.98)_40%,_rgba(223,236,255,0.95)_100%)] px-4 text-slate-900">
-        <div className="pointer-events-none absolute inset-0 opacity-60">
-          <div className="absolute left-[10%] top-[18%] h-20 w-20 rounded-full bg-blue-100/70 blur-2xl" />
-          <div className="absolute right-[12%] top-[12%] h-32 w-32 rounded-full bg-sky-100/80 blur-3xl" />
-          <div className="absolute bottom-[16%] left-[18%] h-24 w-24 rounded-full bg-cyan-100/70 blur-3xl" />
-          <div className="absolute right-[18%] bottom-[18%] h-px w-48 bg-sky-200" />
-          <div className="absolute right-[13%] bottom-[18%] h-10 w-10 rounded-full border border-sky-200/80" />
-        </div>
-
-        <motion.div
-          initial={{ opacity: 0, y: 14 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.4 }}
-          className="relative w-full max-w-md rounded-[2rem] border border-sky-100 bg-white/88 p-8 shadow-[0_26px_70px_rgba(148,163,184,0.18)] backdrop-blur-xl"
-        >
-          <div className="flex items-center gap-4">
-            <div className="relative flex h-16 w-16 items-center justify-center overflow-hidden rounded-[1.25rem] border border-sky-100 bg-white shadow-[0_16px_32px_rgba(37,99,235,0.16)]">
-              <Image
-                src="/opus-logo-2.jfif"
-                alt="OPUS logo"
-                fill
-                className="object-contain p-1.5"
-              />
-            </div>
-            <div>
-              <p className="text-xl font-semibold tracking-[-0.04em] text-slate-950">Claim Status Portal</p>
-              <p className="text-sm text-slate-500">Preparing your healthcare workspace</p>
-            </div>
-          </div>
-
-          <div className="mt-8 flex items-center gap-4">
-            <div className="relative h-12 w-12">
-              <div className="absolute inset-0 rounded-full border-4 border-sky-100" />
-              <div className="absolute inset-0 animate-spin rounded-full border-4 border-transparent border-t-[#2563EB] border-r-[#3B82F6]" />
-            </div>
-            <div className="min-w-0 flex-1">
-              <p className="text-sm font-semibold uppercase tracking-[0.22em] text-sky-600">Loading</p>
-              <p className="mt-1 text-base font-medium text-slate-800">Checking session, restoring portal state, and loading your dashboard.</p>
-            </div>
-          </div>
-
-          <div className="mt-6 overflow-hidden rounded-full bg-sky-100/80">
-            <motion.div
-              initial={{ x: "-100%" }}
-              animate={{ x: "100%" }}
-              transition={{ duration: 1.6, repeat: Number.POSITIVE_INFINITY, ease: "easeInOut" }}
-              className="h-2 w-1/2 rounded-full bg-[linear-gradient(90deg,#1f8bff_0%,#2563eb_55%,#38bdf8_100%)]"
-            />
-          </div>
-
-          <div className="mt-6 grid gap-3 sm:grid-cols-3">
-            {["Secure session", "Portal restore", "UI loading"].map((item) => (
-              <div key={item} className="rounded-[1rem] border border-sky-100 bg-sky-50/70 px-3 py-3 text-center text-xs font-medium text-slate-600">
-                {item}
-              </div>
-            ))}
-          </div>
-        </motion.div>
-      </main>
-    );
+  if (authLoading && !authUser) {
+    return null;
   }
 
   if (!authUser) {
@@ -2674,7 +2657,7 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
           >
             <span className="relative flex h-14 w-14 items-center justify-center overflow-hidden rounded-[1.15rem] border border-sky-200 bg-white shadow-[0_18px_36px_rgba(37,99,235,0.2)]">
               <Image
-                src="/opus-logo-2.jfif"
+                src="/opus-logo-2.jpg"
                 alt="OPUS logo"
                 fill
                 className="object-contain p-1"
@@ -3373,11 +3356,11 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
 
               {effectivePortalId === "iehp" ? (
                 <div className="mt-5">
-                  <IehpResultView errorScreenshots={errorScreenshots} logs={logs} progress={progress} status={status} />
+                  <IehpResultView errorScreenshots={errorScreenshots} logs={logs} status={status} />
                 </div>
               ) : effectivePortalId === "aerial" ? (
                 <div className="mt-5">
-                  <AerialResultView errorScreenshots={errorScreenshots} logs={logs} progress={progress} status={status} />
+                  <AerialResultView errorScreenshots={errorScreenshots} logs={logs} status={status} />
                 </div>
               ) : effectivePortalId === "regal" ? (
                 <div className="mt-5">
@@ -3394,7 +3377,6 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
                     onOtpSubmit={submitRegalOtp}
                     otpRequest={regalOtpRequest}
                     otpValue={regalOtpValue}
-                    progress={progress}
                     outputCompleted={latestRegalOutput?.completed}
                     outputTotal={latestRegalOutput?.total}
                     status={status}
@@ -3409,7 +3391,6 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
                     onOtpSubmit={submitBlueShieldOtp}
                     otpRequest={blueShieldOtpRequest}
                     otpValue={blueShieldOtpValue}
-                    progress={progress}
                     status={status}
                   />
                 </div>
@@ -3424,5 +3405,8 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
     </main>
   );
 }
+
+
+
 
 
