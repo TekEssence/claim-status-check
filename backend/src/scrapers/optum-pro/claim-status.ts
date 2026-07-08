@@ -69,6 +69,10 @@ type ClaimResultCandidate = {
 
 const CLAIM_SEARCH_PATIENT_SELECTOR = "input[placeholder*='Subscriber ID'], input[placeholder*='Patient Name'], input[placeholder*='Date of Birth']";
 const CLAIM_SEARCH_MEDICAL_GROUP_SELECTOR = "input[placeholder*='Medical group'], input[placeholder*='Medical Group']";
+const CLAIM_SEARCH_DATE_SELECTOR = "input[placeholder*='MM/DD/YYYY']:visible";
+const CLAIM_SEARCH_ACTION_SELECTOR = "button:has-text('Search'):visible, button:has-text('Clear all'):visible";
+const CLAIM_SEARCH_READY_TIMEOUT_MS = 45000;
+const FAST_CLAIM_SEARCH_READY_TIMEOUT_MS = 1500;
 
 function elapsedSeconds(startedAt: number): string {
   return ((Date.now() - startedAt) / 1000).toFixed(1);
@@ -121,17 +125,6 @@ function downloadableWorkbookEvent(filename: string, content: Buffer): Record<st
   };
 }
 
-async function clickFirstVisible(page: Page, selectors: string[], timeout = 2000): Promise<boolean> {
-  for (const selector of selectors) {
-    const locator = page.locator(selector).first();
-    if (await locator.isVisible({ timeout }).catch(() => false)) {
-      await locator.click();
-      return true;
-    }
-  }
-  return false;
-}
-
 async function fillInputLikeUser(page: Page, selector: string, value: string): Promise<void> {
   const locator = page.locator(selector).first();
   await locator.waitFor({ state: "visible", timeout: 30000 });
@@ -139,7 +132,16 @@ async function fillInputLikeUser(page: Page, selector: string, value: string): P
   await page.keyboard.press("Control+A");
   await page.keyboard.press("Backspace");
   await locator.pressSequentially(value, { delay: 60 });
-  await page.waitForTimeout(700);
+  await page.waitForTimeout(300);
+}
+
+async function waitForCondition(timeout: number, pollMs: number, condition: () => Promise<boolean>): Promise<boolean> {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeout) {
+    if (await condition().catch(() => false)) return true;
+    await new Promise((resolve) => setTimeout(resolve, pollMs));
+  }
+  return false;
 }
 
 async function visibleRows(page: Page): Promise<Array<{ index: number; text: string }>> {
@@ -197,6 +199,15 @@ async function patientDropdownRows(page: Page): Promise<PatientDropdownRow[]> {
   return values;
 }
 
+async function waitForPatientDropdownRows(page: Page, timeout = 5000): Promise<PatientDropdownRow[]> {
+  let rows: PatientDropdownRow[] = [];
+  await waitForCondition(timeout, 250, async () => {
+    rows = await patientDropdownRows(page);
+    return rows.length > 0;
+  });
+  return rows;
+}
+
 async function selectPatient(page: Page, row: OptumProInputRow, mode: PatientSelectionMode): Promise<PatientSelection> {
   const attempts = [row.memberId];
   const strippedMemberId = leadingThreeLettersStripped(row.memberId);
@@ -204,9 +215,8 @@ async function selectPatient(page: Page, row: OptumProInputRow, mode: PatientSel
 
   for (const memberId of attempts) {
     await fillInputLikeUser(page, CLAIM_SEARCH_PATIENT_SELECTOR, memberId);
-    await page.waitForTimeout(1400);
 
-    const parsedRows = await patientDropdownRows(page);
+    const parsedRows = await waitForPatientDropdownRows(page);
     const samePatientRows = parsedRows.filter((candidate) => patientNameMatches(candidate.patientName, row.patient));
     const exactSubscriberMatch = samePatientRows.find((candidate) => normalize(candidate.subscriberId) === normalize(memberId));
     const blankSubscriberMatch = samePatientRows.find((candidate) => !candidate.subscriberId);
@@ -226,7 +236,7 @@ async function selectPatient(page: Page, row: OptumProInputRow, mode: PatientSel
 
     if (match) {
       await page.locator("tbody tr:visible").nth(match.index).click();
-      await page.waitForTimeout(700);
+      await page.waitForTimeout(300);
       return {
         text: match.text,
         allowBlankSubscriberFallback: mode === "loose" && duplicateSamePatientRows && Boolean(exactSubscriberMatch && blankSubscriberMatch && match.index === exactSubscriberMatch.index),
@@ -246,12 +256,12 @@ async function selectMedicalGroup(page: Page, medicalGroupName: string): Promise
 
   for (let attempt = 1; attempt <= 2; attempt++) {
     await fillInputLikeUser(page, CLAIM_SEARCH_MEDICAL_GROUP_SELECTOR, searchText);
-    await page.waitForTimeout(1500);
+    await waitForStableMedicalGroupOptions(page);
 
     const bestOption = await bestMedicalGroupOption(page, targetWords);
     if (bestOption.index >= 0 && bestOption.score >= 40) {
       await medicalGroupOptions(page).nth(bestOption.index).click();
-      await page.waitForTimeout(700);
+      await page.waitForTimeout(300);
       return bestOption.text;
     }
   }
@@ -263,7 +273,7 @@ async function selectMedicalGroup(page: Page, medicalGroupName: string): Promise
     const bestOption = await bestMedicalGroupOption(page, targetWords);
     if (bestOption.index >= 0 && bestOption.score >= 40) {
       await medicalGroupOptions(page).nth(bestOption.index).click();
-      await page.waitForTimeout(700);
+      await page.waitForTimeout(300);
       return bestOption.text;
     }
   }
@@ -382,12 +392,17 @@ async function setServiceDate(page: Page, dos: string): Promise<void> {
     await page.keyboard.press("Backspace");
     await dateRangeInput.pressSequentially(`${normalizedDos} - ${normalizedDos}`, { delay: 45 });
   }
-  await page.waitForTimeout(500);
+  await page.waitForTimeout(250);
 }
 
 async function captureResultSummary(page: Page): Promise<string> {
-  await page.waitForTimeout(2000);
-  const summaryText = await page.locator("text=/Results? Found/i").first().innerText({ timeout: 5000 }).catch(() => "");
+  await waitForCondition(10000, 250, async () => {
+    if (await page.locator("text=/Results? Found|No Claims found/i").first().isVisible({ timeout: 100 }).catch(() => false)) {
+      return true;
+    }
+    return (await claimResultRows(page).then((rows) => rows.count()).catch(() => 0)) > 0;
+  });
+  const summaryText = await page.locator("text=/Results? Found/i").first().innerText({ timeout: 1000 }).catch(() => "");
   const rows = await visibleRows(page);
   if (!rows.length) return summaryText || "No result rows visible.";
   return [summaryText, rows.map((row) => row.text).join(" | ")].filter(Boolean).join(" - ");
@@ -517,7 +532,7 @@ async function closeClaimDetailsUnavailablePopup(page: Page): Promise<string> {
     "button:has-text('Close'), [role='button']:has-text('Close'), button[aria-label*='close' i], [role='button'][aria-label*='close' i]",
   ).last();
   await closeButton.click({ timeout: 1000 }).catch(() => page.keyboard.press("Escape"));
-  await page.waitForTimeout(500);
+  await page.waitForTimeout(200);
   return message || "Claim details unavailable popup was shown.";
 }
 
@@ -580,7 +595,7 @@ async function openClaimResultRowByIndex(page: Page, index: number): Promise<{ t
     }
     throw error;
   }
-  await page.waitForTimeout(1500);
+  await page.waitForTimeout(400);
   return { text, detailsUnavailable: false, unavailableMessage: "" };
 }
 
@@ -871,10 +886,38 @@ async function returnToClaimSearch(page: Page): Promise<void> {
   await page.locator(CLAIM_SEARCH_PATIENT_SELECTOR).first().waitFor({ state: "visible", timeout: 45000 });
 }
 
-async function isClaimSearchReady(page: Page): Promise<boolean> {
-  const claimSearchVisible = await page.locator("text=Claim Search").first().isVisible({ timeout: 1000 }).catch(() => false);
-  if (!claimSearchVisible) return false;
-  return page.locator(CLAIM_SEARCH_PATIENT_SELECTOR).first().isVisible({ timeout: 1000 }).catch(() => false);
+async function fastClaimSearchReady(page: Page, timeout = FAST_CLAIM_SEARCH_READY_TIMEOUT_MS): Promise<boolean> {
+  return waitForCondition(timeout, 150, async () => {
+    if (!page.url().includes("/claims-panel")) return false;
+    const claimSearchVisible = await page.locator("text=Claim Search").first().isVisible({ timeout: 100 }).catch(() => false);
+    if (!claimSearchVisible) return false;
+    const patientVisible = await page.locator(CLAIM_SEARCH_PATIENT_SELECTOR).first().isVisible({ timeout: 100 }).catch(() => false);
+    const medicalGroupVisible = await page.locator(CLAIM_SEARCH_MEDICAL_GROUP_SELECTOR).first().isVisible({ timeout: 100 }).catch(() => false);
+    const dateVisible = await page.locator(CLAIM_SEARCH_DATE_SELECTOR).first().isVisible({ timeout: 100 }).catch(() => false);
+    const actionVisible = await page.locator(CLAIM_SEARCH_ACTION_SELECTOR).first().isVisible({ timeout: 100 }).catch(() => false);
+    return patientVisible && medicalGroupVisible && dateVisible && actionVisible;
+  });
+}
+
+async function waitForClaimSearchFormControls(page: Page, timeout = CLAIM_SEARCH_READY_TIMEOUT_MS): Promise<void> {
+  await page.locator("text=Claim Search").first().waitFor({ state: "visible", timeout });
+  await page.locator(CLAIM_SEARCH_PATIENT_SELECTOR).first().waitFor({ state: "visible", timeout });
+  await page.locator(CLAIM_SEARCH_MEDICAL_GROUP_SELECTOR).first().waitFor({ state: "visible", timeout });
+  await page.locator(CLAIM_SEARCH_DATE_SELECTOR).first().waitFor({ state: "visible", timeout });
+  await page.locator(CLAIM_SEARCH_ACTION_SELECTOR).first().waitFor({ state: "visible", timeout });
+}
+
+async function dismissClaimSearchOverlays(page: Page): Promise<void> {
+  await closeClaimDetailsUnavailablePopup(page).catch(() => "");
+  await page.keyboard.press("Escape").catch(() => {});
+}
+
+async function clearClaimSearchFormIfVisible(page: Page): Promise<boolean> {
+  const clearButton = page.locator("button:has-text('Clear all')").first();
+  if (!(await clearButton.isVisible({ timeout: 500 }).catch(() => false))) return false;
+  await clearButton.click();
+  await fastClaimSearchReady(page);
+  return true;
 }
 
 async function resetClaimSearchPage(
@@ -885,10 +928,9 @@ async function resetClaimSearchPage(
   timingLabelPrefix = "",
 ): Promise<void> {
   const ensureStartedAt = Date.now();
-  await closeClaimDetailsUnavailablePopup(page).catch(() => "");
-  await page.keyboard.press("Escape").catch(() => {});
+  await dismissClaimSearchOverlays(page);
 
-  if (!(await isClaimSearchReady(page))) {
+  if (!(await fastClaimSearchReady(page))) {
     await stageLog("info", "claim-search", `Resetting Optum Pro Claim Search page ${reason}.`);
     await returnToClaimSearch(page).catch(async (returnError) => {
       await stageLog("warn", "claim-search", `Could not return to Claim Search with back/navigation controls: ${returnError instanceof Error ? returnError.message : String(returnError)}`);
@@ -896,16 +938,33 @@ async function resetClaimSearchPage(
     });
   }
 
-  if (!(await isClaimSearchReady(page))) {
+  if (!(await fastClaimSearchReady(page))) {
     await openClaimsSearch(page, stageLog);
   }
   await timingLog?.(`${timingLabelPrefix}ensureClaimSearchReady`, ensureStartedAt);
 
   const formReadyStartedAt = Date.now();
-  await clickFirstVisible(page, ["button:has-text('Clear all')"], 1500).catch(() => {});
-  await page.locator(CLAIM_SEARCH_PATIENT_SELECTOR).first().waitFor({ state: "visible", timeout: 45000 });
-  await page.locator(CLAIM_SEARCH_MEDICAL_GROUP_SELECTOR).first().waitFor({ state: "visible", timeout: 45000 });
+  await clearClaimSearchFormIfVisible(page).catch(() => {});
+  await waitForClaimSearchFormControls(page);
   await timingLog?.(`${timingLabelPrefix}claimSearchFormReady`, formReadyStartedAt);
+}
+
+async function cleanupClaimSearchAfterRow(
+  page: Page,
+  stageLog: StageLog,
+  reason: string,
+  timingLog?: RowTimingLog,
+): Promise<boolean> {
+  await dismissClaimSearchOverlays(page);
+  await clearClaimSearchFormIfVisible(page).catch(() => {});
+  if (await fastClaimSearchReady(page)) {
+    await stageLog("info", "claim-search", `Fast cleanup passed ${reason}.`);
+    return true;
+  }
+
+  await stageLog("info", "claim-search", `Heavy Claim Search reset used ${reason}.`);
+  await resetClaimSearchPage(page, stageLog, reason, timingLog, "cleanup.");
+  return fastClaimSearchReady(page);
 }
 
 async function searchWithSelectedPatient(
@@ -983,7 +1042,6 @@ async function searchWithSelectedPatient(
 async function searchClaimRow(page: Page, row: OptumProInputRow, stageLog: StageLog): Promise<OptumProSearchResult> {
   await stageLog("info", "claim-search", `Processing Optum Pro input row ${row.rowNumber}: member ${row.memberId}, DOS ${row.dos}, medical group ${row.medicalGroupName}.`);
 
-  await clickFirstVisible(page, ["button:has-text('Clear all')"], 1000).catch(() => {});
   const timingLog: RowTimingLog = async (label, startedAt) => {
     await stageLog("info", "row-timing", `[row-timing] row ${row.rowNumber} ${label} took ${elapsedSeconds(startedAt)}s`);
   };
@@ -1004,7 +1062,7 @@ async function searchClaimRow(page: Page, row: OptumProInputRow, stageLog: Stage
     return exactResult;
   }
 
-  await clickFirstVisible(page, ["button:has-text('Clear all')"], 1000).catch(() => {});
+  await clearClaimSearchFormIfVisible(page).catch(() => {});
   const fillPatientFallbackStartedAt = Date.now();
   const blankSubscriberPatient = await selectPatient(page, row, "blank-subscriber").catch(() => null);
   await timingLog("fillPatientFallback", fillPatientFallbackStartedAt);
@@ -1063,7 +1121,9 @@ export async function runOptumProClaimSearch(
     };
 
     try {
-      await resetClaimSearchPage(page, stageLog, `before row ${row.rowNumber}`, timingLog);
+      if (!(await fastClaimSearchReady(page))) {
+        await resetClaimSearchPage(page, stageLog, `before row ${row.rowNumber}`, timingLog);
+      }
       results.push(await searchClaimRow(page, row, stageLog));
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -1107,11 +1167,11 @@ export async function runOptumProClaimSearch(
         notes: message,
       });
     } finally {
-      const resetAfterRowStartedAt = Date.now();
-      await resetClaimSearchPage(page, stageLog, `after row ${row.rowNumber}`, timingLog, "resetAfterRow.").catch((error) => {
+      const cleanupStartedAt = Date.now();
+      await cleanupClaimSearchAfterRow(page, stageLog, `after row ${row.rowNumber}`, timingLog).catch((error) => {
         void stageLog("warn", "claim-search", `Could not reset Claim Search after row ${row.rowNumber}: ${error instanceof Error ? error.message : String(error)}`);
       });
-      await timingLog("resetAfterRow", resetAfterRowStartedAt);
+      await timingLog("cleanup", cleanupStartedAt);
       await timingLog("total", rowStartedAt);
       previousRowEndedAt = Date.now();
     }
