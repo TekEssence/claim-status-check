@@ -109,13 +109,13 @@ export function LoginPage() {
             custom={0.05}
             className="relative z-10 flex items-center gap-3"
           >
-            <div className="relative flex h-12 w-12 items-center justify-center overflow-hidden rounded-2xl border border-sky-100 bg-white shadow-[0_16px_34px_rgba(37,99,235,0.18)]">
+            <div className="relative flex h-14 w-14 items-center justify-center overflow-hidden rounded-2xl border border-sky-100 bg-white shadow-[0_16px_34px_rgba(37,99,235,0.18)]">
               <Image
                 src="/opus-logo-2.jpg"
                 alt="OPUS logo"
                 fill
-                className="object-contain p-1.5"
-                sizes="48px"
+                className="object-contain p-1"
+                sizes="56px"
                 priority
               />
             </div>

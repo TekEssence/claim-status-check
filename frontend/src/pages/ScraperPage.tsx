@@ -3336,24 +3336,6 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
                 </div>
               </div>
 
-              <div className="mt-5 rounded-[1.7rem] border border-sky-100 bg-white/92 p-5 shadow-[0_16px_38px_rgba(148,163,184,0.12)]">
-                <p className="text-[0.7rem] font-semibold uppercase tracking-[0.22em] text-sky-600">Workflow Status</p>
-                <div className="mt-4 grid gap-3 md:grid-cols-3">
-                  <div className="rounded-[1rem] border border-sky-100 bg-sky-50/70 px-4 py-3">
-                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-sky-700">Login File</p>
-                    <p className="mt-1 text-sm font-medium text-slate-800">{portalFileState.loginFileLabel || "Waiting for upload"}</p>
-                  </div>
-                  <div className="rounded-[1rem] border border-sky-100 bg-sky-50/70 px-4 py-3">
-                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-sky-700">Claim File</p>
-                    <p className="mt-1 text-sm font-medium text-slate-800">{portalFileState.claimFileLabel || "Waiting for upload"}</p>
-                  </div>
-                  <div className="rounded-[1rem] border border-sky-100 bg-sky-50/70 px-4 py-3">
-                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-sky-700">Processing State</p>
-                    <p className="mt-1 text-sm font-medium text-slate-800">{status || (isProcessing ? "Processing is currently running." : "Waiting for file validation.")}</p>
-                  </div>
-                </div>
-              </div>
-
               {effectivePortalId === "iehp" ? (
                 <div className="mt-5">
                   <IehpResultView errorScreenshots={errorScreenshots} logs={logs} status={status} />
