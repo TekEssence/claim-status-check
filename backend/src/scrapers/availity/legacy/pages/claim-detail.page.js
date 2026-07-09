@@ -147,7 +147,7 @@ async function findTableWithHeaders(scope, requiredHeaders) {
 async function waitForLineLevelRows(page, options = {}) {
   const frame = await getClaimStatusFrame(page);
   const hipaa = options.hipaa === true;
-  const deadline = Date.now() + (options.timeoutMs || 15000);
+  const deadline = Date.now() + (options.timeoutMs || 5000);
   const findMemberLineTable = async () => {
     return await findTableWithHeaders(frame, ["Procedure Code", "Service Dates"])
       || await findTableWithHeaders(frame, ["Proc", "Service Dates", "Billed", "Paid"]);
@@ -187,7 +187,7 @@ async function waitForClaimDetailPage(page) {
 
 async function getLabelValue(page, labelText) {
   const frame = await getClaimStatusFrame(page);
-  const directPanelValue = await readExactInfoPanelValue(frame, labelText, 10000);
+  const directPanelValue = await readExactInfoPanelValue(frame, labelText, 2000);
 
   if (directPanelValue) {
     logger.info(`Extracted direct info panel "${labelText}" value="${directPanelValue}"`);
@@ -299,7 +299,7 @@ async function getLabelValue(page, labelText) {
 
 async function getInfoPanelValue(page, labelText) {
   const frame = await getClaimStatusFrame(page);
-  const directPanelValue = await readExactInfoPanelValue(frame, labelText, 10000);
+  const directPanelValue = await readExactInfoPanelValue(frame, labelText, 2000);
 
   if (directPanelValue) {
     logger.info(`Extracted direct HIPAA info panel "${labelText}" value="${directPanelValue}"`);
@@ -454,6 +454,119 @@ async function readExpandedLabelValue(row, page, labelText) {
     .innerText({ timeout: 1500 })
     .then((text) => text.trim())
     .catch(() => "");
+}
+
+async function readFirstExpandedLabelValue(row, page, labelTexts) {
+  for (const labelText of labelTexts) {
+    const value = await readExpandedLabelValue(row, page, labelText);
+    if (value.trim()) {
+      return value.trim();
+    }
+  }
+
+  return "";
+}
+
+async function readExpandedMuiGridLabelValue(row, page, labelTexts) {
+  const fromRowExpansion = await row.evaluate((rowElement, labels) => {
+    function clean(text) {
+      return String(text || "").replace(/\s+/g, " ").trim();
+    }
+
+    function matchesLabel(value) {
+      return labels.some((label) => clean(value).toLowerCase() === clean(label).toLowerCase());
+    }
+
+    function readFromRoot(root) {
+      const gridItems = Array.from(root.querySelectorAll("div[class*='MuiGrid-root']"));
+      for (const gridItem of gridItems) {
+        const children = Array.from(gridItem.children);
+        const label = children.find((child) => matchesLabel(child.textContent));
+        if (!label) {
+          continue;
+        }
+
+        const value = children
+          .filter((child) => child !== label)
+          .map((child) => clean(child.textContent))
+          .find((text) => text && !matchesLabel(text));
+
+        if (value) {
+          return value;
+        }
+      }
+
+      const labelNode = Array.from(root.querySelectorAll("p, div, span")).find((node) => matchesLabel(node.textContent));
+      if (labelNode) {
+        let sibling = labelNode.nextElementSibling;
+        while (sibling) {
+          const value = clean(sibling.textContent);
+          if (value && !matchesLabel(value)) {
+            return value;
+          }
+          sibling = sibling.nextElementSibling;
+        }
+      }
+
+      return "";
+    }
+
+    const currentRowValue = readFromRoot(rowElement);
+    if (currentRowValue) {
+      return currentRowValue;
+    }
+
+    let siblingRow = rowElement.nextElementSibling;
+    while (siblingRow) {
+      if (siblingRow.querySelector("p[id^='procedureCode-']")) {
+        break;
+      }
+
+      const value = readFromRoot(siblingRow);
+      if (value) {
+        return value;
+      }
+
+      siblingRow = siblingRow.nextElementSibling;
+    }
+
+    return "";
+  }, labelTexts).catch(() => "");
+
+  if (fromRowExpansion.trim()) {
+    return fromRowExpansion.trim();
+  }
+
+  const frame = await getClaimStatusFrame(page);
+  return frame.evaluate((labels) => {
+    function clean(text) {
+      return String(text || "").replace(/\s+/g, " ").trim();
+    }
+
+    function matchesLabel(value) {
+      return labels.some((label) => clean(value).toLowerCase() === clean(label).toLowerCase());
+    }
+
+    const gridItems = Array.from(document.querySelectorAll("div[class*='MuiGrid-root']"));
+    for (let index = gridItems.length - 1; index >= 0; index -= 1) {
+      const children = Array.from(gridItems[index].children);
+      const label = children.find((child) => matchesLabel(child.textContent));
+      if (!label) {
+        continue;
+      }
+
+      const value = children
+        .filter((child) => child !== label)
+        .map((child) => clean(child.textContent))
+        .find((text) => text && !matchesLabel(text));
+
+      if (value) {
+        return value;
+      }
+    }
+
+    return "";
+  }, labelTexts).catch(() => "");
 }
 
 async function extractLineRows(page) {
@@ -697,7 +810,8 @@ async function extractDenied(page, status) {
   };
 }
 
-async function extractHipaaLineRows(page) {
+async function extractHipaaLineRows(page, options = {}) {
+  const preferExpandedReasonRemarkCode = options.preferExpandedReasonRemarkCode === true;
   const frame = await getClaimStatusFrame(page);
   const lineTable = await waitForLineLevelRows(page, { hipaa: true, timeoutMs: 15000 }) || frame.locator(SELECTORS.hipaaLineLevelTable).first();
   const tableScope = await lineTable.isVisible({ timeout: 3000 }).catch(() => false) ? lineTable : frame;
@@ -766,6 +880,11 @@ async function extractHipaaLineRows(page) {
       await humanDelay(300, 700);
     }
 
+    const expandedReasonRemarkCode = preferExpandedReasonRemarkCode
+      ? normalizeRemarkCode(
+        await readExpandedMuiGridLabelValue(row, page, ["Reason/Remark Code", "Reason/Remark Codes"])
+      )
+      : "";
     const tableReasonRemarkCode = normalizeRemarkCode(
       cellByAnyExactHeader(cells, headers, ["hipaa codes", "reason/remark codes", "reason/remark"], 6)
     );
@@ -776,7 +895,7 @@ async function extractHipaaLineRows(page) {
       dxCodes: cellByAnyExactHeader(cells, headers, ["dx codes"]),
       modifier: cellByAnyExactHeader(cells, headers, ["modifier"], 7),
       quantity: cellByAnyExactHeader(cells, headers, ["quantity", "qty"], 8),
-      reasonRemarkCode: tableReasonRemarkCode.trim(),
+      reasonRemarkCode: (expandedReasonRemarkCode || tableReasonRemarkCode).trim(),
       billed: cellByAnyExactHeader(cells, headers, ["billed", "billed amount"], 4),
       allowed: cellByAnyExactHeader(cells, headers, ["allowed", "allowed amount"]),
       coinsurance: cellByAnyExactHeader(cells, headers, ["coinsurance", "coinsurance amount"]),
@@ -794,9 +913,9 @@ async function extractHipaaLineRows(page) {
   return lines;
 }
 
-async function extractHipaaPaid(page, status) {
+async function extractHipaaPaid(page, status, options = {}) {
   logger.info("Extracting HIPAA PAID claim detail");
-  const lines = await extractHipaaLineRows(page);
+  const lines = await extractHipaaLineRows(page, options);
   for (const line of lines) {
     line.remarkCode = line.remarkCode || line.reasonRemarkCode || "";
     line.description = line.description || (line.remarkCode ? await getHipaaRemarkDescription(page, line.remarkCode) : "");
@@ -813,9 +932,9 @@ async function extractHipaaPaid(page, status) {
   };
 }
 
-async function extractHipaaDenied(page, status) {
+async function extractHipaaDenied(page, status, options = {}) {
   logger.info("Extracting HIPAA DENIED claim detail");
-  const baseLines = await extractHipaaLineRows(page);
+  const baseLines = await extractHipaaLineRows(page, options);
   if (baseLines.length === 0) {
     logger.warn("HIPAA DENIED extraction found 0 CPT line rows on detail page.");
   }

@@ -99,7 +99,7 @@ function collectMissingExtractionFields(extracted, sourceTab = "") {
   return missing;
 }
 
-async function extractMatchedRow(page, matchedRow, sourceTab = "Member") {
+async function extractMatchedRow(page, matchedRow, sourceTab = "Member", options = {}) {
   logger.info(
     `Preparing to extract matched row: claim="${matchedRow.claimNumber}", status="${matchedRow.status.display}", service_date="${matchedRow.serviceDate}", billed="${matchedRow.billedAmount}"`
   );
@@ -129,9 +129,14 @@ async function extractMatchedRow(page, matchedRow, sourceTab = "Member") {
   }
   if (matchedRow.status.type === "paid" || matchedRow.status.type === "denied") {
     logger.info(`Extracting finalized CPT-level detail for claim ${matchedRow.claimNumber}. Claim-level status="${matchedRow.status.display}"`);
-    const extracted = sourceTab === "HIPAA Standard"
-      ? await extractHipaaPaid(page, matchedRow.status.display)
-      : await extractPaid(page, matchedRow.status.display);
+    let extracted;
+    if (sourceTab === "HIPAA Standard" && matchedRow.status.type === "denied" && options.useHipaaDeniedExtractorForDeniedStatus) {
+      extracted = await extractHipaaDenied(page, matchedRow.status.display, options.hipaaExtractionOptions || {});
+    } else {
+      extracted = sourceTab === "HIPAA Standard"
+        ? await extractHipaaPaid(page, matchedRow.status.display, options.hipaaExtractionOptions || {})
+        : await extractPaid(page, matchedRow.status.display);
+    }
     extracted.claimNumber = extracted.claimNumber || matchedRow.claimNumber;
     return extracted;
   }
@@ -154,7 +159,7 @@ function attachSummaryContext(extracted, matchedRow, payerName) {
   };
 }
 
-async function processParsedSearchResults(page, row, provider, resultSummary, sourceTab, resultRows, noMatchStatus = "failed") {
+async function processParsedSearchResults(page, row, provider, resultSummary, sourceTab, resultRows, noMatchStatus = "failed", options = {}) {
   logger.info(
     `Matching ${sourceTab} returned rows against input: service_date="${row.data["Service Date"]}", charges="${row.data.Charges}"`
   );
@@ -214,7 +219,7 @@ async function processParsedSearchResults(page, row, provider, resultSummary, so
   }
 
   for (const matchedRow of [latestSelection.selectedRow]) {
-    const extracted = attachSummaryContext(await extractMatchedRow(page, matchedRow, sourceTab), matchedRow, row.data["Payer Name"] || "");
+    const extracted = attachSummaryContext(await extractMatchedRow(page, matchedRow, sourceTab, options), matchedRow, row.data["Payer Name"] || "");
     summaries.push(renderClaimSummary(extracted));
     const missingFields = collectMissingExtractionFields(extracted, sourceTab);
     if (missingFields.length > 0) {
@@ -243,9 +248,9 @@ async function processParsedSearchResults(page, row, provider, resultSummary, so
   };
 }
 
-async function processSearchResults(page, row, provider, resultSummary, sourceTab, noMatchStatus = "failed") {
+async function processSearchResults(page, row, provider, resultSummary, sourceTab, noMatchStatus = "failed", options = {}) {
   const resultRows = await getResultRows(page);
-  return processParsedSearchResults(page, row, provider, resultSummary, sourceTab, resultRows, noMatchStatus);
+  return processParsedSearchResults(page, row, provider, resultSummary, sourceTab, resultRows, noMatchStatus, options);
 }
 
 async function runMemberProviderSearch(page, row, providerOrder = PROVIDERS, searchFunction = searchMemberWithProvider) {
@@ -293,7 +298,7 @@ async function runMemberProviderSearch(page, row, providerOrder = PROVIDERS, sea
   };
 }
 
-async function runHipaaProviderSearch(page, row, providerOrder = PROVIDERS) {
+async function runHipaaProviderSearch(page, row, providerOrder = PROVIDERS, options = {}) {
   let lastProviderFailure = "";
 
   for (const provider of providerOrder) {
@@ -323,7 +328,7 @@ async function runHipaaProviderSearch(page, row, providerOrder = PROVIDERS) {
       continue;
     }
 
-    return processParsedSearchResults(page, row, provider, resultSummary, "HIPAA Standard", resultRows);
+    return processParsedSearchResults(page, row, provider, resultSummary, "HIPAA Standard", resultRows, "failed", options);
   }
 
   return {
