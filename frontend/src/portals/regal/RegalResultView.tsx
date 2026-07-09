@@ -1,8 +1,7 @@
-import { JobProgress } from "../../components/JobProgress";
 import { LogsPanel } from "../../components/LogsPanel";
 import { ScreenshotViewer } from "../../components/ScreenshotViewer";
 import { StatusMessage } from "../../components/StatusMessage";
-import type { ErrorScreenshot, JobProgressValue } from "../../types/job";
+import type { ErrorScreenshot } from "../../types/job";
 
 type MfaOption = {
   value: string;
@@ -27,7 +26,6 @@ export function RegalResultView({
   otpValue,
   outputCompleted,
   outputTotal,
-  progress,
   status,
 }: {
   canDownloadOutput?: boolean;
@@ -44,12 +42,10 @@ export function RegalResultView({
   otpValue?: string;
   outputCompleted?: number;
   outputTotal?: number;
-  progress: JobProgressValue | null;
   status: string;
 }) {
   return (
     <>
-      <JobProgress progress={progress} />
       {mfaRequest ? (
         <div className="mt-4 rounded-md border border-blue-200 bg-blue-50 p-4">
           <div className="text-sm font-medium text-blue-950">{mfaRequest.label}</div>
@@ -145,3 +141,5 @@ export function RegalResultView({
     </>
   );
 }
+
+

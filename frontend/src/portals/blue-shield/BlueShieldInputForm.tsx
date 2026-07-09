@@ -41,11 +41,9 @@ export function BlueShieldInputForm({
   group,
   inputFileName,
   isProcessing,
-  resetCheckpoint,
   onCredentialFileChange,
   onGroupChange,
   onInputFileChange,
-  onResetCheckpointChange,
   onSubmit,
 }: {
   canSubmit: boolean;
@@ -53,11 +51,9 @@ export function BlueShieldInputForm({
   group: string;
   inputFileName?: string;
   isProcessing: boolean;
-  resetCheckpoint: boolean;
   onCredentialFileChange: (file: File | null) => void;
   onGroupChange: (group: string) => void;
   onInputFileChange: (file: File | null) => void;
-  onResetCheckpointChange: (value: boolean) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
 }) {
   const dropdownRef = useRef<HTMLDivElement | null>(null);
@@ -82,8 +78,9 @@ export function BlueShieldInputForm({
   return (
     <form className="space-y-5" onSubmit={onSubmit}>
       <div className="rounded-[1.5rem] border border-sky-100 bg-[linear-gradient(180deg,rgba(255,255,255,0.98)_0%,rgba(244,249,255,0.96)_100%)] p-5 shadow-[0_16px_34px_rgba(148,163,184,0.12)]">
-        <label className="text-base font-semibold tracking-[-0.03em] text-slate-950" htmlFor="blueShieldGroup">
-          Select Processing Group
+        <label className="flex items-center gap-1 text-base font-semibold tracking-[-0.03em] text-slate-950" htmlFor="blueShieldGroup">
+          <span>Select Processing Group</span>
+          <span className="text-rose-600">*</span>
         </label>
         <p className="mt-2 text-sm text-slate-600">Choose the Blue Shield payer group before uploading the workbook package.</p>
         <div ref={dropdownRef} className="relative">
@@ -92,6 +89,7 @@ export function BlueShieldInputForm({
             id="blueShieldGroup"
             aria-expanded={isGroupDropdownOpen}
             aria-haspopup="listbox"
+            aria-required="true"
             onClick={() => setIsGroupDropdownOpen((isOpen) => !isOpen)}
             className="flex w-full items-center justify-between rounded-md border border-slate-300 bg-white p-2 text-left text-sm text-slate-900"
           >
@@ -147,9 +145,6 @@ export function BlueShieldInputForm({
             </div>
           ) : null}
         </div>
-        {!group ? (
-          <p className="mt-2 text-xs text-slate-500">Choose the group before starting.</p>
-        ) : null}
       </div>
 
       <div className="grid gap-5 xl:grid-cols-2">
@@ -179,15 +174,6 @@ export function BlueShieldInputForm({
         />
       </div>
 
-      <label className="flex items-center gap-3 rounded-[1.2rem] border border-sky-100 bg-white/80 px-4 py-3 text-sm text-slate-700 shadow-sm">
-        <input
-          type="checkbox"
-          checked={resetCheckpoint}
-          onChange={(event) => onResetCheckpointChange(event.target.checked)}
-          className="h-4 w-4 rounded border-slate-300 text-blue-600"
-        />
-        Reset saved checkpoint for this workbook
-      </label>
 
       <button
         type="submit"
