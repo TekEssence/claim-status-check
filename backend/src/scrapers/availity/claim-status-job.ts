@@ -26,6 +26,10 @@ function createRunId(): string {
   return `availity_${new Date().toISOString().replace(/[-:.TZ]/g, "").slice(0, 14)}`;
 }
 
+function createAvailityOutputFilename(): string {
+  return `availity_claimstatus_${new Date().toISOString().replace(/[-:.TZ]/g, "").slice(0, 14)}.xlsx`;
+}
+
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -200,7 +204,7 @@ export async function runAvailityClaimStatusJob(formData: FormData, context: Scr
       message: entry.line,
     });
   });
-  await log(`Availity input loaded: ${input.inputRows.length} row(s). Available payers: Aetna, Blue Cross Blue Shield.`);
+  await log(`Availity input loaded: ${input.inputRows.length} row(s). Available payers: Aetna, Blue Cross Blue Shield, Wellpoint.`);
   await context.emit({ type: "progress", completed: 0, total: input.inputRows.length });
 
   try {
@@ -319,7 +323,7 @@ export async function runAvailityClaimStatusJob(formData: FormData, context: Scr
       errorRows,
       auditRows,
     });
-    await context.emit(downloadableFileEvent("availity_output.xlsx", workbookBuffer, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"));
+    await context.emit(downloadableFileEvent(createAvailityOutputFilename(), workbookBuffer, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"));
 
     if (errorRows.length) {
       await context.emit({

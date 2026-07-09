@@ -22,6 +22,7 @@ const HIPAA_SELECTORS = {
   serviceToDate: "input#serviceDates-end",
   submitButton: "button[type='submit'][data-analytics-form-name='HIPAA Standard']",
   resultsHeading: "span:has-text('Results (Displaying'), h5:has-text('Search Results'), h5:has-text('Results (Displaying')",
+  tableRows: "tbody tr",
   noResultsMessage: "li:has-text('The payer could not find any results based on your search')",
   portalAlert: "[role='alert'], .MuiAlert-root"
 };
@@ -433,10 +434,10 @@ async function resultIndicatorAppeared(page, timeoutMs) {
   while (Date.now() < deadline) {
     const frame = await getClaimStatusFrame(page);
     const headingVisible = await frame.locator(HIPAA_SELECTORS.resultsHeading).first().isVisible({ timeout: 500 }).catch(() => false);
+    const resultRowsVisible = await frame.locator(HIPAA_SELECTORS.tableRows).first().isVisible({ timeout: 500 }).catch(() => false);
     const noResultsVisible = await frame.locator(HIPAA_SELECTORS.noResultsMessage).first().isVisible({ timeout: 500 }).catch(() => false);
-    const portalAlertVisible = await frame.locator(HIPAA_SELECTORS.portalAlert).first().isVisible({ timeout: 500 }).catch(() => false);
 
-    if (headingVisible || noResultsVisible || portalAlertVisible) {
+    if (headingVisible || resultRowsVisible || noResultsVisible) {
       return true;
     }
 
