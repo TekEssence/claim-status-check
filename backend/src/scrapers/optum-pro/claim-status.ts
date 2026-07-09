@@ -73,6 +73,7 @@ const CLAIM_SEARCH_DATE_SELECTOR = "input[placeholder*='MM/DD/YYYY']:visible";
 const CLAIM_SEARCH_ACTION_SELECTOR = "button:has-text('Search'):visible, button:has-text('Clear all'):visible";
 const CLAIM_SEARCH_READY_TIMEOUT_MS = 45000;
 const FAST_CLAIM_SEARCH_READY_TIMEOUT_MS = 1500;
+const INITIAL_FEEDBACK_DISMISS_CHECKED = new WeakSet<Page>();
 const CLAIM_DETAILS_PAGE_SIGNALS = [
   "text=/Claim details/i",
   "text=/Claim information/i",
@@ -136,14 +137,83 @@ function downloadableWorkbookEvent(filename: string, content: Buffer): Record<st
   };
 }
 
-async function fillInputLikeUser(page: Page, selector: string, value: string): Promise<void> {
-  const locator = page.locator(selector).first();
-  await locator.waitFor({ state: "visible", timeout: 30000 });
-  await locator.click();
-  await page.keyboard.press("Control+A");
-  await page.keyboard.press("Backspace");
-  await locator.pressSequentially(value, { delay: 60 });
-  await page.waitForTimeout(300);
+function isTimeoutError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /timeout|timed out/i.test(message);
+}
+
+async function dismissOptumBlockingPopups(page: Page, stageLog?: StageLog): Promise<boolean> {
+  const popup = page.locator("text=/Your opinion matters!/i").first();
+  if (!(await popup.isVisible({ timeout: 500 }).catch(() => false))) return false;
+
+  const closeClicked = await page.evaluate(() => {
+    const clean = (value: string | null | undefined) => (value || "").replace(/\s+/g, " ").trim();
+    const visible = (element: Element) => {
+      const style = window.getComputedStyle(element);
+      const rect = element.getBoundingClientRect();
+      return style.visibility !== "hidden" && style.display !== "none" && rect.width > 0 && rect.height > 0;
+    };
+    const title = Array.from(document.querySelectorAll("body *"))
+      .find((element) => visible(element) && clean((element as HTMLElement).innerText) === "Your opinion matters!");
+    const root = title?.closest("[role='dialog'], mat-dialog-container, .cdk-overlay-pane")
+      ?? title?.parentElement?.parentElement?.parentElement
+      ?? document.body;
+    const elements = Array.from(root.querySelectorAll("button, [role='button']"))
+      .filter((element) => visible(element) && clean((element as HTMLElement).innerText) !== "Yes, after my visit");
+    const closeButton = elements.find((element) => {
+      const label = clean(element.getAttribute("aria-label")).toLowerCase();
+      const text = clean((element as HTMLElement).innerText);
+      return label.includes("close") || text === "";
+    }) as HTMLElement | undefined;
+    closeButton?.click();
+    return Boolean(closeButton);
+  }).catch(() => false);
+
+  if (closeClicked) {
+    await page.waitForTimeout(200);
+    await stageLog?.("info", "claim-search", "Dismissed Optum feedback popup.");
+    return true;
+  }
+
+  const noButton = page.locator("button:has-text('No'), [role='button']:has-text('No')").first();
+  if (await noButton.isVisible({ timeout: 500 }).catch(() => false)) {
+    await noButton.click({ timeout: 500 }).catch(() => {});
+    await page.waitForTimeout(200);
+    await stageLog?.("info", "claim-search", "Dismissed Optum feedback popup.");
+    return true;
+  }
+
+  return false;
+}
+
+async function retryAfterBlockingPopup<T>(
+  page: Page,
+  stageLog: StageLog | undefined,
+  action: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await action();
+  } catch (error) {
+    if (!isTimeoutError(error)) throw error;
+    await dismissOptumBlockingPopups(page, stageLog);
+    return action();
+  }
+}
+
+async function clickWithBlockingPopupRetry(page: Page, stageLog: StageLog | undefined, action: () => Promise<void>): Promise<void> {
+  await retryAfterBlockingPopup(page, stageLog, action);
+}
+
+async function fillInputLikeUser(page: Page, selector: string, value: string, stageLog?: StageLog): Promise<void> {
+  await retryAfterBlockingPopup(page, stageLog, async () => {
+    const locator = page.locator(selector).first();
+    await locator.waitFor({ state: "visible", timeout: 30000 });
+    await locator.click();
+    await page.keyboard.press("Control+A");
+    await page.keyboard.press("Backspace");
+    await locator.pressSequentially(value, { delay: 60 });
+    await page.waitForTimeout(300);
+  });
 }
 
 async function waitForCondition(timeout: number, pollMs: number, condition: () => Promise<boolean>): Promise<boolean> {
@@ -219,13 +289,13 @@ async function waitForPatientDropdownRows(page: Page, timeout = 5000): Promise<P
   return rows;
 }
 
-async function selectPatient(page: Page, row: OptumProInputRow, mode: PatientSelectionMode): Promise<PatientSelection> {
+async function selectPatient(page: Page, row: OptumProInputRow, mode: PatientSelectionMode, stageLog?: StageLog): Promise<PatientSelection> {
   const attempts = [row.memberId];
   const strippedMemberId = leadingThreeLettersStripped(row.memberId);
   if (strippedMemberId !== row.memberId) attempts.push(strippedMemberId);
 
   for (const memberId of attempts) {
-    await fillInputLikeUser(page, CLAIM_SEARCH_PATIENT_SELECTOR, memberId);
+    await fillInputLikeUser(page, CLAIM_SEARCH_PATIENT_SELECTOR, memberId, stageLog);
 
     const parsedRows = await waitForPatientDropdownRows(page);
     const samePatientRows = parsedRows.filter((candidate) => patientNameMatches(candidate.patientName, row.patient));
@@ -246,7 +316,7 @@ async function selectPatient(page: Page, row: OptumProInputRow, mode: PatientSel
           : exactSubscriberMatch ?? blankSubscriberMatch;
 
     if (match) {
-      await page.locator("tbody tr:visible").nth(match.index).click();
+      await clickWithBlockingPopupRetry(page, stageLog, () => page.locator("tbody tr:visible").nth(match.index).click());
       await page.waitForTimeout(300);
       return {
         text: match.text,
@@ -258,7 +328,7 @@ async function selectPatient(page: Page, row: OptumProInputRow, mode: PatientSel
   throw new Error(`No patient dropdown match found for Member Id ${row.memberId} / patient ${row.patient}.`);
 }
 
-async function selectMedicalGroup(page: Page, medicalGroupName: string): Promise<string> {
+async function selectMedicalGroup(page: Page, medicalGroupName: string, stageLog?: StageLog): Promise<string> {
   const searchText = buildMedicalGroupSearch(medicalGroupName);
   if (!searchText) throw new Error(`Medical group not found for ${medicalGroupName}.`);
 
@@ -266,24 +336,24 @@ async function selectMedicalGroup(page: Page, medicalGroupName: string): Promise
   const targetWords = target.split(" ").filter(Boolean);
 
   for (let attempt = 1; attempt <= 2; attempt++) {
-    await fillInputLikeUser(page, CLAIM_SEARCH_MEDICAL_GROUP_SELECTOR, searchText);
+    await fillInputLikeUser(page, CLAIM_SEARCH_MEDICAL_GROUP_SELECTOR, searchText, stageLog);
     await waitForStableMedicalGroupOptions(page);
 
     const bestOption = await bestMedicalGroupOption(page, targetWords);
     if (bestOption.index >= 0 && bestOption.score >= 40) {
-      await medicalGroupOptions(page).nth(bestOption.index).click();
+      await clickWithBlockingPopupRetry(page, stageLog, () => medicalGroupOptions(page).nth(bestOption.index).click());
       await page.waitForTimeout(300);
       return bestOption.text;
     }
   }
 
   for (const fallbackSearchText of medicalGroupFallbackSearches(medicalGroupName)) {
-    await fillInputLikeUser(page, CLAIM_SEARCH_MEDICAL_GROUP_SELECTOR, fallbackSearchText);
+    await fillInputLikeUser(page, CLAIM_SEARCH_MEDICAL_GROUP_SELECTOR, fallbackSearchText, stageLog);
     await waitForStableMedicalGroupOptions(page);
 
     const bestOption = await bestMedicalGroupOption(page, targetWords);
     if (bestOption.index >= 0 && bestOption.score >= 40) {
-      await medicalGroupOptions(page).nth(bestOption.index).click();
+      await clickWithBlockingPopupRetry(page, stageLog, () => medicalGroupOptions(page).nth(bestOption.index).click());
       await page.waitForTimeout(300);
       return bestOption.text;
     }
@@ -374,7 +444,7 @@ function medicalGroupOptionScore(optionText: string, targetWords: string[]): num
   return score;
 }
 
-async function setServiceDate(page: Page, dos: string): Promise<void> {
+async function setServiceDate(page: Page, dos: string, stageLog?: StageLog): Promise<void> {
   const normalizedDos = normalizeDate(dos);
   const dateType = page.locator("select").first();
   if (await dateType.isVisible({ timeout: 1000 }).catch(() => false)) {
@@ -390,18 +460,22 @@ async function setServiceDate(page: Page, dos: string): Promise<void> {
   if (dateInputCount >= 2) {
     for (let index = 0; index < 2; index++) {
       const input = dateInputs.nth(index);
-      await input.click();
-      await page.keyboard.press("Control+A");
-      await page.keyboard.press("Backspace");
-      await input.pressSequentially(normalizedDos, { delay: 45 });
+      await retryAfterBlockingPopup(page, stageLog, async () => {
+        await input.click();
+        await page.keyboard.press("Control+A");
+        await page.keyboard.press("Backspace");
+        await input.pressSequentially(normalizedDos, { delay: 45 });
+      });
     }
   } else {
     const dateRangeInput = dateInputs.first();
-    await dateRangeInput.waitFor({ state: "visible", timeout: 30000 });
-    await dateRangeInput.click();
-    await page.keyboard.press("Control+A");
-    await page.keyboard.press("Backspace");
-    await dateRangeInput.pressSequentially(`${normalizedDos} - ${normalizedDos}`, { delay: 45 });
+    await retryAfterBlockingPopup(page, stageLog, async () => {
+      await dateRangeInput.waitFor({ state: "visible", timeout: 30000 });
+      await dateRangeInput.click();
+      await page.keyboard.press("Control+A");
+      await page.keyboard.press("Backspace");
+      await dateRangeInput.pressSequentially(`${normalizedDos} - ${normalizedDos}`, { delay: 45 });
+    });
   }
   await page.waitForTimeout(250);
 }
@@ -544,6 +618,36 @@ async function hasClaimDetailsPageSignals(page: Page, timeout = 300): Promise<bo
   return false;
 }
 
+async function hasClaimSearchResultTable(page: Page, timeout = 100): Promise<boolean> {
+  const dataNameRows = page.locator("tr[data-name='Claims-View-Details']:visible, tbody tr:visible [data-name='Claims-View-Details']");
+  return (await dataNameRows.first().isVisible({ timeout }).catch(() => false))
+    || (await page.locator("text=/Summary|Results? Found/i").first().isVisible({ timeout }).catch(() => false));
+}
+
+async function claimDetailsOpenState(page: Page, timeout = 100): Promise<{
+  urlAfterClick: string;
+  detailUrlMatched: boolean;
+  detailSelectorMatched: boolean;
+  claimSearchResultsActive: boolean;
+  detailsOpened: boolean;
+}> {
+  const urlAfterClick = page.url();
+  const detailUrlMatched = urlAfterClick.includes("/claims-details");
+  const detailSelectorMatched = await hasClaimDetailsPageSignals(page, timeout);
+  const claimSearchResultsActive = await hasClaimSearchResultTable(page, timeout);
+  return {
+    urlAfterClick,
+    detailUrlMatched,
+    detailSelectorMatched,
+    claimSearchResultsActive,
+    detailsOpened: detailUrlMatched || (detailSelectorMatched && !claimSearchResultsActive),
+  };
+}
+
+async function hasConfirmedClaimDetailsPage(page: Page, timeout = 300): Promise<boolean> {
+  return (await claimDetailsOpenState(page, timeout)).detailsOpened;
+}
+
 async function closeTransientClaimDetailsSnackbar(page: Page): Promise<void> {
   const snackbar = page.locator(
     ".ecp-ucl-snackbar:has-text('Something unexpected happened'), [role='alert']:has-text('Something unexpected happened')",
@@ -555,7 +659,7 @@ async function closeTransientClaimDetailsSnackbar(page: Page): Promise<void> {
 }
 
 async function closeClaimDetailsUnavailablePopup(page: Page): Promise<string> {
-  if (await hasClaimDetailsPageSignals(page, 100)) {
+  if (await hasConfirmedClaimDetailsPage(page, 100)) {
     await closeTransientClaimDetailsSnackbar(page);
     return "";
   }
@@ -581,7 +685,7 @@ async function claimDetailsUnavailablePopupMessage(page: Page, timeout = 100): P
 async function waitForClaimDetailsUnavailablePopup(page: Page, timeout = 8000): Promise<string> {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeout) {
-    if (await hasClaimDetailsPageSignals(page, 100)) {
+    if (await hasConfirmedClaimDetailsPage(page, 100)) {
       await closeTransientClaimDetailsSnackbar(page);
       return "";
     }
@@ -596,7 +700,7 @@ async function waitForClaimDetailsUnavailablePopup(page: Page, timeout = 8000): 
 async function waitForClaimDetailsPage(page: Page, timeout = 45000): Promise<void> {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeout) {
-    if (await hasClaimDetailsPageSignals(page)) {
+    if (await hasConfirmedClaimDetailsPage(page)) {
       await closeTransientClaimDetailsSnackbar(page);
       return;
     }
@@ -630,20 +734,23 @@ async function openClaimResultRowByIndex(
   const startedAt = Date.now();
   let unavailableMessage = "";
   while (Date.now() - startedAt < 8000) {
-    if (await hasClaimDetailsPageSignals(page, 100)) {
+    const detailState = await claimDetailsOpenState(page, 100);
+    if (detailState.detailsOpened) {
       await closeTransientClaimDetailsSnackbar(page);
       await page.waitForTimeout(400);
+      await stageLog("info", "claim-search", `Claim result row ${index + 1}: urlAfterClick=${detailState.urlAfterClick}; detailUrlMatched=${detailState.detailUrlMatched}; detailSelectorMatched=${detailState.detailSelectorMatched}; final detailsOpened decision=true.`);
       await stageLog("info", "claim-search", `Claim result row ${index + 1}: details page opened true; unavailable popup seen ${Boolean(unavailableMessage)}.`);
       return { text, detailsOpened: true, detailsUnavailable: false, unavailableMessage };
     }
 
     unavailableMessage ||= await claimDetailsUnavailablePopupMessage(page, 100);
-    if (unavailableMessage && Date.now() - startedAt >= 3000) {
+    if (unavailableMessage && (page.url().includes("/claims-panel") || Date.now() - startedAt >= 3000)) {
       const closeButton = page.locator(
         "button:has-text('Close'), [role='button']:has-text('Close'), button[aria-label*='close' i], [role='button'][aria-label*='close' i]",
       ).last();
       await closeButton.click({ timeout: 1000 }).catch(() => page.keyboard.press("Escape"));
       await page.waitForTimeout(200);
+      await stageLog("info", "claim-search", `Claim result row ${index + 1}: urlAfterClick=${detailState.urlAfterClick}; detailUrlMatched=${detailState.detailUrlMatched}; detailSelectorMatched=${detailState.detailSelectorMatched}; final detailsOpened decision=false.`);
       await stageLog("info", "claim-search", `Claim result row ${index + 1}: details page opened false; unavailable popup seen true.`);
       return { text, detailsOpened: false, detailsUnavailable: true, unavailableMessage };
     }
@@ -652,10 +759,14 @@ async function openClaimResultRowByIndex(
   }
 
   if (unavailableMessage) {
+    const detailState = await claimDetailsOpenState(page, 100);
+    await stageLog("info", "claim-search", `Claim result row ${index + 1}: urlAfterClick=${detailState.urlAfterClick}; detailUrlMatched=${detailState.detailUrlMatched}; detailSelectorMatched=${detailState.detailSelectorMatched}; final detailsOpened decision=false.`);
     await stageLog("info", "claim-search", `Claim result row ${index + 1}: details page opened false; unavailable popup seen true.`);
     return { text, detailsOpened: false, detailsUnavailable: true, unavailableMessage };
   }
 
+  const detailState = await claimDetailsOpenState(page, 100);
+  await stageLog("info", "claim-search", `Claim result row ${index + 1}: urlAfterClick=${detailState.urlAfterClick}; detailUrlMatched=${detailState.detailUrlMatched}; detailSelectorMatched=${detailState.detailSelectorMatched}; final detailsOpened decision=false.`);
   await stageLog("info", "claim-search", `Claim result row ${index + 1}: details page opened false; unavailable popup seen false.`);
   throw new Error("Timed out waiting for Optum Pro claim details page.");
 }
@@ -702,6 +813,10 @@ async function findMatchingClaimDetails(
         notes: opened.unavailableMessage || "Claim details unavailable popup was shown.",
       };
       await stageLog("info", "claim-search", `Skipping claim result row ${candidate.index + 1}: ${opened.unavailableMessage || "claim details unavailable popup was shown"}.`);
+      continue;
+    }
+    if (!opened.detailsOpened) {
+      await stageLog("info", "claim-search", `Skipping claim result row ${candidate.index + 1}: Claim Details page was not confirmed opened.`);
       continue;
     }
 
@@ -1062,7 +1177,7 @@ async function searchWithSelectedPatient(
   timingLog?: RowTimingLog,
 ): Promise<OptumProSearchResult> {
   const medicalGroupStartedAt = Date.now();
-  const matchedGroup = await selectMedicalGroup(page, row.medicalGroupName).catch(() => "");
+  const matchedGroup = await selectMedicalGroup(page, row.medicalGroupName, stageLog).catch(() => "");
   await timingLog?.("fillMedicalGroup", medicalGroupStartedAt);
   if (!matchedGroup) {
     await page.keyboard.press("Escape").catch(() => {});
@@ -1075,13 +1190,15 @@ async function searchWithSelectedPatient(
   }
 
   const dateRangeStartedAt = Date.now();
-  await setServiceDate(page, row.dos);
+  await setServiceDate(page, row.dos, stageLog);
   await timingLog?.("fillDateRange", dateRangeStartedAt);
 
   const searchResultsStartedAt = Date.now();
   const searchButton = page.locator("button:has-text('Search')").last();
-  await searchButton.waitFor({ state: "visible", timeout: 30000 });
-  await searchButton.click();
+  await retryAfterBlockingPopup(page, stageLog, async () => {
+    await searchButton.waitFor({ state: "visible", timeout: 30000 });
+    await searchButton.click();
+  });
   const resultSummary = await captureResultSummary(page);
   const resultRows = await claimResultRows(page);
   const resultRowCount = await resultRows.count().catch(() => 0);
@@ -1142,7 +1259,7 @@ async function searchClaimRow(page: Page, row: OptumProInputRow, stageLog: Stage
     await stageLog("info", "row-timing", `[row-timing] row ${row.rowNumber} ${label} took ${elapsedSeconds(startedAt)}s`);
   };
   const fillPatientStartedAt = Date.now();
-  const selectedPatient = await selectPatient(page, row, "loose").catch(() => null);
+  const selectedPatient = await selectPatient(page, row, "loose", stageLog).catch(() => null);
   await timingLog("fillPatient", fillPatientStartedAt);
   if (!selectedPatient) {
     await page.keyboard.press("Escape").catch(() => {});
@@ -1160,7 +1277,7 @@ async function searchClaimRow(page: Page, row: OptumProInputRow, stageLog: Stage
 
   await clearClaimSearchFormIfVisible(page).catch(() => {});
   const fillPatientFallbackStartedAt = Date.now();
-  const blankSubscriberPatient = await selectPatient(page, row, "blank-subscriber").catch(() => null);
+  const blankSubscriberPatient = await selectPatient(page, row, "blank-subscriber", stageLog).catch(() => null);
   await timingLog("fillPatientFallback", fillPatientFallbackStartedAt);
   if (!blankSubscriberPatient) {
     return exactResult;
@@ -1172,20 +1289,24 @@ async function searchClaimRow(page: Page, row: OptumProInputRow, stageLog: Stage
 async function openClaimsSearch(page: Page, stageLog: StageLog): Promise<void> {
   await stageLog("info", "claim-navigation", "Opening Optum Pro Claims menu.");
   await page.locator("text=/Optum Pro portal|Hello,/i").first().waitFor({ state: "visible", timeout: 60000 }).catch(() => {});
-  await page.locator("button:has-text('Claims'), a:has-text('Claims'), [role='button']:has-text('Claims')").first().click();
+  await clickWithBlockingPopupRetry(page, stageLog, () => page.locator("button:has-text('Claims'), a:has-text('Claims'), [role='button']:has-text('Claims')").first().click());
 
   const nammOption = page.locator("text=NAMM").first();
   const nammCard = page.locator("mat-dialog-container ecp-ucl-card:has-text('NAMM'), mat-dialog-container [class*='card']:has-text('NAMM')").first();
   if (await nammCard.isVisible({ timeout: 10000 }).catch(() => false)) {
     await stageLog("info", "claim-navigation", "Selecting NAMM CDO card.");
-    await nammCard.click();
+    await clickWithBlockingPopupRetry(page, stageLog, () => nammCard.click());
   } else if (await nammOption.isVisible({ timeout: 10000 }).catch(() => false)) {
     await stageLog("info", "claim-navigation", "Selecting NAMM CDO.");
-    await nammOption.click();
+    await clickWithBlockingPopupRetry(page, stageLog, () => nammOption.click());
   }
 
   await page.locator("text=Claim Search").first().waitFor({ state: "visible", timeout: 60000 });
   await page.locator(CLAIM_SEARCH_PATIENT_SELECTOR).first().waitFor({ state: "visible", timeout: 60000 });
+  if (!INITIAL_FEEDBACK_DISMISS_CHECKED.has(page)) {
+    INITIAL_FEEDBACK_DISMISS_CHECKED.add(page);
+    await dismissOptumBlockingPopups(page, stageLog);
+  }
   await stageLog("info", "claim-navigation", "Optum Pro Claim Search page is ready.");
 }
 
