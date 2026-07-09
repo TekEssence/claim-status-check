@@ -82,7 +82,6 @@ export function readOptumProInputRowsFromBuffer(buffer: ArrayBuffer): OptumProIn
         !row.patient ? "Patient" : "",
         !row.dos ? "DOS" : "",
         !row.cpt ? "CPT" : "",
-        !row.memberId ? "Member Id" : "",
       ].filter(Boolean);
       return missing.length ? `row ${row.rowNumber}: ${missing.join(", ")}` : "";
     })

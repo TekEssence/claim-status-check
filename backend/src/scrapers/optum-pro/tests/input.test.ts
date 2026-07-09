@@ -48,6 +48,21 @@ test("reads Optum Pro claim rows with mandatory columns", () => {
   assert.equal(rows[0].raw["Extra Column"], "keep allowed");
 });
 
+test("allows Optum Pro claim rows with blank member id", () => {
+  const rows = readOptumProInputRowsFromBuffer(workbookBuffer([
+    {
+      "Medical Group Name": "NAMM MEDICAL GROUP",
+      Patient: "Isabel Bravo",
+      DOS: "02/16/2026",
+      CPT: "99204",
+      "Member Id": "",
+    },
+  ]));
+
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].memberId, "");
+});
+
 test("rejects Optum Pro claim rows missing mandatory values", () => {
   assert.throws(
     () => readOptumProInputRowsFromBuffer(workbookBuffer([

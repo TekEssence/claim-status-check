@@ -73,6 +73,17 @@ const CLAIM_SEARCH_DATE_SELECTOR = "input[placeholder*='MM/DD/YYYY']:visible";
 const CLAIM_SEARCH_ACTION_SELECTOR = "button:has-text('Search'):visible, button:has-text('Clear all'):visible";
 const CLAIM_SEARCH_READY_TIMEOUT_MS = 45000;
 const FAST_CLAIM_SEARCH_READY_TIMEOUT_MS = 1500;
+const CLAIM_DETAILS_PAGE_SIGNALS = [
+  "text=/Claim details/i",
+  "text=/Claim information/i",
+  "text=/Claim received date/i",
+  "text=/Processed date/i",
+  "text=/Payment mode/i",
+  "text=/Payment information/i",
+  "text=/Payment details/i",
+  "text=/Billing information/i",
+  "text=/Service and procedure details/i",
+];
 
 function elapsedSeconds(startedAt: number): string {
   return ((Date.now() - startedAt) / 1000).toFixed(1);
@@ -524,7 +535,31 @@ function isInProgressStatus(status: string): boolean {
   return /in\s*(process|progress)/i.test(status);
 }
 
+async function hasClaimDetailsPageSignals(page: Page, timeout = 300): Promise<boolean> {
+  for (const selector of CLAIM_DETAILS_PAGE_SIGNALS) {
+    if (await page.locator(selector).first().isVisible({ timeout }).catch(() => false)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+async function closeTransientClaimDetailsSnackbar(page: Page): Promise<void> {
+  const snackbar = page.locator(
+    ".ecp-ucl-snackbar:has-text('Something unexpected happened'), [role='alert']:has-text('Something unexpected happened')",
+  ).first();
+  if (!(await snackbar.isVisible({ timeout: 100 }).catch(() => false))) return;
+  await snackbar.locator(
+    "button[aria-label*='close' i], [role='button'][aria-label*='close' i], button:has-text('Close')",
+  ).last().click({ timeout: 500 }).catch(() => {});
+}
+
 async function closeClaimDetailsUnavailablePopup(page: Page): Promise<string> {
+  if (await hasClaimDetailsPageSignals(page, 100)) {
+    await closeTransientClaimDetailsSnackbar(page);
+    return "";
+  }
+
   const popup = page.locator("text=/Claim details unavailable|claim details.*wasn.t found|claim details.*not.*found|details.*not.*available/i").first();
   if (!(await popup.isVisible({ timeout: 1500 }).catch(() => false))) return "";
   const message = (await popup.innerText({ timeout: 1000 }).catch(() => "")).replace(/\s+/g, " ").trim();
@@ -539,6 +574,11 @@ async function closeClaimDetailsUnavailablePopup(page: Page): Promise<string> {
 async function waitForClaimDetailsUnavailablePopup(page: Page, timeout = 8000): Promise<string> {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeout) {
+    if (await hasClaimDetailsPageSignals(page, 100)) {
+      await closeTransientClaimDetailsSnackbar(page);
+      return "";
+    }
+
     const message = await closeClaimDetailsUnavailablePopup(page);
     if (message) return message;
     await page.waitForTimeout(250);
@@ -547,24 +587,16 @@ async function waitForClaimDetailsUnavailablePopup(page: Page, timeout = 8000): 
 }
 
 async function waitForClaimDetailsPage(page: Page, timeout = 45000): Promise<void> {
-  const detailPageSignals = [
-    "text=/Claim received date/i",
-    "text=/Processed date/i",
-    "text=/Payment mode/i",
-    "text=/Payment details/i",
-    "text=/Service and procedure details/i",
-  ];
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeout) {
+    if (await hasClaimDetailsPageSignals(page)) {
+      await closeTransientClaimDetailsSnackbar(page);
+      return;
+    }
+
     const unavailableMessage = await closeClaimDetailsUnavailablePopup(page);
     if (unavailableMessage) {
       throw new Error(`Claim details unavailable: ${unavailableMessage}`);
-    }
-
-    for (const selector of detailPageSignals) {
-      if (await page.locator(selector).first().isVisible({ timeout: 300 }).catch(() => false)) {
-        return;
-      }
     }
 
     await page.waitForTimeout(300);
@@ -603,8 +635,6 @@ async function returnToClaimResults(page: Page): Promise<void> {
   const backButton = page.locator("button:has-text('Back')").first();
   if (await backButton.isVisible({ timeout: 3000 }).catch(() => false)) {
     await backButton.click();
-  } else {
-    await page.goBack({ waitUntil: "domcontentloaded" }).catch(() => {});
   }
   await page.locator("text=/Summary|Results? Found/i").first().waitFor({ state: "visible", timeout: 45000 }).catch(() => {});
   await claimResultRows(page).then((rows) => rows.first().waitFor({ state: "visible", timeout: 45000 })).catch(() => {});
@@ -705,6 +735,10 @@ function fallbackDash(value: string): string {
 
 function outputValue(value: string): string {
   return value.trim() || "-";
+}
+
+function outputMemberId(value: string): string {
+  return value.trim() || "No Member Id Found";
 }
 
 async function extractClaimDetails(page: Page, row: OptumProInputRow): Promise<Partial<OptumProSearchResult>> {
@@ -875,15 +909,28 @@ async function extractMatchedLineDetails(page: Page, cpt: string): Promise<Parti
   }, cpt).catch(() => ({}));
 }
 
-async function returnToClaimSearch(page: Page): Promise<void> {
-  const backButton = page.locator("button:has-text('Back')").first();
-  if (await backButton.isVisible({ timeout: 3000 }).catch(() => false)) {
-    await backButton.click();
-  } else {
-    await page.locator("a:has-text('Claims')").first().click().catch(() => page.goBack({ waitUntil: "domcontentloaded" }));
+async function returnToClaimSearch(page: Page, stageLog: StageLog): Promise<void> {
+  const currentUrl = page.url();
+  if (currentUrl.includes("/claims-panel")) {
+    return;
   }
-  await page.locator("text=Claim Search").first().waitFor({ state: "visible", timeout: 45000 });
-  await page.locator(CLAIM_SEARCH_PATIENT_SELECTOR).first().waitFor({ state: "visible", timeout: 45000 });
+
+  if (currentUrl.includes("/dashboard")) {
+    await openClaimsSearch(page, stageLog);
+    return;
+  }
+
+  if (await hasClaimDetailsPageSignals(page, 300)) {
+    const backButton = page.locator("button:has-text('Back')").first();
+    if (await backButton.isVisible({ timeout: 3000 }).catch(() => false)) {
+      await backButton.click();
+      if (await fastClaimSearchReady(page, CLAIM_SEARCH_READY_TIMEOUT_MS)) {
+        return;
+      }
+    }
+  }
+
+  await openClaimsSearch(page, stageLog);
 }
 
 async function fastClaimSearchReady(page: Page, timeout = FAST_CLAIM_SEARCH_READY_TIMEOUT_MS): Promise<boolean> {
@@ -932,8 +979,8 @@ async function resetClaimSearchPage(
 
   if (!(await fastClaimSearchReady(page))) {
     await stageLog("info", "claim-search", `Resetting Optum Pro Claim Search page ${reason}.`);
-    await returnToClaimSearch(page).catch(async (returnError) => {
-      await stageLog("warn", "claim-search", `Could not return to Claim Search with back/navigation controls: ${returnError instanceof Error ? returnError.message : String(returnError)}`);
+    await returnToClaimSearch(page, stageLog).catch(async (returnError) => {
+      await stageLog("warn", "claim-search", `Could not return to Claim Search with state-driven navigation: ${returnError instanceof Error ? returnError.message : String(returnError)}`);
       await openClaimsSearch(page, stageLog);
     });
   }
@@ -1024,7 +1071,7 @@ async function searchWithSelectedPatient(
   }
 
   if (matchingClaim.status === "Completed") {
-    await returnToClaimSearch(page).catch((error) => {
+    await returnToClaimSearch(page, stageLog).catch((error) => {
       void stageLog("warn", "claim-search", `Could not return to Claim Search after detail extraction: ${error instanceof Error ? error.message : String(error)}`);
     });
   }
@@ -1041,6 +1088,15 @@ async function searchWithSelectedPatient(
 
 async function searchClaimRow(page: Page, row: OptumProInputRow, stageLog: StageLog): Promise<OptumProSearchResult> {
   await stageLog("info", "claim-search", `Processing Optum Pro input row ${row.rowNumber}: member ${row.memberId}, DOS ${row.dos}, medical group ${row.medicalGroupName}.`);
+
+  if (!row.memberId.trim()) {
+    return emptyClaimResult(row, {
+      memberId: "No Member Id Found",
+      resultSummary: "No Member Id Found",
+      status: "No Member Id Found",
+      notes: "Input row did not contain a Member Id.",
+    });
+  }
 
   const timingLog: RowTimingLog = async (label, startedAt) => {
     await stageLog("info", "row-timing", `[row-timing] row ${row.rowNumber} ${label} took ${elapsedSeconds(startedAt)}s`);
@@ -1135,7 +1191,7 @@ export async function runOptumProClaimSearch(
         patient: row.patient,
         dos: row.dos,
         cpt: row.cpt,
-        memberId: row.memberId,
+        memberId: outputMemberId(row.memberId),
         matchedPatient: "",
         matchedGroup: "",
         claimNumber: "",
@@ -1191,6 +1247,7 @@ function createOptumProOutputWorkbookBuffer(results: OptumProSearchResult[]): Bu
   const workbook = XLSX.utils.book_new();
   const rows = results.map((result) => ({
     ...result.input.raw,
+    member_id: outputMemberId(result.memberId),
     result: result.status,
     matched_patient: outputValue(result.matchedPatient),
     matched_medical_group: outputValue(result.matchedGroup),
