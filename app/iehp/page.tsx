@@ -1,5 +1,5 @@
-import { ScraperPage } from "@/frontend/src/pages/ScraperPage";
+import { ClaimStatusPage } from "@/frontend/src/workflows/claim-status/ClaimStatusPage";
 
 export default function IehpPage() {
-  return <ScraperPage forcedPortalId="iehp" />;
+  return <ClaimStatusPage forcedPortalId="iehp" />;
 }

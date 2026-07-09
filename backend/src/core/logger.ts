@@ -1,4 +1,4 @@
-import type { LogEvent } from "../scrapers/types";
+import type { LogEvent } from "../workflows/types";
 
 export type Logger = {
   debug: (message: string, meta?: Record<string, unknown>) => Promise<void>;

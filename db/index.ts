@@ -1,10 +1,12 @@
 import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 import * as betterAuthSchema from "./schema/better-auth";
+import * as automationJobsSchema from "./schema/automation-jobs";
 import * as scrapeJobsSchema from "./schema/scrape-jobs";
 
 const schema = {
   ...betterAuthSchema,
+  ...automationJobsSchema,
   ...scrapeJobsSchema,
 };
 

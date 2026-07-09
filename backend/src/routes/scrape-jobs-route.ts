@@ -21,7 +21,7 @@ import {
   isScrapeJobDbConnectionError,
   updateScrapeJobSnapshot,
 } from "@/lib/scrape-jobs/db";
-import { getScraper } from "@/backend/src/scrapers/registry";
+import { getClaimStatusScraper } from "@/backend/src/workflows/claim-status/registry";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -34,6 +34,7 @@ function ensurePersistenceListenerRegistered() {
   persistenceListenerRegistered = true;
 
   registerScrapeJobEmitListener((jobId, data) => {
+    if (getScrapeJob(jobId)?.workflowId !== "claim-status") return;
     void persistScrapeJobEvent(jobId, data);
   });
 }
@@ -48,7 +49,7 @@ export async function POST(req: Request) {
 
     const formData = await req.formData();
     const portalId = getPortalId(formData);
-    const scraper = getScraper(portalId);
+    const scraper = getClaimStatusScraper(portalId);
     const input = scraper.validateInput(formData);
     const requestedJobId = getRequestedJobId(formData);
     const totalRows = getTotalRows(formData);
@@ -208,7 +209,7 @@ export async function DELETE(req: Request) {
   return Response.json(cancelled ? { ok: true } : { ok: true, alreadyStopped: true });
 }
 
-function getLastEventId(req: Request, url: URL): number {
+export function getLastEventId(req: Request, url: URL): number {
   const fromQuery = Number(url.searchParams.get("after") || "0");
   const fromHeader = Number(req.headers.get("last-event-id") || "0");
   const lastEventId = Math.max(
@@ -400,7 +401,7 @@ function sseHeaders(): HeadersInit {
   };
 }
 
-function streamScrapeJobEvents(req: Request, jobId: string, afterEventId: number): Response {
+export function streamScrapeJobEvents(req: Request, jobId: string, afterEventId: number): Response {
   const encoder = new TextEncoder();
   const job = getScrapeJob(jobId);
 

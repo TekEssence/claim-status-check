@@ -1,5 +1,5 @@
-import { ScraperPage } from "@/frontend/src/pages/ScraperPage";
+import { ClaimStatusPage } from "@/frontend/src/workflows/claim-status/ClaimStatusPage";
 
 export default function BlueShieldPage() {
-  return <ScraperPage forcedPortalId="blue-shield" />;
+  return <ClaimStatusPage forcedPortalId="blue-shield" />;
 }

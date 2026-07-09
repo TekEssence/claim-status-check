@@ -45,3 +45,5 @@ next-env.d.ts
 /data/
 *.log
 
+eligibility-verification-architecture-report.md
+eligibility-verification-architecture.txt

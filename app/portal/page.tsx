@@ -1,3 +1,3 @@
-import { ScraperPage } from "@/frontend/src/pages/ScraperPage";
+import { WorkflowDashboardPage } from "@/frontend/src/workflows/WorkflowDashboardPage";
 
-export default ScraperPage;
+export default WorkflowDashboardPage;

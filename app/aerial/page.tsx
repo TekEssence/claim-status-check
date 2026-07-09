@@ -1,5 +1,5 @@
-import { ScraperPage } from "@/frontend/src/pages/ScraperPage";
+import { ClaimStatusPage } from "@/frontend/src/workflows/claim-status/ClaimStatusPage";
 
 export default function AerialPage() {
-  return <ScraperPage forcedPortalId="aerial" />;
+  return <ClaimStatusPage forcedPortalId="aerial" />;
 }

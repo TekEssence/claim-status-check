@@ -1,5 +1,5 @@
-import { ScraperPage } from "@/frontend/src/pages/ScraperPage";
+import { ClaimStatusPage } from "@/frontend/src/workflows/claim-status/ClaimStatusPage";
 
 export default function RegalPage() {
-  return <ScraperPage forcedPortalId="regal" />;
+  return <ClaimStatusPage forcedPortalId="regal" />;
 }

@@ -45,7 +45,10 @@ function createJobId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
-export function createScrapeJob(jobId?: string): ScrapeJob {
+export function createScrapeJob(
+  jobId?: string,
+  workflowId: ScrapeJob["workflowId"] = "claim-status",
+): ScrapeJob {
   const now = Date.now();
   const resolvedJobId = jobId || createJobId();
   const existing = jobs.get(resolvedJobId);
@@ -54,6 +57,7 @@ export function createScrapeJob(jobId?: string): ScrapeJob {
   }
   const job: ScrapeJob = {
     id: resolvedJobId,
+    workflowId,
     status: "running",
     currentCompleted: 0,
     events: [],
