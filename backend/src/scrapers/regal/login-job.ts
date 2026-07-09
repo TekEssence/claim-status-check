@@ -96,6 +96,30 @@ async function fillPassword(page: Page, password: string): Promise<void> {
   ]);
 }
 
+async function dismissRegalPasswordExpiryWarningIfPresent(
+  page: Page,
+  stageLog: (level: RegalLogEntry["level"], stage: string, message: string, currentPage?: Page) => Promise<void>,
+): Promise<boolean> {
+  const warningTitle = page.locator(regalConfig.selectors.passwordExpiryTitle).first();
+  const warningVisible = await warningTitle.waitFor({ state: "visible", timeout: 15000 }).then(() => true, () => false);
+  if (!warningVisible) {
+    return false;
+  }
+
+  const remindLater = page.locator(regalConfig.selectors.passwordExpiryRemindLater).first();
+  await remindLater.waitFor({ state: "visible", timeout: 10000 });
+  await stageLog("info", "password", "Regal password expiry warning appeared; clicking Remind me later.", page);
+  await remindLater.click({ force: true });
+  await page.waitForLoadState("domcontentloaded", { timeout: 15000 }).catch(() => {});
+  await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
+  if (await warningTitle.isVisible({ timeout: 1000 }).catch(() => false)) {
+    await remindLater.evaluate((element) => (element as HTMLElement).click()).catch(() => {});
+    await page.waitForLoadState("domcontentloaded", { timeout: 15000 }).catch(() => {});
+    await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
+  }
+  return true;
+}
+
 async function detectVisibleError(page: Page, timeout = 2000): Promise<string> {
   const errorContainer = page.locator(regalConfig.selectors.errorContainer).first();
   const text = await errorContainer.innerText({ timeout }).catch(() => "");
@@ -122,7 +146,13 @@ function downloadableWorkbookEvent(filename: string, buffer: Buffer, options: { 
   };
 }
 
-async function assertRegalDashboard(page: Page): Promise<void> {
+async function assertRegalDashboard(
+  page: Page,
+  stageLog?: (level: RegalLogEntry["level"], stage: string, message: string, currentPage?: Page) => Promise<void>,
+): Promise<void> {
+  if (stageLog) {
+    await dismissRegalPasswordExpiryWarningIfPresent(page, stageLog);
+  }
   await Promise.race([
     page.locator(regalConfig.selectors.dashboardHeading).first().waitFor({ state: "visible", timeout: 30000 }),
     page.locator(regalConfig.selectors.dashboardText).first().waitFor({ state: "visible", timeout: 30000 }),
@@ -1206,13 +1236,14 @@ export async function runRegalLoginJob(formData: FormData, context: ScraperConte
     await fillPassword(page, input.credentials.password);
 
     await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
+    await dismissRegalPasswordExpiryWarningIfPresent(page, stageLog);
     const passwordStepError = await detectVisibleError(page, 5000);
     if (passwordStepError) {
       throw new Error(`Regal password step failed: ${passwordStepError}`);
     }
     await stageLog("info", "password", "Password accepted; checking Okta dashboard.");
 
-    await assertRegalDashboard(page);
+    await assertRegalDashboard(page, stageLog);
     dashboardPage = page;
     await stageLog("info", "dashboard", "Confirmed Okta dashboard by Dashboard heading and Sign out link.");
 
