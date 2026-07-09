@@ -571,6 +571,13 @@ async function closeClaimDetailsUnavailablePopup(page: Page): Promise<string> {
   return message || "Claim details unavailable popup was shown.";
 }
 
+async function claimDetailsUnavailablePopupMessage(page: Page, timeout = 100): Promise<string> {
+  const popup = page.locator("text=/Claim details unavailable|claim details.*wasn.t found|claim details.*not.*found|details.*not.*available/i").first();
+  if (!(await popup.isVisible({ timeout }).catch(() => false))) return "";
+  return (await popup.innerText({ timeout: 1000 }).catch(() => "")).replace(/\s+/g, " ").trim()
+    || "Claim details unavailable popup was shown.";
+}
+
 async function waitForClaimDetailsUnavailablePopup(page: Page, timeout = 8000): Promise<string> {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeout) {
@@ -604,31 +611,53 @@ async function waitForClaimDetailsPage(page: Page, timeout = 45000): Promise<voi
   throw new Error("Timed out waiting for Optum Pro claim details page.");
 }
 
-async function openClaimResultRowByIndex(page: Page, index: number): Promise<{ text: string; detailsUnavailable: boolean; unavailableMessage: string }> {
+async function openClaimResultRowByIndex(
+  page: Page,
+  index: number,
+  stageLog: StageLog,
+): Promise<{ text: string; detailsOpened: boolean; detailsUnavailable: boolean; unavailableMessage: string }> {
   const rows = await claimResultRows(page);
   const row = rows.nth(index);
   const text = (await row.innerText({ timeout: 1000 }).catch(() => "")).replace(/\s+/g, " ").trim();
   const openTarget = row.locator("a, button, [role='button'], [data-name='Claims-View-Details']").filter({ hasNot: page.locator("input[type='checkbox']") }).first();
+  await stageLog("info", "claim-search", `Clicked claim result row ${index + 1}: ${text || "(no row text)"}.`);
   if (await openTarget.isVisible({ timeout: 1000 }).catch(() => false)) {
     await openTarget.click();
   } else {
     await row.click();
   }
-  const unavailableMessage = await waitForClaimDetailsUnavailablePopup(page, 3000);
-  if (unavailableMessage) {
-    return { text, detailsUnavailable: true, unavailableMessage };
-  }
-  try {
-    await waitForClaimDetailsPage(page);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (/claim details unavailable/i.test(message)) {
-      return { text, detailsUnavailable: true, unavailableMessage: message.replace(/^Claim details unavailable:\s*/i, "") };
+
+  const startedAt = Date.now();
+  let unavailableMessage = "";
+  while (Date.now() - startedAt < 8000) {
+    if (await hasClaimDetailsPageSignals(page, 100)) {
+      await closeTransientClaimDetailsSnackbar(page);
+      await page.waitForTimeout(400);
+      await stageLog("info", "claim-search", `Claim result row ${index + 1}: details page opened true; unavailable popup seen ${Boolean(unavailableMessage)}.`);
+      return { text, detailsOpened: true, detailsUnavailable: false, unavailableMessage };
     }
-    throw error;
+
+    unavailableMessage ||= await claimDetailsUnavailablePopupMessage(page, 100);
+    if (unavailableMessage && Date.now() - startedAt >= 3000) {
+      const closeButton = page.locator(
+        "button:has-text('Close'), [role='button']:has-text('Close'), button[aria-label*='close' i], [role='button'][aria-label*='close' i]",
+      ).last();
+      await closeButton.click({ timeout: 1000 }).catch(() => page.keyboard.press("Escape"));
+      await page.waitForTimeout(200);
+      await stageLog("info", "claim-search", `Claim result row ${index + 1}: details page opened false; unavailable popup seen true.`);
+      return { text, detailsOpened: false, detailsUnavailable: true, unavailableMessage };
+    }
+
+    await page.waitForTimeout(250);
   }
-  await page.waitForTimeout(400);
-  return { text, detailsUnavailable: false, unavailableMessage: "" };
+
+  if (unavailableMessage) {
+    await stageLog("info", "claim-search", `Claim result row ${index + 1}: details page opened false; unavailable popup seen true.`);
+    return { text, detailsOpened: false, detailsUnavailable: true, unavailableMessage };
+  }
+
+  await stageLog("info", "claim-search", `Claim result row ${index + 1}: details page opened false; unavailable popup seen false.`);
+  throw new Error("Timed out waiting for Optum Pro claim details page.");
 }
 
 async function returnToClaimResults(page: Page): Promise<void> {
@@ -647,8 +676,10 @@ async function findMatchingClaimDetails(
 ): Promise<{ clickedRowText: string; details: Partial<OptumProSearchResult>; status: string; notes?: string } | null> {
   const candidates = await orderedClaimResultIndexes(page, row);
   let unavailableResult: { clickedRowText: string; details: Partial<OptumProSearchResult>; notes: string } | null = null;
+  let openedDetailsCount = 0;
   for (const candidate of candidates) {
     if (isInProgressStatus(candidate.resultStatus)) {
+      await stageLog("info", "claim-search", `Final claim result status reason: result row ${candidate.index + 1} is in progress; details were not opened.`);
       return {
         clickedRowText: candidate.text,
         status: candidate.resultStatus || "In Progress",
@@ -660,7 +691,7 @@ async function findMatchingClaimDetails(
       };
     }
 
-    const opened = await openClaimResultRowByIndex(page, candidate.index);
+    const opened = await openClaimResultRowByIndex(page, candidate.index, stageLog);
     if (opened.detailsUnavailable) {
       unavailableResult ??= {
         clickedRowText: opened.text,
@@ -674,9 +705,11 @@ async function findMatchingClaimDetails(
       continue;
     }
 
+    openedDetailsCount++;
     const details = await extractClaimDetails(page, row);
     const serviceCode = typeof details.serviceCode === "string" ? details.serviceCode : "";
     if (normalize(serviceCode) === normalize(row.cpt)) {
+      await stageLog("info", "claim-search", `Final claim result status reason: claim details opened and service code ${serviceCode || "-"} matched CPT ${row.cpt}.`);
       return { clickedRowText: opened.text, details, status: "Completed" };
     }
 
@@ -684,11 +717,18 @@ async function findMatchingClaimDetails(
     await returnToClaimResults(page);
   }
 
-  if (unavailableResult) {
+  if (!openedDetailsCount && unavailableResult) {
+    await stageLog("info", "claim-search", "Final claim result status reason: result rows existed, but no Claim Details page opened and unavailable popup was shown.");
     return {
       ...unavailableResult,
       status: "Claim details unavailable",
     };
+  }
+
+  if (openedDetailsCount) {
+    await stageLog("info", "claim-search", `Final claim result status reason: ${openedDetailsCount} Claim Details page(s) opened, but none contained CPT/service code ${row.cpt}.`);
+  } else {
+    await stageLog("info", "claim-search", "Final claim result status reason: result rows existed, but no Claim Details page opened.");
   }
 
   return null;
