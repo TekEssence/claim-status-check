@@ -185,9 +185,9 @@ async function waitForClaimDetailPage(page) {
   ]);
 }
 
-async function getLabelValue(page, labelText) {
+async function getLabelValue(page, labelText, exactPanelTimeoutMs = 2000) {
   const frame = await getClaimStatusFrame(page);
-  const directPanelValue = await readExactInfoPanelValue(frame, labelText, 2000);
+  const directPanelValue = await readExactInfoPanelValue(frame, labelText, exactPanelTimeoutMs);
 
   if (directPanelValue) {
     logger.info(`Extracted direct info panel "${labelText}" value="${directPanelValue}"`);
@@ -297,9 +297,9 @@ async function getLabelValue(page, labelText) {
   return safeInnerText(value);
 }
 
-async function getInfoPanelValue(page, labelText) {
+async function getInfoPanelValue(page, labelText, exactPanelTimeoutMs = 2000) {
   const frame = await getClaimStatusFrame(page);
-  const directPanelValue = await readExactInfoPanelValue(frame, labelText, 2000);
+  const directPanelValue = await readExactInfoPanelValue(frame, labelText, exactPanelTimeoutMs);
 
   if (directPanelValue) {
     logger.info(`Extracted direct HIPAA info panel "${labelText}" value="${directPanelValue}"`);
@@ -324,7 +324,7 @@ async function getInfoPanelValue(page, labelText) {
     }
   }
 
-  return getLabelValue(page, labelText);
+  return getLabelValue(page, labelText, exactPanelTimeoutMs);
 }
 
 async function getClaimNumber(page) {
@@ -781,6 +781,63 @@ async function getHipaaRemarkDescription(page, remarkCode) {
   return descriptions.join(" | ");
 }
 
+function splitRemarkCodes(remarkCode) {
+  return String(remarkCode || "")
+    .split(/[,:]/)
+    .map((code) => code.trim())
+    .filter(Boolean);
+}
+
+async function getTypeCodeDescription(page, remarkCode) {
+  if (!remarkCode) {
+    return "";
+  }
+
+  const frame = await getClaimStatusFrame(page);
+  const showMoreButtons = frame.locator(SELECTORS.showMoreButton);
+  const count = await showMoreButtons.count();
+  for (let index = 0; index < count; index += 1) {
+    await showMoreButtons.nth(index).click().catch(() => {});
+  }
+
+  const requestedCodes = splitRemarkCodes(remarkCode);
+  const descriptions = [];
+  const tables = frame.locator("table");
+  const tableCount = await tables.count();
+
+  for (const requestedCode of requestedCodes) {
+    let description = "";
+
+    for (let tableIndex = 0; tableIndex < tableCount && !description; tableIndex += 1) {
+      const table = tables.nth(tableIndex);
+      const headerText = await table.locator("thead").innerText({ timeout: 1000 }).catch(() => "");
+      if (!/type/i.test(headerText) || !/code/i.test(headerText) || !/description/i.test(headerText)) {
+        continue;
+      }
+
+      const rows = table.locator("tbody > tr");
+      const rowCount = await rows.count();
+      for (let rowIndex = 0; rowIndex < rowCount; rowIndex += 1) {
+        const cells = rows.nth(rowIndex).locator("td");
+        const code = await safeInnerText(cells.nth(1), 1000);
+
+        if (code.trim().toUpperCase() === requestedCode.toUpperCase()) {
+          description = await safeInnerText(cells.nth(2), 3000);
+          break;
+        }
+      }
+    }
+
+    if (description) {
+      descriptions.push(`${requestedCode}: ${description}`);
+    } else {
+      logger.info(`Type/Code/Description table did not include description for code "${requestedCode}".`);
+    }
+  }
+
+  return descriptions.join(" | ");
+}
+
 
 async function extractDenied(page, status) {
   logger.info("Extracting DENIED claim detail");
@@ -805,6 +862,56 @@ async function extractDenied(page, status) {
   return {
     type: "denied",
     claimNumber: await getClaimNumber(page),
+    claimStatus: status,
+    lines
+  };
+}
+
+async function extractWellcarePaid(page, status) {
+  logger.info("Extracting Wellcare PAID claim detail");
+  const claimNumber = await getClaimNumber(page);
+  const checkNumber = await getLabelValue(page, "Check Number", 4000);
+  const checkDate = await getLabelValue(page, "Check Date", 4000);
+  const lines = await extractLineRows(page);
+  for (const line of lines) {
+    line.remarkCode = line.remarkCode || line.reasonRemarkCode || "";
+    line.description = line.description || (line.remarkCode ? await getTypeCodeDescription(page, line.remarkCode) : "");
+  }
+  logger.info(`Wellcare PAID header values: claim="${claimNumber}", check_number="${checkNumber}", check_date="${checkDate}"`);
+
+  return {
+    type: "paid",
+    claimNumber,
+    claimStatus: status,
+    checkNumber,
+    checkDate,
+    lines
+  };
+}
+
+async function extractWellcareDenied(page, status) {
+  logger.info("Extracting Wellcare DENIED claim detail");
+  const baseLines = await extractLineRows(page);
+  if (baseLines.length === 0) {
+    logger.warn("Wellcare DENIED extraction found 0 CPT line rows on detail page.");
+  }
+  const lines = [];
+
+  for (const item of baseLines) {
+    const remarkCode = item.reasonRemarkCode || "";
+    if (!remarkCode.trim()) {
+      logger.warn(`Wellcare DENIED line ${item.procedureCode || "unknown"} did not include a Reason/Remark Code.`);
+    }
+    lines.push({
+      procedureCode: item.procedureCode,
+      remarkCode: remarkCode.trim(),
+      description: remarkCode.trim() ? await getTypeCodeDescription(page, remarkCode.trim()) : ""
+    });
+  }
+
+  return {
+    type: "denied",
+    claimNumber: await getLabelValue(page, "Claim Number", 4000),
     claimStatus: status,
     lines
   };
@@ -986,6 +1093,8 @@ module.exports = {
   extractHipaaPaid,
   extractInProcess,
   extractPaid,
+  extractWellcareDenied,
+  extractWellcarePaid,
   returnToResults,
   waitForClaimDetailPage
 };

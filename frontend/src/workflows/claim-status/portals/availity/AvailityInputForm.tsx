@@ -22,7 +22,7 @@ export function AvailityInputForm({
   return (
     <form className="space-y-5" onSubmit={onSubmit}>
       <div className="rounded-[1.2rem] border border-blue-100 bg-blue-50/70 px-4 py-3 text-sm text-blue-900">
-        <span className="font-semibold">Available Payers:</span> Aetna, Blue Cross Blue Shield
+        <span className="font-semibold">Available Payers:</span> Aetna, Blue Cross Blue Shield, Wellpoint, Wellcare
       </div>
 
       <div className="grid gap-5 xl:grid-cols-2">

@@ -1,0 +1,491 @@
+"use strict";
+
+const logger = require("../../../../legacy/utils/logger");
+const { humanDelay, withRetry } = require("../../../../legacy/utils/browser");
+const { getClaimStatusFrame } = require("../../../../legacy/pages/navigation.page");
+const { PROVIDERS } = require("../../../../legacy/pages/claim-status-member.page");
+const { waitForSearchResultsToSettle, normalizeMoney, normalizeDateText } = require("../../../../legacy/pages/results.page");
+const { renderClaimSummary, renderFailedSummary } = require("../../../../legacy/services/summary-renderer");
+const { normalizeStatus } = require("../../../../legacy/services/status-normalizer");
+const {
+  extractInProcess,
+  extractWellcareDenied,
+  extractWellcarePaid,
+  returnToResults,
+  waitForClaimDetailPage
+} = require("../../../../legacy/pages/claim-detail.page");
+
+const SELECTORS = {
+  serviceDateTab: "button[role='tab']:has-text('Service Dates'), a[role='button']:has-text('Service Dates')",
+  providerNpiRadio: "input[name='providerIdentifier'][value='npi']",
+  providerNpi: "input#providerNpi[name='providerNpi']",
+  searchButton: "button#submit-byServiceDates[type='submit']",
+  searchResultsHeading: "h5:has-text('Search Results')",
+  tableRows: "tbody tr",
+  noResultsMessage: "li:has-text('The payer could not find any results based on your search')"
+};
+
+function normalizeMemberId(value) {
+  return String(value || "").replace(/[^a-z0-9]/gi, "").toUpperCase();
+}
+
+async function selectAutocompleteOption(scope, inputLocator, value) {
+  await inputLocator.click({ force: true });
+  await inputLocator.press(process.platform === "darwin" ? "Meta+A" : "Control+A").catch(() => {});
+  await inputLocator.press("Backspace").catch(() => {});
+  await inputLocator.fill(String(value || ""));
+  await humanDelay(500, 1000);
+
+  const option = scope.getByText(value, { exact: true }).last();
+  if (await option.isVisible({ timeout: 3000 }).catch(() => false)) {
+    await option.click();
+  } else {
+    await inputLocator.press("Enter");
+  }
+}
+
+async function selectServiceDateTab(page) {
+  await withRetry(
+    "Selecting Wellcare Service Dates tab",
+    async () => {
+      const frame = await getClaimStatusFrame(page);
+      const tab = frame.locator(SELECTORS.serviceDateTab).first();
+      await tab.waitFor({ state: "visible", timeout: 10000 });
+      await tab.click({ force: true });
+      await humanDelay(500, 900);
+    },
+    { retries: 1, retryDelayMs: 1000 }
+  );
+}
+
+async function selectProvider(page, providerName) {
+  await withRetry(
+    `Selecting Wellcare provider ${providerName}`,
+    async () => {
+      const frame = await getClaimStatusFrame(page);
+      const providerLabel = frame.getByText("Select a Provider", { exact: true }).first();
+      const providerInput = providerLabel.locator("xpath=ancestor::*[self::div or self::label][1]/following::input[@role='combobox'][1]");
+      await providerInput.waitFor({ state: "visible", timeout: 15000 });
+      await selectAutocompleteOption(frame, providerInput, providerName);
+
+      const npiRadio = frame.locator(SELECTORS.providerNpiRadio).first();
+      if (await npiRadio.isVisible({ timeout: 3000 }).catch(() => false)) {
+        const isChecked = await npiRadio.isChecked({ timeout: 500 }).catch(() => false);
+        if (!isChecked) {
+          await npiRadio.setChecked(true, { force: true }).catch(async () => {
+            await frame.getByText("Provider NPI", { exact: true }).click({ force: true });
+          });
+        }
+      }
+
+      await frame.waitForFunction(
+        () => {
+          const input = document.querySelector("input#providerNpi[name='providerNpi']");
+          return input && input.value && input.value.trim().length > 0;
+        },
+        null,
+        { timeout: 10000 }
+      );
+    },
+    { retries: 2, retryDelayMs: 1200 }
+  );
+}
+
+async function getMuiDateBoxText(dateBox) {
+  return dateBox.innerText({ timeout: 1000 })
+    .then((text) => text.replace(/\s+/g, "").trim())
+    .catch(() => "");
+}
+
+async function fillMuiDateSegments(scope, container, normalizedValue) {
+  const [month, day, year] = normalizedValue.split("/");
+  const keyboard = scope.page().keyboard;
+  const segments = [
+    { label: "Month", value: month },
+    { label: "Day", value: day },
+    { label: "Year", value: year }
+  ];
+
+  for (const segment of segments) {
+    const segmentLocator = container.locator(`[contenteditable='true'][aria-label='${segment.label}']`).first();
+    await segmentLocator.waitFor({ state: "visible", timeout: 5000 });
+    await segmentLocator.click({ force: true });
+    await keyboard.press(process.platform === "darwin" ? "Meta+A" : "Control+A");
+    await keyboard.type(segment.value);
+    await humanDelay(100, 200);
+  }
+
+  await keyboard.press("Tab");
+}
+
+async function fillDateByLabel(scope, labelText, value) {
+  const normalizedValue = String(value || "").trim();
+  if (!/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(normalizedValue)) {
+    throw new Error(`Invalid date format for ${labelText}: "${normalizedValue}". Expected MM/DD/YYYY.`);
+  }
+
+  const label = scope.locator("label").filter({ hasText: labelText }).first();
+  await label.waitFor({ state: "visible", timeout: 15000 });
+
+  const container = label.locator(
+    "xpath=ancestor::*[contains(@class,'MuiFormControl-root') or contains(@class,'MuiTextField-root') or contains(@class,'form-group')][1]"
+  );
+  const dateBox = container.locator("[contenteditable='false']").first();
+
+  if (await dateBox.isVisible({ timeout: 5000 }).catch(() => false)) {
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      await dateBox.click({ force: true });
+      const keyboard = scope.page().keyboard;
+      await keyboard.press(process.platform === "darwin" ? "Meta+A" : "Control+A");
+      await keyboard.type(normalizedValue);
+      await keyboard.press("Tab");
+      await humanDelay(200, 400);
+
+      const dateText = await getMuiDateBoxText(dateBox);
+      if (dateText === normalizedValue) {
+        return;
+      }
+
+      logger.warn(`${labelText} did not fill completely on attempt ${attempt}: expected="${normalizedValue}", actual="${dateText}". Filling date segments directly.`);
+      await fillMuiDateSegments(scope, container, normalizedValue);
+      if (await getMuiDateBoxText(dateBox) === normalizedValue) {
+        return;
+      }
+    }
+
+    throw new Error(`${labelText} was not set correctly. Expected "${normalizedValue}", found "${await getMuiDateBoxText(dateBox)}".`);
+  }
+
+  const visibleInput = container.locator("input:not([aria-hidden='true']):visible").first();
+  await visibleInput.waitFor({ state: "visible", timeout: 15000 });
+  await visibleInput.click({ force: true });
+  await visibleInput.fill("");
+  await visibleInput.pressSequentially(normalizedValue);
+  await visibleInput.press("Tab");
+}
+
+async function fillServiceDateSearchForm(page, rowData) {
+  const frame = await getClaimStatusFrame(page);
+  await fillDateByLabel(frame, "Service From Date", rowData["Service Date"]);
+  await humanDelay(300, 700);
+  await fillDateByLabel(frame, "Service To Date", rowData["Service Date"]);
+}
+
+async function submitServiceDateSearch(page) {
+  async function resultIndicatorAppeared(timeoutMs) {
+    const deadline = Date.now() + timeoutMs;
+
+    while (Date.now() < deadline) {
+      const frame = await getClaimStatusFrame(page);
+      const headingVisible = await frame.locator(SELECTORS.searchResultsHeading).first().isVisible({ timeout: 500 }).catch(() => false);
+      const resultRowsVisible = await frame.locator(SELECTORS.tableRows).first().isVisible({ timeout: 500 }).catch(() => false);
+      const noResultsVisible = await frame.locator(SELECTORS.noResultsMessage).first().isVisible({ timeout: 500 }).catch(() => false);
+
+      if (headingVisible || resultRowsVisible || noResultsVisible) {
+        return true;
+      }
+
+      await humanDelay(800, 1200);
+    }
+
+    return false;
+  }
+
+  await withRetry(
+    "Submitting Wellcare Service Dates search",
+    async () => {
+      for (let attempt = 1; attempt <= 3; attempt += 1) {
+        const frame = await getClaimStatusFrame(page);
+        const searchButton = frame.locator(SELECTORS.searchButton).first();
+        await searchButton.waitFor({ state: "visible", timeout: 15000 });
+        await searchButton.scrollIntoViewIfNeeded().catch(() => {});
+        await searchButton.click({ force: attempt > 1 });
+        logger.info(`Wellcare Service Dates Search clicked (attempt ${attempt}/3). Waiting for portal response.`);
+        await humanDelay(1500, 2500);
+
+        if (await resultIndicatorAppeared(5000)) {
+          logger.info(`Wellcare Service Dates search response appeared after submit attempt ${attempt}.`);
+          return;
+        }
+
+        if (attempt < 3) {
+          logger.warn(`Wellcare Service Dates search results did not appear within 5 seconds after submit attempt ${attempt}. Re-clicking Search.`);
+        }
+      }
+
+      throw new Error("Wellcare Service Dates Search did not produce results, no-results message, or validation response after 3 attempts.");
+    },
+    { retries: 1, retryDelayMs: 1200 }
+  );
+}
+
+async function readColumnHeaders(frame) {
+  const headers = await frame.locator("thead th").evaluateAll((nodes) => nodes.map((node) => node.textContent || "")).catch(() => []);
+  return headers.map((header) => header.replace(/\s+/g, " ").trim().toLowerCase());
+}
+
+function cellByHeader(cells, headers, headerName) {
+  const target = String(headerName || "").toLowerCase();
+  const index = headers.findIndex((header) => header === target || header.includes(target));
+  return index >= 0 ? cells[index] || "" : "";
+}
+
+function cellByAnyHeader(cells, headers, headerNames) {
+  for (const headerName of headerNames) {
+    const value = cellByHeader(cells, headers, headerName);
+    if (value) {
+      return value;
+    }
+  }
+
+  return "";
+}
+
+function parseDateValue(value) {
+  const normalized = normalizeDateText(value);
+  const [month, day, year] = normalized.split("/").map((part) => Number(part));
+  if (!month || !day || !year) {
+    return null;
+  }
+
+  const date = new Date(year, month - 1, day);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+async function getWellcareServiceDateRows(page) {
+  const frame = await getClaimStatusFrame(page);
+  const headers = await readColumnHeaders(frame);
+  const rows = frame.locator(SELECTORS.tableRows);
+  const count = await rows.count();
+  const results = [];
+
+  for (let index = 0; index < count; index += 1) {
+    const row = rows.nth(index);
+    const cells = await row.locator("td").evaluateAll((nodes) => nodes.map((node) => node.textContent || "")).catch(() => []);
+    const normalizedCells = cells.map((cell) => cell.replace(/\s+/g, " ").trim());
+    if (normalizedCells.length < 2) {
+      continue;
+    }
+
+    const statusText = await row.locator(".badge").first().innerText({ timeout: 1000 }).catch(() => cellByHeader(normalizedCells, headers, "status"));
+    const finalizedDate = cellByHeader(normalizedCells, headers, "finalized date");
+    results.push({
+      index,
+      row,
+      cells: normalizedCells,
+      serviceDate: normalizeDateText(cellByHeader(normalizedCells, headers, "service dates")),
+      billedAmount: cellByHeader(normalizedCells, headers, "billed amount"),
+      claimNumber: cellByHeader(normalizedCells, headers, "claim number"),
+      memberId: cellByAnyHeader(normalizedCells, headers, ["member id", "patient member id"]),
+      finalizedDate: normalizeDateText(finalizedDate),
+      finalizedDateValue: parseDateValue(finalizedDate),
+      status: normalizeStatus(statusText)
+    });
+  }
+
+  return results;
+}
+
+function selectWellcareMatchedRows(matchedRows, sourceTab) {
+  if (matchedRows.length <= 1) {
+    return {
+      selectedRows: matchedRows[0] ? [matchedRows[0]] : [],
+      notes: ""
+    };
+  }
+
+  const rowsWithFinalizedDate = matchedRows.filter((matchedRow) => matchedRow.finalizedDateValue);
+  if (!rowsWithFinalizedDate.length) {
+    const message = `${matchedRows.length} ${sourceTab} rows matched Service Date + Billed Amount + Member ID and all had blank Finalized Date. Extracting all matching rows.`;
+    return {
+      selectedRows: matchedRows,
+      notes: message
+    };
+  }
+
+  rowsWithFinalizedDate.sort((a, b) => b.finalizedDateValue.getTime() - a.finalizedDateValue.getTime());
+  const selectedRow = rowsWithFinalizedDate[0];
+  return {
+    selectedRows: [selectedRow],
+    notes: `${matchedRows.length} ${sourceTab} rows matched Service Date + Billed Amount + Member ID. Selected latest finalized date ${selectedRow.finalizedDate} for claim ${selectedRow.claimNumber || "blank"}.`
+  };
+}
+
+async function extractWellcareMatchedRow(page, matchedRow, sourceTab) {
+  logger.info(
+    `Preparing to extract Wellcare matched row: claim="${matchedRow.claimNumber}", status="${matchedRow.status.display}", service_date="${matchedRow.serviceDate}", billed="${matchedRow.billedAmount}", member_id="${matchedRow.memberId}"`
+  );
+
+  if (matchedRow.status.type === "unsupported") {
+    return {
+      type: "unsupported",
+      claimNumber: matchedRow.claimNumber,
+      claimStatus: matchedRow.status.display
+    };
+  }
+
+  await matchedRow.row.click();
+  logger.info(`Clicked Wellcare matched result row for claim ${matchedRow.claimNumber}. Waiting for detail page.`);
+  await page.waitForLoadState("domcontentloaded").catch(() => {});
+  await waitForClaimDetailPage(page);
+  logger.success(`Wellcare detail page loaded for claim ${matchedRow.claimNumber}`);
+
+  if (matchedRow.status.type === "in_process") {
+    const extracted = await extractInProcess(page, matchedRow.status.display);
+    extracted.claimNumber = extracted.claimNumber || matchedRow.claimNumber;
+    return extracted;
+  }
+
+  if (matchedRow.status.type === "paid") {
+    const extracted = await extractWellcarePaid(page, matchedRow.status.display);
+    extracted.claimNumber = extracted.claimNumber || matchedRow.claimNumber;
+    return extracted;
+  }
+
+  if (matchedRow.status.type === "denied") {
+    const extracted = await extractWellcareDenied(page, matchedRow.status.display);
+    extracted.claimNumber = extracted.claimNumber || matchedRow.claimNumber;
+    return extracted;
+  }
+
+  return {
+    type: "unsupported",
+    claimNumber: matchedRow.claimNumber,
+    claimStatus: matchedRow.status.display
+  };
+}
+
+async function processWellcareServiceDateResults(page, row, provider, resultSummary) {
+  const sourceTab = "Service Dates";
+  const resultRows = await getWellcareServiceDateRows(page);
+  const inputDate = normalizeDateText(row.data["Service Date"]);
+  const inputCharge = normalizeMoney(row.data.Charges);
+  const inputMemberId = normalizeMemberId(row.data["Subscriber No"]);
+
+  resultRows.forEach((result) => {
+    logger.info(
+      `Parsed Wellcare Service Dates row ${result.index + 1}: service_date="${result.serviceDate}", billed="${result.billedAmount}", normalized_billed="${normalizeMoney(result.billedAmount)}", member_id="${result.memberId}", finalized_date="${result.finalizedDate}", claim="${result.claimNumber}", status="${result.status.display}"`
+    );
+  });
+
+  const matchedRows = resultRows.filter((result) => {
+    return result.serviceDate === inputDate
+      && normalizeMoney(result.billedAmount) === inputCharge
+      && normalizeMemberId(result.memberId) === inputMemberId;
+  });
+  logger.info(`Matched ${matchedRows.length} Wellcare Service Dates result row(s) by Service Date + Billed Amount + Member ID`);
+
+  if (matchedRows.length === 0) {
+    const returnedRowsSummary = resultRows.slice(0, 5).map((result, index) => {
+      return `returned row ${index + 1}: service_date=${result.serviceDate || "blank"}, billed=${result.billedAmount || "blank"}, member_id=${result.memberId || "blank"}, finalized_date=${result.finalizedDate || "blank"}, claim=${result.claimNumber || "blank"}, status=${result.status.display || "blank"}`;
+    }).join("; ");
+    const returnedCount = resultSummary.total ?? (resultRows.length || "unknown");
+    const mismatchReason = `Portal returned ${returnedCount} rows in ${sourceTab} for provider ${provider}, but none matched input Service Date ${row.data["Service Date"]}, Charges ${row.data.Charges}, and Member ID ${row.data["Subscriber No"]}. ${returnedRowsSummary}`;
+    return {
+      status: "failed",
+      summaries: [renderFailedSummary(mismatchReason)],
+      matchCount: 0,
+      provider,
+      sourceTab,
+      notes: mismatchReason
+    };
+  }
+
+  const selection = selectWellcareMatchedRows(matchedRows, sourceTab);
+  if (selection.notes) {
+    logger.info(selection.notes);
+  }
+
+  if (!selection.selectedRows.length) {
+    return {
+      status: "failed",
+      summaries: [renderFailedSummary(selection.notes)],
+      matchCount: matchedRows.length,
+      provider,
+      sourceTab,
+      notes: selection.notes
+    };
+  }
+
+  const summaries = [];
+  for (let index = 0; index < selection.selectedRows.length; index += 1) {
+    const matchedRow = selection.selectedRows[index];
+    const extracted = await extractWellcareMatchedRow(page, matchedRow, sourceTab);
+    const summaryContext = {
+      ...extracted,
+      payerName: row.data["Payer Name"] || "",
+      serviceDate: matchedRow.serviceDate || "",
+      finalizedDate: matchedRow.finalizedDate || "",
+      claimNumber: extracted.claimNumber || matchedRow.claimNumber || "",
+      claimStatus: extracted.claimStatus || matchedRow.status.display || ""
+    };
+    summaries.push(renderClaimSummary(summaryContext));
+
+    if (extracted.type !== "unsupported") {
+      await returnToResults(page);
+    }
+  }
+
+  return {
+    status: "success",
+    summaries: [summaries.join("\n\n")],
+    matchCount: matchedRows.length,
+    provider,
+    sourceTab,
+    notes: selection.notes || ""
+  };
+}
+
+async function searchWellcareServiceDatesWithProvider(page, providerName, rowData) {
+  logger.info(`Wellcare Service Dates provider attempt: ${providerName}`);
+  await selectServiceDateTab(page);
+  await selectProvider(page, providerName);
+  await fillServiceDateSearchForm(page, rowData);
+  await submitServiceDateSearch(page);
+}
+
+async function processClaim(page, row) {
+  logger.info("Using Wellcare workflow: Service Dates tab only.");
+
+  let lastProviderFailure = "";
+  for (const provider of PROVIDERS) {
+    await searchWellcareServiceDatesWithProvider(page, provider, row.data);
+
+    logger.info(`Waiting up to 5 seconds for ${provider} Wellcare Service Dates results to settle`);
+    const resultSummary = await waitForSearchResultsToSettle(page, 5000);
+    logger.info(
+      `Wellcare Service Dates provider ${provider} result summary: heading="${resultSummary.headingText || "not found"}", total=${resultSummary.total ?? "unknown"}, rows=${resultSummary.resultRowCount ?? "unknown"}, no_results_message=${resultSummary.noResultsMessageVisible}, alert="${resultSummary.portalAlertMessage || ""}"`
+    );
+
+    const resultRows = await getWellcareServiceDateRows(page);
+    if (resultSummary.hasPortalAlert && resultRows.length === 0) {
+      logger.warn(`Wellcare Service Dates provider ${provider} returned portal alert without claim rows: ${resultSummary.portalAlertMessage}`);
+      lastProviderFailure = `Provider ${provider}: ${resultSummary.portalAlertMessage}`;
+      continue;
+    }
+
+    if (resultRows.length === 0) {
+      logger.warn(`Wellcare Service Dates provider ${provider} returned no claim rows. Trying next provider if available.`);
+      lastProviderFailure = `Provider ${provider}: no claim rows returned.`;
+      continue;
+    }
+
+    return processWellcareServiceDateResults(page, row, provider, resultSummary);
+  }
+
+  return {
+    status: "failed",
+    summaries: [renderFailedSummary(lastProviderFailure || "Claim not found in Wellcare Service Dates tab for matching Service Date, Charges, and Member ID.")],
+    matchCount: 0,
+    provider: PROVIDERS.join(", "),
+    sourceTab: "Service Dates",
+    notes: lastProviderFailure
+      ? `Searched Wellcare Service Dates providers: ${PROVIDERS.join(", ")}. Last provider failure: ${lastProviderFailure}`
+      : `Searched Wellcare Service Dates providers: ${PROVIDERS.join(", ")}. No matching Service Date + Charges + Member ID found.`
+  };
+}
+
+module.exports = {
+  name: "wellcare",
+  processClaim
+};
