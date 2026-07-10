@@ -38,17 +38,29 @@ test("accepts normalized payer and insurance name header variants", () => {
   assert.equal(insuranceRouting.batches[0].payerId, "arp");
 });
 
-test("routes Blue Cross Blue Shield aliases to the BCBS payer", () => {
+test("routes Blue Cross Blue Shield aliases to the correct Waystar payer option", () => {
   const routing = routeWaystarRowsByPayer([
-    { Payer: "Blue Cross and Blue Shield" },
+    { Payer: "Blue Cross and Blue Shield of Texas" },
     { Payer: "BCBS Florida" },
-    { Payer: "Blue Shield" },
+    { Payer: "Florida Blue" },
   ]);
 
   assert.deepEqual(
     routing.batches.map((batch) => [batch.payerId, batch.rows.length]),
-    [["blue-cross-blue-shield", 3]],
+    [
+      ["blue-cross-blue-shield-texas", 1],
+      ["blue-cross-blue-shield-florida", 2],
+    ],
   );
+});
+
+test("accepts Primary Ins Subscriber No as a BCBS payer source column", () => {
+  const routing = routeWaystarRowsByPayer([
+    { "Primary Ins Subscriber No": "Blue Cross and Blue Shield of Texas" },
+  ]);
+
+  assert.equal(routing.payerHeader, "Primary Ins Subscriber No");
+  assert.equal(routing.batches[0].payerId, "blue-cross-blue-shield-texas");
 });
 
 test("reports unsupported insurance rows without mixing them into payer batches", () => {

@@ -1,19 +1,38 @@
 import type { WaystarPayerHandler } from "../types";
 
-export const blueCrossBlueShieldPayer: WaystarPayerHandler = {
-  id: "blue-cross-blue-shield",
-  name: "Blue Cross Blue Shield",
-  portalPayerName: "Blue Cross Blue Shield",
+const commonRequiredFields = ["memberId", "patientFirstName", "patientLastName", "dateOfBirth"];
+
+export const blueCrossBlueShieldTexasPayer: WaystarPayerHandler = {
+  id: "blue-cross-blue-shield-texas",
+  name: "Blue Cross Blue Shield Texas",
+  portalPayerName: "BCBS Texas(SB900)",
   insuranceNameAliases: [
-    "blue cross blue shield",
-    "blue cross and blue shield",
-    "bcbs",
-    "bluecross blueshield",
-    "blue shield",
-    "blue cross",
+    "blue cross and blue shield of texas",
+    "blue cross blue shield of texas",
+    "blue cross blue shield texas",
+    "bcbs texas",
+    "bcbstx",
   ],
-  requiredFields: ["memberId", "patientFirstName", "patientLastName", "dateOfBirth"],
+  requiredFields: commonRequiredFields,
   parseResult() {
-    throw new Error("The Waystar Blue Cross Blue Shield response parser has not been configured.");
+    throw new Error("The Waystar Blue Cross Blue Shield Texas response parser has not been configured.");
+  },
+};
+
+export const blueCrossBlueShieldFloridaPayer: WaystarPayerHandler = {
+  id: "blue-cross-blue-shield-florida",
+  name: "Blue Cross Blue Shield Florida",
+  portalPayerName: "BCBS Florida(SB590)",
+  insuranceNameAliases: [
+    "blue cross and blue shield of florida",
+    "blue cross blue shield of florida",
+    "blue cross blue shield florida",
+    "bcbs florida",
+    "bcbsfl",
+    "florida blue",
+  ],
+  requiredFields: commonRequiredFields,
+  parseResult() {
+    throw new Error("The Waystar Blue Cross Blue Shield Florida response parser has not been configured.");
   },
 };

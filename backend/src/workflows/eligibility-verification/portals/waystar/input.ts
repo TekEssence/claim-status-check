@@ -12,6 +12,7 @@ export const INSURANCE_HEADER_ALIASES = [
   "payer name",
   "insurance name",
   "insurance",
+  "primary ins subscriber no",
 ] as const;
 
 export type WaystarWorkbookRouting = {
