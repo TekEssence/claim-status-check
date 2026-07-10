@@ -1,150 +1,29 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
-import { FileSpreadsheet, KeyRound, Play } from "lucide-react";
+import type { FormEvent } from "react";
+import { FileSpreadsheet, Info, KeyRound, Play } from "lucide-react";
 import { PortalUploadCard } from "../../../../components/portal-workflow/PortalUploadCard";
-
-const BLUE_SHIELD_GROUPS = [
-  "AST",
-  "BZA",
-  "CTH",
-  "DMA",
-  "GEH",
-  "JTC",
-  "KMJ",
-  "MAIN",
-  "NSG",
-  "SARMG",
-  "SDOMG",
-  "USA",
-  "AHK",
-  "BPH",
-  "ESC",
-  "FASC",
-  "IENT",
-  "IPMG",
-  "IUMG",
-  "KS-PC",
-  "LCS",
-  "MMG",
-  "NUR",
-  "Posada",
-  "SMHR",
-  "SSCE",
-  "TAJ",
-  "TAT",
-  "TWL",
-  "WMGU",
-];
 
 export function BlueShieldInputForm({
   canSubmit,
   credentialFileName,
-  group,
   inputFileName,
   isProcessing,
   onCredentialFileChange,
-  onGroupChange,
   onInputFileChange,
   onSubmit,
 }: {
   canSubmit: boolean;
   credentialFileName?: string;
-  group: string;
   inputFileName?: string;
   isProcessing: boolean;
   onCredentialFileChange: (file: File | null) => void;
-  onGroupChange: (group: string) => void;
   onInputFileChange: (file: File | null) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
 }) {
-  const dropdownRef = useRef<HTMLDivElement | null>(null);
-  const [isGroupDropdownOpen, setIsGroupDropdownOpen] = useState(false);
-  const [groupSearch, setGroupSearch] = useState("");
-  const normalizedGroupSearch = groupSearch.trim().toLowerCase();
-  const filteredGroups = normalizedGroupSearch
-    ? BLUE_SHIELD_GROUPS.filter((groupName) => groupName.toLowerCase().includes(normalizedGroupSearch))
-    : BLUE_SHIELD_GROUPS;
-
-  useEffect(() => {
-    function closeDropdown(event: MouseEvent) {
-      if (!dropdownRef.current?.contains(event.target as Node)) {
-        setIsGroupDropdownOpen(false);
-      }
-    }
-
-    document.addEventListener("mousedown", closeDropdown);
-    return () => document.removeEventListener("mousedown", closeDropdown);
-  }, []);
-
   return (
     <form className="space-y-5" onSubmit={onSubmit}>
-      <div className="rounded-[1.5rem] border border-sky-100 bg-[linear-gradient(180deg,rgba(255,255,255,0.98)_0%,rgba(244,249,255,0.96)_100%)] p-5 shadow-[0_16px_34px_rgba(148,163,184,0.12)]">
-        <label className="flex items-center gap-1 text-base font-semibold tracking-[-0.03em] text-slate-950" htmlFor="blueShieldGroup">
-          <span>Select Processing Group</span>
-          <span className="text-rose-600">*</span>
-        </label>
-        <p className="mt-2 text-sm text-slate-600">Choose the Blue Shield payer group before uploading the workbook package.</p>
-        <div ref={dropdownRef} className="relative">
-          <button
-            type="button"
-            id="blueShieldGroup"
-            aria-expanded={isGroupDropdownOpen}
-            aria-haspopup="listbox"
-            aria-required="true"
-            onClick={() => setIsGroupDropdownOpen((isOpen) => !isOpen)}
-            className="flex w-full items-center justify-between rounded-md border border-slate-300 bg-white p-2 text-left text-sm text-slate-900"
-          >
-            <span className={group ? "" : "text-slate-500"}>{group || "Choose the group"}</span>
-            <span
-              aria-hidden="true"
-              className="h-2 w-2 border-b-2 border-r-2 border-slate-500 transition-transform"
-              style={{ transform: isGroupDropdownOpen ? "rotate(225deg)" : "rotate(45deg)" }}
-            />
-          </button>
-
-          {isGroupDropdownOpen ? (
-            <div className="absolute z-20 mt-1 w-full rounded-md border border-slate-300 bg-white shadow-lg">
-              <div className="border-b border-slate-200 p-2">
-                <input
-                  type="search"
-                  value={groupSearch}
-                  onChange={(event) => setGroupSearch(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") {
-                      event.preventDefault();
-                    }
-                  }}
-                  placeholder="Search group"
-                  className="block w-full rounded-md border border-slate-300 bg-white p-2 text-sm"
-                  autoFocus
-                />
-              </div>
-              <div className="max-h-56 overflow-y-auto py-1" role="listbox" aria-labelledby="blueShieldGroup">
-                {filteredGroups.length ? (
-                  filteredGroups.map((groupName) => (
-                    <button
-                      key={groupName}
-                      type="button"
-                      role="option"
-                      aria-selected={groupName === group}
-                      onClick={() => {
-                        onGroupChange(groupName);
-                        setGroupSearch("");
-                        setIsGroupDropdownOpen(false);
-                      }}
-                      className={`block w-full px-3 py-2 text-left text-sm hover:bg-blue-50 ${
-                        groupName === group ? "bg-blue-50 font-medium text-blue-700" : "text-slate-900"
-                      }`}
-                    >
-                      {groupName}
-                    </button>
-                  ))
-                ) : (
-                  <div className="px-3 py-2 text-sm text-slate-500">No groups found</div>
-                )}
-              </div>
-            </div>
-          ) : null}
-        </div>
+      <div className="flex gap-3 rounded-[1.2rem] border border-blue-200 bg-blue-50 p-4 text-sm text-blue-900">
+        <Info className="mt-0.5 h-4 w-4 shrink-0" />
+        Groups are detected automatically from the claim workbook and matched to the login workbook.
       </div>
 
       <div className="grid gap-5 xl:grid-cols-2">
@@ -152,7 +31,7 @@ export function BlueShieldInputForm({
           mode="file"
           accept=".xlsx,.xls,.csv"
           acceptedFormats=".xlsx, .xls, .csv"
-          description="Upload the Blue Shield credential workbook used for secure portal sign-in."
+          description="Upload the credential workbook containing Group, URL, User Name, and Password."
           fileName={credentialFileName}
           icon={KeyRound}
           inputId="blueShieldCredentialExcel"
@@ -164,7 +43,7 @@ export function BlueShieldInputForm({
           mode="file"
           accept=".xlsx,.xls,.csv"
           acceptedFormats=".xlsx, .xls, .csv"
-          description="Upload the input workbook grouped by Member ID for automated Blue Shield validation."
+          description="Upload the claim workbook containing Group, Member ID, and DOS columns."
           fileName={inputFileName}
           icon={FileSpreadsheet}
           inputId="blueShieldInputExcel"
@@ -173,7 +52,6 @@ export function BlueShieldInputForm({
           title="Upload Claim File"
         />
       </div>
-
 
       <button
         type="submit"

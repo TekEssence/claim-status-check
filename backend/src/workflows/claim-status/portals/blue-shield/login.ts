@@ -1,6 +1,7 @@
 import type { Page } from "playwright-core";
 import { waitForScrapeJobInput } from "@/backend/src/jobs/job-store";
 import type { ScraperContext } from "../../types";
+import { isBlueShieldPingAuthorizationUrl } from "./auth-state";
 import { blueShieldConfig } from "./config";
 import { assertNoSecurityBlock } from "./detection-monitor";
 import type { BlueShieldCredentials } from "./types";
@@ -182,6 +183,7 @@ async function handleOptionalBookmarkPage(page: Page, log: (message: string) => 
 
 async function requestBlueShieldOtpFromUser(context: ScraperContext, log: (message: string) => Promise<void>): Promise<string> {
   await log("Blue Shield OTP page detected. Waiting for user to enter OTP in frontend. Timeout: 5 minutes.");
+  const otpPromise = waitForScrapeJobInput(context.jobId, "blue_shield_otp", 300000);
   await context.emit({
     type: "input_request",
     inputName: "blue_shield_otp",
@@ -189,7 +191,32 @@ async function requestBlueShieldOtpFromUser(context: ScraperContext, log: (messa
     message: "Enter the Blue Shield verification code within 5 minutes.",
     timeoutMs: 300000,
   });
-  return waitForScrapeJobInput(context.jobId, "blue_shield_otp", 300000);
+  return otpPromise;
+}
+
+async function hasClaimStatusSession(page: Page, credentials: BlueShieldCredentials): Promise<boolean> {
+  await page.goto(credentials.claimStatusUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
+  await page.locator(blueShieldConfig.selectors.memberIdInput).first()
+    .waitFor({ state: "visible", timeout: 12000 })
+    .catch(() => {});
+  return !isBlueShieldPingAuthorizationUrl(page.url())
+    && Boolean(await firstVisible(page, blueShieldConfig.selectors.memberIdInput));
+}
+
+async function resetExistingBlueShieldSession(
+  page: Page,
+  credentials: BlueShieldCredentials,
+  log: (message: string) => Promise<void>,
+): Promise<void> {
+  const hasExistingSession = await hasClaimStatusSession(page, credentials).catch(() => false);
+  if (!hasExistingSession) return;
+
+  await log("Blue Shield already has an open account session. Logging it out before entering the requested credentials.");
+  await logoutFromBlueShield(page, log);
+  await page.goto(credentials.loginUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
+  await page.waitForLoadState("networkidle", { timeout: 30000 }).catch(() => {});
+  await handleCookieConsent(page, log);
+  await handleOptionalBookmarkPage(page, log);
 }
 
 export async function loginToBlueShield(options: {
@@ -207,6 +234,7 @@ export async function loginToBlueShield(options: {
   await assertNoSecurityBlock(page);
   await handleCookieConsent(page, log);
   const startedFromBookmarkPage = await handleOptionalBookmarkPage(page, log);
+  await resetExistingBlueShieldSession(page, credentials, log);
 
   await handleCookieConsent(page, log);
   await clickIfVisible(page, selectors.loginRegister, 5000);
@@ -218,9 +246,31 @@ export async function loginToBlueShield(options: {
   }
 
   if (!await waitForVisible(page, selectors.password, 10000)) {
-    await log("Blue Shield session appears to be already authenticated.");
-    await handleOptionalBookmarkPage(page, log);
-    return;
+    if (await hasClaimStatusSession(page, credentials).catch(() => false)) {
+      await log("Blue Shield stored session was valid but may belong to another account. Logging out and signing in with the requested credentials.");
+      await logoutFromBlueShield(page, log);
+      await page.goto(credentials.loginUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
+      await page.waitForLoadState("networkidle", { timeout: 30000 }).catch(() => {});
+      await handleCookieConsent(page, log);
+      await handleOptionalBookmarkPage(page, log);
+      await clickIfVisible(page, selectors.loginRegister, 5000);
+      if (await waitForVisible(page, selectors.password, 12000)) {
+        // Continue into the normal credential-entry path below.
+      } else {
+        throw new Error(`Blue Shield login fields were not available after logging out the existing account. Current URL: ${page.url()}`);
+      }
+    } else {
+      await log(`Blue Shield stored session is expired or incomplete (${page.url()}). Clearing it and signing in again.`);
+      await page.context().clearCookies();
+      await page.goto(credentials.loginUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
+      await page.waitForLoadState("networkidle", { timeout: 30000 }).catch(() => {});
+      await handleCookieConsent(page, log);
+      await handleOptionalBookmarkPage(page, log);
+      await clickIfVisible(page, selectors.loginRegister, 5000);
+      if (!await waitForVisible(page, selectors.password, 12000)) {
+        throw new Error(`Blue Shield login fields were not available after stale-session recovery. Current URL: ${page.url()}`);
+      }
+    }
   }
 
   await typeLoginField(page, selectors.username, credentials.username);
@@ -251,5 +301,38 @@ export async function loginToBlueShield(options: {
     await log("Blue Shield OTP page was not shown. Continuing with existing trusted session.");
   }
 
-  await log("Blue Shield login completed.");
+  if (!await hasClaimStatusSession(page, credentials).catch(() => false)) {
+    throw new Error(`Blue Shield authentication did not reach the claim status page. Current URL: ${page.url()}`);
+  }
+  await log("Blue Shield login completed and claim status access was validated.");
+}
+
+export async function logoutFromBlueShield(
+  page: Page,
+  log: (message: string) => Promise<void>,
+): Promise<void> {
+  const selectors = blueShieldConfig.selectors;
+  await page.evaluate(() => window.scrollTo(0, 0)).catch(() => {});
+
+  let logout = page.locator(selectors.logout).first();
+  if (!await logout.isVisible({ timeout: 1500 }).catch(() => false)) {
+    const accountMenu = page.locator(selectors.accountMenu).first();
+    if (await accountMenu.isVisible({ timeout: 1500 }).catch(() => false)) {
+      await accountMenu.click({ timeout: 5000 }).catch(() => {});
+      await page.waitForTimeout(500);
+      logout = page.locator(selectors.logout).first();
+    }
+  }
+
+  if (await logout.isVisible({ timeout: 1500 }).catch(() => false)) {
+    await logout.click({ timeout: 5000 }).catch(async () => {
+      await logout.click({ force: true, timeout: 5000 });
+    });
+    await page.waitForLoadState("domcontentloaded", { timeout: 15000 }).catch(() => {});
+    await log("Blue Shield logged out before switching credentials.");
+  } else {
+    await log("Blue Shield logout control was not visible; clearing the completed account session before switching credentials.");
+  }
+
+  await page.context().clearCookies();
 }

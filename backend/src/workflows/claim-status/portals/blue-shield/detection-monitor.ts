@@ -57,3 +57,7 @@ export function attachBlueShieldDetectionMonitor(page: Page): void {
     }
   });
 }
+
+export function clearBlueShieldDetectionMonitor(page: Page): void {
+  responseDetections.delete(page);
+}

@@ -1,11 +1,13 @@
 import { UnknownPortalError } from "../../../../core/errors";
 import { arpPayer } from "./payers/arp";
+import { blueCrossBlueShieldPayer } from "./payers/blue-cross-blue-shield";
 import { medicarePayer } from "./payers/medicare";
 import type { WaystarPayerHandler } from "./payers/types";
 
 export const waystarPayerRegistry = {
   medicare: medicarePayer,
   arp: arpPayer,
+  "blue-cross-blue-shield": blueCrossBlueShieldPayer,
 } satisfies Record<string, WaystarPayerHandler>;
 
 export function getWaystarPayer(payerId: string): WaystarPayerHandler {

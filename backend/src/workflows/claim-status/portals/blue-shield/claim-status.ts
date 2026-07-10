@@ -1,5 +1,6 @@
-import type { Page } from "playwright-core";
+import type { Locator, Page } from "playwright-core";
 import { blueShieldConfig } from "./config";
+import { isBlueShieldPingAuthorizationUrl } from "./auth-state";
 import { assertNoSecurityBlock } from "./detection-monitor";
 import type { BlueShieldCredentials, BlueShieldMemberWorkItem } from "./types";
 
@@ -65,9 +66,105 @@ async function fillFirstAvailable(page: Page, selector: string, value: string): 
   return true;
 }
 
+async function clearVisibleInputs(locator: Locator): Promise<number> {
+  const count = await locator.count().catch(() => 0);
+  let cleared = 0;
+  for (let index = 0; index < count; index++) {
+    const input = locator.nth(index);
+    if (!await input.isVisible().catch(() => false)) continue;
+    await input.fill("").catch(async () => {
+      await input.evaluate((element) => {
+        if (!(element instanceof HTMLInputElement)) return;
+        const prototype = Object.getPrototypeOf(element) as HTMLInputElement;
+        const descriptor = Object.getOwnPropertyDescriptor(prototype, "value");
+        descriptor?.set?.call(element, "");
+        element.dispatchEvent(new Event("input", { bubbles: true }));
+        element.dispatchEvent(new Event("change", { bubbles: true }));
+      }).catch(() => {});
+    });
+    cleared++;
+  }
+  return cleared;
+}
+
+async function clearClaimOrEobSearchFields(page: Page): Promise<void> {
+  const selectors = blueShieldConfig.selectors;
+  await page.evaluate(() => {
+    const visible = (element: HTMLElement) => {
+      const style = window.getComputedStyle(element);
+      const box = element.getBoundingClientRect();
+      return style.display !== "none" && style.visibility !== "hidden" && box.width > 0 && box.height > 0;
+    };
+    const setNativeValue = (element: HTMLInputElement | HTMLSelectElement, value: string) => {
+      const prototype = Object.getPrototypeOf(element);
+      const descriptor = Object.getOwnPropertyDescriptor(prototype, "value");
+      descriptor?.set?.call(element, value);
+      element.dispatchEvent(new Event("input", { bubbles: true }));
+      element.dispatchEvent(new Event("change", { bubbles: true }));
+      element.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true }));
+    };
+
+    for (const input of Array.from(document.querySelectorAll<HTMLInputElement>("input"))) {
+      const type = (input.getAttribute("type") || "text").toLowerCase();
+      if (!visible(input) || input.disabled || input.readOnly || ["button", "submit", "reset", "checkbox", "radio", "hidden"].includes(type)) continue;
+      setNativeValue(input, "");
+    }
+    for (const select of Array.from(document.querySelectorAll<HTMLSelectElement>("select"))) {
+      if (!visible(select) || select.disabled) continue;
+      setNativeValue(select, "");
+    }
+  }).catch(() => {});
+
+  await clearVisibleInputs(page.locator(selectors.claimEobInput));
+  await clearVisibleInputs(page.locator(selectors.checkEftInput));
+
+  await page.evaluate(() => {
+    const visible = (element: HTMLElement) => {
+      const style = window.getComputedStyle(element);
+      const box = element.getBoundingClientRect();
+      return style.display !== "none" && style.visibility !== "hidden" && box.width > 0 && box.height > 0;
+    };
+    const isClaimOrEobSearchField = (element: HTMLInputElement) => {
+      const attributes = [
+        element.id,
+        element.name,
+        element.placeholder,
+        element.ariaLabel,
+        element.getAttribute("formcontrolname"),
+        element.getAttribute("data-testid"),
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      if (!/(claim|eob)/i.test(attributes)) return false;
+      return !/(claimsearchstatus|status|fromdate|todate|memid|member|subscriber)/i.test(attributes);
+    };
+
+    for (const input of Array.from(document.querySelectorAll<HTMLInputElement>("input"))) {
+      if (!visible(input) || input.disabled || input.readOnly || !isClaimOrEobSearchField(input)) continue;
+      input.value = "";
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+  }).catch(() => {});
+}
+
+async function resetBlueShieldSearchForm(page: Page): Promise<void> {
+  const startOver = page.locator(blueShieldConfig.selectors.startOverSearch).first();
+  if (await startOver.isVisible({ timeout: 1000 }).catch(() => false)) {
+    await startOver.click({ timeout: 3000 }).catch(async () => {
+      await startOver.click({ force: true, timeout: 3000 });
+    });
+    await page.waitForTimeout(500);
+  }
+  await clearClaimOrEobSearchFields(page);
+}
+
 async function fillSearchCriteria(page: Page, workItem: BlueShieldMemberWorkItem, dosRange: { start: string; end: string }): Promise<boolean> {
   const selectors = blueShieldConfig.selectors;
   const memberId = normalizeMemberId(workItem.memberId);
+
+  await resetBlueShieldSearchForm(page);
 
   if (!await fillFirstAvailable(page, selectors.memberIdInput, memberId)) {
     throw new Error("Blue Shield Member ID input was not found.");
@@ -87,11 +184,45 @@ async function visibleCount(page: Page, selector: string): Promise<number> {
   return page.locator(selector).count().catch(() => 0);
 }
 
+async function visibleClaimResultCount(page: Page, memberId: string): Promise<number> {
+  const pageText = await page.locator("body").innerText({ timeout: 3000 }).catch(() => "");
+  if (/showing\s+0\s+claims/i.test(pageText) || /couldn[’']?t\s+find\s+any\s+claims\s+that\s+match\s+your\s+search/i.test(pageText)) {
+    return 0;
+  }
+
+  const normalizedMemberId = normalizeMemberId(memberId).toLowerCase();
+  const rows = page.locator(blueShieldConfig.selectors.resultRows);
+  const rowCount = await rows.count().catch(() => 0);
+  let resultCount = 0;
+
+  for (let index = 0; index < rowCount; index++) {
+    const row = rows.nth(index);
+    if (!await row.isVisible().catch(() => false)) continue;
+    const text = (await row.innerText().catch(() => "")).replace(/\s+/g, " ").trim();
+    if (!text) continue;
+
+    const normalizedText = text.replace(/\s+/g, "").toLowerCase();
+    const hasDate = /\b\d{1,2}\/\d{1,2}\/(?:\d{2}|\d{4})\b/.test(text);
+    const hasMember = normalizedMemberId && normalizedText.includes(normalizedMemberId);
+    const hasClaimSignal = /\b(claim|eob|paid|pending|denied|billed|patient responsibility)\b/i.test(text) || /\$[0-9,]+(?:\.\d{2})?/.test(text);
+    const cellCount = await row.locator("td").count().catch(() => 0);
+    if (cellCount >= 4 && hasDate && (hasMember || hasClaimSignal)) {
+      resultCount++;
+    }
+  }
+
+  return resultCount;
+}
+
 export async function navigateToBlueShieldClaimStatus(page: Page, credentials: BlueShieldCredentials): Promise<void> {
   await page.evaluate(() => window.scrollTo(0, 0)).catch(() => {});
   await page.goto(credentials.claimStatusUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
   await page.locator(blueShieldConfig.selectors.memberIdInput).first().waitFor({ state: "visible", timeout: 12000 }).catch(() => {});
   await assertNoSecurityBlock(page);
+
+  if (isBlueShieldPingAuthorizationUrl(page.url())) {
+    throw new Error(`Blue Shield session expired and redirected to Ping authorization. Current URL: ${page.url()}`);
+  }
 
   if (await visibleCount(page, blueShieldConfig.selectors.memberIdInput) > 0) {
     return;
@@ -148,10 +279,10 @@ export async function searchBlueShieldClaims(options: {
     lastSearchDisplay = filledRange ? `${currentRange.start} - ${currentRange.end}` : currentRange.start;
 
     await page.locator(selectors.searchSubmit).first().click();
-    await page.locator(blueShieldConfig.selectors.resultRows).first().waitFor({ state: "visible", timeout: 15000 }).catch(() => {});
+    await page.locator(blueShieldConfig.selectors.resultRows).first().waitFor({ state: "visible", timeout: 10000 }).catch(() => {});
     await assertNoSecurityBlock(page);
 
-    if (await visibleCount(page, blueShieldConfig.selectors.resultRows) > 0) {
+    if (await visibleClaimResultCount(page, memberId) > 0) {
       return { dosSearched: lastSearchDisplay };
     }
   }

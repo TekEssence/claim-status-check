@@ -4,10 +4,13 @@ import { blueShieldClaimExtractionTestHooks } from "../claim-extraction";
 
 const {
   computeClaimStatus,
+  formatClaimMessage,
+  formatClaimNotesForLine,
   mergeServiceLineSources,
   noteForServiceLine,
   parseServiceLinesFromRows,
   parseServiceLinesFromText,
+  sectionTextFromLines,
   sanitizeClaimNotesText,
   textMatchesRequestedDos,
 } = blueShieldClaimExtractionTestHooks;
@@ -15,8 +18,41 @@ const {
 test("extracts the matching Blue Shield claim note for each service line", () => {
   const notes = "LINE 1 DENIED - not a covered benefit LINE 2 PAID per contracted rate";
 
-  assert.equal(noteForServiceLine(notes, "1"), "DENIED - not a covered benefit");
-  assert.equal(noteForServiceLine(notes, "2"), "PAID per contracted rate");
+  assert.equal(noteForServiceLine(notes, "1"), "Claim notes line 1: DENIED - not a covered benefit");
+  assert.equal(noteForServiceLine(notes, "2"), "Claim notes line 2: PAID per contracted rate");
+});
+
+test("reports no Blue Shield claim notes for the matched service line", () => {
+  assert.equal(
+    noteForServiceLine("Claim notes: There are no notes for this claim.", "1"),
+    "Claim notes line 1: There are no notes for line 1.",
+  );
+});
+
+test("does not reuse another Blue Shield service line note for matched CPT line", () => {
+  const notes = [
+    "LINE 1",
+    "CONTRACTING PHYSICIANS AND HEALTH CARE PROVIDERS AGREE TO ACCEPT THE ALLOWED AMOUNT AS PAYMENT IN FULL.",
+  ].join(" ");
+
+  assert.equal(
+    noteForServiceLine(notes, "2"),
+    "Claim notes line 2: There are no notes for line 2.",
+  );
+});
+
+test("labels Blue Shield claim message text for Bot Claim Notes", () => {
+  assert.equal(
+    formatClaimMessage("THIS CLAIM HAS BEEN PAID BY CALPERS."),
+    "Claim message: THIS CLAIM HAS BEEN PAID BY CALPERS.",
+  );
+});
+
+test("labels Blue Shield claim notes with the matched line number", () => {
+  assert.equal(
+    formatClaimNotesForLine("PAID per contracted rate", "2"),
+    "Claim notes line 2: PAID per contracted rate",
+  );
 });
 
 test("computes Blue Shield status from service-line data before claim-level totals", () => {
@@ -227,6 +263,26 @@ test("removes Blue Shield site navigation text from claim notes", () => {
       "Skip to content Contact us Site help Provider Connection Account Eligibility",
     ].join("\n")),
     "LINE 1 DENIED - MEMBER NOT ELIGIBLE ON DATE OF SERVICE",
+  );
+});
+
+test("extracts Blue Shield claim message text before claim notes", () => {
+  const claimMessage = sectionTextFromLines(
+    [
+      "Service and procedure details",
+      "Claim message",
+      "THIS CLAIM HAS BEEN PAID BY CALPERS.",
+      "PLEASE REVIEW THE MEMBER RESPONSIBILITY ON THE EOB.",
+      "Claim notes",
+      "There are no notes for this claim.",
+    ].join("\n"),
+    /^claim\s+message$/i,
+    /^(claim notes?|claim details|payment details|service and procedure details|service details|procedure details)$/i,
+  );
+
+  assert.equal(
+    claimMessage,
+    "THIS CLAIM HAS BEEN PAID BY CALPERS. PLEASE REVIEW THE MEMBER RESPONSIBILITY ON THE EOB.",
   );
 });
 

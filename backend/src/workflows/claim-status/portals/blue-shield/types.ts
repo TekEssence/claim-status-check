@@ -9,6 +9,7 @@ export type BlueShieldCredentials = {
 
 export type BlueShieldInputRow = Record<string, unknown> & {
   inputRowId: number;
+  group: string;
   memberId: string;
   dos: string;
   cptCode: string;
@@ -24,12 +25,23 @@ export type BlueShieldMemberWorkItem = {
 };
 
 export type BlueShieldInput = {
-  credentials: BlueShieldCredentials;
-  selectedGroup: string;
+  credentialWorkbookBuffer: ArrayBuffer;
   inputWorkbookBuffer: ArrayBuffer;
   inputFileName: string;
   checkpointId: string;
   resetCheckpoint: boolean;
+};
+
+export type BlueShieldCredentialBatch = {
+  credentialKey: string;
+  credentials: BlueShieldCredentials;
+  groups: string[];
+  rows: BlueShieldInputRow[];
+};
+
+export type BlueShieldCredentialRouting = {
+  batches: BlueShieldCredentialBatch[];
+  unmappedRows: BlueShieldInputRow[];
 };
 
 export type BlueShieldClaimSummary = {

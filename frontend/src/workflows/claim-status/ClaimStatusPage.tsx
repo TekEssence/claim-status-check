@@ -631,7 +631,6 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
   const [availityInputFile, setAvailityInputFile] = useState<File | null>(null);
   const [blueShieldCredentialFile, setBlueShieldCredentialFile] = useState<File | null>(null);
   const [blueShieldInputFile, setBlueShieldInputFile] = useState<File | null>(null);
-  const [blueShieldGroup, setBlueShieldGroup] = useState("");
   const [blueShieldResetCheckpoint, setBlueShieldResetCheckpoint] = useState(false);
   const [blueShieldJobId, setBlueShieldJobId] = useState<string>("");
   const [blueShieldOtpRequest, setBlueShieldOtpRequest] = useState<{ inputName: string; label: string; message: string } | null>(null);
@@ -741,8 +740,8 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     [regalClaimFile, isProcessing],
   );
   const canSubmitBlueShield = useMemo(
-    () => Boolean(blueShieldCredentialFile && blueShieldInputFile && blueShieldGroup && !isProcessing),
-    [blueShieldCredentialFile, blueShieldInputFile, blueShieldGroup, isProcessing],
+    () => Boolean(blueShieldCredentialFile && blueShieldInputFile && !isProcessing),
+    [blueShieldCredentialFile, blueShieldInputFile, isProcessing],
   );
   const currentCanSubmit =
     effectivePortalId === "iehp"
@@ -1309,7 +1308,6 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     setAerialInputFile(null);
     setBlueShieldCredentialFile(null);
     setBlueShieldInputFile(null);
-    setBlueShieldGroup("");
     setBlueShieldResetCheckpoint(false);
     setBlueShieldJobId("");
     setBlueShieldOtpRequest(null);
@@ -2381,7 +2379,6 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
 
     const formData = new FormData();
     formData.append("portalId", "blue-shield");
-    formData.append("group", blueShieldGroup);
     formData.append("credentialExcel", blueShieldCredentialFile);
     formData.append("inputExcel", blueShieldInputFile);
     formData.append("checkpointId", blueShieldInputFile.name || "blue-shield");
@@ -3524,11 +3521,9 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
                     <BlueShieldInputForm
                       canSubmit={canSubmitBlueShield}
                       credentialFileName={blueShieldCredentialFile?.name ?? ""}
-                      group={blueShieldGroup}
                       inputFileName={blueShieldInputFile?.name ?? ""}
                       isProcessing={isProcessing}
                       onCredentialFileChange={setBlueShieldCredentialFile}
-                      onGroupChange={setBlueShieldGroup}
                       onInputFileChange={setBlueShieldInputFile}
                       onSubmit={submitBlueShield}
                     />
