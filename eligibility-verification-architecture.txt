@@ -1,0 +1,349 @@
+Eligibility Verification Architecture Proposal
+
+I read the project and I would not add Eligibility Verification as "just another claim status portal." The clean architecture is to make it a second workflow/product line that shares the same job engine, auth, logging, persistence, browser helpers, retry/error utilities, and UI shell, while keeping portal parsing and domain rules completely separate.
+
+Current Shape
+
+The current app is a multi-portal claim status platform.
+
+Main pieces:
+
+- backend/src/scrapers/types.ts defines the shared PortalScraper contract.
+- backend/src/scrapers/registry.ts registers claim-status portals: IEHP, Aerial, Regal, Blue Shield.
+- backend/src/routes/scrape-jobs-route.ts starts jobs, streams SSE events, handles cancellation/input, and persists logs/artifacts.
+- backend/src/core already contains reusable things eligibility should share: errors, browser, retry, logger, storage, screenshots, downloads, environment.
+- frontend/src/pages/ScraperPage.tsx is the large claim-status UI shell with hardcoded portal switching.
+- db/schema/scrape-jobs.ts persists job state, but names are still iehp_scrape_jobs, claim_file_name, etc.
+
+So the backend has a decent generic foundation, but many names and UI flows still say "claim."
+
+Recommended Architecture
+
+Add a new top-level workflow concept:
+
+backend/src/
+  core/
+    browser.ts
+    errors.ts
+    logger.ts
+    retry.ts
+    storage.ts
+    screenshots.ts
+    downloads.ts
+
+  jobs/
+    job-store.ts
+    types.ts
+
+  workflows/
+    types.ts
+    registry.ts
+
+    claim-status/
+      registry.ts
+      types.ts
+      portals/
+        iehp/
+        aerial/
+        regal/
+        blue-shield/
+
+    eligibility-verification/
+      registry.ts
+      types.ts
+      portals/
+        availity/
+        provider-portal-x/
+        payer-portal-y/
+
+The important move is this:
+
+workflowId = "claim-status" | "eligibility-verification"
+portalId = "iehp" | "blue-shield" | "availity" | ...
+
+Right now portalId carries too much meaning. Eligibility should not reuse backend/src/scrapers/registry.ts directly because that registry currently means "claim status scraper registry," even if the type name is generic.
+
+Shared Contract
+
+I would introduce a neutral automation contract, then keep the old PortalScraper as a compatibility layer during migration.
+
+Example shape:
+
+export type WorkflowId = "claim-status" | "eligibility-verification";
+
+export type AutomationContext = {
+  jobId: string;
+  workflowId: WorkflowId;
+  portalId: string;
+  log: (...) => Promise<void>;
+  emit: (...) => Promise<void>;
+  isCancelled?: () => boolean;
+};
+
+export interface AutomationRunner<TInput = unknown> {
+  workflowId: WorkflowId;
+  portalId: string;
+  name: string;
+  validateInput(input: unknown): TInput;
+  run(input: TInput, context: AutomationContext): Promise<void>;
+}
+
+Then claim-status portals become:
+
+backend/src/workflows/claim-status/portals/iehp
+backend/src/workflows/claim-status/portals/aerial
+...
+
+Eligibility portals become:
+
+backend/src/workflows/eligibility-verification/portals/availity
+backend/src/workflows/eligibility-verification/portals/...
+
+Each eligibility portal owns its own:
+
+config.ts
+input.ts
+scraper.ts
+auth.ts
+eligibility-job.ts
+selectors.ts
+parser.ts
+workbook.ts
+storage.ts
+tests/
+
+That keeps parsing differences isolated.
+
+API Design
+
+I would not keep expanding only /api/scrape-jobs.
+
+Better options:
+
+/api/jobs
+/api/jobs/current
+/api/jobs/:jobId/input
+
+or, if you want to move gradually:
+
+/api/scrape-jobs       existing claim status, kept stable
+/api/automation-jobs   new generic endpoint
+
+The new job creation payload should include:
+
+workflowId: "claim-status" | "eligibility-verification"
+portalId: string
+
+This lets the API resolve:
+
+const runner = getWorkflowRunner(workflowId, portalId);
+
+instead of:
+
+const scraper = getScraper(portalId);
+
+For backward compatibility, existing claim status pages can still send portalId=iehp to /api/scrape-jobs until the migration is complete.
+
+Database
+
+The existing tables can technically store eligibility jobs, but the naming is claim-specific:
+
+iehp_scrape_jobs
+claim_file_name
+completedClaimsToday
+
+Clean future schema:
+
+automation_jobs
+automation_job_logs
+automation_job_artifacts
+
+Columns:
+
+job_id
+user_id
+workflow_id
+portal_id
+status
+current_completed
+total_items
+primary_input_file_name
+credential_file_name
+metadata_json
+created_at
+updated_at
+finished_at
+
+Do not force eligibility into claimFileName. Eligibility inputs may be member lists, subscriber details, DOB, payer, provider, NPI, service type, date of service, etc. Use neutral names plus metadata_json.
+
+Migration can be non-breaking:
+
+1. Add new generic tables.
+2. Keep old tables for existing claim runs.
+3. Or map old scrapeJobs code behind a generic repository interface first, then migrate names later.
+
+Frontend
+
+The current frontend/src/pages/ScraperPage.tsx is the biggest risk. It already has many portal-specific branches. Eligibility should not be added as more if effectivePortalId === ....
+
+I would split it like this:
+
+frontend/src/
+  app-shell/
+    AuthenticatedShell.tsx
+    DashboardHome.tsx
+    WorkflowSelector.tsx
+
+  workflows/
+    claim-status/
+      ClaimStatusPage.tsx
+      registry.ts
+      portals/
+        iehp/
+        aerial/
+        regal/
+        blue-shield/
+
+    eligibility-verification/
+      EligibilityPage.tsx
+      registry.ts
+      portals/
+        availity/
+        ...
+
+Each frontend portal config should define more than metadata:
+
+{
+  workflowId: "eligibility-verification",
+  portalId: "availity",
+  name: "Availity Eligibility",
+  route: "/eligibility/availity",
+  InputForm,
+  ResultView,
+  buildFormData,
+  restorePolicy,
+}
+
+Then the page can render from config instead of hardcoded portal branches.
+
+Routes could be:
+
+/portal                         existing claim-status portal selector
+/claim-status                   claim-status selector
+/claim-status/iehp
+/claim-status/aerial
+/eligibility-verification       eligibility selector
+/eligibility-verification/availity
+
+If you want simpler URLs:
+
+/eligibility
+/eligibility/availity
+
+Eligibility Backend Flow
+
+Eligibility should have its own domain events and outputs.
+
+Example flow:
+
+Frontend eligibility form
+  -> POST /api/automation-jobs with workflowId=eligibility-verification
+  -> job store creates job
+  -> workflow registry resolves eligibility portal runner
+  -> portal validates workbook/input
+  -> browser login/auth
+  -> portal-specific eligibility search
+  -> parser extracts coverage/plan/benefit/status
+  -> emits progress/logs/artifacts
+  -> writes eligibility output workbook/report
+  -> frontend receives downloadable output
+
+Eligibility event types can reuse common events:
+
+log
+progress
+error
+done
+input_request
+error_screenshot
+file_download
+output_snapshot
+
+But eligibility-specific result payloads should be separate, for example:
+
+eligibility_result
+eligibility_row_update
+benefit_summary
+
+Do not reuse claim_update or claim-specific workbook logic.
+
+What Should Be Shared
+
+Good shared pieces:
+
+- Authentication/session system.
+- Job lifecycle: start, stream, cancel, submit OTP/input.
+- SSE event transport.
+- DB retry and persistence.
+- Core error classes.
+- Browser launching.
+- Screenshots/artifacts/downloads.
+- Logger and retry helpers.
+- Common upload cards/status/log UI components.
+
+What should not be shared:
+
+- Claim row parsing.
+- Claim status result formatting.
+- IEHP workbook post-processing.
+- Claim-specific dashboard metric names.
+- Portal selectors.
+- Eligibility benefit parsing.
+- Eligibility output columns.
+
+Implementation Phases
+
+Phase 1: Refactor without behavior change.
+
+- Introduce workflowId.
+- Add a generic workflow registry.
+- Register existing claim status portals under claim-status.
+- Keep old /api/scrape-jobs working.
+- Derive available portal count from registry instead of hardcoded 4.
+
+Phase 2: Split frontend by workflow.
+
+- Extract shared shell from ScraperPage.
+- Keep claim-status UI behavior the same.
+- Move claim portal configs into a claim-status registry.
+- Add an empty Eligibility Verification selector page.
+
+Phase 3: Add eligibility infrastructure.
+
+- Add backend/src/workflows/eligibility-verification.
+- Add eligibility-specific types: input row, normalized result, benefit summary, parser result.
+- Add first portal skeleton only.
+- Add API support through generic jobs.
+
+Phase 4: Add first eligibility portal.
+
+- Implement portal auth/navigation/parser inside its own folder.
+- Add focused tests for input parsing, date/member matching, benefit extraction, and final output rows.
+- Add frontend input/result components for that portal.
+
+Main Rule
+
+Eligibility Verification should be a sibling workflow to Claim Status Check, not a child portal inside it.
+
+That gives you:
+
+Same platform
+Same user/login/job/log/error handling
+Different domain
+Different portals
+Different parsing
+Different UI forms
+Different outputs
+No damage to existing claim-status behavior
+
+No implementation has been done here. This is only the architecture explanation and integration plan.
