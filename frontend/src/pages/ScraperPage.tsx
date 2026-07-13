@@ -1324,6 +1324,15 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
       setLogs((prev) => [...prev, eventData.message ?? ""]);
     } else if (eventData.type === "progress" && typeof eventData.completed === "number" && typeof eventData.total === "number") {
       setProgress({ completed: eventData.completed, total: eventData.total });
+    } else if (eventData.type === "job_metadata") {
+      const metadata = eventData as Record<string, unknown>;
+      if (typeof metadata.processedRows !== "number" || typeof metadata.totalRows !== "number") return;
+      const processedRows = metadata.processedRows;
+      const totalRows = metadata.totalRows;
+      setProgress({ completed: processedRows, total: totalRows });
+      if (Boolean(metadata.stopped) && Boolean(metadata.partialOutputAvailable)) {
+        setStatus(`Stopped. Partial Excel ready for ${processedRows} of ${totalRows} rows.`);
+      }
     } else if (eventData.type === "input_request" && eventData.inputName) {
       setOptumProOtpRequest({
         inputName: eventData.inputName,
@@ -1339,7 +1348,11 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
       if (!hasDownloadedArtifact(jobId, artifactKey)) {
         downloadBase64File(eventData.filename, eventData.base64, eventData.mimeType || "application/octet-stream");
         rememberDownloadedArtifact(jobId, artifactKey);
-        setStatus(`Downloaded ${eventData.filename}`);
+        setStatus(
+          String(eventData.filename).includes("partial")
+            ? `Partial Excel downloaded: ${eventData.filename}`
+            : `Downloaded ${eventData.filename}`,
+        );
       }
     } else if (eventData.type === "debug_html" && typeof eventData.index === "number" && eventData.html) {
       const artifactKey = buildDownloadArtifactKey(eventData);
@@ -1357,7 +1370,7 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
       setIsProcessing(false);
       setOptumProOtpRequest(null);
       setLogs((prev) => [...prev, message]);
-      setStatus(message);
+      setStatus(String(message).startsWith("Stopped") ? message : `Stopped. ${message}`);
     } else if (eventData.type === "error" && eventData.message) {
       onError(eventData.message);
       setLogs((prev) => [...prev, `ERROR: ${eventData.message}`]);

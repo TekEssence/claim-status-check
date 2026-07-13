@@ -56,6 +56,8 @@ export function createScrapeJob(jobId?: string): ScrapeJob {
     id: resolvedJobId,
     status: "running",
     currentCompleted: 0,
+    totalRows: 0,
+    cancelRequested: false,
     events: [],
     subscribers: new Set(),
     inputWaiters: new Map(),
@@ -70,11 +72,13 @@ export function getScrapeJob(jobId: string): ScrapeJob | undefined {
   return jobs.get(jobId);
 }
 
-export function cancelScrapeJob(jobId: string, message = "Scrape job cancelled."): boolean {
+export function cancelScrapeJob(jobId: string, message = "Scrape job cancelled.", options: { emitDone?: boolean } = {}): boolean {
   const job = jobs.get(jobId);
   if (!job || isTerminalStatus(job.status)) return false;
   emitScrapeJobEvent(jobId, { type: "cancelled", message });
-  emitScrapeJobEvent(jobId, { type: "done" });
+  if (options.emitDone ?? true) {
+    emitScrapeJobEvent(jobId, { type: "done" });
+  }
   return true;
 }
 
@@ -84,6 +88,9 @@ export function emitScrapeJobEvent(jobId: string, data: StreamEvent): void {
 
   if (data.type === "progress" && typeof data.completed === "number") {
     job.currentCompleted = data.completed;
+    if (typeof data.total === "number") {
+      job.totalRows = data.total;
+    }
   }
   if (data.type === "done") {
     job.status = "done";
@@ -93,6 +100,7 @@ export function emitScrapeJobEvent(jobId: string, data: StreamEvent): void {
   }
   if (data.type === "cancelled") {
     job.status = "cancelled";
+    job.cancelRequested = true;
   }
 
   const event = {

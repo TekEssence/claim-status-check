@@ -1,10 +1,14 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import type { Page } from "playwright-core";
 import * as XLSX from "xlsx";
+import { getJobDataPath } from "@/backend/src/core/storage";
 import type { ScraperContext } from "../types";
 import type { OptumProInputRow } from "./input";
 
 type StageLog = (level: "info" | "warn" | "error", stage: string, message: string, currentPage?: Page) => Promise<void>;
 type RowTimingLog = (label: string, startedAt: number) => Promise<void>;
+type CancellationCheck = () => void;
 
 type OptumProSearchResult = {
   input: OptumProInputRow;
@@ -66,6 +70,22 @@ type ClaimResultCandidate = {
   claimNumber: string;
   resultStatus: string;
 };
+
+type OptumProPartialJobMetadata = {
+  totalRows: number;
+  processedRows: number;
+  successfulRows: number;
+  failedRows: number;
+  stopped: boolean;
+  partialOutputAvailable: boolean;
+};
+
+class OptumProStopRequestedError extends Error {
+  constructor(message = "Optum Pro stop requested.") {
+    super(message);
+    this.name = "OptumProStopRequestedError";
+  }
+}
 
 const CLAIM_SEARCH_PATIENT_SELECTOR = "input[placeholder*='Subscriber ID'], input[placeholder*='Patient Name'], input[placeholder*='Date of Birth']";
 const CLAIM_SEARCH_MEDICAL_GROUP_SELECTOR = "input[placeholder*='Medical group'], input[placeholder*='Medical Group']";
@@ -216,9 +236,10 @@ async function fillInputLikeUser(page: Page, selector: string, value: string, st
   });
 }
 
-async function waitForCondition(timeout: number, pollMs: number, condition: () => Promise<boolean>): Promise<boolean> {
+async function waitForCondition(timeout: number, pollMs: number, condition: () => Promise<boolean>, checkCancellation?: CancellationCheck): Promise<boolean> {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeout) {
+    checkCancellation?.();
     if (await condition().catch(() => false)) return true;
     await new Promise((resolve) => setTimeout(resolve, pollMs));
   }
@@ -682,9 +703,10 @@ async function claimDetailsUnavailablePopupMessage(page: Page, timeout = 100): P
     || "Claim details unavailable popup was shown.";
 }
 
-async function waitForClaimDetailsUnavailablePopup(page: Page, timeout = 8000): Promise<string> {
+async function waitForClaimDetailsUnavailablePopup(page: Page, timeout = 8000, checkCancellation?: CancellationCheck): Promise<string> {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeout) {
+    checkCancellation?.();
     if (await hasConfirmedClaimDetailsPage(page, 100)) {
       await closeTransientClaimDetailsSnackbar(page);
       return "";
@@ -697,9 +719,10 @@ async function waitForClaimDetailsUnavailablePopup(page: Page, timeout = 8000): 
   return "";
 }
 
-async function waitForClaimDetailsPage(page: Page, timeout = 45000): Promise<void> {
+async function waitForClaimDetailsPage(page: Page, timeout = 45000, checkCancellation?: CancellationCheck): Promise<void> {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeout) {
+    checkCancellation?.();
     if (await hasConfirmedClaimDetailsPage(page)) {
       await closeTransientClaimDetailsSnackbar(page);
       return;
@@ -719,6 +742,7 @@ async function openClaimResultRowByIndex(
   page: Page,
   index: number,
   stageLog: StageLog,
+  checkCancellation?: CancellationCheck,
 ): Promise<{ text: string; detailsOpened: boolean; detailsUnavailable: boolean; unavailableMessage: string }> {
   const rows = await claimResultRows(page);
   const row = rows.nth(index);
@@ -734,6 +758,7 @@ async function openClaimResultRowByIndex(
   const startedAt = Date.now();
   let unavailableMessage = "";
   while (Date.now() - startedAt < 8000) {
+    checkCancellation?.();
     const detailState = await claimDetailsOpenState(page, 100);
     if (detailState.detailsOpened) {
       await closeTransientClaimDetailsSnackbar(page);
@@ -784,11 +809,13 @@ async function findMatchingClaimDetails(
   page: Page,
   row: OptumProInputRow,
   stageLog: StageLog,
+  checkCancellation?: CancellationCheck,
 ): Promise<{ clickedRowText: string; details: Partial<OptumProSearchResult>; status: string; notes?: string } | null> {
   const candidates = await orderedClaimResultIndexes(page, row);
   let unavailableResult: { clickedRowText: string; details: Partial<OptumProSearchResult>; notes: string } | null = null;
   let openedDetailsCount = 0;
   for (const candidate of candidates) {
+    checkCancellation?.();
     if (isInProgressStatus(candidate.resultStatus)) {
       await stageLog("info", "claim-search", `Final claim result status reason: result row ${candidate.index + 1} is in progress; details were not opened.`);
       return {
@@ -802,7 +829,7 @@ async function findMatchingClaimDetails(
       };
     }
 
-    const opened = await openClaimResultRowByIndex(page, candidate.index, stageLog);
+    const opened = await openClaimResultRowByIndex(page, candidate.index, stageLog, checkCancellation);
     if (opened.detailsUnavailable) {
       unavailableResult ??= {
         clickedRowText: opened.text,
@@ -821,6 +848,7 @@ async function findMatchingClaimDetails(
     }
 
     openedDetailsCount++;
+    checkCancellation?.();
     const details = await extractClaimDetails(page, row);
     const serviceCode = typeof details.serviceCode === "string" ? details.serviceCode : "";
     if (normalize(serviceCode) === normalize(row.cpt)) {
@@ -894,6 +922,112 @@ function outputValue(value: string): string {
 
 function outputMemberId(value: string): string {
   return value.trim() || "No Member Id Found";
+}
+
+function isStopRequestedError(error: unknown): boolean {
+  return error instanceof OptumProStopRequestedError;
+}
+
+function optumProOutputPath(jobId: string): string {
+  return path.join(getJobDataPath(jobId, "outputs"), "optum_pro_output_partial.xlsx");
+}
+
+async function writeAtomicFile(filePath: string, content: Buffer): Promise<void> {
+  const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+  await fs.writeFile(tempPath, content);
+  await fs.rename(tempPath, filePath);
+}
+
+function emptyResultForRow(row: OptumProInputRow, status: string, notes: string): OptumProSearchResult {
+  return {
+    input: row,
+    rowNumber: row.rowNumber,
+    medicalGroupName: row.medicalGroupName,
+    patient: row.patient,
+    dos: row.dos,
+    cpt: row.cpt,
+    memberId: outputMemberId(row.memberId),
+    matchedPatient: "",
+    matchedGroup: "",
+    claimNumber: "",
+    claimReceivedDate: "",
+    processedDate: "",
+    serviceCode: "",
+    billedAmount: "",
+    planAllowedAmount: "",
+    patientResponsibility: "",
+    withholdAmount: "",
+    deniedAmount: "",
+    paidAmount: "",
+    lineStatus: "",
+    explanationCode: "",
+    explanationDescription: "",
+    copayAmount: "",
+    coinsuranceAmount: "",
+    deductibleAmount: "",
+    paymentMode: "",
+    paymentType: "",
+    eftNumber: "",
+    eftAmount: "",
+    paymentDate: "",
+    paymentId: "",
+    paymentName: "",
+    payeeName: "",
+    resultSummary: "",
+    status,
+    notes,
+  };
+}
+
+function rowFailed(result: OptumProSearchResult): boolean {
+  return /^(error|stopped during processing|not processed - job stopped)$/i.test(result.status);
+}
+
+function buildOptumProJobMetadata(
+  totalRows: number,
+  results: Array<OptumProSearchResult | null>,
+  stopped: boolean,
+  partialOutputAvailable: boolean,
+): OptumProPartialJobMetadata {
+  const completedResults = results.filter((result): result is OptumProSearchResult => Boolean(result));
+  const failedRows = completedResults.filter(rowFailed).length;
+  return {
+    totalRows,
+    processedRows: completedResults.length,
+    successfulRows: completedResults.length - failedRows,
+    failedRows,
+    stopped,
+    partialOutputAvailable,
+  };
+}
+
+function completeResultsForWorkbook(
+  rows: OptumProInputRow[],
+  results: Array<OptumProSearchResult | null>,
+  stopped: boolean,
+): OptumProSearchResult[] {
+  return rows.map((row, index) => results[index] ?? emptyResultForRow(
+    row,
+    stopped ? "Not processed - job stopped" : "Not processed",
+    stopped ? "Not processed - job stopped" : "Not processed.",
+  ));
+}
+
+async function saveOptumProPartialWorkbook(
+  context: ScraperContext,
+  rows: OptumProInputRow[],
+  results: Array<OptumProSearchResult | null>,
+  stopped: boolean,
+): Promise<{ path: string; buffer: Buffer; metadata: OptumProPartialJobMetadata }> {
+  const workbookRows = completeResultsForWorkbook(rows, results, stopped);
+  const buffer = createOptumProOutputWorkbookBuffer(workbookRows);
+  const outputPath = optumProOutputPath(context.jobId);
+  await writeAtomicFile(outputPath, buffer);
+  return {
+    path: outputPath,
+    buffer,
+    metadata: buildOptumProJobMetadata(rows.length, results, stopped, true),
+  };
 }
 
 async function extractClaimDetails(page: Page, row: OptumProInputRow): Promise<Partial<OptumProSearchResult>> {
@@ -1088,7 +1222,7 @@ async function returnToClaimSearch(page: Page, stageLog: StageLog): Promise<void
   await openClaimsSearch(page, stageLog);
 }
 
-async function fastClaimSearchReady(page: Page, timeout = FAST_CLAIM_SEARCH_READY_TIMEOUT_MS): Promise<boolean> {
+async function fastClaimSearchReady(page: Page, timeout = FAST_CLAIM_SEARCH_READY_TIMEOUT_MS, checkCancellation?: CancellationCheck): Promise<boolean> {
   return waitForCondition(timeout, 150, async () => {
     if (!page.url().includes("/claims-panel")) return false;
     const claimSearchVisible = await page.locator("text=Claim Search").first().isVisible({ timeout: 100 }).catch(() => false);
@@ -1098,7 +1232,7 @@ async function fastClaimSearchReady(page: Page, timeout = FAST_CLAIM_SEARCH_READ
     const dateVisible = await page.locator(CLAIM_SEARCH_DATE_SELECTOR).first().isVisible({ timeout: 100 }).catch(() => false);
     const actionVisible = await page.locator(CLAIM_SEARCH_ACTION_SELECTOR).first().isVisible({ timeout: 100 }).catch(() => false);
     return patientVisible && medicalGroupVisible && dateVisible && actionVisible;
-  });
+  }, checkCancellation);
 }
 
 async function waitForClaimSearchFormControls(page: Page, timeout = CLAIM_SEARCH_READY_TIMEOUT_MS): Promise<void> {
@@ -1175,7 +1309,9 @@ async function searchWithSelectedPatient(
   matchedPatient: string,
   stageLog: StageLog,
   timingLog?: RowTimingLog,
+  checkCancellation?: CancellationCheck,
 ): Promise<OptumProSearchResult> {
+  checkCancellation?.();
   const medicalGroupStartedAt = Date.now();
   const matchedGroup = await selectMedicalGroup(page, row.medicalGroupName, stageLog).catch(() => "");
   await timingLog?.("fillMedicalGroup", medicalGroupStartedAt);
@@ -1189,10 +1325,12 @@ async function searchWithSelectedPatient(
     });
   }
 
+  checkCancellation?.();
   const dateRangeStartedAt = Date.now();
   await setServiceDate(page, row.dos, stageLog);
   await timingLog?.("fillDateRange", dateRangeStartedAt);
 
+  checkCancellation?.();
   const searchResultsStartedAt = Date.now();
   const searchButton = page.locator("button:has-text('Search')").last();
   await retryAfterBlockingPopup(page, stageLog, async () => {
@@ -1204,6 +1342,7 @@ async function searchWithSelectedPatient(
   const resultRowCount = await resultRows.count().catch(() => 0);
   await timingLog?.("searchResults", searchResultsStartedAt);
 
+  checkCancellation?.();
   if (!resultRowCount || /no result|0 results|no claims|no claims found/i.test(resultSummary) || await page.locator("text=/No Claims found/i").first().isVisible({ timeout: 500 }).catch(() => false)) {
     return emptyClaimResult(row, {
       matchedPatient,
@@ -1215,7 +1354,7 @@ async function searchWithSelectedPatient(
   }
 
   const processResultStartedAt = Date.now();
-  const matchingClaim = await findMatchingClaimDetails(page, row, stageLog);
+  const matchingClaim = await findMatchingClaimDetails(page, row, stageLog, checkCancellation);
   await timingLog?.("processResult", processResultStartedAt);
   if (!matchingClaim) {
     return emptyClaimResult(row, {
@@ -1243,8 +1382,9 @@ async function searchWithSelectedPatient(
   });
 }
 
-async function searchClaimRow(page: Page, row: OptumProInputRow, stageLog: StageLog): Promise<OptumProSearchResult> {
+async function searchClaimRow(page: Page, row: OptumProInputRow, stageLog: StageLog, checkCancellation?: CancellationCheck): Promise<OptumProSearchResult> {
   await stageLog("info", "claim-search", `Processing Optum Pro input row ${row.rowNumber}: member ${row.memberId}, DOS ${row.dos}, medical group ${row.medicalGroupName}.`);
+  checkCancellation?.();
 
   if (!row.memberId.trim()) {
     return emptyClaimResult(row, {
@@ -1261,6 +1401,7 @@ async function searchClaimRow(page: Page, row: OptumProInputRow, stageLog: Stage
   const fillPatientStartedAt = Date.now();
   const selectedPatient = await selectPatient(page, row, "loose", stageLog).catch(() => null);
   await timingLog("fillPatient", fillPatientStartedAt);
+  checkCancellation?.();
   if (!selectedPatient) {
     await page.keyboard.press("Escape").catch(() => {});
     return emptyClaimResult(row, {
@@ -1270,7 +1411,7 @@ async function searchClaimRow(page: Page, row: OptumProInputRow, stageLog: Stage
     });
   }
 
-  const exactResult = await searchWithSelectedPatient(page, row, selectedPatient.text, stageLog, timingLog);
+  const exactResult = await searchWithSelectedPatient(page, row, selectedPatient.text, stageLog, timingLog, checkCancellation);
   if (exactResult.status !== "No claims found" || !selectedPatient.allowBlankSubscriberFallback) {
     return exactResult;
   }
@@ -1279,11 +1420,12 @@ async function searchClaimRow(page: Page, row: OptumProInputRow, stageLog: Stage
   const fillPatientFallbackStartedAt = Date.now();
   const blankSubscriberPatient = await selectPatient(page, row, "blank-subscriber", stageLog).catch(() => null);
   await timingLog("fillPatientFallback", fillPatientFallbackStartedAt);
+  checkCancellation?.();
   if (!blankSubscriberPatient) {
     return exactResult;
   }
 
-  return searchWithSelectedPatient(page, row, blankSubscriberPatient.text, stageLog, timingLog);
+  return searchWithSelectedPatient(page, row, blankSubscriberPatient.text, stageLog, timingLog, checkCancellation);
 }
 
 async function openClaimsSearch(page: Page, stageLog: StageLog): Promise<void> {
@@ -1317,91 +1459,109 @@ export async function runOptumProClaimSearch(
   stageLog: StageLog,
 ): Promise<void> {
   await openClaimsSearch(page, stageLog);
-  const results: OptumProSearchResult[] = [];
+  const results: Array<OptumProSearchResult | null> = rows.map(() => null);
   await context.emit({ type: "progress", completed: 0, total: rows.length });
   let previousRowEndedAt: number | null = null;
+  let processedRows = 0;
+  let stopped = false;
+  let finalWorkbook: { path: string; buffer: Buffer; metadata: OptumProPartialJobMetadata } | null = null;
 
-  for (let index = 0; index < rows.length; index++) {
+  const checkCancellation: CancellationCheck = () => {
     if (context.isCancelled?.()) {
-      await stageLog("warn", "claim-search", "Optum Pro claim search cancelled.");
-      break;
+      throw new OptumProStopRequestedError();
     }
+  };
 
-    const row = rows[index];
-    const rowStartedAt = Date.now();
-    if (previousRowEndedAt !== null) {
-      await stageLog("info", "row-timing", `[row-timing] gap before row ${row.rowNumber} was ${elapsedSeconds(previousRowEndedAt)}s`);
-    }
-    await stageLog("info", "row-timing", `[row-timing] row ${row.rowNumber} started at ${new Date(rowStartedAt).toISOString()}`);
-    const timingLog: RowTimingLog = async (label, startedAt) => {
-      await stageLog("info", "row-timing", `[row-timing] row ${row.rowNumber} ${label} took ${elapsedSeconds(startedAt)}s`);
-    };
+  const emitMetadata = async (metadata: OptumProPartialJobMetadata) => {
+    await context.emit({
+      type: "job_metadata",
+      totalRows: metadata.totalRows,
+      processedRows: metadata.processedRows,
+      successfulRows: metadata.successfulRows,
+      failedRows: metadata.failedRows,
+      stopped: metadata.stopped,
+      partialOutputAvailable: metadata.partialOutputAvailable,
+    });
+  };
 
-    try {
-      if (!(await fastClaimSearchReady(page))) {
-        await resetClaimSearchPage(page, stageLog, `before row ${row.rowNumber}`, timingLog);
+  try {
+    for (let index = 0; index < rows.length; index++) {
+      checkCancellation();
+
+      const row = rows[index];
+      const rowStartedAt = Date.now();
+      if (previousRowEndedAt !== null) {
+        await stageLog("info", "row-timing", `[row-timing] gap before row ${row.rowNumber} was ${elapsedSeconds(previousRowEndedAt)}s`);
       }
-      results.push(await searchClaimRow(page, row, stageLog));
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      await stageLog("error", "claim-search", `Row ${row.rowNumber} failed: ${message}`);
-      results.push({
-        input: row,
-        rowNumber: row.rowNumber,
-        medicalGroupName: row.medicalGroupName,
-        patient: row.patient,
-        dos: row.dos,
-        cpt: row.cpt,
-        memberId: outputMemberId(row.memberId),
-        matchedPatient: "",
-        matchedGroup: "",
-        claimNumber: "",
-        claimReceivedDate: "",
-        processedDate: "",
-        serviceCode: "",
-        billedAmount: "",
-        planAllowedAmount: "",
-        patientResponsibility: "",
-        withholdAmount: "",
-        deniedAmount: "",
-        paidAmount: "",
-        lineStatus: "",
-        explanationCode: "",
-        explanationDescription: "",
-        copayAmount: "",
-        coinsuranceAmount: "",
-        deductibleAmount: "",
-        paymentMode: "",
-        paymentType: "",
-        eftNumber: "",
-        eftAmount: "",
-        paymentDate: "",
-        paymentId: "",
-        paymentName: "",
-        payeeName: "",
-        resultSummary: "",
-        status: "error",
-        notes: message,
-      });
-    } finally {
-      const cleanupStartedAt = Date.now();
-      await cleanupClaimSearchAfterRow(page, stageLog, `after row ${row.rowNumber}`, timingLog).catch((error) => {
-        void stageLog("warn", "claim-search", `Could not reset Claim Search after row ${row.rowNumber}: ${error instanceof Error ? error.message : String(error)}`);
-      });
-      await timingLog("cleanup", cleanupStartedAt);
-      await timingLog("total", rowStartedAt);
-      previousRowEndedAt = Date.now();
-    }
+      await stageLog("info", "row-timing", `[row-timing] row ${row.rowNumber} started at ${new Date(rowStartedAt).toISOString()}`);
+      const timingLog: RowTimingLog = async (label, startedAt) => {
+        await stageLog("info", "row-timing", `[row-timing] row ${row.rowNumber} ${label} took ${elapsedSeconds(startedAt)}s`);
+      };
 
-    await context.emit({ type: "progress", completed: index + 1, total: rows.length });
+      try {
+        if (!(await fastClaimSearchReady(page, FAST_CLAIM_SEARCH_READY_TIMEOUT_MS, checkCancellation))) {
+          await resetClaimSearchPage(page, stageLog, `before row ${row.rowNumber}`, timingLog);
+        }
+        checkCancellation();
+        results[index] = await searchClaimRow(page, row, stageLog, checkCancellation);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (isStopRequestedError(error)) {
+          stopped = true;
+          results[index] = emptyResultForRow(row, "Stopped during processing", "Stopped during processing");
+          await stageLog("warn", "claim-search", "Current row marked as stopped during processing");
+        } else {
+          await stageLog("error", "claim-search", `Row ${row.rowNumber} failed: ${message}`);
+          results[index] = emptyResultForRow(row, "error", message);
+        }
+      } finally {
+        const cleanupStartedAt = Date.now();
+        await cleanupClaimSearchAfterRow(page, stageLog, `after row ${row.rowNumber}`, timingLog).catch((error) => {
+          void stageLog("warn", "claim-search", `Could not reset Claim Search after row ${row.rowNumber}: ${error instanceof Error ? error.message : String(error)}`);
+        });
+        await timingLog("cleanup", cleanupStartedAt);
+        await timingLog("total", rowStartedAt);
+        previousRowEndedAt = Date.now();
+      }
+
+      processedRows = results.filter(Boolean).length;
+      finalWorkbook = await saveOptumProPartialWorkbook(context, rows, results, stopped);
+      await stageLog("info", "claim-search", `Partial result saved after row ${row.rowNumber}`);
+      await emitMetadata(finalWorkbook.metadata);
+      await context.emit({ type: "progress", completed: processedRows, total: rows.length });
+
+      if (stopped) {
+        await stageLog("warn", "claim-search", "Stop requested; finalizing partial workbook");
+        break;
+      }
+    }
+  } catch (error) {
+    if (isStopRequestedError(error)) {
+      stopped = true;
+      await stageLog("warn", "claim-search", "Stop requested; finalizing partial workbook");
+    } else {
+      const message = error instanceof Error ? error.message : String(error);
+      await stageLog("error", "claim-search", `Unrecoverable Optum Pro claim search failure: ${message}`);
+      finalWorkbook = await saveOptumProPartialWorkbook(context, rows, results, false);
+      await emitMetadata(finalWorkbook.metadata);
+      await stageLog("warn", "claim-search", "Partial output finalized after failure");
+      await context.emit(downloadableWorkbookEvent("optum_pro_output_partial.xlsx", finalWorkbook.buffer));
+      throw error;
+    }
   }
 
-  if (context.isCancelled?.()) {
-    await stageLog("warn", "claim-search", "Optum Pro claim search stopped before output workbook generation.");
+  const completedAllRows = processedRows >= rows.length && !stopped;
+  finalWorkbook = await saveOptumProPartialWorkbook(context, rows, results, stopped);
+  await emitMetadata(finalWorkbook.metadata);
+
+  if (stopped) {
+    await stageLog("info", "claim-search", `Partial workbook ready: ${processedRows}/${rows.length} rows processed`);
+    await context.emit(downloadableWorkbookEvent("optum_pro_output_partial.xlsx", finalWorkbook.buffer));
+    await context.emit({ type: "cancelled", message: `Stopped. Partial workbook ready: ${processedRows}/${rows.length} rows processed.` });
     return;
   }
 
-  await context.emit(downloadableWorkbookEvent("optum_pro_output.xlsx", createOptumProOutputWorkbookBuffer(results)));
+  await context.emit(downloadableWorkbookEvent(completedAllRows ? "optum_pro_output.xlsx" : "optum_pro_output_partial.xlsx", finalWorkbook.buffer));
 }
 
 function createOptumProOutputWorkbookBuffer(results: OptumProSearchResult[]): Buffer {

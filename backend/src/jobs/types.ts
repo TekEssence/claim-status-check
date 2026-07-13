@@ -11,6 +11,8 @@ export type ScrapeJob = {
   id: string;
   status: ScrapeJobStatus;
   currentCompleted: number;
+  totalRows: number;
+  cancelRequested: boolean;
   events: ScrapeJobEvent[];
   subscribers: Set<(event: ScrapeJobEvent) => void>;
   inputWaiters: Map<string, {
