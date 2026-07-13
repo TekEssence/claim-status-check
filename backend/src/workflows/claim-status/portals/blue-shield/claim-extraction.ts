@@ -1,6 +1,7 @@
 import type { Locator, Page } from "playwright-core";
 import { blueShieldConfig } from "./config";
 import { assertNoSecurityBlock } from "./detection-monitor";
+import { dismissBlueShieldSurvey } from "./overlays";
 import type { BlueShieldClaimSummary, BlueShieldMemberWorkItem } from "./types";
 
 type BlueShieldResultRowData = {
@@ -53,10 +54,16 @@ type BlueShieldDetailData = {
     coInsurance: string;
     amountPaid: string;
   }>;
+  claimMessage: string;
   claimNotes: string;
 };
 
 type BlueShieldServiceLine = BlueShieldDetailData["serviceLines"][number];
+const NO_CLAIM_NOTES_TEXT = "Claim notes: There are no notes for this claim.";
+
+function noClaimNotesForLineText(serviceLineNumber: string): string {
+  return `Claim notes line ${serviceLineNumber}: There are no notes for line ${serviceLineNumber}.`;
+}
 
 function firstMatch(text: string, pattern: RegExp): string {
   return text.match(pattern)?.[1]?.trim() ?? "";
@@ -308,6 +315,10 @@ function isServiceLineHeaderText(value: string): boolean {
 function readServiceDateFromCells(cells: string[], index: number): { value: string; nextIndex: number } {
   const first = cells[index] ?? "";
   const second = cells[index + 1] ?? "";
+  const datesInFirstCell = Array.from(first.matchAll(/\b\d{1,2}\/\d{1,2}\/\d{2,4}\b/g), (match) => match[0]);
+  if (datesInFirstCell.length >= 2) {
+    return { value: `${datesInFirstCell[0]}-${datesInFirstCell[1]}`, nextIndex: index + 1 };
+  }
   const fullRange = first.match(/^(\d{1,2}\/\d{1,2}\/\d{2,4})\s*[-–]\s*(\d{1,2}\/\d{1,2}\/\d{2,4})$/);
   if (fullRange) {
     return { value: `${fullRange[1]}-${fullRange[2]}`, nextIndex: index + 1 };
@@ -394,10 +405,30 @@ function sanitizeClaimNotesText(value: string): string {
   return sanitizeClaimNoteLines(value.split(/\r?\n/)).join(" ");
 }
 
+function combineClaimTextParts(...parts: string[]): string {
+  return Array.from(new Set(parts.map(sanitizeClaimNotesText).filter(Boolean))).join(" ");
+}
+
+function formatClaimMessage(value: string): string {
+  const message = sanitizeClaimNotesText(value);
+  if (!message) return "";
+  return /^claim\s+message\s*:/i.test(message) ? message : `Claim message: ${message}`;
+}
+
+function formatClaimNotesForLine(value: string, serviceLineNumber: string): string {
+  const notes = sanitizeClaimNotesText(value);
+  if (!notes) return "";
+  if (/^claim\s+notes\s+line\s+\d+\s*:/i.test(notes)) return notes;
+  return `Claim notes line ${serviceLineNumber}: ${notes}`;
+}
+
 function noteForServiceLine(claimNotes: string, serviceLineNumber: string): string {
   const cleanClaimNotes = sanitizeClaimNotesText(claimNotes);
   const lineNumber = serviceLineNumber.trim();
   if (!cleanClaimNotes || !lineNumber) return cleanClaimNotes;
+  if (/^claim\s+notes\s*:\s*there are no notes for this claim\.?$/i.test(cleanClaimNotes)) {
+    return noClaimNotesForLineText(lineNumber);
+  }
 
   const escapedLineNumber = lineNumber.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const linePattern = new RegExp(
@@ -405,7 +436,11 @@ function noteForServiceLine(claimNotes: string, serviceLineNumber: string): stri
     "i",
   );
   const match = cleanClaimNotes.match(linePattern);
-  return sanitizeClaimNotesText(match?.[1] ?? "") || cleanClaimNotes;
+  const matchedLineNotes = sanitizeClaimNotesText(match?.[1] ?? "");
+  if (matchedLineNotes) return formatClaimNotesForLine(matchedLineNotes, lineNumber);
+
+  const hasLineSpecificNotes = /\bLINE\s*(?:NUMBER\s*)?#?\s*\d+\b/i.test(cleanClaimNotes);
+  return hasLineSpecificNotes ? noClaimNotesForLineText(lineNumber) : formatClaimNotesForLine(cleanClaimNotes, lineNumber);
 }
 
 function dateKeysFromText(value: string): Set<string> {
@@ -422,7 +457,7 @@ function dateKeysFromText(value: string): Set<string> {
 
 function dateRangesFromText(value: string): Array<{ start: string; end: string }> {
   const ranges: Array<{ start: string; end: string }> = [];
-  const matches = value.matchAll(/\b(\d{1,2}\/\d{1,2}\/(?:\d{2}|\d{4}))\s*[-â€“]\s*(\d{1,2}\/\d{1,2}\/(?:\d{2}|\d{4}))\b/g);
+  const matches = value.matchAll(/\b(\d{1,2}\/\d{1,2}\/(?:\d{2}|\d{4}))\s*[^\d/]{1,12}\s*(\d{1,2}\/\d{1,2}\/(?:\d{2}|\d{4}))\b/g);
   for (const match of matches) {
     const start = Array.from(dateKeysFromText(match[1]))[0];
     const end = Array.from(dateKeysFromText(match[2]))[0];
@@ -472,6 +507,57 @@ function claimSummaryKey(claim: BlueShieldClaimSummary): string {
     .join("::");
 }
 
+async function rowCellCount(row: Locator): Promise<number> {
+  return row.locator("td").count().catch(() => 0);
+}
+
+function rowTextContainsMemberId(rowText: string, memberId: string): boolean {
+  const normalizedRow = rowText.replace(/\s+/g, "").toLowerCase();
+  const normalizedMember = memberId.replace(/\s+/g, "").toLowerCase();
+  return Boolean(normalizedMember && normalizedRow.includes(normalizedMember));
+}
+
+function looksLikeBlueShieldResultRow(args: {
+  rowText: string;
+  cellCount: number;
+  rowData: BlueShieldResultRowData;
+  memberId: string;
+}): boolean {
+  const { rowText, cellCount, rowData, memberId } = args;
+  if (cellCount < 4) return false;
+
+  const normalizedText = normalizeText(rowText);
+  if (!normalizedText) return false;
+  if (/^(previous|next|\d+)$/i.test(normalizedText)) return false;
+  if (/no\s+(claims?|results?)\s+(found|match)/i.test(normalizedText)) return false;
+
+  const hasStructuredClaimData = Boolean(
+    rowData.claimNumber ||
+    rowData.datesOfService ||
+    rowData.memberIdSubscriberId ||
+    rowData.claimStatusLastModified ||
+    rowData.claimAmountBilled ||
+    rowData.claimAmountPaid,
+  );
+  const hasDate = /\b\d{1,2}\/\d{1,2}\/(?:\d{2}|\d{4})\b/.test(normalizedText);
+  const hasMember = rowTextContainsMemberId(normalizedText, memberId);
+  const hasClaimSignal = /\b(claim|eob|paid|pending|denied|billed|responsibility)\b/i.test(normalizedText) || /\$[0-9,]+(?:\.\d{2})?/.test(normalizedText);
+
+  return hasDate && (hasStructuredClaimData || hasMember || hasClaimSignal);
+}
+
+function isBlueShieldNoResultsText(text: string): boolean {
+  return /showing\s+0\s+claims/i.test(text)
+    || /couldn[’']?t\s+find\s+any\s+claims\s+that\s+match\s+your\s+search/i.test(text);
+}
+
+function looksLikeBlueShieldSearchPage(text: string): boolean {
+  return /check\s+claim\s+status/i.test(text)
+    && /all\s+fields\s+are\s+optional/i.test(text)
+    && /member\s+information/i.test(text)
+    && /claim\s+information/i.test(text);
+}
+
 function emptyDetailData(): BlueShieldDetailData {
   return {
     claim: {
@@ -496,8 +582,56 @@ function emptyDetailData(): BlueShieldDetailData {
       payeeAddress: "",
     },
     serviceLines: [],
+    claimMessage: "",
     claimNotes: "",
   };
+}
+
+function sectionTextFromLines(text: string, headingPattern: RegExp, stopPattern: RegExp): string {
+  const lines = text.split(/\r?\n/).map(normalizeText).filter(Boolean);
+  const sectionLines: string[] = [];
+  let inSection = false;
+
+  for (const line of lines) {
+    if (!inSection && headingPattern.test(line)) {
+      inSection = true;
+      const inlineValue = line.replace(headingPattern, "").replace(/^[:\s-]+/, "").trim();
+      if (inlineValue) sectionLines.push(inlineValue);
+      continue;
+    }
+    if (!inSection) continue;
+    if (stopPattern.test(line)) break;
+    sectionLines.push(line);
+  }
+
+  return sanitizeClaimNotesText(sectionLines.join("\n"));
+}
+
+async function extractHeadingSectionText(page: Page, headingPattern: RegExp, stopPattern: RegExp): Promise<string> {
+  return page.evaluate(({ headingSource, stopSource, flags }) => {
+    const headingPattern = new RegExp(headingSource, flags);
+    const stopPattern = new RegExp(stopSource, flags);
+    const normalize = (value: string) => value.replace(/\s+/g, " ").trim();
+    const isHeading = (element: Element) => headingPattern.test(normalize(element.textContent ?? ""));
+    const heading = Array.from(document.querySelectorAll("h1, h2, h3, h4, h5, h6, div, span, p")).find(isHeading);
+    if (!heading) return "";
+
+    const siblingParts: string[] = [];
+    let sibling = heading.nextElementSibling;
+    while (sibling && siblingParts.length < 30) {
+      const siblingText = normalize((sibling as HTMLElement).innerText || sibling.textContent || "");
+      if (siblingText && stopPattern.test(siblingText)) break;
+      if (siblingText) siblingParts.push(siblingText);
+      sibling = sibling.nextElementSibling;
+    }
+    if (siblingParts.length) return siblingParts.join("\n");
+
+    return normalize((heading.parentElement as HTMLElement | null)?.innerText || "");
+  }, {
+    headingSource: headingPattern.source,
+    stopSource: stopPattern.source,
+    flags: headingPattern.flags,
+  }).catch(() => "");
 }
 
 function valueAfterLabel(text: string, aliases: string[]): string {
@@ -670,27 +804,11 @@ async function extractServiceLines(page: Page, text: string): Promise<BlueShield
 }
 
 async function extractClaimNotes(page: Page, text: string): Promise<string> {
-  const notesText = await page.evaluate(() => {
-    const normalize = (value: string) => value.replace(/\s+/g, " ").trim();
-    const isClaimNotesHeading = (element: Element) => /^claim\s+notes$/i.test(normalize(element.textContent ?? ""));
-    const isNextSectionHeading = (value: string) =>
-      /^(claim details|payment details|service and procedure details|service details|procedure details)$/i.test(normalize(value));
-    const heading = Array.from(document.querySelectorAll("h1, h2, h3, h4, h5, h6, div, span, p")).find(isClaimNotesHeading);
-    if (!heading) return "";
-
-    const siblingParts: string[] = [];
-    let sibling = heading.nextElementSibling;
-    while (sibling && siblingParts.length < 30) {
-      const siblingText = normalize((sibling as HTMLElement).innerText || sibling.textContent || "");
-      if (siblingText && isNextSectionHeading(siblingText)) break;
-      if (siblingText) siblingParts.push(siblingText);
-      sibling = sibling.nextElementSibling;
-    }
-    if (siblingParts.length) return siblingParts.join("\n");
-
-    const parentText = normalize((heading.parentElement as HTMLElement | null)?.innerText || "");
-    return parentText;
-  }).catch(() => "");
+  const notesText = await extractHeadingSectionText(
+    page,
+    /^claim\s+notes$/i,
+    /^(claim message|claim details|payment details|service and procedure details|service details|procedure details)$/i,
+  );
 
   const sourceText = notesText || text;
   const lines = sourceText.split(/\r?\n/).map(normalizeText).filter(Boolean);
@@ -707,7 +825,7 @@ async function extractClaimNotes(page: Page, text: string): Promise<string> {
       break;
     }
     if (inNotes && /^there are no notes for this claim\.?$/i.test(line)) {
-      return "";
+      return NO_CLAIM_NOTES_TEXT;
     }
     if (inNotes && isBlueShieldChromeText(line)) {
       continue;
@@ -722,11 +840,23 @@ async function extractClaimNotes(page: Page, text: string): Promise<string> {
   }
 
   if (!noteLines.length) {
-    const inlineNotes = sourceText.match(/Claim\s+notes?\s*([\s\S]*?)(?:Claim details|Payment details|Service and procedure details|$)/i)?.[1] ?? "";
+    const inlineNotes = sourceText.match(/Claim\s+notes?\s*([\s\S]*?)(?:Claim message|Claim details|Payment details|Service and procedure details|$)/i)?.[1] ?? "";
+    if (/^there are no notes for this claim\.?$/i.test(normalizeText(inlineNotes))) {
+      return NO_CLAIM_NOTES_TEXT;
+    }
     return sanitizeClaimNotesText(inlineNotes);
   }
 
   return sanitizeClaimNoteLines(noteLines).join(" ");
+}
+
+async function extractClaimMessage(page: Page, text: string): Promise<string> {
+  const stopPattern = /^(claim notes?|claim details|payment details|service and procedure details|service details|procedure details)$/i;
+  const messageText = await extractHeadingSectionText(page, /^claim\s+message$/i, stopPattern);
+  const sourceText = sectionTextFromLines(messageText, /^claim\s+message$/i, stopPattern)
+    || messageText
+    || sectionTextFromLines(text, /^claim\s+message$/i, stopPattern);
+  return sanitizeClaimNotesText(sourceText);
 }
 
 async function extractDetailData(page: Page, text: string): Promise<BlueShieldDetailData> {
@@ -789,6 +919,7 @@ async function extractDetailData(page: Page, text: string): Promise<BlueShieldDe
     payeeAddress: paymentDetails["Payee address"] || valueAfterLabel(text, ["Payee address"]),
   };
   detailData.serviceLines = await extractServiceLines(page, text);
+  detailData.claimMessage = await extractClaimMessage(page, text);
   detailData.claimNotes = await extractClaimNotes(page, text);
   return detailData;
 }
@@ -844,6 +975,7 @@ function extractClaimDetails(args: {
   const serviceLineAmountPaid = serviceLine?.amountPaid ?? "";
   const serviceLineCoInsurance = serviceLine?.coInsurance ?? "";
   const lineNotes = noteForServiceLine(detailData.claimNotes, serviceLine?.lineNumber ?? "");
+  const claimNotes = combineClaimTextParts(formatClaimMessage(detailData.claimMessage), lineNotes);
   return {
     memberId,
     dosSearched,
@@ -888,13 +1020,13 @@ function extractClaimDetails(args: {
     serviceLineCopay: serviceLine?.copay ?? "",
     serviceLineCoInsurance,
     serviceLineAmountPaid,
-    claimNotes: lineNotes,
+    claimNotes,
     claimStatus: computeClaimStatus({
       detailAmountPaid,
       listAmountPaid: resultRowData.claimAmountPaid,
       serviceLineAmountPaid,
       serviceLineCoInsurance,
-      lineNotes,
+      lineNotes: claimNotes,
       hasServiceLine: Boolean(serviceLine),
     }),
     serviceDate: detailData.claim.datesOfService || resultRowData.datesOfService || firstMatch(text, /(?:Service Date|DOS)\s*:?\s*(\d{1,2}\/\d{1,2}\/\d{2,4})/i),
@@ -908,6 +1040,7 @@ function extractClaimDetails(args: {
 }
 
 async function openClaimFromRow(page: Page, row: Locator, resultRowData: BlueShieldResultRowData): Promise<Page> {
+  await dismissBlueShieldSurvey(page);
   const beforePages = page.context().pages();
   const clickableTargets = row.locator(blueShieldConfig.selectors.claimOpenTarget);
   const claimNumberTarget = resultRowData.claimNumber
@@ -920,20 +1053,34 @@ async function openClaimFromRow(page: Page, row: Locator, resultRowData: BlueShi
     "a:has-text('Claim')",
     "button:has-text('Claim')",
   ].join(", ")).first();
+  const firstVisible = async (locator: Locator): Promise<Locator | null> => {
+    const count = await locator.count().catch(() => 0);
+    for (let index = 0; index < count; index++) {
+      const candidate = locator.nth(index);
+      if (await candidate.isVisible({ timeout: 500 }).catch(() => false)) {
+        return candidate;
+      }
+    }
+    return null;
+  };
   const target =
-    claimNumberTarget && await claimNumberTarget.count().catch(() => 0) > 0
-      ? claimNumberTarget
-      : await claimDetailTarget.count().catch(() => 0) > 0
-        ? claimDetailTarget
-        : clickableTargets.first();
-  const popupPromise = page.waitForEvent("popup", { timeout: 1200 }).catch(() => null);
-  await target.click();
+    (claimNumberTarget ? await firstVisible(claimNumberTarget) : null) ||
+    await firstVisible(claimDetailTarget) ||
+    await firstVisible(clickableTargets);
+  if (!target) {
+    throw new Error(`Blue Shield result row for claim ${resultRowData.claimNumber || "(no claim number)"} did not expose a visible claim details link.`);
+  }
+  const popupPromise = page.waitForEvent("popup", { timeout: 800 }).catch(() => null);
+  await target.click({ timeout: 7000 }).catch(async () => {
+    await dismissBlueShieldSurvey(page);
+    await target.click({ force: true, timeout: 4000 });
+  });
   const popup = await popupPromise;
   if (popup) {
-    await popup.waitForLoadState("domcontentloaded", { timeout: 10000 }).catch(() => {});
+    await popup.waitForLoadState("domcontentloaded", { timeout: 8000 }).catch(() => {});
     return popup;
   }
-  await page.waitForLoadState("domcontentloaded", { timeout: 10000 }).catch(() => {});
+  await page.waitForLoadState("domcontentloaded", { timeout: 8000 }).catch(() => {});
   const afterPages = page.context().pages();
   return afterPages.find((candidate) => !beforePages.includes(candidate)) ?? page;
 }
@@ -951,8 +1098,8 @@ async function expandFullView(page: Page): Promise<void> {
   await fullView.click().catch(async () => {
     await fullView.click({ force: true, timeout: 5000 });
   });
-  await page.waitForLoadState("domcontentloaded", { timeout: 8000 }).catch(() => {});
-  await page.waitForTimeout(200);
+  await page.waitForLoadState("domcontentloaded", { timeout: 6000 }).catch(() => {});
+  await page.waitForTimeout(100);
 }
 
 export async function extractAllBlueShieldClaims(options: {
@@ -969,6 +1116,14 @@ export async function extractAllBlueShieldClaims(options: {
 
   while (true) {
     await assertNoSecurityBlock(page);
+    if (await dismissBlueShieldSurvey(page)) {
+      await log("Blue Shield feedback survey was dismissed before processing claim results.");
+    }
+    const pageText = await page.locator("body").innerText({ timeout: 3000 }).catch(() => "");
+    if (isBlueShieldNoResultsText(pageText)) {
+      await log(`Blue Shield member ${workItem.memberId}: portal reported 0 claims on page ${resultPage}; no result rows will be extracted.`);
+      break;
+    }
     const headers = await getResultHeaders(page);
     const rows = page.locator(blueShieldConfig.selectors.resultRows);
     const rowCount = await rows.count();
@@ -979,6 +1134,10 @@ export async function extractAllBlueShieldClaims(options: {
       const rowText = await row.innerText().catch(() => "");
       if (!rowText.trim()) continue;
       const resultRowData = await extractResultRowData(row, headers);
+      const cellCount = await rowCellCount(row);
+      if (!looksLikeBlueShieldResultRow({ rowText, cellCount, rowData: resultRowData, memberId: workItem.memberId })) {
+        continue;
+      }
       if (resultRowData.datesOfService && !textMatchesRequestedDos(resultRowData.datesOfService, requestedKeys)) {
         await log(`Blue Shield member ${workItem.memberId}: skipped result claim ${resultRowData.claimNumber || "(no claim number)"} because result DOS ${resultRowData.datesOfService} does not match requested DOS ${Array.from(requestedKeys).join(", ")}.`);
         continue;
@@ -988,8 +1147,14 @@ export async function extractAllBlueShieldClaims(options: {
       try {
         detailPage = await openClaimFromRow(page, row, resultRowData);
         await assertNoSecurityBlock(detailPage);
+        await dismissBlueShieldSurvey(detailPage);
         await expandFullView(detailPage);
-        const detailText = await detailPage.locator("body").innerText({ timeout: 15000 }).catch(() => rowText);
+        await dismissBlueShieldSurvey(detailPage);
+        const detailText = await detailPage.locator("body").innerText({ timeout: 10000 }).catch(() => rowText);
+        if (isBlueShieldNoResultsText(detailText) || looksLikeBlueShieldSearchPage(detailText)) {
+          await log(`Blue Shield member ${workItem.memberId}: skipped candidate claim ${resultRowData.claimNumber || "(no claim number)"} because it opened the search/no-results page instead of claim detail.`);
+          continue;
+        }
         const detailData = await extractDetailData(detailPage, detailText || rowText);
         const matchingServiceLines = detailData.serviceLines.filter((serviceLine) => serviceLineMatchesRequestedDos(serviceLine, requestedKeys));
         if (detailData.serviceLines.length && !matchingServiceLines.length) {
@@ -1025,7 +1190,7 @@ export async function extractAllBlueShieldClaims(options: {
         if (detailPage && detailPage !== page) {
           await detailPage.close().catch(() => {});
         } else {
-          await page.goBack({ waitUntil: "domcontentloaded", timeout: 8000 }).catch(() => {});
+          await page.goBack({ waitUntil: "domcontentloaded", timeout: 6000 }).catch(() => {});
         }
       }
     }
@@ -1033,8 +1198,8 @@ export async function extractAllBlueShieldClaims(options: {
     const next = page.locator(blueShieldConfig.selectors.nextResultsPage).first();
     if ((await next.count()) === 0 || !await next.isEnabled().catch(() => false)) break;
     await next.click();
-    await page.waitForLoadState("domcontentloaded", { timeout: 10000 }).catch(() => {});
-    await page.locator(blueShieldConfig.selectors.resultRows).first().waitFor({ state: "visible", timeout: 10000 }).catch(() => {});
+    await page.waitForLoadState("domcontentloaded", { timeout: 8000 }).catch(() => {});
+    await page.locator(blueShieldConfig.selectors.resultRows).first().waitFor({ state: "visible", timeout: 7000 }).catch(() => {});
     resultPage++;
   }
 
@@ -1044,9 +1209,12 @@ export async function extractAllBlueShieldClaims(options: {
 export const blueShieldClaimExtractionTestHooks = {
   computeClaimStatus,
   noteForServiceLine,
+  formatClaimMessage,
+  formatClaimNotesForLine,
   mergeServiceLineSources,
   parseServiceLinesFromRows,
   parseServiceLinesFromText,
+  sectionTextFromLines,
   sanitizeClaimNotesText,
   textMatchesRequestedDos,
 };

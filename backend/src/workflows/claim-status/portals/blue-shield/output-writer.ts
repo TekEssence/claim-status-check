@@ -174,10 +174,23 @@ export async function createBlueShieldOutputWorkbookBuffer(state: BlueShieldWork
   workbook.created = new Date();
   workbook.modified = new Date();
 
-  addOutputSheet(workbook, state.outputRows);
+  const orderedOutputRows = [...state.outputRows].sort((left, right) => left.inputRowId - right.inputRowId);
+  addOutputSheet(workbook, orderedOutputRows);
   addSheet(workbook, "Error", state.errorRows, errorColumns);
   addSheet(workbook, "Audit_Log", state.auditRows, auditColumns);
 
+  const buffer = await workbook.xlsx.writeBuffer();
+  return Buffer.from(buffer);
+}
+
+export async function createBlueShieldErrorReportBuffer(
+  errorRows: BlueShieldErrorRow[],
+): Promise<Buffer> {
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = "Claim Status Check";
+  workbook.created = new Date();
+  workbook.modified = new Date();
+  addSheet(workbook, "Blue Shield Errors", errorRows, errorColumns);
   const buffer = await workbook.xlsx.writeBuffer();
   return Buffer.from(buffer);
 }

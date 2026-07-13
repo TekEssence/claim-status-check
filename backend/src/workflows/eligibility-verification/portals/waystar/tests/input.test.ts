@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { routeWaystarRowsByPayer, splitPatientName } from "../input";
+import * as XLSX from "xlsx";
+import {
+  readWaystarEligibilityWorkbook,
+  routeWaystarRowsByPayer,
+  splitPatientName,
+} from "../input";
 
 test("routes a mixed workbook to payer batches using Primary Insurance Name", () => {
   const routing = routeWaystarRowsByPayer([
@@ -84,6 +89,104 @@ test("splits space-delimited patient names when separate first and last name col
     firstName: "John A",
     lastName: "Doe",
   });
+});
+
+test("detects flexible payer or insurance column names", () => {
+  const payerStateRouting = routeWaystarRowsByPayer([
+    { "Primary Insurance Payer State": "Blue Cross and Blue Shield of Texas" },
+  ]);
+  const planRouting = routeWaystarRowsByPayer([
+    { "Current Insurance Plan": "Medicare Advantage" },
+  ]);
+
+  assert.equal(payerStateRouting.payerHeader, "Primary Insurance Payer State");
+  assert.equal(payerStateRouting.batches[0].payerId, "blue-cross-blue-shield-texas");
+  assert.equal(planRouting.payerHeader, "Current Insurance Plan");
+  assert.equal(planRouting.batches[0].payerId, "medicare");
+});
+
+test("routes Blue Cross Blue Shield aliases to the correct Waystar payer option", () => {
+  const routing = routeWaystarRowsByPayer([
+    { Payer: "Blue Cross and Blue Shield of Texas" },
+    { Payer: "BCBS Florida" },
+    { Payer: "Florida Blue" },
+  ]);
+
+  assert.deepEqual(
+    routing.batches.map((batch) => [batch.payerId, batch.rows.length]),
+    [
+      ["blue-cross-blue-shield-texas", 1],
+      ["blue-cross-blue-shield-florida", 2],
+    ],
+  );
+});
+
+test("groups mixed payer rows so each payer can use its own portal flow", () => {
+  const routing = routeWaystarRowsByPayer([
+    { "Insurance Name": "Medicare" },
+    { "Insurance Name": "Blue Cross and Blue Shield of Texas" },
+    { "Insurance Name": "ARP Health Plan" },
+    { "Insurance Name": "Blue Cross and Blue Shield of Florida" },
+  ]);
+
+  assert.deepEqual(
+    routing.batches.map((batch) => [batch.payerId, batch.rows.length]),
+    [
+      ["medicare", 1],
+      ["blue-cross-blue-shield-texas", 1],
+      ["arp", 1],
+      ["blue-cross-blue-shield-florida", 1],
+    ],
+  );
+});
+
+test("accepts Primary Ins Subscriber No as a BCBS payer source column", () => {
+  const routing = routeWaystarRowsByPayer([
+    { "Primary Ins Subscriber No": "Blue Cross and Blue Shield of Texas" },
+  ]);
+
+  assert.equal(routing.payerHeader, "Primary Ins Subscriber No");
+  assert.equal(routing.batches[0].payerId, "blue-cross-blue-shield-texas");
+});
+
+test("routes BCBS rows using the BCBS_Payer_Mappings workbook sheet", async () => {
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(
+    workbook,
+    XLSX.utils.json_to_sheet([
+      { "Primary Ins Subscriber No": "Blue Cross and Blue Shield of Texas" },
+      { "Primary Ins Subscriber No": "Blue Cross and Blue Shield of Florida" },
+    ]),
+    "Eligibility",
+  );
+  XLSX.utils.book_append_sheet(
+    workbook,
+    XLSX.utils.json_to_sheet([
+      {
+        "INPUT_Insurance payer_state": "Blue Cross and Blue Shield of Texas",
+        "Payer portal": "BCBS Texas(SB900)",
+      },
+      {
+        "INPUT_Insurance payer_state": "Blue Cross and Blue Shield of Florida",
+        "Payer portal": "BCBS Florida(SB590)",
+      },
+    ]),
+    "BCBS_Payer_Mappings",
+  );
+
+  const file = new File(
+    [XLSX.write(workbook, { type: "buffer", bookType: "xlsx" })],
+    "eligibility.xlsx",
+  );
+  const routing = await readWaystarEligibilityWorkbook(file);
+
+  assert.deepEqual(
+    routing.batches.map((batch) => [batch.payerId, batch.rows.length]),
+    [
+      ["blue-cross-blue-shield-texas", 1],
+      ["blue-cross-blue-shield-florida", 1],
+    ],
+  );
 });
 
 test("reports unsupported insurance rows without mixing them into payer batches", () => {

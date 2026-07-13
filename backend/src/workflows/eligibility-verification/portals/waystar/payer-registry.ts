@@ -1,11 +1,17 @@
 import { UnknownPortalError } from "../../../../core/errors";
 import { arpPayer } from "./payers/arp";
+import {
+  blueCrossBlueShieldFloridaPayer,
+  blueCrossBlueShieldTexasPayer,
+} from "./payers/blue-cross-blue-shield";
 import { medicarePayer } from "./payers/medicare";
 import type { WaystarPayerHandler } from "./payers/types";
 
 export const waystarPayerRegistry = {
   medicare: medicarePayer,
   arp: arpPayer,
+  "blue-cross-blue-shield-texas": blueCrossBlueShieldTexasPayer,
+  "blue-cross-blue-shield-florida": blueCrossBlueShieldFloridaPayer,
 } satisfies Record<string, WaystarPayerHandler>;
 
 export function getWaystarPayer(payerId: string): WaystarPayerHandler {
@@ -28,6 +34,15 @@ export function matchWaystarPayer(insuranceName: string): WaystarPayerHandler | 
         normalizedName.endsWith(` ${normalizedAlias}`) ||
         normalizedName.includes(` ${normalizedAlias} `);
     }),
+  ) ?? null;
+}
+
+export function matchWaystarPayerByPortalName(portalPayerName: string): WaystarPayerHandler | null {
+  const normalizedPortalName = normalizeLookupValue(portalPayerName);
+  if (!normalizedPortalName) return null;
+
+  return Object.values(waystarPayerRegistry).find(
+    (payer) => normalizeLookupValue(payer.portalPayerName) === normalizedPortalName,
   ) ?? null;
 }
 

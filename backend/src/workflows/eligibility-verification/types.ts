@@ -29,7 +29,9 @@ export type EligibilityResult = {
   rowIndex: number;
   payerId: string;
   coverageStatus: EligibilityCoverageStatus;
+  planType?: string;
   planName?: string;
+  planStatus?: string;
   effectiveDate?: string;
   terminationDate?: string;
   benefits: EligibilityBenefit[];

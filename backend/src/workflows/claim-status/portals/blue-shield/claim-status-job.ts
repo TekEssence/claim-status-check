@@ -6,13 +6,15 @@ import { launchBlueShieldPersistentContext } from "./browser";
 import {
   BlueShieldSecurityDetectionError,
   attachBlueShieldDetectionMonitor,
+  clearBlueShieldDetectionMonitor,
 } from "./detection-monitor";
 import {
   createUniqueMemberWorkItems,
   parseBlueShieldInput,
   readBlueShieldInputWorkbook,
+  routeBlueShieldRowsByCredentials,
 } from "./input";
-import { loginToBlueShield } from "./login";
+import { loginToBlueShield, logoutFromBlueShield } from "./login";
 import {
   clearBlueShieldCheckpoint,
   readBlueShieldCheckpoint,
@@ -20,6 +22,7 @@ import {
 } from "./checkpoint-service";
 import {
   createBlueShieldOutputWorkbookBuffer,
+  createBlueShieldErrorReportBuffer,
   createBlueShieldWorkbookState,
   type BlueShieldWorkbookState,
 } from "./output-writer";
@@ -32,6 +35,7 @@ import { blueShieldWritableDataPath } from "./storage";
 import type { BlueShieldAuditRow, BlueShieldClaimSummary, BlueShieldErrorRow, BlueShieldInputRow, BlueShieldMemberWorkItem, BlueShieldOutputRow } from "./types";
 
 const BLUE_SHIELD_SAVE_INTERVAL = 5;
+const BLUE_SHIELD_MAX_BATCH_RECOVERIES = 3;
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -77,7 +81,7 @@ function addError(
 }
 
 function workItemKey(member: BlueShieldMemberWorkItem): string {
-  return `${member.memberId.trim().toUpperCase()}::${member.dosValues.join("|").trim().toUpperCase()}`;
+  return `${member.memberId.trim().toUpperCase()}::${member.dosValues.join("|").trim().toUpperCase()}::${member.rowIds.join(",")}`;
 }
 
 function downloadableFileEvent(filename: string, buffer: Buffer, mimeType: string): Record<string, unknown> {
@@ -95,7 +99,7 @@ function outputWorkbookFilename(group: string): string {
 }
 
 function normalizeProcedureCode(value: string): string {
-  return value.toUpperCase().replace(/[^A-Z0-9]+/g, "");
+  return value.trim().replace(/\.0+$/, "").toUpperCase().replace(/[^A-Z0-9]+/g, "");
 }
 
 function dateKeysFromText(value: string): string[] {
@@ -171,20 +175,38 @@ function claimMatchesInputDos(claim: BlueShieldClaimSummary, inputDos: string): 
   const inputDosKey = firstDateKeyFromText(inputDos);
   if (!inputDosKey) return true;
 
-  const claimDosKeys = new Set(
-    [
-      claim.serviceLineDatesOfService,
-      claim.detailDatesOfService,
-      claim.datesOfService,
-      claim.serviceDate,
-    ].flatMap(dateKeysFromText),
-  );
-  return claimDosKeys.has(inputDosKey);
+  const claimDosValues = [
+    claim.serviceLineDatesOfService,
+    claim.detailDatesOfService,
+    claim.datesOfService,
+    claim.serviceDate,
+  ];
+  const claimDosKeys = new Set(claimDosValues.flatMap(dateKeysFromText));
+  if (claimDosKeys.has(inputDosKey)) return true;
+
+  return claimDosValues.some((value) => {
+    const keys = dateKeysFromText(value);
+    if (keys.length < 2) return false;
+    const sorted = keys.sort();
+    return inputDosKey >= sorted[0] && inputDosKey <= sorted[sorted.length - 1];
+  });
 }
 
 function inputData(row: BlueShieldInputRow): Record<string, unknown> {
-  const { inputRowId, memberId, dos, cptCode, validationStatus, validationMessage, ...data } = row;
+  const { inputRowId, group, memberId, dos, cptCode, validationStatus, validationMessage, ...data } = row;
   return data;
+}
+
+function addMemberFailureOutput(
+  state: BlueShieldWorkbookState,
+  rows: BlueShieldInputRow[],
+  member: BlueShieldMemberWorkItem,
+  message: string,
+): void {
+  for (const rowId of member.rowIds) {
+    const row = rows.find((candidate) => candidate.inputRowId === rowId);
+    if (row) state.outputRows.push(outputRowWithoutClaim(row, message));
+  }
 }
 
 function cleanFinalStatusPart(value: string): string {
@@ -299,11 +321,17 @@ export function alignClaimsToInputRows(rows: BlueShieldInputRow[], member: BlueS
     const newestMatchingClaims = uniqueClaimsForOutput(keepMostRecentClaims(matchingClaims));
 
     if (!newestMatchingClaims.length) {
+      const extractedDos = Array.from(new Set(claims.flatMap((claim) => [
+        claim.serviceLineDatesOfService,
+        claim.detailDatesOfService,
+        claim.datesOfService,
+      ]).filter(Boolean))).join(", ") || "(blank)";
+      const extractedCpt = Array.from(new Set(dosMatchedClaims.map((claim) => claim.procedureCode).filter(Boolean))).join(", ") || "(blank)";
       outputRows.push(outputRowWithoutClaim(
         row,
         inputCpt
-          ? `No service line matched input DOS ${row.dos} and CPT ${row.cptCode}.`
-          : `No matching claim or service line was found for input DOS ${row.dos}.`,
+          ? `No service line matched input DOS ${row.dos} and CPT ${row.cptCode}. Portal DOS: ${extractedDos}; portal CPT: ${extractedCpt}.`
+          : `No matching claim or service line was found for input DOS ${row.dos}. Portal DOS: ${extractedDos}.`,
       ));
       continue;
     }
@@ -337,6 +365,70 @@ async function saveErrorLog(jobId: string, state: BlueShieldWorkbookState): Prom
   return { buffer, filePath };
 }
 
+async function saveErrorReport(
+  jobId: string,
+  state: BlueShieldWorkbookState,
+): Promise<{ buffer: Buffer; filePath: string }> {
+  const buffer = await createBlueShieldErrorReportBuffer(state.errorRows);
+  const reportDir = blueShieldWritableDataPath("outputs", "blue-shield", jobId);
+  await fs.mkdir(reportDir, { recursive: true });
+  const filePath = path.join(reportDir, "blue-shield-error-report.xlsx");
+  await fs.writeFile(filePath, buffer);
+  return { buffer, filePath };
+}
+
+async function emitErrorArtifacts(
+  context: ScraperContext,
+  state: BlueShieldWorkbookState,
+): Promise<void> {
+  const [errorReport, errorLog] = await Promise.all([
+    saveErrorReport(context.jobId, state),
+    saveErrorLog(context.jobId, state),
+  ]);
+  await context.emit(downloadableFileEvent(
+    "blue-shield-error-report.xlsx",
+    errorReport.buffer,
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  ));
+  await context.emit(downloadableFileEvent(
+    "blue-shield-error.log",
+    errorLog.buffer,
+    "text/plain",
+  ));
+}
+
+async function recoverBlueShieldBatchSession(options: {
+  page: Page;
+  credentials: Parameters<typeof loginToBlueShield>[0]["credentials"];
+  context: ScraperContext;
+  log: (message: string) => Promise<void>;
+  reason: string;
+}): Promise<void> {
+  const { page, credentials, context, log, reason } = options;
+  await log(`Blue Shield is resetting the current login before continuing. Reason: ${reason}`);
+  clearBlueShieldDetectionMonitor(page);
+  await logoutFromBlueShield(page, log).catch(async (error) => {
+    await log(`Blue Shield logout during recovery did not complete cleanly: ${errorMessage(error)}. Clearing browser cookies instead.`);
+    await page.context().clearCookies().catch(() => {});
+  });
+  clearBlueShieldDetectionMonitor(page);
+  await loginToBlueShield({ page, credentials, context, log });
+}
+
+async function closeBlueShieldBatchContext(options: {
+  page: Page | null;
+  contextHandle: Awaited<ReturnType<typeof launchBlueShieldPersistentContext>> | null;
+  log: (message: string) => Promise<void>;
+}): Promise<void> {
+  const { page, contextHandle, log } = options;
+  if (page) {
+    await logoutFromBlueShield(page, log).catch(async (error) => {
+      await log(`Blue Shield logout before closing credential batch did not complete cleanly: ${errorMessage(error)}.`);
+    });
+  }
+  await contextHandle?.close().catch(() => {});
+}
+
 export async function runBlueShieldClaimStatusJob(formData: FormData, context: ScraperContext): Promise<void> {
   const input = await parseBlueShieldInput(formData);
   if (input.resetCheckpoint) {
@@ -344,18 +436,26 @@ export async function runBlueShieldClaimStatusJob(formData: FormData, context: S
   }
 
   const rows = readBlueShieldInputWorkbook(input.inputWorkbookBuffer);
-  const workItems = createUniqueMemberWorkItems(rows);
+  const routing = routeBlueShieldRowsByCredentials(rows, input.credentialWorkbookBuffer);
+  const batches = routing.batches.map((batch) => ({
+    ...batch,
+    workItems: createUniqueMemberWorkItems(batch.rows),
+  }));
+  const totalWorkItems = batches.reduce((total, batch) => total + batch.workItems.length, 0);
   const state = createBlueShieldWorkbookState();
   const invalidRows = rows.filter((row) => row.validationStatus === "invalid");
-  let completedWorkItems = new Set<string>();
+  const completedWorkItems = new Set<string>();
   let outputWorkbookPath = "";
   let page: Page | null = null;
   let contextHandle: Awaited<ReturnType<typeof launchBlueShieldPersistentContext>> | null = null;
-  const workbookFilename = outputWorkbookFilename(input.selectedGroup);
+  const workbookFilename = outputWorkbookFilename("BlueShield");
 
   const log = async (message: string) => context.log({ level: "info", message });
-  await log(`Blue Shield input loaded for ${input.selectedGroup}: ${rows.length} row(s), ${workItems.length} unique member/DOS search(es).`);
-  const duplicateCount = workItems.reduce((count, item) => count + item.duplicateRowIds.length, 0);
+  await log(`Blue Shield input loaded: ${rows.length} row(s), ${batches.length} unique credential login(s), ${totalWorkItems} unique member/DOS search(es).`);
+  const duplicateCount = batches.reduce(
+    (count, batch) => count + batch.workItems.reduce((batchCount, item) => batchCount + item.duplicateRowIds.length, 0),
+    0,
+  );
   if (duplicateCount > 0) {
     await log(`Blue Shield skipped ${duplicateCount} duplicate input row(s) with the same Member ID and DOS.`);
   }
@@ -371,83 +471,180 @@ export async function runBlueShieldClaimStatusJob(formData: FormData, context: S
       portal_url: "",
     });
   });
-
+  routing.unmappedRows.forEach((row) => {
+    const message = `Missing Blue Shield credentials for group ${row.group}.`;
+    state.outputRows.push(outputRowWithoutClaim(row, message));
+    state.errorRows.push({
+      timestamp: nowIso(),
+      member_id: row.memberId,
+      dos: row.dos,
+      error_type: "credential_mapping",
+      error_message: message,
+      portal_url: "",
+    });
+  });
+  if (routing.unmappedRows.length > 0) {
+    await log(`Blue Shield skipped ${routing.unmappedRows.length} row(s) whose Group did not match the credential workbook.`);
+  }
   const checkpoint = await readBlueShieldCheckpoint(input.checkpointId);
   if (checkpoint) {
     await clearBlueShieldCheckpoint(input.checkpointId);
     await log(`Blue Shield found an old checkpoint after member ${checkpoint.lastCompletedMember}. Cleared it so this run will reprocess every member.`);
   }
 
-  await context.emit({ type: "progress", completed: completedWorkItems.size, total: workItems.length });
+  await context.emit({ type: "progress", completed: completedWorkItems.size, total: totalWorkItems });
 
   try {
-    contextHandle = await launchBlueShieldPersistentContext(log);
-    page = contextHandle.pages()[0] ?? await contextHandle.newPage();
-    attachBlueShieldDetectionMonitor(page);
+    if (batches.length === 0) {
+      throw new Error("No Blue Shield rows could be matched to login credentials.");
+    }
 
-    await loginToBlueShield({ page, credentials: input.credentials, context, log });
-
-    for (const member of workItems) {
-      const currentWorkItemKey = workItemKey(member);
-      if (completedWorkItems.has(currentWorkItemKey)) {
-        continue;
-      }
-
-      const memberStartedAt = Date.now();
+    for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
+      const batch = batches[batchIndex];
+      await log(`Blue Shield logging in for group(s) ${batch.groups.join(", ")} to process ${batch.rows.length} row(s).`);
+      let batchSecurityFailure = "";
+      let batchRecoveryCount = 0;
       try {
-        addAudit(state, member.memberId, "member_started", "started", memberStartedAt);
-        await navigateToBlueShieldClaimStatus(page, input.credentials);
-        const searchResult = await searchBlueShieldClaims({ page, workItem: member, log });
-        const claims = await extractAllBlueShieldClaims({
-          page,
-          workItem: member,
-          dosSearched: searchResult.dosSearched,
-          log,
-        });
+        if (contextHandle) {
+          await closeBlueShieldBatchContext({ page, contextHandle, log });
+          page = null;
+          contextHandle = null;
+        }
 
-        state.outputRows.push(...alignClaimsToInputRows(rows, member, claims));
-        addAudit(state, member.memberId, "member_completed", "completed", memberStartedAt, `Extracted ${claims.length} claim(s).`);
-        completedWorkItems.add(currentWorkItemKey);
+        contextHandle = await launchBlueShieldPersistentContext(log, batch.credentials);
+        page = contextHandle.pages()[0] ?? await contextHandle.newPage();
+        attachBlueShieldDetectionMonitor(page);
+        await loginToBlueShield({ page, credentials: batch.credentials, context, log });
 
-        const shouldSaveIntermediateWorkbook = completedWorkItems.size % BLUE_SHIELD_SAVE_INTERVAL === 0;
-        if (shouldSaveIntermediateWorkbook) {
-          const saved = await saveWorkbook(context.jobId, state, workbookFilename);
-          outputWorkbookPath = saved.filePath;
-          await saveBlueShieldCheckpoint({
-            checkpointId: input.checkpointId,
-            lastCompletedMember: member.memberId,
-            completedMembers: Array.from(completedWorkItems),
-            outputWorkbookPath,
-            updatedAt: nowIso(),
+        for (const member of batch.workItems) {
+          const currentWorkItemKey = workItemKey(member);
+          if (completedWorkItems.has(currentWorkItemKey)) continue;
+
+          const memberStartedAt = Date.now();
+          try {
+            addAudit(state, member.memberId, "member_started", "started", memberStartedAt);
+            await navigateToBlueShieldClaimStatus(page, batch.credentials);
+            const searchResult = await searchBlueShieldClaims({ page, workItem: member, log });
+            const claims = await extractAllBlueShieldClaims({
+              page,
+              workItem: member,
+              dosSearched: searchResult.dosSearched,
+              log,
+            });
+
+            state.outputRows.push(...alignClaimsToInputRows(batch.rows, member, claims));
+            addAudit(state, member.memberId, "member_completed", "completed", memberStartedAt, `Extracted ${claims.length} claim(s).`);
+            completedWorkItems.add(currentWorkItemKey);
+
+            const shouldSaveIntermediateWorkbook = completedWorkItems.size % BLUE_SHIELD_SAVE_INTERVAL === 0;
+            if (shouldSaveIntermediateWorkbook) {
+              const saved = await saveWorkbook(context.jobId, state, workbookFilename);
+              outputWorkbookPath = saved.filePath;
+              await saveBlueShieldCheckpoint({
+                checkpointId: input.checkpointId,
+                lastCompletedMember: member.memberId,
+                completedMembers: Array.from(completedWorkItems),
+                outputWorkbookPath,
+                updatedAt: nowIso(),
+              });
+            }
+            await log(
+              shouldSaveIntermediateWorkbook
+                ? `Blue Shield member ${member.memberId} completed and checkpoint saved.`
+                : `Blue Shield member ${member.memberId} completed.`,
+            );
+            await context.emit({ type: "progress", completed: completedWorkItems.size, total: totalWorkItems });
+          } catch (error) {
+            const message = errorMessage(error);
+            const isSecurity = error instanceof BlueShieldSecurityDetectionError;
+            addError(state, member, page, isSecurity ? error.reason : "member_processing", message);
+            addMemberFailureOutput(state, batch.rows, member, message);
+            completedWorkItems.add(currentWorkItemKey);
+            await saveWorkbook(context.jobId, state, workbookFilename);
+            await saveErrorLog(context.jobId, state);
+            await saveBlueShieldCheckpoint({
+              checkpointId: input.checkpointId,
+              lastCompletedMember: Array.from(completedWorkItems).at(-1) ?? "",
+              completedMembers: Array.from(completedWorkItems),
+              outputWorkbookPath,
+              updatedAt: nowIso(),
+            });
+
+            if (isSecurity) {
+              addAudit(state, member.memberId, "member_failed", "failed", memberStartedAt, message);
+              await context.emit({ type: "progress", completed: completedWorkItems.size, total: totalWorkItems });
+
+              if (batchRecoveryCount >= BLUE_SHIELD_MAX_BATCH_RECOVERIES) {
+                batchSecurityFailure = message;
+                await context.emit({
+                  type: "warning",
+                  message: `Blue Shield stopped the ${batch.groups.join(", ")} credential batch after repeated security responses and will continue with the next login.`,
+                });
+                break;
+              }
+
+              batchRecoveryCount++;
+              await context.emit({
+                type: "warning",
+                message: `Blue Shield hit a security response for ${member.memberId}. The current login will be reset, then remaining rows for this same login will continue.`,
+              });
+              await recoverBlueShieldBatchSession({
+                page,
+                credentials: batch.credentials,
+                context,
+                log,
+                reason: message,
+              });
+              continue;
+            }
+
+            addAudit(state, member.memberId, "member_failed", "failed", memberStartedAt, message);
+            await context.emit({ type: "progress", completed: completedWorkItems.size, total: totalWorkItems });
+          }
+        }
+
+        if (batchSecurityFailure) {
+          for (const skippedMember of batch.workItems) {
+            const skippedKey = workItemKey(skippedMember);
+            if (completedWorkItems.has(skippedKey)) continue;
+            const message = `Skipped because this credential batch was stopped after: ${batchSecurityFailure}`;
+            addError(state, skippedMember, page, "credential_batch_stopped", message);
+            addMemberFailureOutput(state, batch.rows, skippedMember, message);
+            completedWorkItems.add(skippedKey);
+          }
+          await context.emit({
+            type: "progress",
+            completed: completedWorkItems.size,
+            total: totalWorkItems,
           });
         }
-        await log(
-          shouldSaveIntermediateWorkbook
-            ? `Blue Shield member ${member.memberId} completed and checkpoint saved.`
-            : `Blue Shield member ${member.memberId} completed.`,
-        );
-        await context.emit({ type: "progress", completed: completedWorkItems.size, total: workItems.length });
       } catch (error) {
-        const message = errorMessage(error);
-        const isSecurity = error instanceof BlueShieldSecurityDetectionError;
-        addError(state, member, page, isSecurity ? error.reason : "member_processing", message);
-        await saveWorkbook(context.jobId, state, workbookFilename);
-        await saveErrorLog(context.jobId, state);
-        await saveBlueShieldCheckpoint({
-          checkpointId: input.checkpointId,
-          lastCompletedMember: Array.from(completedWorkItems).at(-1) ?? "",
-          completedMembers: Array.from(completedWorkItems),
-          outputWorkbookPath,
-          updatedAt: nowIso(),
-        });
-
-        if (isSecurity) {
-          await context.emit({ type: "error", message });
-          break;
+        const failure = errorMessage(error);
+        const errorType = error instanceof BlueShieldSecurityDetectionError
+          ? error.reason
+          : "credential_batch_login";
+        for (const skippedMember of batch.workItems) {
+          const skippedKey = workItemKey(skippedMember);
+          if (completedWorkItems.has(skippedKey)) continue;
+          addError(state, skippedMember, page, errorType, failure);
+          addMemberFailureOutput(state, batch.rows, skippedMember, failure);
+          completedWorkItems.add(skippedKey);
         }
-
-        addAudit(state, member.memberId, "member_failed", "failed", memberStartedAt, message);
-        await context.emit({ type: "progress", completed: completedWorkItems.size, total: workItems.length });
+        await context.log({
+          level: "error",
+          message: `Blue Shield credential batch ${batch.groups.join(", ")} failed before completion: ${failure}`,
+          eventName: "blue_shield_credential_batch_failed",
+          meta: { groups: batch.groups, errorType },
+        });
+        await context.emit({
+          type: "warning",
+          message: `Blue Shield could not process the ${batch.groups.join(", ")} credential batch and will continue with the next login: ${failure}`,
+        });
+        await context.emit({
+          type: "progress",
+          completed: completedWorkItems.size,
+          total: totalWorkItems,
+        });
       }
     }
 
@@ -455,22 +652,19 @@ export async function runBlueShieldClaimStatusJob(formData: FormData, context: S
     await context.emit(downloadableFileEvent(workbookFilename, finalWorkbook.buffer, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"));
 
     if (state.errorRows.length > 0) {
-      const errorLog = await saveErrorLog(context.jobId, state);
-      await context.emit(downloadableFileEvent("blue-shield-error.log", errorLog.buffer, "text/plain"));
+      await emitErrorArtifacts(context, state);
       await context.emit({ type: "warning", message: `Blue Shield completed with ${state.errorRows.length} error(s).` });
     }
   } catch (error) {
     const message = errorMessage(error);
     addError(state, null, page, "job_failure", message);
-    const workbookFilename = outputWorkbookFilename(input?.selectedGroup ?? "BlueShield");
     await saveWorkbook(context.jobId, state, workbookFilename).catch(() => {});
-    const errorLog = await saveErrorLog(context.jobId, state).catch(() => null);
-    if (errorLog) {
-      await context.emit(downloadableFileEvent("blue-shield-error.log", errorLog.buffer, "text/plain"));
-    }
+    await emitErrorArtifacts(context, state).catch(() => {});
     await context.emit({ type: "error", message });
   } finally {
     await contextHandle?.close().catch(() => {});
+    contextHandle = null;
+    page = null;
     await context.emit({ type: "done" });
   }
 }

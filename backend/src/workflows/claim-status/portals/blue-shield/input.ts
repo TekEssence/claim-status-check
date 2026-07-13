@@ -1,7 +1,14 @@
 import * as XLSX from "xlsx";
 import { getSharedMfaMailbox } from "@/backend/src/core/mfa-otp-service";
 import { envText, loadBlueShieldEnvironment } from "./env";
-import type { BlueShieldCredentials, BlueShieldInput, BlueShieldInputRow, BlueShieldMemberWorkItem } from "./types";
+import type {
+  BlueShieldCredentialBatch,
+  BlueShieldCredentialRouting,
+  BlueShieldCredentials,
+  BlueShieldInput,
+  BlueShieldInputRow,
+  BlueShieldMemberWorkItem,
+} from "./types";
 import { blueShieldConfig } from "./config";
 
 const MAIL_CONFIGURATION_SHEET_NAME = "mailconfigurations";
@@ -120,6 +127,16 @@ const CPT_ALIASES = [
   "HCPCS Code",
 ];
 
+const GROUP_ALIASES = [
+  "Group",
+  "Group Name",
+  "Medical Group",
+  "Medical Group Name",
+  "Provider Group",
+  "IPA Group",
+  "IPA",
+];
+
 function normalizeGroupName(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, "");
 }
@@ -221,35 +238,22 @@ async function loadOptionalWorkbookBuffer(file: FormDataEntryValue | null): Prom
   return file instanceof File ? file.arrayBuffer() : null;
 }
 
-function resolveCredentials(
-  credentialWorkbook: ArrayBuffer | null,
-  selectedGroup: string,
-): BlueShieldCredentials {
-  if (!credentialWorkbook) {
-    throw new Error("Missing Blue Shield login Excel file.");
-  }
-
-  loadBlueShieldMailConfigurationFromWorkbook(credentialWorkbook);
-  const workbookCredentials = loadCredentialsFromWorkbook(credentialWorkbook, selectedGroup);
-  if (workbookCredentials) return workbookCredentials;
-
-  throw new Error(`Missing Blue Shield credentials for group ${selectedGroup}. Upload a login Excel with Group, URL, User Name, and Password columns.`);
-}
-
 export async function parseBlueShieldInput(formData: FormData): Promise<BlueShieldInput> {
   loadBlueShieldEnvironment();
   const credentialWorkbook = await loadOptionalWorkbookBuffer(formData.get("credentialExcel"));
   const inputExcel = formData.get("inputExcel");
-  const selectedGroup = asText(formData.get("group")) || "AST";
 
   if (!(inputExcel instanceof File)) {
     throw new Error("Missing Blue Shield input Excel file.");
   }
+  if (!credentialWorkbook) {
+    throw new Error("Missing Blue Shield login Excel file.");
+  }
 
   const inputWorkbookBuffer = await inputExcel.arrayBuffer();
+  loadBlueShieldMailConfigurationFromWorkbook(credentialWorkbook);
   return {
-    credentials: resolveCredentials(credentialWorkbook, selectedGroup),
-    selectedGroup,
+    credentialWorkbookBuffer: credentialWorkbook,
     inputWorkbookBuffer,
     inputFileName: inputExcel.name || "blue_shield_input.xlsx",
     checkpointId: asText(formData.get("checkpointId")) || inputExcel.name || "blue-shield",
@@ -270,13 +274,16 @@ export function readBlueShieldInputWorkbook(buffer: ArrayBuffer): BlueShieldInpu
       const memberId = normalizeMemberId(findValue(row, MEMBER_ID_ALIASES));
       const dos = findValue(row, DOS_ALIASES);
       const cptCode = findValue(row, CPT_ALIASES).replace(/\s+/g, "").trim();
+      const group = findValue(row, GROUP_ALIASES);
       const missing = [
+        !group ? "Group" : "",
         !memberId ? "Member ID" : "",
         !dos ? "DOS" : "",
       ].filter(Boolean);
       return {
         ...row,
         inputRowId: index + 2,
+        group,
         memberId,
         dos,
         cptCode,
@@ -284,7 +291,50 @@ export function readBlueShieldInputWorkbook(buffer: ArrayBuffer): BlueShieldInpu
         validationMessage: missing.length ? `Missing ${missing.join(" and ")}.` : "",
       } satisfies BlueShieldInputRow;
     })
-    .filter((row) => row.memberId || row.dos);
+    .filter((row) => row.group || row.memberId || row.dos);
+}
+
+export function routeBlueShieldRowsByCredentials(
+  rows: BlueShieldInputRow[],
+  credentialWorkbook: ArrayBuffer,
+): BlueShieldCredentialRouting {
+  const batchesByCredential = new Map<string, BlueShieldCredentialBatch>();
+  const unmappedRows: BlueShieldInputRow[] = [];
+
+  for (const row of rows.filter((candidate) => candidate.validationStatus === "valid")) {
+    const credentials = loadCredentialsFromWorkbook(credentialWorkbook, row.group);
+    if (!credentials) {
+      unmappedRows.push(row);
+      continue;
+    }
+
+    const credentialKey = [
+      credentials.loginUrl.trim().toLowerCase(),
+      credentials.username.trim().toLowerCase(),
+      credentials.password,
+      credentials.claimStatusUrl.trim().toLowerCase(),
+    ].join("::");
+    const existing = batchesByCredential.get(credentialKey);
+    if (existing) {
+      existing.rows.push(row);
+      if (!existing.groups.some((group) => normalizeGroupName(group) === normalizeGroupName(row.group))) {
+        existing.groups.push(row.group);
+      }
+      continue;
+    }
+
+    batchesByCredential.set(credentialKey, {
+      credentialKey,
+      credentials,
+      groups: [row.group],
+      rows: [row],
+    });
+  }
+
+  return {
+    batches: Array.from(batchesByCredential.values()),
+    unmappedRows,
+  };
 }
 
 export function createUniqueMemberWorkItems(rows: BlueShieldInputRow[]): BlueShieldMemberWorkItem[] {
