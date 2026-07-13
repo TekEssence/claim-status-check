@@ -14,6 +14,94 @@ export const INSURANCE_HEADER_ALIASES = [
   "insurance",
 ] as const;
 
+const MEMBER_ID_HEADER_ALIASES = [
+  "member id",
+  "member number",
+  "member no",
+  "member #",
+  "subscriber id",
+  "subscriber number",
+  "subscriber no",
+  "subscriber #",
+  "primary ins subscriber no",
+  "primary insurance subscriber no",
+  "policy number",
+  "policy no",
+  "policy id",
+  "insurance id",
+  "medicare id",
+] as const;
+
+const SUBSCRIBER_ID_HEADER_ALIASES = [
+  "subscriber id",
+  "subscriber number",
+  "subscriber no",
+  "subscriber #",
+  "primary ins subscriber no",
+  "primary insurance subscriber no",
+  "member id",
+  "member number",
+  "member no",
+] as const;
+
+const FIRST_NAME_HEADER_ALIASES = [
+  "patient first name",
+  "first name",
+  "pat f name",
+  "pat first name",
+  "patient fname",
+  "patient fname initial",
+  "member first name",
+  "subscriber first name",
+  "fname",
+] as const;
+
+const LAST_NAME_HEADER_ALIASES = [
+  "patient last name",
+  "last name",
+  "pat l name",
+  "pat last name",
+  "patient lname",
+  "member last name",
+  "subscriber last name",
+  "lname",
+] as const;
+
+const FULL_NAME_HEADER_ALIASES = [
+  "patient name",
+  "member name",
+  "subscriber name",
+  "patient full name",
+  "member full name",
+  "subscriber full name",
+  "patient",
+] as const;
+
+const DATE_OF_BIRTH_HEADER_ALIASES = [
+  "date of birth",
+  "dob",
+  "pat birthdate",
+  "patient birthdate",
+  "patient dob",
+  "patient date of birth",
+  "member dob",
+  "subscriber dob",
+  "birth date",
+] as const;
+
+const DATE_OF_SERVICE_HEADER_ALIASES = [
+  "date of service",
+  "dos",
+  "date",
+  "service date",
+] as const;
+
+const SERVICE_TYPE_HEADER_ALIASES = [
+  "service type",
+  "service type code",
+  "service type codes",
+] as const;
+
 export type WaystarWorkbookRouting = {
   payerHeader: string;
   batches: EligibilityPayerBatch[];
@@ -62,15 +150,19 @@ export function routeWaystarRowsByPayer(
       return;
     }
 
+    const memberId = findValue(raw, MEMBER_ID_HEADER_ALIASES);
+    const subscriberId = findValue(raw, SUBSCRIBER_ID_HEADER_ALIASES) || memberId;
+    const parsedName = resolvePatientName(raw);
+
     const eligibilityRow: EligibilityInputRow = {
       originalIndex: rowIndex,
-      memberId: findValue(raw, ["member id", "member number", "member no"]),
-      subscriberId: findValue(raw, ["subscriber id", "subscriber number", "subscriber no"]),
-      patientFirstName: findValue(raw, ["patient first name", "first name"]),
-      patientLastName: findValue(raw, ["patient last name", "last name"]),
-      dateOfBirth: findValue(raw, ["date of birth", "dob"]),
-      dateOfService: findValue(raw, ["date of service", "dos"]),
-      serviceType: findValue(raw, ["service type", "service type code"]),
+      memberId,
+      subscriberId,
+      patientFirstName: parsedName.firstName,
+      patientLastName: parsedName.lastName,
+      dateOfBirth: findValue(raw, DATE_OF_BIRTH_HEADER_ALIASES),
+      dateOfService: findValue(raw, DATE_OF_SERVICE_HEADER_ALIASES),
+      serviceType: findValue(raw, SERVICE_TYPE_HEADER_ALIASES),
       raw,
     };
 
@@ -91,12 +183,55 @@ export function routeWaystarRowsByPayer(
   };
 }
 
+function resolvePatientName(row: Record<string, unknown>): {
+  firstName?: string;
+  lastName?: string;
+} {
+  const explicitFirstName = findValue(row, FIRST_NAME_HEADER_ALIASES);
+  const explicitLastName = findValue(row, LAST_NAME_HEADER_ALIASES);
+  if (explicitFirstName || explicitLastName) {
+    return {
+      firstName: explicitFirstName,
+      lastName: explicitLastName,
+    };
+  }
+
+  const fullName = findValue(row, FULL_NAME_HEADER_ALIASES);
+  return splitPatientName(fullName);
+}
+
+export function splitPatientName(fullName?: string): {
+  firstName?: string;
+  lastName?: string;
+} {
+  const normalized = asText(fullName).replace(/\s+/g, " ").trim();
+  if (!normalized) return {};
+
+  if (normalized.includes(",")) {
+    const [lastNamePart, firstNamePart] = normalized.split(",", 2).map((part) => part.trim());
+    return {
+      firstName: firstNamePart || undefined,
+      lastName: lastNamePart || undefined,
+    };
+  }
+
+  const parts = normalized.split(" ").filter(Boolean);
+  if (parts.length === 1) {
+    return { firstName: parts[0] };
+  }
+
+  return {
+    firstName: parts.slice(0, -1).join(" ") || undefined,
+    lastName: parts.at(-1) || undefined,
+  };
+}
+
 function findInsuranceHeader(headers: string[]): string | null {
   const aliases = new Set(INSURANCE_HEADER_ALIASES.map(normalizeHeader));
   return headers.find((header) => aliases.has(normalizeHeader(header))) ?? null;
 }
 
-function findValue(row: Record<string, unknown>, aliases: string[]): string | undefined {
+function findValue(row: Record<string, unknown>, aliases: readonly string[]): string | undefined {
   const normalizedAliases = new Set(aliases.map(normalizeHeader));
   const key = Object.keys(row).find((header) => normalizedAliases.has(normalizeHeader(header)));
   const value = key ? asText(row[key]) : "";

@@ -1,0 +1,34 @@
+export const WAYSTAR_SELECTORS = {
+  login: {
+    username: "#loginName",
+    password: "#password",
+    submit: "#loginButton",
+  },
+  additionalAuth: {
+    container: "text=Additional Authentication Required",
+    question: "div:has-text('Answer:') >> xpath=preceding-sibling::*[contains(normalize-space(.), '?')][1], text=/what .*\?|first job\??|dessert\??/i",
+    answer: "input[type='text']:visible",
+    verify: "button:has-text('Verify'):visible, input[type='submit'][value='Verify']:visible",
+    trustDevice: "input[type='checkbox']:visible",
+  },
+  navigation: {
+    eligibility: "input.split-button-left[value='Eligibility']:visible",
+  },
+  inquiry: {
+    payerInput: "#payerText:visible",
+    payerSelect: "select[name*='Payer']:visible, select[id*='Payer']:visible",
+    provider: "#ddlProv:visible",
+    serviceType: "#ddlSTCCode:visible",
+    patientLookup: "#PatientLookup:visible",
+    memberId: "#SbrId:visible",
+    lastName: "#LName:visible",
+    firstName: "#FName:visible",
+    dateOfBirth: "#DOB:visible",
+    submit: "#SubmitInquiry:visible",
+    subscriberRadio: "input[name='PatientType'][value='S']:visible",
+    activeCoverage: "#id_InquiryStatus:visible",
+    sectionHeaders: ".SectionHeader",
+    sectionTitle: ".SectionTitle",
+    sectionStatus: ".SectionStatus",
+  },
+} as const;

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { routeWaystarRowsByPayer } from "../input";
+import { routeWaystarRowsByPayer, splitPatientName } from "../input";
 
 test("routes a mixed workbook to payer batches using Primary Insurance Name", () => {
   const routing = routeWaystarRowsByPayer([
@@ -36,6 +36,54 @@ test("accepts normalized payer and insurance name header variants", () => {
 
   assert.equal(payerRouting.batches[0].payerId, "medicare");
   assert.equal(insuranceRouting.batches[0].payerId, "arp");
+});
+
+test("reads abbreviated patient and subscriber headers from the workbook", () => {
+  const routing = routeWaystarRowsByPayer([
+    {
+      "Primary Insurance Name": "Medicare",
+      "Primary Ins Subscriber No": "SUB-123",
+      "Pat F Name": "John",
+      "Pat L Name": "Doe",
+      "Pat Birthdate": "01/02/1950",
+      Date: "07/09/2026",
+    },
+  ]);
+
+  const row = routing.batches[0]?.rows[0];
+  assert.equal(row?.memberId, "SUB-123");
+  assert.equal(row?.subscriberId, "SUB-123");
+  assert.equal(row?.patientFirstName, "John");
+  assert.equal(row?.patientLastName, "Doe");
+  assert.equal(row?.dateOfBirth, "01/02/1950");
+  assert.equal(row?.dateOfService, "07/09/2026");
+});
+
+test("reads common Medicare-style headers including Patient Name and Patient DOB", () => {
+  const routing = routeWaystarRowsByPayer([
+    {
+      "Primary Insurance Name": "Medicare",
+      "Subscriber No": "SUB-456",
+      "Patient Name": "DOE, JANE",
+      "Patient DOB": "02/14/1955",
+      "Service Type Codes": "30 - Health Benefit Plan Coverage",
+    },
+  ]);
+
+  const row = routing.batches[0]?.rows[0];
+  assert.equal(row?.memberId, "SUB-456");
+  assert.equal(row?.subscriberId, "SUB-456");
+  assert.equal(row?.patientFirstName, "JANE");
+  assert.equal(row?.patientLastName, "DOE");
+  assert.equal(row?.dateOfBirth, "02/14/1955");
+  assert.equal(row?.serviceType, "30 - Health Benefit Plan Coverage");
+});
+
+test("splits space-delimited patient names when separate first and last name columns are absent", () => {
+  assert.deepEqual(splitPatientName("John A Doe"), {
+    firstName: "John A",
+    lastName: "Doe",
+  });
 });
 
 test("reports unsupported insurance rows without mixing them into payer batches", () => {
