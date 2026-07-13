@@ -16,11 +16,13 @@ export type RegalInput = {
 
 export type RegalClaimSearchInput = {
   rowNumber: number;
+  accountNumber: string;
   group: string;
   memberName: string;
   dos: string;
 };
 
+const ACCOUNT_NUMBER_ALIASES = ["Account Number", "Account No", "Account #", "Acct Number", "Acct No"];
 const GROUP_ALIASES = ["Group", "Site", "Portal Group"];
 const MEMBER_NAME_ALIASES = ["Member Name", "Member", "Patient Name"];
 const DOS_ALIASES = ["DOS", "Date of Service", "Service Date"];
@@ -34,12 +36,17 @@ function findColumnIndex(headers: unknown[], aliases: string[]): number {
   return headers.findIndex((header) => normalizedAliases.includes(normalizeHeader(header)));
 }
 
-function parseClaimWorkbookRow(row: unknown[], rowNumber: number, indexes: { group: number; memberName: number; dos: number }): RegalClaimSearchInput {
+function valueAt(row: unknown[], index: number): unknown {
+  return index >= 0 ? row[index] : "";
+}
+
+function parseClaimWorkbookRow(row: unknown[], rowNumber: number, indexes: { accountNumber: number; group: number; memberName: number; dos: number }): RegalClaimSearchInput {
   return {
     rowNumber,
-    group: normalizeRegalGroup(row[indexes.group]),
-    memberName: normalizeRegalMemberName(row[indexes.memberName]),
-    dos: normalizeRegalInputDate(row[indexes.dos]),
+    accountNumber: asText(valueAt(row, indexes.accountNumber)),
+    group: normalizeRegalGroup(valueAt(row, indexes.group)),
+    memberName: normalizeRegalMemberName(valueAt(row, indexes.memberName)),
+    dos: normalizeRegalInputDate(valueAt(row, indexes.dos)),
   };
 }
 
@@ -57,14 +64,15 @@ export function readRegalClaimRowsFromBuffer(buffer: ArrayBuffer): RegalClaimSea
   }) as unknown[][];
 
   const firstRow = matrix[0] ?? [];
+  const accountNumberIndex = findColumnIndex(firstRow, ACCOUNT_NUMBER_ALIASES);
   const groupIndex = findColumnIndex(firstRow, GROUP_ALIASES);
   const memberNameIndex = findColumnIndex(firstRow, MEMBER_NAME_ALIASES);
   const dosIndex = findColumnIndex(firstRow, DOS_ALIASES);
-  const hasHeader = groupIndex >= 0 || memberNameIndex >= 0 || dosIndex >= 0;
+  const hasHeader = accountNumberIndex >= 0 || groupIndex >= 0 || memberNameIndex >= 0 || dosIndex >= 0;
 
   const indexes = hasHeader
-    ? { group: groupIndex, memberName: memberNameIndex, dos: dosIndex }
-    : { group: -1, memberName: 0, dos: 1 };
+    ? { accountNumber: accountNumberIndex, group: groupIndex, memberName: memberNameIndex, dos: dosIndex }
+    : { accountNumber: -1, group: -1, memberName: 0, dos: 1 };
 
   if (hasHeader && (indexes.group < 0 || indexes.memberName < 0 || indexes.dos < 0)) {
     throw new Error("Regal claim Excel must include Group, Member Name, and DOS columns.");
@@ -93,6 +101,7 @@ async function claimRowsFromWorkbook(file: File): Promise<RegalClaimSearchInput[
 function claimRowsFromEnv(): RegalClaimSearchInput[] {
   const row: RegalClaimSearchInput = {
     rowNumber: 0,
+    accountNumber: optionalEnv("REGAL_TEST_ACCOUNT_NUMBER"),
     group: normalizeRegalGroup(optionalEnv("REGAL_TEST_GROUP")),
     memberName: normalizeRegalMemberName(optionalEnv("REGAL_TEST_MEMBER_NAME")),
     dos: normalizeRegalInputDate(optionalEnv("REGAL_TEST_DOS")),

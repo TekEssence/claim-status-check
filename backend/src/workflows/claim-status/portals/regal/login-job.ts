@@ -683,8 +683,9 @@ async function returnToRegalHomeForGroupSelection(page: Page, stageLog: (level: 
   ]);
 }
 
-function createRegalNoClaimsOutputRow(claimInput: { rowNumber: number; group: string; memberName: string; dos: string }): Record<string, unknown> {
+function createRegalNoClaimsOutputRow(claimInput: { rowNumber: number; accountNumber?: string; group: string; memberName: string; dos: string }): Record<string, unknown> {
   return {
+    "Account Number": claimInput.accountNumber ?? "",
     input_row_number: claimInput.rowNumber,
     input_group: claimInput.group,
     input_member_name: claimInput.memberName,
@@ -1333,6 +1334,7 @@ export async function runRegalLoginJob(formData: FormData, context: ScraperConte
         const lines = detailRows.lineDetails.length ? detailRows.lineDetails : [{} as RegalLineDetailRow];
         for (const line of lines) {
           outputRows.push({
+            "Account Number": claimInput.accountNumber,
             input_row_number: claimInput.rowNumber,
             input_group: claimInput.group,
             input_member_name: claimInput.memberName,

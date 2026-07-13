@@ -13,6 +13,7 @@ type RegalWorkbookOptions = {
 };
 
 const REGAL_OUTPUT_HEADERS = [
+  "Account Number",
   "input_row_number",
   "input_group",
   "input_member_name",
