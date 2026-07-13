@@ -37,6 +37,15 @@ export function matchWaystarPayer(insuranceName: string): WaystarPayerHandler | 
   ) ?? null;
 }
 
+export function matchWaystarPayerByPortalName(portalPayerName: string): WaystarPayerHandler | null {
+  const normalizedPortalName = normalizeLookupValue(portalPayerName);
+  if (!normalizedPortalName) return null;
+
+  return Object.values(waystarPayerRegistry).find(
+    (payer) => normalizeLookupValue(payer.portalPayerName) === normalizedPortalName,
+  ) ?? null;
+}
+
 function normalizeLookupValue(value: string): string {
   return value
     .toLowerCase()
