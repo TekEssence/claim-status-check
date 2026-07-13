@@ -22,6 +22,20 @@ export type CurrentScrapeJob = {
   }>;
 };
 
+export class ActiveScrapeJobError extends Error {
+  jobId: string;
+
+  constructor(message: string, jobId: string) {
+    super(message);
+    this.name = "ActiveScrapeJobError";
+    this.jobId = jobId;
+  }
+}
+
+export function getActiveScrapeJobErrorId(error: unknown): string {
+  return error instanceof ActiveScrapeJobError ? error.jobId : "";
+}
+
 export async function startScrapeJob(formData: FormData): Promise<string> {
   const response = await fetch("/api/scrape-jobs", {
     method: "POST",
@@ -29,8 +43,12 @@ export async function startScrapeJob(formData: FormData): Promise<string> {
   });
 
   if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
-    throw new Error(body.error || `Failed to start scrape job: ${response.status}`);
+    const body = await response.json().catch(() => ({})) as { error?: string; jobId?: string };
+    const message = body.error || `Failed to start scrape job: ${response.status}`;
+    if (response.status === 409 && body.jobId) {
+      throw new ActiveScrapeJobError(message, body.jobId);
+    }
+    throw new Error(message);
   }
 
   const body = await response.json() as { jobId?: string };

@@ -107,16 +107,17 @@ export async function POST(req: Request) {
     }).then(async () => {
       const currentJob = getScrapeJob(job.id);
       const completed = currentJob?.currentCompleted ?? startIndex;
+      const finalTotalRows = currentJob?.totalRows || totalRows;
       const finalStatus = currentJob?.status === "cancelled" || currentJob?.cancelRequested
         ? "cancelled"
-        : completed < totalRows
+        : completed < finalTotalRows
           ? "waiting_resume"
           : "completed";
       await updateScrapeJobSnapshot({
         jobId: job.id,
         status: finalStatus,
         currentCompleted: completed,
-        totalRows,
+        totalRows: finalTotalRows,
       }).catch(() => {});
     }).catch(async (error) => {
       const message = error instanceof Error ? error.message : "Unexpected automation error.";
@@ -126,9 +127,9 @@ export async function POST(req: Request) {
         jobId: job.id,
         status: "failed",
         currentCompleted: getScrapeJob(job.id)?.currentCompleted ?? startIndex,
-        totalRows,
+        totalRows: getScrapeJob(job.id)?.totalRows || totalRows,
       }).catch(() => {});
-    });
+  });
 
     return Response.json({ jobId: job.id, portalId });
   } catch (error) {
@@ -198,7 +199,12 @@ export async function DELETE(req: Request) {
     return Response.json({ error: "Run not found for this user." }, { status: 404 });
   }
 
-  const cancelled = cancelScrapeJob(jobId, "Scrape job cancelled because Excel could not be updated.");
+  const isOptumProJob = ownedJob.portalId === "optum-pro";
+  const cancelled = cancelScrapeJob(
+    jobId,
+    isOptumProJob ? "Stop requested for Optum Pro scraping. Finalizing partial workbook..." : "Scrape job cancelled because Excel could not be updated.",
+    { emitDone: !isOptumProJob },
+  );
   await updateScrapeJobSnapshot({
     jobId,
     status: "cancelled",
@@ -206,7 +212,7 @@ export async function DELETE(req: Request) {
     totalRows: ownedJob.totalRows,
   }).catch(() => {});
 
-  return Response.json(cancelled ? { ok: true } : { ok: true, alreadyStopped: true });
+  return Response.json({ ok: true, alreadyStopped: !cancelled });
 }
 
 export function getLastEventId(req: Request, url: URL): number {

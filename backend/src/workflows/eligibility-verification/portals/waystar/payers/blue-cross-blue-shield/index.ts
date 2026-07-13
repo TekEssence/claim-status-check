@@ -102,14 +102,14 @@ function asBcbsPayload(payload: unknown): BcbsHealthBenefitPlanCoveragePayload {
   return payload as BcbsHealthBenefitPlanCoveragePayload;
 }
 
-function normalizeCoverageStatus(value: string): EligibilityCoverageStatus {
-  const normalized = value.toLowerCase();
+function normalizeCoverageStatus(value?: string): EligibilityCoverageStatus {
+  const normalized = (value ?? "").toLowerCase();
   if (normalized.includes("inactive")) return "inactive";
   if (normalized.includes("active")) return "active";
   return "unknown";
 }
 
-function normalizePlanType(value: string): string | undefined {
+function normalizePlanType(value?: string): string | undefined {
   if (!value) return undefined;
   const match = value.match(/\(([^)]+)\)/);
   return match?.[1]?.trim() || value.trim();

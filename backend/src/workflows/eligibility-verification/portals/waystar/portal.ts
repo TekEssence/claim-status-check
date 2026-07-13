@@ -226,7 +226,7 @@ async function readAdditionalAuthQuestion(page: Page): Promise<string> {
   const fromLocator = await questionLocator.textContent().catch(() => "");
   if (fromLocator?.trim()) return fromLocator.trim();
 
-  const fallbackText = await page.locator("body").textContent().catch(() => "");
+  const fallbackText = await page.locator("body").textContent().catch(() => "") ?? "";
   const match = fallbackText.match(/(what[^\n\r?]*\?|first job\??|dessert\??)/i);
   return match?.[1]?.trim() || "";
 }

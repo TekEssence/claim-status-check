@@ -12,9 +12,10 @@ export type ScrapeJob = {
   workflowId: "claim-status" | "eligibility-verification";
   status: ScrapeJobStatus;
   currentCompleted: number;
+  totalRows: number;
+  cancelRequested: boolean;
   events: ScrapeJobEvent[];
   subscribers: Set<(event: ScrapeJobEvent) => void>;
-  cancelRequested?: boolean;
   inputWaiters: Map<string, {
     resolve: (value: string) => void;
     reject: (error: Error) => void;
