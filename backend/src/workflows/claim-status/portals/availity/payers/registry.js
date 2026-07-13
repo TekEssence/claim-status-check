@@ -2,6 +2,7 @@
 
 const aetnaWorkflow = require("./aetna/registry");
 const blueCrossBlueShieldWorkflow = require("./blue-cross-blue-shield/registry");
+const wellcareWorkflow = require("./wellcare/registry");
 const wellpointWorkflow = require("./wellpoint/registry");
 
 function normalize(value) {
@@ -14,6 +15,10 @@ function getWorkflowForPayer({ inputPayerName, mappedPortalPayerName }) {
 
   if (mapped.includes("AETNA") || input.includes("AETNA")) {
     return aetnaWorkflow;
+  }
+
+  if (mapped.includes("WELLCARE") || input.includes("WELLCARE")) {
+    return wellcareWorkflow;
   }
 
   if (mapped.includes("WELLPOINT") || input.includes("WELLPOINT")) {
