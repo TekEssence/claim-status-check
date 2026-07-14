@@ -204,7 +204,7 @@ export async function runAvailityClaimStatusJob(formData: FormData, context: Scr
       message: entry.line,
     });
   });
-  await log(`Availity input loaded: ${input.inputRows.length} row(s). Available payers: Aetna, Blue Cross Blue Shield, Wellpoint, Wellcare.`);
+  await log(`Availity input loaded: ${input.inputRows.length} row(s). Available payers: Aetna, Blue Cross Blue Shield, Wellpoint, Wellcare, Humana.`);
   await context.emit({ type: "progress", completed: 0, total: input.inputRows.length });
 
   try {

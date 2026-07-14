@@ -294,7 +294,7 @@ const PORTAL_WORKSPACE_META: Record<
     processingDescription: "Blue Shield requests are validated by group, encrypted during upload, and processed with checkpoint-aware automation.",
   },
   availity: {
-    heroDescription: "Upload your Availity login workbook and claim workbook to process Aetna, Blue Cross Blue Shield, Wellpoint, and Wellcare claim status checks.",
+    heroDescription: "Upload your Availity login workbook and claim workbook to process Aetna, Blue Cross Blue Shield, Wellpoint, Wellcare, and Humana claim status checks.",
     processingDescription: "Availity requests stream live status over SSE and automatically download the completed output workbook.",
   },
   "optum-pro": {

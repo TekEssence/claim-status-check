@@ -641,11 +641,13 @@ async function extractLineRows(page) {
     }
 
     const expanded = {
+      allowed: await readExpandedMuiGridLabelValue(row, page, ["Allowed", "Allowed Amount"]),
       coinsurance: await readExpandedLabelValue(row, page, "Coinsurance"),
       copay: await readExpandedLabelValue(row, page, "Copay"),
       deductible: await readExpandedLabelValue(row, page, "Deductible")
     };
     const reasonRemarkCode = await readExpandedLabelValue(row, page, "Reason/Remark Codes");
+    const tableAllowed = cellByAnyExactHeader(cells, headers, ["allowed", "allowed amount"]);
     const tableCoinsurance = cellByAnyExactHeader(cells, headers, ["coinsurance", "coins", "coinsurance amount"]);
     const tableCopay = cellByAnyExactHeader(cells, headers, ["copay", "copay amount"]);
     const tableDeductible = cellByAnyExactHeader(cells, headers, ["deductible", "deductible amount"]);
@@ -658,7 +660,7 @@ async function extractLineRows(page) {
       serviceDates: cellByHeader(cells, headers, "service dates") || cells[2] || "",
       paid: cellByHeader(cells, headers, "paid") || cells[5] || "",
       billed: cellByHeader(cells, headers, "billed") || cells[6] || "",
-      allowed: cellByHeader(cells, headers, "allowed") || "",
+      allowed: tableAllowed || expanded.allowed || cellByHeader(cells, headers, "allowed") || "",
       hipaaCodes: cellByHeader(cells, headers, "hipaa codes") || cells[7] || "",
       modifier: cellByHeader(cells, headers, "modifier") || cells[8] || "",
       quantity: cellByHeader(cells, headers, "quantity") || cells[9] || "",
