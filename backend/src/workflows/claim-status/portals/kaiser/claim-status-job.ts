@@ -111,17 +111,35 @@ function claimCodeDescriptionsForService(details: ClaimDetails, service: Service
   return descriptions.join("; ");
 }
 
+function unpaidServiceLines(details: ClaimDetails): ServiceLine[] {
+  return details.services.filter((line) => moneyToNumber(line.netPayable) <= 0);
+}
+
 function serviceLevelDenialForService(details: ClaimDetails, service: ServiceLine): string {
   const text = cleanText(details.serviceLevelDescription);
   if (!text || /no service-level claim codes/i.test(text)) return "";
+  if (moneyToNumber(service.netPayable) > 0) return "";
+
   const serviceCpt = serviceCodeFromText(service.service);
   if (serviceCpt && text.toUpperCase().includes(serviceCpt)) return text;
-  return details.services.length === 1 ? text : "";
+
+  if (details.services.length === 1) return text;
+
+  // Multi-service claim and the Service-Level text doesn't name a CPT (Kaiser's Service-Level
+  // description text normally doesn't). Per the Kaiser spec: the description belongs to
+  // whichever line got $0 Net Payable, not the line that was actually paid. Only attach it
+  // when exactly one line is unpaid, so we never guess when several lines are denied.
+  const unpaid = unpaidServiceLines(details);
+  if (unpaid.length === 1 && unpaid[0] === service) return text;
+  return "";
 }
 
 function claimLevelAppliesToService(details: ClaimDetails, service: ServiceLine): boolean {
   if (!details.claimLevelCodes.trim() || moneyToNumber(service.netPayable) > 0) return false;
-  return details.services.length === 1;
+  if (details.services.length === 1) return true;
+
+  const unpaid = unpaidServiceLines(details);
+  return unpaid.length === 1 && unpaid[0] === service;
 }
 
 function serviceSpecificDenial(details: ClaimDetails, service: ServiceLine): { text: string; source: string } {
@@ -947,12 +965,28 @@ async function waitForClaimDetailMarker(page: Page, context: ScraperContext, row
         function text(element: Element | null): string {
           return (element?.textContent || "").replace(/\s+/g, " ").trim();
         }
-        const bodyText = text(document.body);
-        if (/Claim\s*#/i.test(bodyText) && /(Status|Payment|Services)/i.test(bodyText)) return true;
-        return Array.from(document.querySelectorAll("h1,h2,.sectionTitle,table")).some((element) => {
-          const value = text(element);
-          return /Claim\s*#/i.test(value) || /^Status$/i.test(value) || /^Payment$/i.test(value) || /^Services$/i.test(value);
-        });
+        function visible(element: Element): boolean {
+          const style = window.getComputedStyle(element);
+          const rect = element.getBoundingClientRect();
+          return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
+        }
+
+        // The search-results page's #ClmTbl header row literally contains the words
+        // "Claim #" and "Status" as column headers, so a loose body-text/element-text
+        // check can true-positive on the OLD page right after the click, before Kaiser
+        // has actually finished navigating (or re-rendering in-frame) to the detail view.
+        // Require an actual claim-number heading like "Claim #1194341053" (with digits)
+        // AND confirm the search results table is gone before treating the detail page
+        // as ready. This is what was causing "Claim details unavailable": extraction ran
+        // against stale search-page DOM that has no Services/Payment/Adjudication sections.
+        const hasClaimNumberHeading = Array.from(document.querySelectorAll("h1,h2,.sectionTitle"))
+          .filter(visible)
+          .some((element) => /Claim\s*#\s*\d+/i.test(text(element)));
+
+        const searchTable = document.querySelector("#ClmTbl");
+        const searchTableGone = !searchTable || !visible(searchTable);
+
+        return hasClaimNumberHeading && searchTableGone;
       }).catch(() => false);
       if (found) {
         await context.log({ level: "info", message: "TRACE 19: Claim-detail page marker detected.", rowIndex });
