@@ -1,8 +1,8 @@
-import { JobProgress } from "../../components/JobProgress";
-import { LogsPanel } from "../../components/LogsPanel";
-import { ScreenshotViewer } from "../../components/ScreenshotViewer";
-import { StatusMessage } from "../../components/StatusMessage";
-import type { ErrorScreenshot, JobProgressValue } from "../../types/job";
+import { JobProgress } from "../../../../components/JobProgress";
+import { LogsPanel } from "../../../../components/LogsPanel";
+import { ScreenshotViewer } from "../../../../components/ScreenshotViewer";
+import { StatusMessage } from "../../../../components/StatusMessage";
+import type { ErrorScreenshot, JobProgressValue } from "../../../../types/job";
 
 const OPTUM_PRO_OTP_MAX_LENGTH = 8;
 

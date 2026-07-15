@@ -42,14 +42,17 @@ import { BlueShieldInputForm } from "./portals/blue-shield/BlueShieldInputForm";
 import { BlueShieldResultView } from "./portals/blue-shield/BlueShieldResultView";
 import { AvailityInputForm } from "./portals/availity/AvailityInputForm";
 import { AvailityResultView } from "./portals/availity/AvailityResultView";
-import { OptumProInputForm } from "../../portals/optum-pro/OptumProInputForm";
-import { OptumProResultView } from "../../portals/optum-pro/OptumProResultView";
+import { KaiserInputForm } from "./portals/kaiser/KaiserInputForm";
+import { KaiserResultView } from "./portals/kaiser/KaiserResultView";
+import { OptumProInputForm } from "./portals/optum-pro/OptumProInputForm";
+import { OptumProResultView } from "./portals/optum-pro/OptumProResultView";
 import {
   aerialFrontendPortalConfig,
   availityFrontendPortalConfig,
   blueShieldFrontendPortalConfig,
   claimStatusPortalRegistry,
   iehpFrontendPortalConfig,
+  kaiserFrontendPortalConfig,
   optumProFrontendPortalConfig,
   regalFrontendPortalConfig,
 } from "./registry";
@@ -86,7 +89,7 @@ type IehpWorkbookBundle = {
   worksheet: ExcelJS.Worksheet;
 };
 
-export type PortalId = "iehp" | "aerial" | "regal" | "blue-shield" | "availity" | "optum-pro";
+export type PortalId = "iehp" | "aerial" | "regal" | "blue-shield" | "availity" | "kaiser" | "optum-pro";
 type DownloadFile = {
   filename: string;
   bytes: Uint8Array;
@@ -110,11 +113,12 @@ const PORTAL_ROUTE_MAP: Record<PortalId, string> = {
   regal: "/regal",
   "blue-shield": "/blue-shield",
   availity: "/availity",
+  kaiser: "/kaiser",
   "optum-pro": "/optum-pro",
 };
 
 function isPortalId(value: string): value is PortalId {
-  return value === "iehp" || value === "aerial" || value === "regal" || value === "blue-shield" || value === "availity" || value === "optum-pro";
+  return value === "iehp" || value === "aerial" || value === "regal" || value === "blue-shield" || value === "availity" || value === "kaiser" || value === "optum-pro";
 }
 
 function canRestoreCurrentJob(job: CurrentScrapeJob): job is CurrentScrapeJob & { portalId: PortalId } {
@@ -251,6 +255,10 @@ const PORTAL_UI_META: Record<
       height: 32,
     },
   },
+  kaiser: {
+    shortCode: "KP",
+    logoClassName: "bg-white text-cyan-700",
+  },
   "optum-pro": {
     shortCode: "OP",
     logoClassName: "bg-white text-orange-600",
@@ -296,6 +304,10 @@ const PORTAL_WORKSPACE_META: Record<
   availity: {
     heroDescription: "Upload your Availity login workbook and claim workbook to process Aetna, Blue Cross Blue Shield, Wellpoint, and Wellcare claim status checks.",
     processingDescription: "Availity requests stream live status over SSE and automatically download the completed output workbook.",
+  },
+  kaiser: {
+    heroDescription: "Upload the Kaiser EpicLink login workbook and claim workbook to search claim status by Member ID, DOS, and CPT.",
+    processingDescription: "Kaiser rows stream live progress and download an output workbook with claim, payment, service, and denial details.",
   },
   "optum-pro": {
     heroDescription: "Upload the One Healthcare ID login workbook and Optum Pro claim workbook, then enter OTP when prompted.",
@@ -618,8 +630,8 @@ async function writeWorkbookToClaimFile(claimFileHandle: FileSystemFileHandle, e
 export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: PortalId | null }) {
   const router = useRouter();
   const pathname = usePathname();
-  const [authUser, setAuthUser] = useState<AuthUser | null>(() => readCachedAuthUser());
-  const [authLoading, setAuthLoading] = useState(() => readCachedAuthUser() === null);
+  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
   const [authUsername, setAuthUsername] = useState("");
   const [authPassword, setAuthPassword] = useState("");
   const [authConfirmPassword, setAuthConfirmPassword] = useState("");
@@ -655,6 +667,8 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
   const [aerialInputFile, setAerialInputFile] = useState<File | null>(null);
   const [availityCredentialFile, setAvailityCredentialFile] = useState<File | null>(null);
   const [availityInputFile, setAvailityInputFile] = useState<File | null>(null);
+  const [kaiserCredentialFile, setKaiserCredentialFile] = useState<File | null>(null);
+  const [kaiserInputFile, setKaiserInputFile] = useState<File | null>(null);
   const [optumProLoginFile, setOptumProLoginFile] = useState<File | null>(null);
   const [optumProInputFile, setOptumProInputFile] = useState<File | null>(null);
   const [optumProJobId, setOptumProJobId] = useState<string>("");
@@ -717,6 +731,8 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
             ? blueShieldFrontendPortalConfig
             : effectivePortalId === "availity"
               ? availityFrontendPortalConfig
+              : effectivePortalId === "kaiser"
+                ? kaiserFrontendPortalConfig
               : effectivePortalId === "optum-pro"
                 ? optumProFrontendPortalConfig
             : null;
@@ -770,6 +786,10 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     () => Boolean(availityCredentialFile && availityInputFile && !isProcessing),
     [availityCredentialFile, availityInputFile, isProcessing],
   );
+  const canSubmitKaiser = useMemo(
+    () => Boolean(kaiserCredentialFile && kaiserInputFile && !isProcessing),
+    [kaiserCredentialFile, kaiserInputFile, isProcessing],
+  );
   const canSubmitOptumPro = useMemo(
     () => Boolean(optumProLoginFile && optumProInputFile && !isProcessing),
     [optumProLoginFile, optumProInputFile, isProcessing],
@@ -793,6 +813,8 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
             ? canSubmitBlueShield
             : effectivePortalId === "availity"
               ? canSubmitAvaility
+              : effectivePortalId === "kaiser"
+                ? canSubmitKaiser
               : effectivePortalId === "optum-pro"
                 ? canSubmitOptumPro
             : false;
@@ -834,6 +856,15 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
       };
     }
 
+    if (effectivePortalId === "kaiser") {
+      return {
+        claimFileLabel: kaiserInputFile?.name ?? "",
+        claimReady: Boolean(kaiserInputFile),
+        loginFileLabel: kaiserCredentialFile?.name ?? "",
+        loginReady: Boolean(kaiserCredentialFile),
+      };
+    }
+
     if (effectivePortalId === "blue-shield") {
       return {
         claimFileLabel: blueShieldInputFile?.name ?? "",
@@ -868,6 +899,8 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     claimFileName,
     effectivePortalId,
     iehpLoginFile,
+    kaiserCredentialFile,
+    kaiserInputFile,
     optumProInputFile,
     optumProLoginFile,
     regalClaimFile,
@@ -1042,6 +1075,8 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
           await reconnectAerialRun(currentJob);
         } else if (currentJob.portalId === "availity") {
           await reconnectDownloadOnlyRun(currentJob, "availity", "Availity");
+        } else if (currentJob.portalId === "kaiser") {
+          await reconnectDownloadOnlyRun(currentJob, "kaiser", "Kaiser");
         } else if (currentJob.portalId === "regal") {
           await reconnectRegalRun(currentJob);
         } else if (currentJob.portalId === "optum-pro") {
@@ -1234,6 +1269,8 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     setBlueShieldJobId("");
     setBlueShieldOtpRequest(null);
     setBlueShieldOtpValue("");
+    setKaiserCredentialFile(null);
+    setKaiserInputFile(null);
     setOptumProJobId("");
     setOptumProOtpRequest(null);
     setOptumProOtpValue("");
@@ -1376,6 +1413,8 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     setBlueShieldJobId("");
     setBlueShieldOtpRequest(null);
     setBlueShieldOtpValue("");
+    setKaiserCredentialFile(null);
+    setKaiserInputFile(null);
     setOptumProLoginFile(null);
     setOptumProInputFile(null);
     setOptumProJobId("");
@@ -2530,6 +2569,89 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
       );
     } catch (error) {
       setStatus(`Failed to process Availity claims: ${getErrorMessage(error)}`);
+    } finally {
+      setIsProcessing(false);
+      setActiveJobId("");
+    }
+  }
+
+  async function submitKaiser(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+
+    if (!kaiserCredentialFile || !kaiserInputFile) {
+      setStatus("Please provide both the Kaiser login Excel and claim Excel files.");
+      return;
+    }
+
+    resetRunState("Starting Kaiser scraper...");
+
+    const formData = new FormData();
+    formData.append("portalId", "kaiser");
+    formData.append("credentialExcel", kaiserCredentialFile);
+    formData.append("inputExcel", kaiserInputFile);
+    formData.append("loginFileName", kaiserCredentialFile.name);
+    formData.append("claimFileName", kaiserInputFile.name);
+
+    let hasError = false;
+    let wasCancelled = false;
+    let finalErrorMessage = "";
+    let subscribedJobId = "";
+    const streamAbortController = new AbortController();
+
+    const handleJobEvent = async (eventData: ScrapeJobEvent) => {
+      if (eventData.type === "log" && eventData.message) {
+        setLogs((prev) => [...prev, eventData.message ?? ""]);
+      } else if (eventData.type === "progress" && typeof eventData.completed === "number" && typeof eventData.total === "number") {
+        setProgress({ completed: eventData.completed, total: eventData.total });
+      } else if (eventData.type === "error_screenshot" && typeof eventData.index === "number" && eventData.image) {
+        setErrorScreenshots((prev) => [...prev, { index: eventData.index ?? -1, image: eventData.image ?? "" }]);
+      } else if (eventData.type === "file_download" && eventData.filename && eventData.base64) {
+        const artifactKey = buildDownloadArtifactKey(eventData);
+        if (!hasDownloadedArtifact(subscribedJobId, artifactKey)) {
+          downloadBase64File(eventData.filename, eventData.base64, eventData.mimeType || "application/octet-stream");
+          rememberDownloadedArtifact(subscribedJobId, artifactKey);
+          setStatus(`Downloaded ${eventData.filename}`);
+        }
+      } else if (eventData.type === "warning" && eventData.message) {
+        setLogs((prev) => [...prev, eventData.message ?? ""]);
+        setStatus(eventData.message);
+      } else if (eventData.type === "error" && eventData.message) {
+        finalErrorMessage = eventData.message;
+        setLogs((prev) => [...prev, `ERROR: ${eventData.message}`]);
+        setStatus(`Error: ${eventData.message}`);
+        hasError = true;
+      } else if (eventData.type === "cancelled") {
+        wasCancelled = true;
+        setLogs((prev) => [...prev, eventData.message || "Processing cancelled."]);
+        setStatus(eventData.message || "Processing cancelled.");
+      }
+    };
+
+    try {
+      const jobId = await startScrapeJob(formData);
+      subscribedJobId = jobId;
+      setActiveJobId(jobId);
+      await subscribeToScrapeJobEvents({
+        jobId,
+        signal: streamAbortController.signal,
+        onEvent: handleJobEvent,
+        onStreamError(error) {
+          console.error("Kaiser stream error:", error);
+          finalErrorMessage = getErrorMessage(error);
+          setLogs((prev) => [...prev, `STREAM ERROR: ${finalErrorMessage}`]);
+          setStatus(`Stream error: ${finalErrorMessage}`);
+          hasError = true;
+        },
+      });
+      setStatus(
+        wasCancelled
+          ? "Kaiser processing cancelled."
+          : hasError
+            ? `Kaiser processing finished with errors${finalErrorMessage ? `: ${finalErrorMessage}` : "."}`
+            : "Kaiser processing completed.",
+      );
+    } catch (error) {
+      setStatus(`Failed to process Kaiser claims: ${getErrorMessage(error)}`);
     } finally {
       setIsProcessing(false);
       setActiveJobId("");
@@ -3811,6 +3933,16 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
                       onInputFileChange={setAvailityInputFile}
                       onSubmit={submitAvaility}
                     />
+                  ) : effectivePortalId === "kaiser" ? (
+                    <KaiserInputForm
+                      canSubmit={canSubmitKaiser}
+                      credentialFileName={kaiserCredentialFile?.name ?? ""}
+                      inputFileName={kaiserInputFile?.name ?? ""}
+                      isProcessing={isProcessing}
+                      onCredentialFileChange={setKaiserCredentialFile}
+                      onInputFileChange={setKaiserInputFile}
+                      onSubmit={submitKaiser}
+                    />
                   ) : effectivePortalId === "optum-pro" ? (
                     <OptumProInputForm
                       canSubmit={canSubmitOptumPro}
@@ -3879,6 +4011,10 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
               ) : effectivePortalId === "availity" ? (
                 <div className="mt-5">
                   <AvailityResultView errorScreenshots={errorScreenshots} logs={logs} progress={progress} status={status} />
+                </div>
+              ) : effectivePortalId === "kaiser" ? (
+                <div className="mt-5">
+                  <KaiserResultView errorScreenshots={errorScreenshots} logs={logs} progress={progress} status={status} />
                 </div>
               ) : effectivePortalId === "optum-pro" ? (
                 <div className="mt-5">
