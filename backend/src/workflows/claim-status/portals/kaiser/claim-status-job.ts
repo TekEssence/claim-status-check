@@ -111,35 +111,26 @@ function claimCodeDescriptionsForService(details: ClaimDetails, service: Service
   return descriptions.join("; ");
 }
 
-function unpaidServiceLines(details: ClaimDetails): ServiceLine[] {
-  return details.services.filter((line) => moneyToNumber(line.netPayable) <= 0);
+function isServiceUnpaid(service: ServiceLine): boolean {
+  return moneyToNumber(service.netPayable) <= 0;
 }
 
 function serviceLevelDenialForService(details: ClaimDetails, service: ServiceLine): string {
+  if (!isServiceUnpaid(service)) return "";
   const text = cleanText(details.serviceLevelDescription);
   if (!text || /no service-level claim codes/i.test(text)) return "";
-  if (moneyToNumber(service.netPayable) > 0) return "";
 
-  const serviceCpt = serviceCodeFromText(service.service);
-  if (serviceCpt && text.toUpperCase().includes(serviceCpt)) return text;
-
-  if (details.services.length === 1) return text;
-
-  // Multi-service claim and the Service-Level text doesn't name a CPT (Kaiser's Service-Level
-  // description text normally doesn't). Per the Kaiser spec: the description belongs to
-  // whichever line got $0 Net Payable, not the line that was actually paid. Only attach it
-  // when exactly one line is unpaid, so we never guess when several lines are denied.
-  const unpaid = unpaidServiceLines(details);
-  if (unpaid.length === 1 && unpaid[0] === service) return text;
-  return "";
+  // Kaiser's Service-Level description text is a single claim-wide blob; it doesn't name a CPT
+  // per line. Per the Kaiser spec: every line that came back with $0 Net Payable (i.e. denied)
+  // should get this description attached - whether it's the only denied line on the claim or
+  // one of several. Paid lines are already excluded above, so it's safe to attach unconditionally
+  // here to any unpaid line, regardless of how many other lines on the claim are also unpaid.
+  return text;
 }
 
 function claimLevelAppliesToService(details: ClaimDetails, service: ServiceLine): boolean {
-  if (!details.claimLevelCodes.trim() || moneyToNumber(service.netPayable) > 0) return false;
-  if (details.services.length === 1) return true;
-
-  const unpaid = unpaidServiceLines(details);
-  return unpaid.length === 1 && unpaid[0] === service;
+  if (!details.claimLevelCodes.trim()) return false;
+  return isServiceUnpaid(service);
 }
 
 function serviceSpecificDenial(details: ClaimDetails, service: ServiceLine): { text: string; source: string } {
@@ -183,11 +174,37 @@ function patientNameTokens(value: string): string[] {
     .sort();
 }
 
+const NAME_SUFFIX_TOKENS = new Set(["jr", "sr", "ii", "iii", "iv", "v"]);
+
+function isIgnorableNameToken(token: string): boolean {
+  // Single-letter tokens are middle initials; these plus generational suffixes are the parts
+  // that inconsistently appear (or don't) between the Excel input and the Kaiser portal, e.g.
+  // Excel "Cade Jr, Richard D" vs portal "Cade, Richard Jr." Ignore them for matching purposes.
+  return token.length <= 1 || NAME_SUFFIX_TOKENS.has(token);
+}
+
+function coreNameTokens(tokens: string[]): string[] {
+  return tokens.filter((token) => !isIgnorableNameToken(token));
+}
+
 function patientNamesMatch(portalName: string, excelName: string): boolean {
   const portalTokens = patientNameTokens(portalName);
   const excelTokens = patientNameTokens(excelName);
   if (!portalTokens.length || !excelTokens.length) return false;
-  return excelTokens.every((token) => portalTokens.includes(token));
+
+  // Exact token match (original behavior) still takes priority.
+  if (excelTokens.every((token) => portalTokens.includes(token))) return true;
+
+  // Relaxed match: compare only the core name tokens (first/last name etc.), ignoring middle
+  // initials and generational suffixes that may appear in only one of the two sources. Both
+  // sides' core tokens must match each other fully, so a genuine different name still fails.
+  const portalCore = coreNameTokens(portalTokens);
+  const excelCore = coreNameTokens(excelTokens);
+  if (!portalCore.length || !excelCore.length) return false;
+  return (
+    excelCore.every((token) => portalCore.includes(token)) &&
+    portalCore.every((token) => excelCore.includes(token))
+  );
 }
 
 function normalizeDateValue(value: string): string {
@@ -285,8 +302,8 @@ function outputRowFromClaim(inputRow: KaiserInputRow, details: ClaimDetails, ser
     exceededBenefit: service.exceededBenefit,
     patientTotal: service.patientTotal,
     netPayable: service.netPayable,
-    claimCodeDescriptionTable: details.claimCodeDescriptionTable,
-    claimLevelCodes: details.claimLevelCodes,
+    claimCodeDescriptionTable: isServiceUnpaid(service) ? details.claimCodeDescriptionTable : "",
+    claimLevelCodes: isServiceUnpaid(service) ? details.claimLevelCodes : "",
     serviceLevelDescription: serviceDenial.text,
     denialSource: serviceDenial.source,
     finalStatus: cleanText(statusText),
@@ -547,6 +564,98 @@ async function clickMegaSearchMemberIdOption(page: Page, memberId: string, conte
   return false;
 }
 
+async function getHighlightedMegaSearchOptionText(megaSearch: Locator): Promise<string> {
+  return megaSearch.evaluate((_input) => {
+    function visible(element: Element): boolean {
+      const style = window.getComputedStyle(element);
+      const rect = element.getBoundingClientRect();
+      return style.visibility !== "hidden" && style.display !== "none" && rect.width > 0 && rect.height > 0;
+    }
+
+    const highlightSelectors = [
+      ".ui-state-active",
+      ".ui-state-focus",
+      "[aria-selected='true']",
+      ".ui-menu-item-wrapper.ui-state-active",
+      ".active",
+      ".selected",
+      ".highlighted",
+    ].join(",");
+
+    const highlighted = Array.from(document.querySelectorAll(highlightSelectors)).find((element) => visible(element));
+    return (highlighted?.textContent || "").replace(/\s+/g, " ").trim();
+  }).catch(() => "");
+}
+
+// Fix for rows that reuse the same Claim Search page instance across consecutive searches
+// (i.e. rows that never triggered a full page navigation/reset in between - for example when
+// the previous row found no claims, so we never left the Claim Search page). In that situation
+// the mega search dropdown widget's internal "highlighted item" state can go stale, and a
+// synthetic mouse click on the correct DOM node (clickMegaSearchMemberIdOption above) does not
+// reliably override that internal state: Kaiser keeps confirming whichever item the widget
+// still thinks is highlighted (often Submitted ID), regardless of where the click actually
+// lands. Driving the selection through real ArrowDown/Enter key events instead goes through the
+// widget's own selection logic rather than us guessing at a DOM node, so it is not subject to
+// that stale-highlight problem. This is only ever used as an additional attempt alongside the
+// existing mouse-click approach: if it cannot confirm the Member ID row is actually highlighted
+// within a bounded number of presses, it returns false and the existing click-based selection
+// runs exactly as before.
+async function selectMegaSearchMemberIdOptionViaKeyboard(
+  page: Page,
+  megaSearch: Locator,
+  memberId: string,
+  context: ScraperContext,
+  rowIndex: number,
+): Promise<boolean> {
+  const normalizedMemberId = normalizeSearchValue(memberId);
+  const maxPresses = 15;
+
+  for (let presses = 1; presses <= maxPresses; presses++) {
+    await megaSearch.press("ArrowDown").catch(() => {});
+    await page.waitForTimeout(120);
+    const highlightedText = await getHighlightedMegaSearchOptionText(megaSearch);
+    const match = highlightedText.match(/^Member ID\s*:\s*(.+)$/i);
+    const isMemberIdHighlighted = Boolean(
+      match && match[1].replace(/\s+/g, "").trim().toUpperCase() === normalizedMemberId,
+    );
+    if (isMemberIdHighlighted) {
+      await context.log({
+        level: "info",
+        message: `Keyboard navigation highlighted the Member ID option after ${presses} ArrowDown press(es); confirming with Enter.`,
+        rowIndex,
+      });
+      await megaSearch.press("Enter").catch(() => {});
+      await page.waitForTimeout(kaiserConfig.timing.postSelectionMs);
+      return true;
+    }
+  }
+
+  await context.log({
+    level: "info",
+    message: "Keyboard navigation did not confirm the Member ID option was highlighted; falling back to click-based selection.",
+    rowIndex,
+  });
+  return false;
+}
+
+// Maps the real Kaiser #CriteriaRow chip container IDs (confirmed from the actual page markup)
+// to their human-readable criterion label. Checking these exact containers - rather than
+// pattern-matching arbitrary visible text on the page - is what makes selection verification
+// reliable: it is what was previously allowing a Submitted ID/Claim ID/Check Number chip to be
+// mistaken for a Member ID chip.
+const CRITERIA_CHIP_LABEL_BY_ID: Record<string, string> = {
+  critChipVendor: "Vendor",
+  critChipTIN: "Tax ID",
+  critChipProvider: "Provider",
+  critChipClaimID: "Claim ID",
+  critChipSubmittedID: "Submitted ID",
+  critChipBilledAmt: "Billed Amount",
+  critChipClaimType: "Claim Type",
+  critChipCheckNum: "Check Number",
+  critChipClaimStatus: "Claim Status",
+  critChipMRN: "Member ID",
+};
+
 async function getSelectedMegaSearchCriteria(page: Page, memberId: string): Promise<string> {
   const normalizedMemberId = normalizeSearchValue(memberId);
   for (const frame of [page.mainFrame(), ...page.frames()]) {
@@ -557,20 +666,14 @@ async function getSelectedMegaSearchCriteria(page: Page, memberId: string): Prom
         return style.visibility !== "hidden" && style.display !== "none" && rect.width > 0 && rect.height > 0;
       }
 
-      const criteria = ["Submitted ID", "Claim ID", "Check Number", "Member ID"];
-      for (const element of Array.from(document.querySelectorAll("div, span, li, a"))) {
-        if (!visible(element)) continue;
-        if (element.closest(".ui-autocomplete, .ui-menu, [role='listbox']")) continue;
-        const text = (element.textContent || "").replace(/\s+/g, " ").trim();
-        if (/Additional Criteria/i.test(text)) continue;
-        const match = text.match(/\b(Submitted ID|Claim ID|Check Number|Member ID)\s*:\s*([A-Za-z0-9-]+)/i);
-        if (!match) continue;
-        if (match[2].replace(/\s+/g, "").trim().toUpperCase() !== args.normalizedMemberId) continue;
-        const label = criteria.find((candidate) => candidate.toLowerCase() === match[1].toLowerCase());
-        if (label) return label;
+      for (const [chipId, label] of Object.entries(args.chipLabelById)) {
+        const chip = document.getElementById(chipId);
+        if (!chip || chip.classList.contains("Hidden") || !visible(chip)) continue;
+        const chipValue = (chip.textContent || "").replace(/\s+/g, "").trim().toUpperCase();
+        if (chipValue.includes(args.normalizedMemberId)) return label;
       }
       return "";
-    }, { normalizedMemberId }).catch(() => "");
+    }, { normalizedMemberId, chipLabelById: CRITERIA_CHIP_LABEL_BY_ID }).catch(() => "");
     if (criterion) return criterion;
   }
   return "";
@@ -580,45 +683,29 @@ async function hasSelectedMemberIdChip(page: Page, memberId: string): Promise<bo
   return (await getSelectedMegaSearchCriteria(page, memberId)) === "Member ID";
 }
 
-async function clearMegaSearchCriteria(page: Page, memberId: string): Promise<void> {
+async function waitForMemberIdOptionVisible(page: Page, memberId: string, timeoutMs: number, context: ScraperContext, rowIndex: number): Promise<boolean> {
+  // Kaiser's mega search dropdown populates its rows asynchronously - Submitted ID, Claim ID,
+  // and Check Number typically appear first, with Member ID arriving last since it requires the
+  // heaviest lookup. Clicking before the Member ID row has actually rendered is what let the
+  // click land on (or the widget default to) the wrong criterion. Poll patiently for the exact
+  // "Member ID: <value>" row to be visible instead of clicking on a fixed, short timer.
   const normalizedMemberId = normalizeSearchValue(memberId);
-  for (const frame of [page.mainFrame(), ...page.frames()]) {
-    const cleared = await frame.evaluate((args) => {
-      function visible(element: Element): boolean {
-        const style = window.getComputedStyle(element);
-        const rect = element.getBoundingClientRect();
-        return style.visibility !== "hidden" && style.display !== "none" && rect.width > 0 && rect.height > 0;
-      }
-
-      const chips = Array.from(document.querySelectorAll("div, span, li"))
-        .filter((element) => visible(element))
-        .filter((element) => !element.closest(".ui-autocomplete, .ui-menu, [role='listbox']"))
-        .filter((element) => {
-          const text = (element.textContent || "").replace(/\s+/g, " ").trim();
-          const match = text.match(/\b(Submitted ID|Claim ID|Check Number|Member ID)\s*:\s*([A-Za-z0-9-]+)/i);
-          return Boolean(match && match[2].replace(/\s+/g, "").trim().toUpperCase() === args.normalizedMemberId);
-        })
-        .sort((left, right) => (left.textContent || "").length - (right.textContent || "").length);
-
-      const chip = chips[0] as HTMLElement | undefined;
-      const closeTarget = chip?.querySelector("button, a, [role='button'], .close, .remove, .ui-icon-close, .fa-times, .glyphicon-remove") as HTMLElement | null;
-      if (closeTarget) {
-        closeTarget.click();
-        return true;
-      }
-
-      const text = chip?.textContent || "";
-      if (chip && /[\u00d7x]\s*$/.test(text)) {
-        chip.click();
-        return true;
-      }
-      return false;
-    }, { normalizedMemberId }).catch(() => false);
-    if (cleared) {
-      await page.waitForTimeout(kaiserConfig.timing.retryBackoffMs);
-      return;
+  const deadline = Date.now() + timeoutMs;
+  let loggedWaiting = false;
+  while (Date.now() < deadline) {
+    const options = await getMegaSearchDropdownOptions(page);
+    const hasMemberIdOption = options.some((option) => {
+      const match = option.match(/^Member ID\s*:\s*(.+)$/i);
+      return Boolean(match && match[1].replace(/\s+/g, "").trim().toUpperCase() === normalizedMemberId);
+    });
+    if (hasMemberIdOption) return true;
+    if (!loggedWaiting && options.length > 0) {
+      loggedWaiting = true;
+      await context.log({ level: "info", message: "Member ID dropdown row has not rendered yet; waiting for it instead of selecting another criterion.", rowIndex });
     }
+    await page.waitForTimeout(kaiserConfig.timing.stablePollMs);
   }
+  return false;
 }
 
 async function waitForDropdownClosed(page: Page): Promise<void> {
@@ -628,6 +715,68 @@ async function waitForDropdownClosed(page: Page): Promise<void> {
     if (options.length === 0) return;
     await page.waitForTimeout(kaiserConfig.timing.stablePollMs);
   }
+}
+
+async function clearAllCriteriaChips(page: Page, context: ScraperContext, rowIndex: number): Promise<void> {
+  // The Kaiser mega search keeps every selected criterion (Member ID, Submitted ID, Claim ID,
+  // Check Number, etc.) as a "chip" in #CriteriaRow (e.g. #critChipMRN) until it is explicitly
+  // cleared via its .ChipClearDiv "x" control. If a prior row's chip is left in place, typing a
+  // new Member ID can get matched against the wrong criterion (Submitted ID/Claim ID/Check
+  // Number) instead of Member ID. Click every visible chip's clear control before starting a new
+  // row's search so we always begin from a clean criteria state.
+  const maxAttempts = 8;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    let clickedOne = false;
+    for (const frame of [page.mainFrame(), ...page.frames()]) {
+      const clicked = await frame.evaluate(() => {
+        function visible(element: Element): boolean {
+          const style = window.getComputedStyle(element);
+          const rect = element.getBoundingClientRect();
+          return style.visibility !== "hidden" && style.display !== "none" && rect.width > 0 && rect.height > 0;
+        }
+
+        const chip = Array.from(document.querySelectorAll("[id^='critChip']")).find((element) => visible(element));
+        if (!chip) return false;
+        const clearButton = chip.querySelector(".ChipClearDiv") as HTMLElement | null;
+        if (!clearButton) return false;
+        clearButton.click();
+        return true;
+      }).catch(() => false);
+      if (clicked) {
+        clickedOne = true;
+        await page.waitForTimeout(kaiserConfig.timing.retryBackoffMs);
+      }
+    }
+    if (!clickedOne) break;
+  }
+  await context.log({ level: "info", message: "Cleared previous Kaiser mega search criteria chips (if any).", rowIndex });
+}
+
+async function clearDateField(page: Page, selector: string, label: string, context: ScraperContext, rowIndex: number): Promise<void> {
+  const locator = await findVisibleLocator(page, selector, 2000);
+  if (!locator) {
+    await context.log({ level: "warn", message: `Could not find Kaiser ${label} field to clear.`, rowIndex });
+    return;
+  }
+  await locator.click({ timeout: 2000 }).catch(() => {});
+  await page.waitForTimeout(150);
+  await locator.press(process.platform === "darwin" ? "Meta+A" : "Control+A").catch(() => {});
+  await page.waitForTimeout(100);
+  await locator.press("Backspace").catch(() => {});
+  await page.waitForTimeout(150);
+  const remaining = await locator.inputValue({ timeout: 1000 }).catch(() => "");
+  if (remaining) {
+    // Fallback in case Ctrl+A/Backspace did not fully clear the field.
+    await locator.fill("").catch(() => {});
+  }
+  await context.log({ level: "info", message: `Cleared Kaiser ${label} field.`, rowIndex });
+}
+
+async function clearSearchFormFields(page: Page, context: ScraperContext, rowIndex: number): Promise<void> {
+  await context.log({ level: "info", message: "Clearing previous row's Kaiser search criteria (Member ID, From Date, To Date).", rowIndex });
+  await clearAllCriteriaChips(page, context, rowIndex);
+  await clearDateField(page, kaiserConfig.selectors.fromDate, "From Date", context, rowIndex);
+  await clearDateField(page, kaiserConfig.selectors.toDate, "To Date", context, rowIndex);
 }
 
 async function selectMemberIdFromMegaSearch(page: Page, memberId: string, context: ScraperContext, rowIndex: number): Promise<boolean> {
@@ -645,13 +794,36 @@ async function selectMemberIdFromMegaSearch(page: Page, memberId: string, contex
     await page.waitForTimeout(kaiserConfig.timing.dropdownSettleMs);
   };
 
-  await clearMegaSearchCriteria(page, memberId);
+  await clearAllCriteriaChips(page, context, rowIndex);
   await enterMemberId();
 
-  for (let attempt = 1; attempt <= 2; attempt++) {
-    await context.log({ level: "info", message: "Waiting for Additional Criteria dropdown.", rowIndex });
-    if (await clickMegaSearchMemberIdOption(page, memberId, context, rowIndex)) {
-      await context.log({ level: "info", message: "Selecting exact Member ID option.", rowIndex });
+  const maxAttempts = 3;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    await context.log({ level: "info", message: "Waiting for the Member ID row in the Additional Criteria dropdown (not rushing this).", rowIndex });
+    // Wait for the Member ID row itself to render - Submitted ID/Claim ID/Check Number
+    // typically populate first, and clicking before Member ID has loaded is what caused the
+    // wrong criterion to end up selected.
+    const memberIdOptionReady = await waitForMemberIdOptionVisible(page, memberId, 8000, context, rowIndex);
+    if (!memberIdOptionReady) {
+      await context.log({ level: "warn", message: `Member ID dropdown row did not appear (attempt ${attempt}/${maxAttempts}).`, rowIndex });
+      if (attempt < maxAttempts) {
+        await page.waitForTimeout(kaiserConfig.timing.retryBackoffMs);
+        await enterMemberId();
+      }
+      continue;
+    }
+
+    const memberIdOptionSelectedViaKeyboard = await selectMegaSearchMemberIdOptionViaKeyboard(page, megaSearch, memberId, context, rowIndex);
+    const memberIdOptionSelected = memberIdOptionSelectedViaKeyboard
+      || await clickMegaSearchMemberIdOption(page, memberId, context, rowIndex);
+    if (memberIdOptionSelected) {
+      await context.log({
+        level: "info",
+        message: memberIdOptionSelectedViaKeyboard
+          ? "Selected exact Member ID option via keyboard navigation."
+          : "Selecting exact Member ID option.",
+        rowIndex,
+      });
       await page.waitForTimeout(kaiserConfig.timing.postSelectionMs);
       await waitForDropdownClosed(page);
       const selectedCriterion = await getSelectedMegaSearchCriteria(page, memberId);
@@ -666,21 +838,20 @@ async function selectMemberIdFromMegaSearch(page: Page, memberId: string, contex
       await context.log({
         level: "warn",
         message: selectedCriterion
-          ? `Wrong Kaiser criterion selected: ${selectedCriterion}. Clearing and retrying Member ID.`
-          : "Kaiser Member ID selection was not accepted. Retrying.",
+          ? `Wrong Kaiser criterion selected: ${selectedCriterion}. Clearing and retrying Member ID (attempt ${attempt}/${maxAttempts}).`
+          : `Kaiser Member ID selection was not accepted (attempt ${attempt}/${maxAttempts}). Retrying.`,
         rowIndex,
       });
-      await clearMegaSearchCriteria(page, memberId);
+      await clearAllCriteriaChips(page, context, rowIndex);
     }
 
-    if (attempt === 1) {
-      await context.log({ level: "warn", message: "Member ID option not found. Retrying dropdown once.", rowIndex });
+    if (attempt < maxAttempts) {
       await page.waitForTimeout(kaiserConfig.timing.retryBackoffMs);
       await enterMemberId();
     }
   }
 
-  await context.log({ level: "warn", message: "Member ID option not found.", rowIndex });
+  await context.log({ level: "warn", message: "Member ID option not found or wrong criterion kept getting selected after all retries.", rowIndex });
   return false;
 }
 
@@ -837,6 +1008,7 @@ async function waitForClaimTableRefresh(page: Page, previousSignature: string, c
 
 async function submitSearch(page: Page, inputRow: KaiserInputRow, context: ScraperContext): Promise<SearchSubmitState> {
   const dates = dateRangeForDos(inputRow.dos);
+  await clearSearchFormFields(page, context, inputRow.inputRowId);
   const previousSnapshot = await getClaimTableSnapshot(page);
   const selected = await selectMemberIdFromMegaSearch(page, inputRow.memberId, context, inputRow.inputRowId);
   if (!selected) return "member-option-not-found";
@@ -1051,7 +1223,23 @@ async function goBackToSearch(page: Page, context?: ScraperContext, rowIndex?: n
     await backControl.click({ timeout: 5000 }).catch(async () => backControl.evaluate((element) => (element as HTMLElement).click()));
     const ready = await isClaimSearchReady(page, 15000);
     if (!ready) {
-      await context?.log({ level: "warn", message: "Kaiser Back control clicked, but Claim Search fields were not confirmed ready.", rowIndex });
+      // The Back control fired but Kaiser did not leave the Claim Search fields in a
+      // confirmed-ready state. Continuing to interact with a half-reset search form is what
+      // was causing "From Date was not accepted" on the very next row (the form's fields
+      // exist in the DOM but are not fully wired/reset). Force a hard reset through the
+      // normal Claim Search entry point instead of silently trusting the page.
+      await context?.log({
+        level: "warn",
+        message: "Kaiser Back control clicked, but Claim Search fields were not confirmed ready. Forcing a hard reset via Claim Search navigation.",
+        rowIndex,
+      });
+      if (context && !(await isSessionUnavailable(page))) {
+        try {
+          await openClaimSearch(page, context);
+        } catch (error) {
+          await context.log({ level: "warn", message: `Kaiser hard reset of Claim Search failed: ${errorMessage(error)}`, rowIndex });
+        }
+      }
     }
     return;
   }
@@ -1161,11 +1349,9 @@ async function logEmptyServiceDiagnostics(
   }
 }
 
-async function extractClaimDetails(
+async function extractClaimDetailsOnce(
   page: Page,
   claimNumber: string,
-  context: ScraperContext,
-  rowIndex: number,
 ): Promise<ClaimDetailsExtraction> {
   const frames = Array.from(new Set([page.mainFrame(), ...page.frames()]));
   const frameUrls = frames.map((frame) => frame.url());
@@ -1417,7 +1603,7 @@ async function extractClaimDetails(
     if (hasRealClaimDetails(frameDetails)) merged = mergeClaimDetails(merged, frameDetails);
   }
 
-  const finalDetails: ClaimDetailsExtraction = {
+  return {
     ...merged,
     framesInspected: frames.length,
     frameUrls,
@@ -1427,8 +1613,47 @@ async function extractClaimDetails(
     serviceLevelFound,
     diagnostics,
   };
-  await logClaimDetailDiagnostics(context, rowIndex, finalDetails);
-  if (hasRealClaimDetails(finalDetails)) return finalDetails;
+}
+
+async function extractClaimDetails(
+  page: Page,
+  claimNumber: string,
+  context: ScraperContext,
+  rowIndex: number,
+): Promise<ClaimDetailsExtraction> {
+  // Kaiser's claim-detail page renders its shell (the "Claim #12345" heading that
+  // waitForClaimDetailMarker looks for) before the individual report widgets - Status,
+  // Payment, Services, Claim Codes - have actually populated. Each widget streams in
+  // separately, so a single extraction attempt taken right after the marker fires can
+  // legitimately see an empty page even though the URL/heading is already correct. Poll
+  // instead of extracting once.
+  const deadline = Date.now() + kaiserConfig.timing.claimDetailExtractionTimeoutMs;
+  let attempt = 0;
+  let latest = await extractClaimDetailsOnce(page, claimNumber);
+
+  // Status alone (e.g. "Denied") often renders before the Services widget does, so checking
+  // only hasRealClaimDetails() let the loop stop early - before Services had actually loaded -
+  // and report a false "Services section not found". Keep waiting until the Services section
+  // itself has been detected too (or the deadline is reached), instead of rushing off the first
+  // field that happens to appear.
+  while ((!hasRealClaimDetails(latest) || !latest.servicesSectionFound) && Date.now() < deadline) {
+    attempt += 1;
+    await context.log({
+      level: "info",
+      message: `Claim detail widgets not fully populated yet (attempt ${attempt}); waiting for Kaiser report content, especially Services, to finish loading.`,
+      rowIndex,
+    });
+    await waitForKaiserLoadingToFinish(page);
+    await page.waitForTimeout(kaiserConfig.timing.stablePollMs);
+    latest = await extractClaimDetailsOnce(page, claimNumber);
+  }
+
+  if (attempt > 0 && hasRealClaimDetails(latest)) {
+    await context.log({ level: "info", message: `Claim detail content became available after ${attempt} retry attempt(s).`, rowIndex });
+  }
+
+  await logClaimDetailDiagnostics(context, rowIndex, latest);
+  if (hasRealClaimDetails(latest)) return latest;
   throw new Error("Could not extract Kaiser claim detail fields.");
 }
 

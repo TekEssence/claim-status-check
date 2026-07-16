@@ -1,0 +1,145 @@
+<!DOCTYPE html><html lang="en" dir="ltr"><head>
+
+        <base href="https://fam.kp.org/">	
+		<title>Kaiser Permanente Sign On</title>
+		<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+		<link rel="stylesheet" href="assets/kp-affiliates/css/enh-kp-form-style.css" type="text/css">
+		<link rel="stylesheet" href="assets/kp-affiliates/css/enh-kp-table.css" type="text/css">
+		<link rel="stylesheet" href="assets/kp-affiliates/css/enh-kp-style.css" type="text/css">
+		<link type="text/css" href="assets/kp-affiliates/css/jquery-ui-1.8.17.custom.css" rel="stylesheet">
+		<link type="text/css" href="assets/kp-affiliates/css/ui.jqgrid.min.css" rel="stylesheet">
+		<link type="text/css" href="assets/kp-affiliates/css/hfjFonts.css" rel="stylesheet">	
+
+</head><body onload="setFocus()">	
+	<div id="container">
+		<div id="topnav-wrapper">
+			<div id="topnav-main">
+				<a href="http://kp.org/"><img src="assets/kp-affiliates/images/logo.png" alt="Kaiser Permanente" border="0"></a>
+			</div>
+			<div id="topnav-sub">
+			<ul id="header-toolbar"></ul>
+			</div>
+		</div>
+		<div id="header-footer">&nbsp;</div>
+		<div id="main-wrapper">
+			<div id="main-full">
+
+                    <div id="body-content" class="body-content">
+                        <div id="kpCookieError"></div>
+                        <h1>Sign on</h1>
+						<p>Kaiser Permanente affiliate providers and medical office staff:</p>
+			<p>Please sign on to gain access to secure features.</p>
+			
+						<div id="LoginForm" class="contextHelp" style="display: block; width: 420px; padding: 30px 20px 30px;">
+                        <form class="form-simple" name="SignInForm" method="POST" action="/as/6yEJyVb31e/resume/as/authorization.ping" autocomplete="off">
+							<div class="ping-messages">
+								                          
+							</div>
+                                <div class="ping-input-container">
+									                                        <label for="userid">User ID</label><br>
+										<input id="username" type="text" size="35" name="pf.username" value="" autocorrect="off" autocapitalize="off" onkeypress="return postOnReturn(event)" style=""><!---->
+																	</div>
+								<br>
+                                <label for="password">Password</label><br>
+                                <div class="ping-input-container">
+									<input id="password" type="password" size="35" name="pf.pass" onkeypress="return postOnReturn(event)" style="">
+								</div>
+								<br>
+								<div>
+								<input tabindex="3" type="submit" onclick="postOk();" id="submitBtnID" value="Sign on" style="">
+								</div>
+                        </form>
+						</div>
+						<p><a href="https://accessnow-ap.kp.org/kpan-ap/registration">Register now</a> to obtain a User ID or <a href="https://accessnow-ap.kp.org/kpan-ap/accountreactivation">Reactivate</a> your account.</p>
+                        <p><a href="https://fam.kp.org/idp/startSSO.ping?PartnerSpId=https%3A%2F%2Ffam.kp.org%2FforgotUserName%2Fkpim-ap" target="_blank">Forgot your User ID</a> or <a href="https://fam.kp.org/idp/startSSO.ping?PartnerSpId=https%3A%2F%2Ffam.kp.org%2Fmfaportal%2Fforgot-password%2Fkpim-ap">password</a>?</p>
+                    </div>
+					<div style="height: 100px;">&nbsp;</div>
+				<div id="footer">
+					<div id="footer-line1"></div>
+					<div id="footer-text">© 2020 Kaiser Permanente</div>
+					<div id="footer-line2"></div>
+					<div class="overlay"></div>
+					<br><br><br>
+					</div>
+				</div>
+			
+			
+		</div>		
+	</div>		
+	
+    <script type="text/javascript">
+
+                            var isFormSubmitted = false;
+                            function postOk() {
+                                document.getElementById("submitBtnID").disabled =true;
+								isFormSubmitted = true;
+								document.forms[0].submit();
+								setTimeout(postExecution, 4000);
+								return false;
+                            }
+                            function postCancel() {
+                                document.forms[0]['pf.cancel'].value = 'clicked';
+                                document.forms[0].submit();
+                            }
+							function postExecution() {
+								document.getElementById("submitBtnID").disabled =false;
+								isFormSubmitted = false;
+							}
+                            function postOnReturn(e) {
+                                var keycode;
+                                if (window.event)
+                                    keycode = window.event.keyCode;
+                                else if (e)
+                                    keycode = e.which;
+                                else
+                                    return true;
+
+                                if (keycode == 13 && !isFormSubmitted) {
+									document.getElementById("submitBtnID").disabled =true;
+									isFormSubmitted = true;
+									document.forms[0].submit();
+									setTimeout(postExecution, 4000);
+									return false;
+								} else {
+                            return true;
+                            }
+                            }
+                                    function setFocus() {
+                                    var platform = navigator.platform;
+                                    if (platform != null && platform.indexOf("iPhone") == - 1) {
+                                                        document.getElementById('username').focus();
+                                                                         }
+                            }
+                                    function setMobile(mobile) {
+                            var className = ' mobile',
+                                    hasClass = (bodyTag.className.indexOf(className) !== - 1);
+                                    if (mobile && !hasClass) {
+                            bodyTag.className += className;
+                            } else if (!mobile && hasClass) {
+                            bodyTag.className = bodyTag.className.replace(className, '');
+                            }
+
+                            
+    <!-- Check if this is the PingOne Mobile App -->
+                    }
+        function getScreenWidth() {
+            return (window.outerHeight) ? window.outerWidth : document.body.clientWidth;
+        }
+
+        var bodyTag = document.getElementsByTagName('body')[0],
+            width = getScreenWidth(),
+            remember = false && false;
+
+        
+        if(/Android|webOS|iPhone|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent)) {
+            setMobile(true);
+        } else {
+            setMobile((width <= 480));
+            window.onresize = function() {
+                width = getScreenWidth();
+                setMobile((width <= 480));
+            }
+        }
+    </script>
+
+</body></html>

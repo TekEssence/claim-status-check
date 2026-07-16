@@ -24,6 +24,7 @@ import claimStatusHeroImage from "../../Assets/ChatGPT Image Jun 30, 2026, 12_47
 import dashboardWelcomeImage from "../../Assets/ChatGPT Image Jul 1, 2026, 10_55_01 AM.png";
 import blueShieldCaliforniaLogo from "../../Assets/customerlogo-blue-shield-california-clr.svg";
 import iehpLogo from "../../Assets/channels4_profile.jpg";
+import kaiserLogo from "../../Assets/kaiser-permanente-logo.svg";
 import optumLogo from "../../Assets/optum-logo.svg";
 import regalLogo from "../../Assets/channels4_profile (1).jpg";
 import availityLogo from "../../Assets/availity-logo.jpg";
@@ -258,6 +259,19 @@ const PORTAL_UI_META: Record<
   kaiser: {
     shortCode: "KP",
     logoClassName: "bg-white text-cyan-700",
+    logoSrc: kaiserLogo,
+    cardLogoFrameClassName: "h-10 w-[8.6rem] rounded-[1rem] px-2",
+    cardLogoImageClassName: "h-6 w-full object-contain",
+    cardLogoSize: {
+      width: 124,
+      height: 24,
+    },
+    heroLogoFrameClassName: "h-14 w-[12rem] rounded-[1.15rem] px-3",
+    heroLogoImageClassName: "h-8 w-full object-contain",
+    heroLogoSize: {
+      width: 176,
+      height: 32,
+    },
   },
   "optum-pro": {
     shortCode: "OP",

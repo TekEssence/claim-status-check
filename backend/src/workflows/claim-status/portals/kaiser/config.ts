@@ -36,6 +36,7 @@ export const kaiserConfig = {
     betweenRowsMs: 1500,
     retryBackoffMs: 1200,
     stablePollMs: 150,
+    claimDetailExtractionTimeoutMs: 15000,
   },
   runtime: {
     supportsLocal: true,
