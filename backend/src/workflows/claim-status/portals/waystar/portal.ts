@@ -119,11 +119,15 @@ function isLikelyProcToken(token: string): boolean {
     "MODS",
     "CHECK",
     "AMT",
+    "PD",
     "GRP/RC--AMT",
     "GRP/RC-AMT",
   ]);
   if (blocked.has(trimmed)) return false;
   if (/^(CO|PR|OA|PI)-\d+$/i.test(trimmed)) return false;
+  if (/^\d+$/.test(trimmed)) {
+    return /^\d{4,5}$/.test(trimmed);
+  }
   return /^(?=.*\d)[A-Z0-9.-]{4,12}$/.test(trimmed);
 }
 
@@ -158,12 +162,12 @@ function extractGlossary(text: string): Map<string, string> {
   const numericRegex = /(?:^|\n)\s*(\d{1,4})\s*[:\-]?\s*([^\n]*[A-Za-z][^\n]*)(?=\n\s*(?:(?:CO|PR|OA|PI)-?\d{1,4}\b|\d{1,4}\s*[A-Za-z]|$)|$)/gim;
   for (const match of glossaryText.matchAll(numericRegex)) {
     const code = match[1]?.trim();
-    const reason = match[2]?.replace(/\s+/g, ' ').trim();
+    const reasonBody = match[2]?.replace(/\s+/g, ' ').trim();
+    const reason = code && reasonBody ? `${code}${reasonBody}` : '';
     if (code && reason && !glossary.has(code)) {
       glossary.set(code, reason);
     }
   }
-
   return glossary;
 }
 
@@ -271,6 +275,57 @@ function extractPdfRowProcToken(tokens: string[]): string {
   return "";
 }
 
+function parseWaystarClmStatusProcedureLine(tokens: string[], denialCodes: string[], glossary: Map<string, string>, subTotals: string): WaystarProcedureLine | null {
+  if (
+    tokens.length < 10
+    || !/^\d{8,12}$/.test(tokens[0] || "")
+    || !/^\d{3,4}$/.test(tokens[1] || "")
+    || !/^\d{6}$/.test(tokens[2] || "")
+    || !/^\d{1,2}$/.test(tokens[3] || "")
+    || !/^\d{1,2}$/.test(tokens[4] || "")
+    || !isLikelyProcToken(tokens[5] || "")
+  ) {
+    return null;
+  }
+
+  const serviceDate = parseWaystarCompactDate(tokens[2] || "");
+  const proc = tokens[5] || "";
+  let amountIndex = 6;
+  if (!isMoneyToken(tokens[amountIndex] || "")) {
+    amountIndex += 1;
+  }
+
+  const billed = tokens[amountIndex] || "";
+  const allowed = tokens[amountIndex + 1] || "";
+  const deduct = tokens[amountIndex + 2] || "";
+  const coins = tokens[amountIndex + 3] || "";
+  const provPd = isMoneyToken(tokens[tokens.length - 1] || "") ? (tokens[tokens.length - 1] || "") : "";
+
+  if (
+    !serviceDate
+    || !isMoneyToken(billed)
+    || !isMoneyToken(allowed)
+    || !isMoneyToken(deduct)
+    || !isMoneyToken(coins)
+    || !isMoneyToken(provPd)
+  ) {
+    return null;
+  }
+
+  return {
+    serviceDate,
+    proc,
+    billed,
+    allowed,
+    deduct,
+    coins,
+    provPd,
+    subTotals,
+    denialCodes: [...denialCodes],
+    denialReasons: padDenialReasons(denialCodes, glossary),
+  };
+}
+
 function extractPdfStyleProcedureLines(text: string): WaystarProcedureLine[] {
   const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
   const glossary = extractGlossary(text);
@@ -287,6 +342,7 @@ function extractPdfStyleProcedureLines(text: string): WaystarProcedureLine[] {
     if (inGlossarySection) continue;
 
     if (/^date\s+pos\s+nos\s+proc\b/i.test(line)
+      || /^clm\s+status\s*:/i.test(line)
       || /^claims\s+billed\s+amt\b/i.test(line)
       || /^provider\.\s*reason/i.test(line)
       || /^obligations\./i.test(line)
@@ -304,52 +360,59 @@ function extractPdfStyleProcedureLines(text: string): WaystarProcedureLine[] {
 
     const denialCodes = extractDenialCodes(line);
     const startsWithDenialCode = /^\s*(?:CO|PR|OA|PI)-?\d{1,4}\b/i.test(line);
-    const isGlossaryReasonLine = startsWithDenialCode && /[A-Za-z]/.test(line.replace(/^\s*(?:CO|PR|OA|PI)-?\d{1,4}\s*[:\-]?\s*/i, ''));
+    const isGlossaryReasonLine = startsWithDenialCode && /[A-Za-z]/.test(line.replace(/^\s*(?:CO|PR|OA|PI)-?\d{1,4}\s*[:\-]?\s*/i, ""));
     if (isGlossaryReasonLine) continue;
 
     const tokens = line.split(/\s+/).filter(Boolean);
-    let serviceDate = '';
-    let proc = '';
-    let billed = '';
-    let allowed = '';
-    let deduct = '';
-    let coins = '';
-    let provPd = '';
+    const clmStatusLine = parseWaystarClmStatusProcedureLine(tokens, denialCodes, glossary, subTotals);
+    if (clmStatusLine) {
+      current = clmStatusLine;
+      results.push(current);
+      continue;
+    }
+
+    let serviceDate = "";
+    let proc = "";
+    let billed = "";
+    let allowed = "";
+    let deduct = "";
+    let coins = "";
+    let provPd = "";
 
     if (
       tokens.length >= 8
-      && /^\d{5,6}$/.test(tokens[0] || '')
-      && /^\d{1,2}$/.test(tokens[1] || '')
-      && /^\d{1,2}$/.test(tokens[2] || '')
-      && isLikelyProcToken(tokens[3] || '')
+      && /^\d{5,6}$/.test(tokens[0] || "")
+      && /^\d{1,2}$/.test(tokens[1] || "")
+      && /^\d{1,2}$/.test(tokens[2] || "")
+      && isLikelyProcToken(tokens[3] || "")
     ) {
-      serviceDate = parseWaystarCompactDate(tokens[0] || '');
-      proc = tokens[3] || '';
+      serviceDate = parseWaystarCompactDate(tokens[0] || "");
+      proc = tokens[3] || "";
       let amountIndex = 4;
-      if (!isMoneyToken(tokens[amountIndex] || '')) {
+      if (!isMoneyToken(tokens[amountIndex] || "")) {
         amountIndex += 1;
       }
-      billed = tokens[amountIndex] || '';
-      allowed = tokens[amountIndex + 1] || '';
-      deduct = tokens[amountIndex + 2] || '';
-      coins = tokens[amountIndex + 3] || '';
-      provPd = isMoneyToken(tokens[tokens.length - 1] || '') ? (tokens[tokens.length - 1] || '') : '';
+      billed = tokens[amountIndex] || "";
+      allowed = tokens[amountIndex + 1] || "";
+      deduct = tokens[amountIndex + 2] || "";
+      coins = tokens[amountIndex + 3] || "";
+      provPd = isMoneyToken(tokens[tokens.length - 1] || "") ? (tokens[tokens.length - 1] || "") : "";
     } else if (
       tokens.length >= 7
-      && /^\d{1,2}$/.test(tokens[0] || '')
-      && /^\d{1,2}$/.test(tokens[1] || '')
-      && isLikelyProcToken(tokens[2] || '')
+      && /^\d{1,2}$/.test(tokens[0] || "")
+      && /^\d{1,2}$/.test(tokens[1] || "")
+      && isLikelyProcToken(tokens[2] || "")
     ) {
-      proc = tokens[2] || '';
+      proc = tokens[2] || "";
       let amountIndex = 3;
-      if (!isMoneyToken(tokens[amountIndex] || '')) {
+      if (!isMoneyToken(tokens[amountIndex] || "")) {
         amountIndex += 1;
       }
-      billed = tokens[amountIndex] || '';
-      allowed = tokens[amountIndex + 1] || '';
-      deduct = tokens[amountIndex + 2] || '';
-      coins = tokens[amountIndex + 3] || '';
-      provPd = isMoneyToken(tokens[tokens.length - 1] || '') ? (tokens[tokens.length - 1] || '') : '';
+      billed = tokens[amountIndex] || "";
+      allowed = tokens[amountIndex + 1] || "";
+      deduct = tokens[amountIndex + 2] || "";
+      coins = tokens[amountIndex + 3] || "";
+      provPd = isMoneyToken(tokens[tokens.length - 1] || "") ? (tokens[tokens.length - 1] || "") : "";
     }
 
     if (
@@ -384,7 +447,6 @@ function extractPdfStyleProcedureLines(text: string): WaystarProcedureLine[] {
   return results;
 }
 
-
 function extractProcedureLines(text: string): WaystarProcedureLine[] {
   const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
   const glossary = extractGlossary(text);
@@ -404,61 +466,65 @@ function extractProcedureLines(text: string): WaystarProcedureLine[] {
       continue;
     }
     if (inGlossarySection) continue;
-    if (/additional information/i.test(line) || /^sub\s*totals?/i.test(line) || /^prev\s+pd/i.test(line) || /^interest\s+/i.test(line) || /^late\s+filing\s+charge/i.test(line)) {
+    if (/additional information/i.test(line) || /^clm\s+status\s*:/i.test(line) || /^sub\s*totals?/i.test(line) || /^prev\s+pd/i.test(line) || /^interest\s+/i.test(line) || /^late\s+filing\s+charge/i.test(line)) {
       continue;
     }
 
     const tokens = line.split(/\s+/).filter(Boolean);
-    const moneyTokens = tokens.filter((token) => isMoneyToken(token));
+    const denialCodes = extractDenialCodes(line);
+    const clmStatusLine = parseWaystarClmStatusProcedureLine(tokens, denialCodes, glossary, subTotals);
+    if (clmStatusLine) {
+      results.push(clmStatusLine);
+      continue;
+    }
 
-    let serviceDate = '';
-    let proc = '';
-    let billed = '';
-    let allowed = '';
-    let deduct = '';
-    let coins = '';
-    let provPd = '';
+    let serviceDate = "";
+    let proc = "";
+    let billed = "";
+    let allowed = "";
+    let deduct = "";
+    let coins = "";
+    let provPd = "";
 
     if (
       tokens.length >= 8
-      && /^\d{5,6}$/.test(tokens[0] || '')
-      && /^\d{1,2}$/.test(tokens[1] || '')
-      && /^\d{1,2}$/.test(tokens[2] || '')
-      && isLikelyProcToken(tokens[3] || '')
+      && /^\d{5,6}$/.test(tokens[0] || "")
+      && /^\d{1,2}$/.test(tokens[1] || "")
+      && /^\d{1,2}$/.test(tokens[2] || "")
+      && isLikelyProcToken(tokens[3] || "")
     ) {
-      serviceDate = parseWaystarCompactDate(tokens[0] || '');
-      proc = tokens[3] || '';
+      serviceDate = parseWaystarCompactDate(tokens[0] || "");
+      proc = tokens[3] || "";
       let amountIndex = 4;
-      if (!isMoneyToken(tokens[amountIndex] || '')) {
+      if (!isMoneyToken(tokens[amountIndex] || "")) {
         amountIndex += 1;
       }
-      billed = tokens[amountIndex] || '';
-      allowed = tokens[amountIndex + 1] || '';
-      deduct = tokens[amountIndex + 2] || '';
-      coins = tokens[amountIndex + 3] || '';
-      provPd = isMoneyToken(tokens[tokens.length - 1] || '') ? (tokens[tokens.length - 1] || '') : '';
+      billed = tokens[amountIndex] || "";
+      allowed = tokens[amountIndex + 1] || "";
+      deduct = tokens[amountIndex + 2] || "";
+      coins = tokens[amountIndex + 3] || "";
+      provPd = isMoneyToken(tokens[tokens.length - 1] || "") ? (tokens[tokens.length - 1] || "") : "";
     } else if (
       tokens.length >= 7
-      && /^\d{1,2}$/.test(tokens[0] || '')
-      && /^\d{1,2}$/.test(tokens[1] || '')
-      && isLikelyProcToken(tokens[2] || '')
+      && /^\d{1,2}$/.test(tokens[0] || "")
+      && /^\d{1,2}$/.test(tokens[1] || "")
+      && isLikelyProcToken(tokens[2] || "")
     ) {
-      proc = tokens[2] || '';
+      proc = tokens[2] || "";
       let amountIndex = 3;
-      if (!isMoneyToken(tokens[amountIndex] || '')) {
+      if (!isMoneyToken(tokens[amountIndex] || "")) {
         amountIndex += 1;
       }
-      billed = tokens[amountIndex] || '';
-      allowed = tokens[amountIndex + 1] || '';
-      deduct = tokens[amountIndex + 2] || '';
-      coins = tokens[amountIndex + 3] || '';
-      provPd = isMoneyToken(tokens[tokens.length - 1] || '') ? (tokens[tokens.length - 1] || '') : '';
+      billed = tokens[amountIndex] || "";
+      allowed = tokens[amountIndex + 1] || "";
+      deduct = tokens[amountIndex + 2] || "";
+      coins = tokens[amountIndex + 3] || "";
+      provPd = isMoneyToken(tokens[tokens.length - 1] || "") ? (tokens[tokens.length - 1] || "") : "";
     }
 
-    const denialCodes = extractDenialCodes(line);
-    const isSimpleRemarkRow = !proc && tokens.length >= 2 && isLikelyProcToken(tokens[0] || '') && denialCodes.length > 0;
+    const isSimpleRemarkRow = !proc && tokens.length >= 2 && isLikelyProcToken(tokens[0] || "") && denialCodes.length > 0;
     if (isSimpleRemarkRow) {
-      proc = tokens[0] || '';
+      proc = tokens[0] || "";
     }
 
     const hasValidAmountColumns = isMoneyToken(billed) && isMoneyToken(allowed) && isMoneyToken(deduct) && isMoneyToken(coins);
@@ -481,7 +547,7 @@ function extractProcedureLines(text: string): WaystarProcedureLine[] {
   }
 
   if (results.length === 0) {
-    return [{ serviceDate: '', proc: '', billed: '', allowed: '', deduct: '', coins: '', provPd: '', subTotals, denialCodes: [], denialReasons: [] }];
+    return [{ serviceDate: "", proc: "", billed: "", allowed: "", deduct: "", coins: "", provPd: "", subTotals, denialCodes: [], denialReasons: [] }];
   }
 
   return results;
@@ -1149,3 +1215,6 @@ export async function openWaystarEobPopup(page: Page): Promise<Page | null> {
     forceClick: true,
   });
 }
+
+
+

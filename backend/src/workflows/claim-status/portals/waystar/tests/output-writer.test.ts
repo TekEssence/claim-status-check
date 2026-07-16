@@ -98,3 +98,80 @@ test("Waystar output workbook matches the sample output structure", async () => 
     "EOB extracted with denial codes.",
   ]);
 });
+
+test("writes multiple procedure lines on separate output rows", async () => {
+  const buffer = await createWaystarOutputWorkbookBuffer({
+    outputRows: [
+      {
+        sno: "1.",
+        name: "Jason William S",
+        servDate: "2026-04-02",
+        icn: "60497156",
+        acnt: "269048",
+        eft: "ACH7322959",
+        productionDate: "2026-05-07",
+        checkDate: "2026-05-07",
+        proc: "99204",
+        checkAmt: "2753.43",
+        billed: "500.00",
+        allowed: "193.32",
+        deduct: "0.00",
+        coins: "0.00",
+        provPd: "0.00",
+        denialCode1: "CO-24",
+        denialReason1: "24Charges are covered under a capitation agreement/managed care plan.",
+        denialCode2: "CO-45",
+        denialReason2: "45Charge exceeds fee schedule/maximum allowable or contracted/legislated fee arrangement.",
+        denialCode3: "PR-3",
+        denialReason3: "3Co-payment Amount",
+        status: "denial",
+        remarks: "",
+      },
+      {
+        sno: "",
+        name: "Jason William S",
+        servDate: "2026-04-02",
+        icn: "60497156",
+        acnt: "269048",
+        eft: "ACH7322959",
+        productionDate: "2026-05-07",
+        checkDate: "2026-05-07",
+        proc: "51798",
+        checkAmt: "2753.43",
+        billed: "70.00",
+        allowed: "70.00",
+        deduct: "0.00",
+        coins: "0.00",
+        provPd: "70.00",
+        denialCode1: "",
+        denialReason1: "",
+        denialCode2: "",
+        denialReason2: "",
+        denialCode3: "",
+        denialReason3: "",
+        status: "paid",
+        remarks: "",
+      },
+    ],
+    errorRows: [],
+    auditRows: [],
+  });
+
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(buffer);
+  const outputSheet = workbook.getWorksheet("Output");
+  assert.ok(outputSheet);
+
+  assert.equal(outputSheet.getCell("I2").value, "99204");
+  assert.equal(outputSheet.getCell("P2").value, "CO-24");
+  assert.equal(outputSheet.getCell("Q2").value, "24Charges are covered under a capitation agreement/managed care plan.");
+  assert.equal(outputSheet.getCell("R2").value, "CO-45");
+  assert.equal(outputSheet.getCell("S2").value, "45Charge exceeds fee schedule/maximum allowable or contracted/legislated fee arrangement.");
+  assert.equal(outputSheet.getCell("T2").value, "PR-3");
+  assert.equal(outputSheet.getCell("U2").value, "3Co-payment Amount");
+
+  assert.equal(outputSheet.getCell("A3").value ?? "", "");
+  assert.equal(outputSheet.getCell("I3").value, "51798");
+  assert.equal(outputSheet.getCell("K3").value, "70.00");
+  assert.equal(outputSheet.getCell("O3").value, "70.00");
+});

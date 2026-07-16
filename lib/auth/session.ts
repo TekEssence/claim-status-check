@@ -1,6 +1,6 @@
 import { cookies, headers as nextHeaders } from "next/headers";
 import { betterAuthInstance } from "./better-auth";
-import { getActiveAuthUser, type AuthUser } from "./db";
+import { getActiveAuthUser, isAuthDbConnectionError, type AuthUser } from "./db";
 
 export type AuthSession = AuthUser & {
   exp: number | null;
@@ -36,7 +36,10 @@ export async function getSessionFromCookies(requestHeaders?: Headers): Promise<A
       ...activeUser,
       exp: Math.floor(new Date(authResult.session.expiresAt).getTime() / 1000),
     };
-  } catch {
+  } catch (error) {
+    if (isAuthDbConnectionError(error)) {
+      throw error;
+    }
     return null;
   }
 }

@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { getScrapeJob } from "@/backend/src/jobs/job-store";
+import { isAuthDbConnectionError } from "@/lib/auth/db";
 import { getSessionFromCookies } from "@/lib/auth/session";
 import { getActiveScrapeJobForUser, isScrapeJobDbConnectionError, updateScrapeJobSnapshot } from "@/lib/scrape-jobs/db";
 
@@ -72,8 +73,8 @@ export async function GET() {
     return Response.json({ job });
   } catch (error) {
     console.error("Load current scrape job failed", error);
-    if (isScrapeJobDbConnectionError(error)) {
-      return Response.json({ error: "Scrape job database connection timed out. Check DATABASE_URL and restart the dev server." }, { status: 503 });
+    if (isAuthDbConnectionError(error) || isScrapeJobDbConnectionError(error)) {
+      return Response.json({ error: "Database connection timed out. Check DATABASE_URL and restart the dev server." }, { status: 503 });
     }
 
     return Response.json({ error: "Unable to load current scrape job." }, { status: 500 });
