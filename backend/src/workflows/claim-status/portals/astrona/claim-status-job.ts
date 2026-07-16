@@ -35,8 +35,11 @@ function logText(auditRows: Record<string, unknown>[], errorRows: Record<string,
   return `${lines.join("\n")}\n`;
 }
 
-async function processRow(page: Page, row: AstronaInputRow, auditRows: Record<string, unknown>[]): Promise<Record<string, unknown>[]> {
+async function processRow(page: Page, row: AstronaInputRow, auditRows: Record<string, unknown>[], context: ScraperContext): Promise<Record<string, unknown>[]> {
+  const member = row.memberId || row.memberName || `input row ${row.inputRowId}`;
+  const liveLog = (level: "info" | "warn", message: string) => context.log({ level, message: `[Astrona row ${row.inputRowId}] ${message}`, rowIndex: row.inputRowId });
   record(auditRows, row, "claim_search", "started", "Searching by member ID/member name.");
+  await liveLog("info", `Searching member ${member}, DOS ${row.dos || "not provided"}${row.cptCode ? `, CPT ${row.cptCode}` : ""}.`);
   await searchAstronaClaims(page, row);
   let count = await getAstronaClaimCount(page);
   const combinedSearchWasEmpty = !count || await astronaShowsNoClaimResults(page);
@@ -44,29 +47,39 @@ async function processRow(page: Page, row: AstronaInputRow, auditRows: Record<st
     const nameCandidates = astronaMemberNameSearchCandidates(row.memberName);
     for (const candidate of nameCandidates) {
       record(auditRows, row, "claim_search", "retry", `No claims found; clearing Member ID and retrying with Member Name "${candidate}".`);
+      await liveLog("info", `No results from Member ID/name search. Retrying with member name "${candidate}".`);
       await searchAstronaClaims(page, row, "member-name", candidate);
       count = await getAstronaClaimCount(page);
       if (count) break;
     }
   }
   record(auditRows, row, "claim_search", "completed", `Found ${count} claim(s).`);
+  await liveLog(count ? "info" : "warn", count ? `Portal returned ${count} claim(s); checking DOS and service lines.` : "No claims were returned by the portal search.");
   if (!count) return astronaOutputRows(row, blankDetails(), "no_data", "No claim data found in portal.");
 
   const matchingClaimNumbers = await getAstronaClaimNumbersForRow(page, row);
   record(auditRows, row, "claim_search", "filtered", `Opening ${matchingClaimNumbers.length} of ${count} claim(s) matching Member Name ${row.memberName} and Date of Service ${row.dos}.`);
   if (!matchingClaimNumbers.length) {
+    await liveLog("warn", `Claims were returned, but no result matched input DOS ${row.dos}.`);
     return astronaOutputRows(row, blankDetails(), "no_data", `No claim result row matched input DOS ${row.dos}.`);
   }
 
   const output: Record<string, unknown>[] = [];
   let matchedNameAndDos = false;
   let dobMismatch = false;
+  const availablePortalDos = new Set<string>();
   for (const claimNumber of matchingClaimNumbers) {
+    await liveLog("info", `Opening claim ${claimNumber} and reading all service lines.`);
     const opened = await openAstronaClaimByNumber(page, claimNumber);
     try {
       const details = await extractAstronaClaimDetails(page, opened.claimNumber);
       if (!astronaClaimNameMatches(details, row)) continue;
+      for (const line of details.serviceLines) {
+        if (line.from) availablePortalDos.add(line.from);
+        if (line.to) availablePortalDos.add(line.to);
+      }
       const serviceLines = astronaServiceLinesForDosAndCpt(details.serviceLines, row.dos, row.cptCode);
+      await liveLog("info", `Claim ${claimNumber}: extracted ${details.serviceLines.length} service line(s); ${serviceLines.length} matched the requested DOS/CPT.`);
       if ((row.dos || row.cptCode) && !serviceLines.length) continue;
       matchedNameAndDos = true;
       if (!astronaClaimDobMatches(details, row)) {
@@ -85,14 +98,20 @@ async function processRow(page: Page, row: AstronaInputRow, auditRows: Record<st
     }
   }
   if (!output.length && dobMismatch) {
+    await liveLog("warn", "Member name and DOS matched, but portal DOB did not match the input DOB.");
     return astronaOutputRows(row, blankDetails(), "no_data", "Portal claim matched Member Name and DOS, but DOB did not match the input row.");
   }
   if (!output.length && !matchedNameAndDos) {
-    return astronaOutputRows(row, blankDetails(), "no_data", "No portal claim matched input Member Name, DOS, and CPT/Procedure Code.");
+    const available = availablePortalDos.size ? ` Playwright saw portal DOS: ${[...availablePortalDos].join(", ")}.` : " Playwright did not extract any service-line DOS values from the opened claims.";
+    const message = `No portal claim matched input Member Name, DOS, and CPT/Procedure Code.${available}`;
+    await liveLog("warn", message);
+    return astronaOutputRows(row, blankDetails(), "no_data", message);
   }
   if (!output.length && row.dos) {
+    await liveLog("warn", `No service line matched DOS ${row.dos} and CPT ${row.cptCode || "not provided"}.`);
     return astronaOutputRows(row, blankDetails(), "no_data", `No portal service lines matched input DOS ${row.dos} and CPT ${row.cptCode || "(not provided)"}.`);
   }
+  await liveLog("info", `Member data fetched successfully. Writing ${output.length} matched output row(s).`);
   return output;
 }
 
@@ -142,9 +161,10 @@ export async function runAstronaClaimStatusJob(formData: FormData, context: Scra
         for (const row of batch.rows) {
           if (context.isCancelled?.()) throw new Error("Astrona processing was cancelled.");
           try {
-            outputRows.push(...await processRow(page, row, auditRows));
+            outputRows.push(...await processRow(page, row, auditRows, context));
           } catch (error) {
             const message = errorMessage(error);
+            await context.log({ level: "error", message: `[Astrona row ${row.inputRowId}] Member ${row.memberId || row.memberName}: processing failed — ${message}`, rowIndex: row.inputRowId });
             failure(errorRows, row, "claim_processing", "row_failed", message);
             outputRows.push(...astronaOutputRows(row, blankDetails(), "failed", message));
             await context.captureScreenshot?.("astrona-row-error", row.inputRowId);

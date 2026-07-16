@@ -324,7 +324,14 @@ export async function getAstronaClaimNumbersForRow(page: Page, inputRow: Astrona
           .map(({ i }) => i);
         return { claimNumber: (element.textContent ?? "").trim(), dateText: dateIndexes.map((i) => cells[i]?.textContent ?? "").join(" - ") || row?.innerText || "" };
       }).catch(() => ({ claimNumber: "", dateText: "" }));
-      if (result.claimNumber && astronaResultDosMatches(result.dateText, inputRow.dos)) matches.add(result.claimNumber);
+      // Some Astrona result layouts render the service date in cards or a
+      // separate virtualized column, outside the claim link's table row. An
+      // empty/unparseable date here is not evidence of a mismatch: open the
+      // claim and make the final decision from its service lines.
+      const visibleDates = result.dateText.match(/\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4}|\d{4}-\d{1,2}-\d{1,2}/g) ?? [];
+      if (result.claimNumber && (!inputRow.dos || !visibleDates.length || astronaResultDosMatches(result.dateText, inputRow.dos))) {
+        matches.add(result.claimNumber);
+      }
     }
   });
   return [...matches];
@@ -396,7 +403,16 @@ function canonicalDate(value: string): string {
 export function astronaServiceLinesForDos(serviceLines: AstronaServiceLine[], dos: string): AstronaServiceLine[] {
   const wanted = canonicalDate(dos);
   if (!wanted) return serviceLines;
-  return serviceLines.filter((line) => canonicalDate(line.from) === wanted || canonicalDate(line.to) === wanted);
+  return serviceLines.filter((line) => {
+    if (canonicalDate(line.from) === wanted || canonicalDate(line.to) === wanted) return true;
+    const target = Date.parse(`${wanted}T00:00:00Z`);
+    const fromValue = canonicalDate(line.from);
+    const toValue = canonicalDate(line.to);
+    const from = Date.parse(`${fromValue}T00:00:00Z`);
+    const to = Date.parse(`${toValue}T00:00:00Z`);
+    return Boolean(fromValue && toValue) && Number.isFinite(target) && Number.isFinite(from) && Number.isFinite(to)
+      && target >= Math.min(from, to) && target <= Math.max(from, to);
+  });
 }
 
 function canonicalProcedureCode(value: string): string {

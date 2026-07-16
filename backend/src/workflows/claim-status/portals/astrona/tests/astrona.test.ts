@@ -151,3 +151,8 @@ test("Astrona result DOS matching supports exact dates and service ranges", () =
   assert.equal(astronaResultDosMatches("06/01/2025 - 06/30/2025", "06/08/2025"), true);
   assert.equal(astronaResultDosMatches("06/01/2025 - 06/07/2025", "06/08/2025"), false);
 });
+
+test("Astrona service-line DOS matching accepts a DOS inside a From-To range", () => {
+  const lines = [{ from: "04/20/2026", to: "04/23/2026", cpt: "99213", modifier: "", diagCode: "", qty: "1", billed: "", coPay: "", coInsure: "", deductible: "", adjustment: "", net: "$10.00", memoLine1: "" }];
+  assert.equal(astronaServiceLinesForDos(lines, "04/22/2026").length, 1);
+});

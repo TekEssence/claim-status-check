@@ -2622,7 +2622,10 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
         jobId,
         signal: streamAbortController.signal,
         onEvent: async (eventData) => {
-          if (eventData.type === "log" && eventData.message) setLogs((prev) => [...prev, eventData.message ?? ""]);
+          if (eventData.type === "log" && eventData.message) {
+            setLogs((prev) => [...prev, eventData.message ?? ""]);
+            setStatus(eventData.message);
+          }
           else if (eventData.type === "progress" && typeof eventData.completed === "number" && typeof eventData.total === "number") setProgress({ completed: eventData.completed, total: eventData.total });
           else if (eventData.type === "error_screenshot" && typeof eventData.index === "number" && eventData.image) setErrorScreenshots((prev) => [...prev, { index: eventData.index ?? -1, image: eventData.image ?? "" }]);
           else if (eventData.type === "file_download" && eventData.filename && eventData.base64) {
