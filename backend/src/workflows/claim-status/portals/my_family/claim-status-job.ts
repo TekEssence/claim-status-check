@@ -496,7 +496,7 @@ async function openClaimDetail(page: Page, result: SearchResultRow): Promise<voi
 
   await Promise.all([
     page.waitForLoadState("domcontentloaded", { timeout: 30000 }).catch(() => {}),
-    claimLink.click({ timeout: 8000 }),
+    claimLink.click({ timeout: 10000 }),
   ]);
   await findVisibleLocator(page, myFamilyConfig.selectors.detailsMarker, 15000).catch(() => null);
   await page.waitForTimeout(myFamilyConfig.timing.detailLoadMs);
