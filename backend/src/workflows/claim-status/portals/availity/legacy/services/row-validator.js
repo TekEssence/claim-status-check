@@ -7,11 +7,14 @@ function asText(value) {
   return value === null || value === undefined ? "" : String(value).trim();
 }
 
-function validateRow(row, payerMapping) {
+function validateRow(row, payerMapping, options = {}) {
   const errors = [];
   const data = row && row.data ? row.data : {};
+  const requiredFields = Array.isArray(options.requiredFields) && options.requiredFields.length
+    ? options.requiredFields
+    : REQUIRED_FIELDS;
 
-  for (const field of REQUIRED_FIELDS) {
+  for (const field of requiredFields) {
     if (!asText(data[field])) {
       errors.push(`Missing ${field}`);
     }

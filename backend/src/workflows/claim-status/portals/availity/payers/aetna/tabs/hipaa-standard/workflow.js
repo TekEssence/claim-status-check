@@ -7,7 +7,7 @@ const { runHipaaProviderSearch } = require("../../../../legacy/workflows/shared-
 
 const AETNA_PROVIDER_ORDER = ["DAO, THUAN DUC", "TRINITY PAIN MANAGEMENT"];
 
-async function processClaim(page, row) {
+async function processClaim(page, row, options = {}) {
   logger.info("Using Aetna workflow: HIPAA Standard search only.");
   const { hipaaAvailable } = await waitForSearchTabs(page, 3000, { preferHipaa: true });
   logger.info(`Aetna workflow tabs detected: hipaa_standard=${hipaaAvailable}`);
@@ -23,7 +23,10 @@ async function processClaim(page, row) {
     };
   }
 
-  return runHipaaProviderSearch(page, row, AETNA_PROVIDER_ORDER);
+  const providerOrder = Array.isArray(options.providerOrder) && options.providerOrder.length
+    ? options.providerOrder
+    : AETNA_PROVIDER_ORDER;
+  return runHipaaProviderSearch(page, row, providerOrder);
 }
 
 module.exports = {

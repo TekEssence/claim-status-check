@@ -4,7 +4,9 @@ import type { ScraperContext } from "../../types";
 import { launchAvailityBrowser } from "./browser";
 import { parseAvailityInput, readAvailityPayerMapping } from "./input";
 import { createAvailityOutputWorkbookBuffer } from "./output-writer";
-import type { AvailityAuditRow, AvailityErrorRow, AvailityInputRow, AvailityOutputRow } from "./types";
+import { getProviderOrderForRow, readAvailityProviderMapping } from "./project-config";
+import { applyProjectOutputStrategy } from "./project-output";
+import type { AvailityAuditRow, AvailityErrorRow, AvailityInputRow, AvailityOutputRow, AvailityProviderMapping } from "./types";
 
 const require = createRequire(import.meta.url);
 const { submitLogin } = require("./legacy/pages/login.page.js");
@@ -17,6 +19,7 @@ const { getWorkflowForPayer } = require("./payers/registry.js");
 const legacyLogger = require("./legacy/utils/logger.js");
 
 const ROW_PROCESS_MAX_ATTEMPTS = 3;
+const MEDREVENU_REQUIRED_FIELDS = ["Payer Name", "Service Date", "Charges"];
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -169,7 +172,13 @@ async function initializeSession(input: Awaited<ReturnType<typeof parseAvailityI
   return { ...session, page };
 }
 
-async function processValidRow(page: Page, row: AvailityInputRow, mappedPayerName: string, automationState: { selectedPayer: string }) {
+async function processValidRow(
+  page: Page,
+  row: AvailityInputRow,
+  mappedPayerName: string,
+  automationState: { selectedPayer: string },
+  options: { projectId: string; providerMappings: AvailityProviderMapping[] },
+) {
   if (!mappedPayerName?.trim()) {
     throw new Error(`Payer mapping is blank for "${row.data["Payer Name"] || "unknown payer"}". Update backend/src/workflows/claim-status/portals/availity/config/Payer_mapping_ava.xlsx.`);
   }
@@ -183,7 +192,11 @@ async function processValidRow(page: Page, row: AvailityInputRow, mappedPayerNam
     inputPayerName: row.data["Payer Name"] || "",
     mappedPortalPayerName: mappedPayerName,
   });
-  return workflow.processClaim(page, row);
+  const providerOrder = getProviderOrderForRow(options.projectId, row, options.providerMappings);
+  return workflow.processClaim(page, row, {
+    projectId: options.projectId,
+    providerOrder,
+  });
 }
 
 export async function runAvailityClaimStatusJob(formData: FormData, context: ScraperContext): Promise<void> {
@@ -195,6 +208,7 @@ export async function runAvailityClaimStatusJob(formData: FormData, context: Scr
   const auditRows: AvailityAuditRow[] = [];
   const automationState = { selectedPayer: "" };
   const payerMapping = await readAvailityPayerMapping();
+  const providerMappings = await readAvailityProviderMapping();
   let session: Awaited<ReturnType<typeof initializeSession>> | null = null;
 
   const log = async (message: string) => context.log({ level: "info", message });
@@ -204,7 +218,7 @@ export async function runAvailityClaimStatusJob(formData: FormData, context: Scr
       message: entry.line,
     });
   });
-  await log(`Availity input loaded: ${input.inputRows.length} row(s). Available payers: Aetna, Blue Cross Blue Shield, Wellpoint, Wellcare, Humana.`);
+  await log(`Availity input loaded: ${input.inputRows.length} row(s). Project: ${input.projectId}. Available payers: Aetna, Anthem-CA, Blue Cross Blue Shield, Wellpoint, Wellcare, Humana.`);
   await context.emit({ type: "progress", completed: 0, total: input.inputRows.length });
 
   try {
@@ -228,7 +242,11 @@ export async function runAvailityClaimStatusJob(formData: FormData, context: Scr
       const outputRow = buildBaseOutput(row);
       let validation: { isValid: boolean; validation_status: string; validation_message: string; mappedPayerName: string };
       try {
-        validation = validateRow(row, payerMapping);
+        validation = validateRow(
+          row,
+          payerMapping,
+          input.projectId === "medrevenu" ? { requiredFields: MEDREVENU_REQUIRED_FIELDS } : undefined,
+        );
       } catch (error) {
         const message = friendlyAvailityError(error);
         validation = {
@@ -258,20 +276,25 @@ export async function runAvailityClaimStatusJob(formData: FormData, context: Scr
       let lastRowErrorMessage = "";
       for (let rowAttempt = 1; rowAttempt <= ROW_PROCESS_MAX_ATTEMPTS && !rowHandled; rowAttempt += 1) {
         try {
-          const result = await processValidRow(session.page, row, validation.mappedPayerName, automationState);
-          outputRow.bot_updated_claim_status = result.summaries?.[0] || "";
-          outputRow.bot_updated_time = nowIso();
-          outputRow.bot_search_source_tab = result.sourceTab || "";
-          outputRow.bot_match_count = String(result.matchCount ?? "");
-          outputRow.bot_overall_result = result.status || "";
-          outputRow.bot_notes = result.notes || "";
-          outputRows.push(outputRow);
+          const result = await processValidRow(session.page, row, validation.mappedPayerName, automationState, {
+            projectId: input.projectId,
+            providerMappings,
+          });
+          const projectOutputRows = applyProjectOutputStrategy({
+            projectId: input.projectId,
+            row,
+            outputRow,
+            result,
+            timestamp: nowIso(),
+          });
+          outputRows.push(...projectOutputRows);
 
-          if (result.status !== "success") {
+          const projectOutputFailed = projectOutputRows.some((projectOutputRow) => projectOutputRow.bot_overall_result && projectOutputRow.bot_overall_result !== "success");
+          if (result.status !== "success" || projectOutputFailed) {
             addError(errorRows, runId, row, {
               search_source_tab: result.sourceTab || "",
               failure_stage: "claim_status_search_results",
-              failure_reason: result.notes || result.status,
+              failure_reason: String(projectOutputRows.find((projectOutputRow) => projectOutputRow.bot_overall_result !== "success")?.bot_notes || result.notes || result.status),
               current_url: safePageUrl(session.page),
             });
           }

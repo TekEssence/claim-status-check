@@ -7,16 +7,55 @@ import type { ErrorScreenshot, JobProgressValue } from "../../../../types/job";
 export function AvailityResultView({
   errorScreenshots,
   logs,
+  onOtpChange,
+  onOtpSubmit,
+  otpRequest,
+  otpValue,
   progress,
   status,
 }: {
   errorScreenshots: ErrorScreenshot[];
   logs: string[];
+  onOtpChange?: (value: string) => void;
+  onOtpSubmit?: () => void;
+  otpRequest?: { inputName: string; label: string; message: string } | null;
+  otpValue?: string;
   progress: JobProgressValue | null;
   status: string;
 }) {
   return (
     <>
+      {otpRequest ? (
+        <div className="mb-4 rounded-[1.2rem] border border-blue-200 bg-blue-50 p-4">
+          <label className="block text-sm font-semibold text-blue-950" htmlFor="availityOtp">
+            {otpRequest.label}
+          </label>
+          <p className="mt-1 text-sm text-blue-900">{otpRequest.message}</p>
+          <div className="mt-3 flex gap-2">
+            <input
+              id="availityOtp"
+              value={otpValue || ""}
+              onChange={(event) => onOtpChange?.(event.target.value.replace(/\D/g, "").slice(0, 8))}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && otpValue?.trim()) {
+                  onOtpSubmit?.();
+                }
+              }}
+              className="min-w-0 flex-1 rounded-md border border-blue-300 bg-white px-3 py-2 text-sm"
+              inputMode="numeric"
+              autoComplete="one-time-code"
+            />
+            <button
+              type="button"
+              onClick={onOtpSubmit}
+              disabled={!otpValue?.trim()}
+              className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:bg-slate-400"
+            >
+              Submit OTP
+            </button>
+          </div>
+        </div>
+      ) : null}
       <JobProgress progress={progress} />
       <StatusMessage status={status} />
       <ScreenshotViewer screenshots={errorScreenshots} />

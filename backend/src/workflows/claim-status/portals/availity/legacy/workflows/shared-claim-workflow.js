@@ -200,6 +200,7 @@ async function processParsedSearchResults(page, row, provider, resultSummary, so
   }
 
   const summaries = [];
+  const details = [];
   const notes = [];
   const latestSelection = selectLatestFinalizedMatchedRow(matchedRows, sourceTab);
   if (latestSelection.notes) {
@@ -220,6 +221,7 @@ async function processParsedSearchResults(page, row, provider, resultSummary, so
 
   for (const matchedRow of [latestSelection.selectedRow]) {
     const extracted = attachSummaryContext(await extractMatchedRow(page, matchedRow, sourceTab, options), matchedRow, row.data["Payer Name"] || "");
+    details.push(extracted);
     summaries.push(renderClaimSummary(extracted));
     const missingFields = collectMissingExtractionFields(extracted, sourceTab);
     if (missingFields.length > 0) {
@@ -241,6 +243,7 @@ async function processParsedSearchResults(page, row, provider, resultSummary, so
   return {
     status: "success",
     summaries,
+    details,
     matchCount: matchedRows.length,
     provider,
     sourceTab,

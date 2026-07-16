@@ -678,8 +678,10 @@ async function extractLineRows(page) {
 async function extractPaid(page, status) {
   logger.info("Extracting PAID claim detail");
   const claimNumber = await getClaimNumber(page);
+  const receivedDate = await getLabelValue(page, "Received Date", 6000);
   const checkNumber = await getLabelValue(page, "Check Number");
   const checkDate = await getLabelValue(page, "Check Date");
+  const checkAmount = await getLabelValue(page, "Check Amount", 4000);
   const lines = await extractLineRows(page);
   for (const line of lines) {
     line.remarkCode = line.remarkCode || line.reasonRemarkCode || "";
@@ -691,8 +693,10 @@ async function extractPaid(page, status) {
     type: "paid",
     claimNumber,
     claimStatus: status,
+    receivedDate,
     checkNumber,
     checkDate,
+    checkAmount,
     lines
   };
 }
@@ -865,6 +869,7 @@ async function extractDenied(page, status) {
     type: "denied",
     claimNumber: await getClaimNumber(page),
     claimStatus: status,
+    receivedDate: await getLabelValue(page, "Received Date", 4000),
     lines
   };
 }
@@ -872,8 +877,10 @@ async function extractDenied(page, status) {
 async function extractWellcarePaid(page, status) {
   logger.info("Extracting Wellcare PAID claim detail");
   const claimNumber = await getClaimNumber(page);
+  const receivedDate = await getLabelValue(page, "Received Date", 6000);
   const checkNumber = await getLabelValue(page, "Check Number", 4000);
   const checkDate = await getLabelValue(page, "Check Date", 4000);
+  const checkAmount = await getLabelValue(page, "Check Amount", 4000);
   const lines = await extractLineRows(page);
   for (const line of lines) {
     line.remarkCode = line.remarkCode || line.reasonRemarkCode || "";
@@ -885,8 +892,10 @@ async function extractWellcarePaid(page, status) {
     type: "paid",
     claimNumber,
     claimStatus: status,
+    receivedDate,
     checkNumber,
     checkDate,
+    checkAmount,
     lines
   };
 }
@@ -915,6 +924,7 @@ async function extractWellcareDenied(page, status) {
     type: "denied",
     claimNumber: await getLabelValue(page, "Claim Number", 4000),
     claimStatus: status,
+    receivedDate: await getLabelValue(page, "Received Date", 4000),
     lines
   };
 }
@@ -1034,6 +1044,7 @@ async function extractHipaaPaid(page, status, options = {}) {
     type: "paid",
     claimNumber: await getInfoPanelValue(page, "Claim Number"),
     claimStatus: status,
+    receivedDate: await getInfoPanelValue(page, "Received Date"),
     checkNumber: await getInfoPanelValue(page, "Check Number"),
     checkDate: await getInfoPanelValue(page, "Check Date"),
     checkAmount: await getInfoPanelValue(page, "Check Amount"),
@@ -1062,6 +1073,7 @@ async function extractHipaaDenied(page, status, options = {}) {
     type: "denied",
     claimNumber: await getInfoPanelValue(page, "Claim Number"),
     claimStatus: status,
+    receivedDate: await getInfoPanelValue(page, "Received Date"),
     lines
   };
 }

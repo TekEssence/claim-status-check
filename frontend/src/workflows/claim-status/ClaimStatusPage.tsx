@@ -294,7 +294,7 @@ const PORTAL_WORKSPACE_META: Record<
     processingDescription: "Blue Shield requests are validated by group, encrypted during upload, and processed with checkpoint-aware automation.",
   },
   availity: {
-    heroDescription: "Upload your Availity login workbook and claim workbook to process Aetna, Blue Cross Blue Shield, Wellpoint, Wellcare, and Humana claim status checks.",
+    heroDescription: "Upload your Availity login workbook and claim workbook to process Aetna, Anthem-CA, Blue Cross Blue Shield, Wellpoint, Wellcare, and Humana claim status checks.",
     processingDescription: "Availity requests stream live status over SSE and automatically download the completed output workbook.",
   },
   "optum-pro": {
@@ -653,8 +653,12 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
   const [claimFileName, setClaimFileName] = useState<string>("");
   const [aerialCredentialFile, setAerialCredentialFile] = useState<File | null>(null);
   const [aerialInputFile, setAerialInputFile] = useState<File | null>(null);
+  const [availityProjectId, setAvailityProjectId] = useState("minimax");
   const [availityCredentialFile, setAvailityCredentialFile] = useState<File | null>(null);
   const [availityInputFile, setAvailityInputFile] = useState<File | null>(null);
+  const [availityJobId, setAvailityJobId] = useState<string>("");
+  const [availityOtpRequest, setAvailityOtpRequest] = useState<{ inputName: string; label: string; message: string } | null>(null);
+  const [availityOtpValue, setAvailityOtpValue] = useState<string>("");
   const [optumProLoginFile, setOptumProLoginFile] = useState<File | null>(null);
   const [optumProInputFile, setOptumProInputFile] = useState<File | null>(null);
   const [optumProJobId, setOptumProJobId] = useState<string>("");
@@ -767,8 +771,8 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     [aerialInputFile, isProcessing],
   );
   const canSubmitAvaility = useMemo(
-    () => Boolean(availityCredentialFile && availityInputFile && !isProcessing),
-    [availityCredentialFile, availityInputFile, isProcessing],
+    () => Boolean(availityProjectId && availityCredentialFile && availityInputFile && !isProcessing),
+    [availityProjectId, availityCredentialFile, availityInputFile, isProcessing],
   );
   const canSubmitOptumPro = useMemo(
     () => Boolean(optumProLoginFile && optumProInputFile && !isProcessing),
@@ -1180,6 +1184,9 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     setErrorScreenshots([]);
     setProgress(null);
     setActiveJobId("");
+    setAvailityJobId("");
+    setAvailityOtpRequest(null);
+    setAvailityOtpValue("");
     setRegalJobId("");
     setRegalMfaRequest(null);
     setRegalMfaValue("");
@@ -2402,6 +2409,14 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
         setProgress({ completed: eventData.completed, total: eventData.total });
       } else if (eventData.type === "error_screenshot" && typeof eventData.index === "number" && eventData.image) {
         setErrorScreenshots((prev) => [...prev, { index: eventData.index ?? -1, image: eventData.image ?? "" }]);
+      } else if (eventData.type === "otp_request" && eventData.inputName) {
+        setAvailityOtpRequest({
+          inputName: eventData.inputName,
+          label: eventData.label || "Availity OTP",
+          message: eventData.message || "Enter the Availity verification code.",
+        });
+        setAvailityOtpValue("");
+        setStatus(eventData.message || "Enter the Availity verification code.");
       } else if (eventData.type === "file_download" && eventData.filename && eventData.base64) {
         const artifactKey = buildDownloadArtifactKey(eventData);
         if (!hasDownloadedArtifact(subscribedJobId, artifactKey)) {
@@ -2428,6 +2443,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
       const jobId = await startScrapeJob(formData);
       subscribedJobId = jobId;
       setActiveJobId(jobId);
+      setAvailityJobId(jobId);
       await subscribeToScrapeJobEvents({
         jobId,
         signal: streamAbortController.signal,
@@ -2452,6 +2468,24 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     } finally {
       setIsProcessing(false);
       setActiveJobId("");
+      setAvailityJobId("");
+    }
+  }
+
+  async function submitAvailityOtp() {
+    if (!availityJobId || !availityOtpRequest || !availityOtpValue.trim()) return;
+
+    try {
+      await submitScrapeJobInput({
+        jobId: availityJobId,
+        inputName: availityOtpRequest.inputName,
+        value: availityOtpValue.trim(),
+      });
+      setAvailityOtpRequest(null);
+      setAvailityOtpValue("");
+      setStatus("Availity verification code submitted.");
+    } catch (error) {
+      setStatus(`Failed to submit Availity OTP: ${getErrorMessage(error)}`);
     }
   }
 
@@ -2467,6 +2501,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
 
     const formData = new FormData();
     formData.append("portalId", "availity");
+    formData.append("projectId", availityProjectId);
     formData.append("credentialExcel", availityCredentialFile);
     formData.append("inputExcel", availityInputFile);
 
@@ -3807,8 +3842,10 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
                       credentialFileName={availityCredentialFile?.name ?? ""}
                       inputFileName={availityInputFile?.name ?? ""}
                       isProcessing={isProcessing}
+                      selectedProjectId={availityProjectId}
                       onCredentialFileChange={setAvailityCredentialFile}
                       onInputFileChange={setAvailityInputFile}
+                      onProjectChange={setAvailityProjectId}
                       onSubmit={submitAvaility}
                     />
                   ) : effectivePortalId === "optum-pro" ? (
@@ -3878,7 +3915,16 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
                 </div>
               ) : effectivePortalId === "availity" ? (
                 <div className="mt-5">
-                  <AvailityResultView errorScreenshots={errorScreenshots} logs={logs} progress={progress} status={status} />
+                  <AvailityResultView
+                    errorScreenshots={errorScreenshots}
+                    logs={logs}
+                    onOtpChange={setAvailityOtpValue}
+                    onOtpSubmit={submitAvailityOtp}
+                    otpRequest={availityOtpRequest}
+                    otpValue={availityOtpValue}
+                    progress={progress}
+                    status={status}
+                  />
                 </div>
               ) : effectivePortalId === "optum-pro" ? (
                 <div className="mt-5">

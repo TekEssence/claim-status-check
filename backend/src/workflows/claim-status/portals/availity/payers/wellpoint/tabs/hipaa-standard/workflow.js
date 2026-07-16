@@ -6,7 +6,7 @@ const { PROVIDERS } = require("../../../../legacy/pages/claim-status-member.page
 const { renderFailedSummary } = require("../../../../legacy/services/summary-renderer");
 const { runHipaaProviderSearch } = require("../../../../legacy/workflows/shared-claim-workflow");
 
-async function processClaim(page, row) {
+async function processClaim(page, row, options = {}) {
   logger.info("Using Wellpoint workflow: HIPAA Standard search only.");
   const { hipaaAvailable } = await waitForSearchTabs(page, 3000, { preferHipaa: true });
   logger.info(`Wellpoint workflow tabs detected: hipaa_standard=${hipaaAvailable}`);
@@ -22,7 +22,10 @@ async function processClaim(page, row) {
     };
   }
 
-  return runHipaaProviderSearch(page, row, PROVIDERS, {
+  const providerOrder = Array.isArray(options.providerOrder) && options.providerOrder.length
+    ? options.providerOrder
+    : PROVIDERS;
+  return runHipaaProviderSearch(page, row, providerOrder, {
     useHipaaDeniedExtractorForDeniedStatus: true,
     hipaaExtractionOptions: {
       preferExpandedReasonRemarkCode: true

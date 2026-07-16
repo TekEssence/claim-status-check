@@ -118,7 +118,65 @@ async function handleMfa(page, totpSecret, maxAttempts, totpTimeOffsetSeconds = 
   throw new Error("MFA failed after configured OTP attempts.");
 }
 
+async function openMfaCodePage(page) {
+  const directCodePage = await isVisibleQuick(page, SELECTORS.codeInput, 4000);
+
+  if (directCodePage) {
+    return;
+  }
+
+  const methodPage = await isVisibleQuick(page, SELECTORS.methodOption, 4000);
+  if (!methodPage) {
+    throw new Error("MFA screen not found. Expected authenticator method or code page.");
+  }
+
+  logger.info("MFA method selection page detected");
+  await page.click(SELECTORS.methodOption);
+  logger.success("Selected authenticator app MFA option");
+
+  await humanDelay(500, 1200);
+  await withRetry(
+    "Submitting MFA method selection",
+    async () => {
+      await page.click(SELECTORS.methodContinueButton);
+    },
+    { retries: 2, retryDelayMs: 1200 }
+  );
+
+  await verifyCodePage(page);
+}
+
+async function handleManualMfa(page, requestOtp, maxAttempts = 2) {
+  await openMfaCodePage(page);
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const otpCode = await requestOtp(attempt, maxAttempts);
+    await page.fill(SELECTORS.codeInput, String(otpCode || "").trim());
+    await humanDelay(500, 1200);
+
+    const previousUrl = page.url();
+    await withRetry(
+      "Submitting manual MFA form",
+      async () => {
+        await page.click(SELECTORS.submitButton);
+      },
+      { retries: 2, retryDelayMs: 1200 }
+    );
+
+    const outcome = await waitForMfaSubmitOutcome(page, previousUrl, 20000);
+    if (outcome === "success") {
+      logger.success("Manual MFA submitted successfully");
+      return;
+    }
+
+    logger.warn(outcome === "rejected" ? `Manual MFA code rejected on attempt ${attempt}` : `Manual MFA page still visible after attempt ${attempt}`);
+  }
+
+  throw new Error("Manual MFA failed after configured OTP attempts.");
+}
+
 module.exports = {
   handleMfa,
+  handleManualMfa,
   SELECTORS
 };

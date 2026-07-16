@@ -1,6 +1,7 @@
 "use strict";
 
 const aetnaWorkflow = require("./aetna/registry");
+const anthemCaWorkflow = require("./anthem-ca/registry");
 const blueCrossBlueShieldWorkflow = require("./blue-cross-blue-shield/registry");
 const humanaWorkflow = require("./humana/registry");
 const wellcareWorkflow = require("./wellcare/registry");
@@ -16,6 +17,10 @@ function getWorkflowForPayer({ inputPayerName, mappedPortalPayerName }) {
 
   if (mapped.includes("AETNA") || input.includes("AETNA")) {
     return aetnaWorkflow;
+  }
+
+  if (mapped.includes("ANTHEM") || input.includes("ANTHEM")) {
+    return anthemCaWorkflow;
   }
 
   if (mapped.includes("WELLCARE") || input.includes("WELLCARE")) {

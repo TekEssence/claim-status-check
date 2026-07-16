@@ -20,12 +20,15 @@ function isRecoverableRowError(message) {
   return /Target page, context or browser has been closed|Browser page was closed|page was closed|context.*closed|browser.*closed|submit did not produce results, no-results message, or validation response/i.test(String(message || ""));
 }
 
-async function processClaim(page, row) {
+async function processClaim(page, row, options = {}) {
   logger.info("Using BCBSTX workflow: Member search first, then HIPAA Standard fallback when applicable.");
+  const providerOrder = Array.isArray(options.providerOrder) && options.providerOrder.length
+    ? options.providerOrder
+    : PROVIDERS;
 
   if (isBluecarePayer(row)) {
     logger.info("BCBSTX workflow detected Blue Cross Medicare Advantage Plan. Using Bluecare Member search path first.");
-    const memberResult = await runBluecareMemberProviderSearch(page, row, PROVIDERS);
+    const memberResult = await runBluecareMemberProviderSearch(page, row, providerOrder);
     if (memberResult.status === "success") {
       return memberResult;
     }
@@ -36,7 +39,7 @@ async function processClaim(page, row) {
     }
 
     logger.warn("Bluecare Member search did not find a matching Service Date + Charges row. Falling back to Bluecare HIPAA direct-detail search.");
-    const hipaaResult = await runBluecareHipaaDirectSearch(page, row, PROVIDERS);
+    const hipaaResult = await runBluecareHipaaDirectSearch(page, row, providerOrder);
     if (hipaaResult.status !== "success") {
       const memberNote = memberResult.notes || "Bluecare Member search did not find a matching Service Date + Charges row.";
       const hipaaNote = hipaaResult.notes || "Bluecare HIPAA direct-detail search did not find a matching Service Date + Charges row.";
@@ -61,7 +64,7 @@ async function processClaim(page, row) {
 
   if (memberAvailable && groupNumber) {
     logger.info("Member tab is available and Group No is present. Trying Member search first.");
-    const memberResult = await runMemberProviderSearch(page, row, PROVIDERS);
+    const memberResult = await runMemberProviderSearch(page, row, providerOrder);
     if (memberResult.status === "success") {
       return memberResult;
     }
@@ -84,7 +87,7 @@ async function processClaim(page, row) {
     logger.warn("Member search did not find a matching Service Date + Charges row. Falling back to HIPAA Standard search.");
     let hipaaResult;
     try {
-      hipaaResult = await runHipaaProviderSearch(page, row, PROVIDERS);
+      hipaaResult = await runHipaaProviderSearch(page, row, providerOrder);
     } catch (error) {
       const message = error && error.message ? error.message : String(error);
       if (isRecoverableRowError(message)) {
@@ -126,7 +129,7 @@ async function processClaim(page, row) {
     };
   }
 
-  return runHipaaProviderSearch(page, row, PROVIDERS);
+  return runHipaaProviderSearch(page, row, providerOrder);
 }
 
 module.exports = {

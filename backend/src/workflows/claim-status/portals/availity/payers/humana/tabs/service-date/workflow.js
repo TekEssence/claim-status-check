@@ -29,6 +29,20 @@ function normalizeMemberId(value) {
   return String(value || "").replace(/[^a-z0-9]/gi, "").toUpperCase();
 }
 
+function hasUsableValue(value) {
+  const cleaned = String(value || "").trim();
+  return Boolean(cleaned) && !/^(#N\/?A|N\/?A|NA|NULL|NONE|-|--|NIL)$/i.test(cleaned);
+}
+
+function normalizePatientName(value) {
+  return String(value || "").replace(/[^a-z0-9]/gi, "").toUpperCase();
+}
+
+function normalizePatientNameWithoutInitial(value) {
+  const cleaned = String(value || "").replace(/\s+/g, " ").trim();
+  return normalizePatientName(cleaned.replace(/\b[A-Z]\.?$/i, ""));
+}
+
 async function selectAutocompleteOption(scope, inputLocator, value) {
   await inputLocator.click({ force: true });
   await inputLocator.press(process.platform === "darwin" ? "Meta+A" : "Control+A").catch(() => {});
@@ -277,6 +291,7 @@ async function getHumanaServiceDateRows(page) {
       billedAmount: cellByHeader(normalizedCells, headers, "billed amount"),
       claimNumber: cellByHeader(normalizedCells, headers, "claim number"),
       memberId: cellByAnyHeader(normalizedCells, headers, ["member id", "patient member id"]),
+      patientName: cellByAnyHeader(normalizedCells, headers, ["patient name", "member name", "patient", "member"]),
       finalizedDate: normalizeDateText(finalizedDate),
       finalizedDateValue: parseDateValue(finalizedDate),
       status: normalizeStatus(statusText)
@@ -355,32 +370,68 @@ async function extractHumanaMatchedRow(page, matchedRow, sourceTab) {
   };
 }
 
-async function processHumanaServiceDateResults(page, row, provider, resultSummary) {
+async function processHumanaServiceDateResults(page, row, provider, resultSummary, options = {}) {
   const sourceTab = "Service Dates";
   const resultRows = await getHumanaServiceDateRows(page);
   const inputDate = normalizeDateText(row.data["Service Date"]);
   const inputCharge = normalizeMoney(row.data.Charges);
-  const inputMemberId = normalizeMemberId(row.data["Subscriber No"]);
+  const inputMemberId = hasUsableValue(row.data["Subscriber No"]) ? normalizeMemberId(row.data["Subscriber No"]) : "";
+  const inputPatientName = hasUsableValue(row.data["Patient Name"]) ? normalizePatientName(row.data["Patient Name"]) : "";
+  const inputPatientNameWithoutInitial = hasUsableValue(row.data["Patient Name"]) ? normalizePatientNameWithoutInitial(row.data["Patient Name"]) : "";
+  const shouldMatchMemberId = options.projectId !== "medrevenu" || Boolean(inputMemberId);
+  const shouldMatchPatientName = options.projectId === "medrevenu" && !inputMemberId && Boolean(inputPatientName);
+  let matchLabel = shouldMatchMemberId
+    ? "Service Date + Billed Amount + Member ID"
+    : shouldMatchPatientName
+      ? "Service Date + Billed Amount + Patient Name"
+      : "Service Date + Billed Amount";
 
   resultRows.forEach((result) => {
     logger.info(
-      `Parsed Humana Service Dates row ${result.index + 1}: service_date="${result.serviceDate}", billed="${result.billedAmount}", normalized_billed="${normalizeMoney(result.billedAmount)}", member_id="${result.memberId}", finalized_date="${result.finalizedDate}", claim="${result.claimNumber}", status="${result.status.display}"`
+      `Parsed Humana Service Dates row ${result.index + 1}: service_date="${result.serviceDate}", billed="${result.billedAmount}", normalized_billed="${normalizeMoney(result.billedAmount)}", member_id="${result.memberId}", patient_name="${result.patientName}", finalized_date="${result.finalizedDate}", claim="${result.claimNumber}", status="${result.status.display}"`
     );
   });
 
-  const matchedRows = resultRows.filter((result) => {
+  let matchedRows = resultRows.filter((result) => {
     return result.serviceDate === inputDate
       && normalizeMoney(result.billedAmount) === inputCharge
-      && normalizeMemberId(result.memberId) === inputMemberId;
+      && (!shouldMatchMemberId || normalizeMemberId(result.memberId) === inputMemberId)
+      && (!shouldMatchPatientName || normalizePatientName(result.patientName) === inputPatientName);
   });
-  logger.info(`Matched ${matchedRows.length} Humana Service Dates result row(s) by Service Date + Billed Amount + Member ID`);
+
+  if (matchedRows.length === 0 && options.projectId === "medrevenu" && inputMemberId && inputPatientName) {
+    logger.info("No Humana Service Dates rows matched Medrevenu Member ID. Falling back to Patient Name match.");
+    matchedRows = resultRows.filter((result) => {
+      return result.serviceDate === inputDate
+        && normalizeMoney(result.billedAmount) === inputCharge
+        && normalizePatientName(result.patientName) === inputPatientName;
+    });
+    matchLabel = "Service Date + Billed Amount + Patient Name";
+  }
+
+  if (matchedRows.length === 0 && options.projectId === "medrevenu" && inputPatientNameWithoutInitial) {
+    logger.info("No Humana Service Dates rows matched exact Medrevenu Patient Name. Falling back to Patient Name without trailing initial.");
+    matchedRows = resultRows.filter((result) => {
+      return result.serviceDate === inputDate
+        && normalizeMoney(result.billedAmount) === inputCharge
+        && normalizePatientNameWithoutInitial(result.patientName) === inputPatientNameWithoutInitial;
+    });
+    matchLabel = "Service Date + Billed Amount + Patient Name without initial";
+  }
+
+  logger.info(`Matched ${matchedRows.length} Humana Service Dates result row(s) by ${matchLabel}`);
 
   if (matchedRows.length === 0) {
     const returnedRowsSummary = resultRows.slice(0, 5).map((result, index) => {
-      return `returned row ${index + 1}: service_date=${result.serviceDate || "blank"}, billed=${result.billedAmount || "blank"}, member_id=${result.memberId || "blank"}, finalized_date=${result.finalizedDate || "blank"}, claim=${result.claimNumber || "blank"}, status=${result.status.display || "blank"}`;
+      return `returned row ${index + 1}: service_date=${result.serviceDate || "blank"}, billed=${result.billedAmount || "blank"}, member_id=${result.memberId || "blank"}, patient_name=${result.patientName || "blank"}, finalized_date=${result.finalizedDate || "blank"}, claim=${result.claimNumber || "blank"}, status=${result.status.display || "blank"}`;
     }).join("; ");
     const returnedCount = resultSummary.total ?? (resultRows.length || "unknown");
-    const mismatchReason = `Portal returned ${returnedCount} rows in ${sourceTab} for provider ${provider}, but none matched input Service Date ${row.data["Service Date"]}, Charges ${row.data.Charges}, and Member ID ${row.data["Subscriber No"]}. ${returnedRowsSummary}`;
+    const matchCriteria = matchLabel === "Service Date + Billed Amount + Member ID"
+      ? `Service Date ${row.data["Service Date"]}, Charges ${row.data.Charges}, and Member ID ${row.data["Subscriber No"]}`
+      : matchLabel === "Service Date + Billed Amount + Patient Name" || matchLabel === "Service Date + Billed Amount + Patient Name without initial"
+        ? `Service Date ${row.data["Service Date"]}, Charges ${row.data.Charges}, and Patient Name ${row.data["Patient Name"]}`
+        : `Service Date ${row.data["Service Date"]} and Charges ${row.data.Charges}`;
+    const mismatchReason = `Portal returned ${returnedCount} rows in ${sourceTab} for provider ${provider}, but none matched input ${matchCriteria}. ${returnedRowsSummary}`;
     return {
       status: "failed",
       summaries: [renderFailedSummary(mismatchReason)],
@@ -408,6 +459,7 @@ async function processHumanaServiceDateResults(page, row, provider, resultSummar
   }
 
   const summaries = [];
+  const details = [];
   for (let index = 0; index < selection.selectedRows.length; index += 1) {
     const matchedRow = selection.selectedRows[index];
     const extracted = await extractHumanaMatchedRow(page, matchedRow, sourceTab);
@@ -419,6 +471,7 @@ async function processHumanaServiceDateResults(page, row, provider, resultSummar
       claimNumber: extracted.claimNumber || matchedRow.claimNumber || "",
       claimStatus: extracted.claimStatus || matchedRow.status.display || ""
     };
+    details.push(summaryContext);
     summaries.push(renderClaimSummary(summaryContext));
 
     if (extracted.type !== "unsupported") {
@@ -429,6 +482,7 @@ async function processHumanaServiceDateResults(page, row, provider, resultSummar
   return {
     status: "success",
     summaries: [summaries.join("\n\n")],
+    details,
     matchCount: matchedRows.length,
     provider,
     sourceTab,
@@ -444,11 +498,14 @@ async function searchHumanaServiceDatesWithProvider(page, providerName, rowData)
   await submitServiceDateSearch(page);
 }
 
-async function processClaim(page, row) {
+async function processClaim(page, row, options = {}) {
   logger.info("Using Humana workflow: Service Dates tab only.");
+  const providerOrder = Array.isArray(options.providerOrder) && options.providerOrder.length
+    ? options.providerOrder
+    : PROVIDERS;
 
   let lastProviderFailure = "";
-  for (const provider of PROVIDERS) {
+  for (const provider of providerOrder) {
     await searchHumanaServiceDatesWithProvider(page, provider, row.data);
 
     logger.info(`Waiting up to 5 seconds for ${provider} Humana Service Dates results to settle`);
@@ -470,18 +527,18 @@ async function processClaim(page, row) {
       continue;
     }
 
-    return processHumanaServiceDateResults(page, row, provider, resultSummary);
+    return processHumanaServiceDateResults(page, row, provider, resultSummary, options);
   }
 
   return {
     status: "failed",
     summaries: [renderFailedSummary(lastProviderFailure || "Claim not found in Humana Service Dates tab for matching Service Date, Charges, and Member ID.")],
     matchCount: 0,
-    provider: PROVIDERS.join(", "),
+    provider: providerOrder.join(", "),
     sourceTab: "Service Dates",
     notes: lastProviderFailure
-      ? `Searched Humana Service Dates providers: ${PROVIDERS.join(", ")}. Last provider failure: ${lastProviderFailure}`
-      : `Searched Humana Service Dates providers: ${PROVIDERS.join(", ")}. No matching Service Date + Charges + Member ID found.`
+      ? `Searched Humana Service Dates providers: ${providerOrder.join(", ")}. Last provider failure: ${lastProviderFailure}`
+      : `Searched Humana Service Dates providers: ${providerOrder.join(", ")}. No matching Service Date + Charges + Member ID found.`
   };
 }
 

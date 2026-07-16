@@ -1,8 +1,9 @@
 import path from "node:path";
 import ExcelJS from "exceljs";
+import { applyProjectColumnMapping, normalizeProjectId } from "./project-config";
 import type { AvailityCredentials, AvailityInput, AvailityInputRow } from "./types";
 
-const SUPPORTED_PAYER_PATTERN = /\b(aetna|blue\s*cross|blue\s*shield|bcbs|bcbstx|wellpoint|wellcare|humana)\b/i;
+const SUPPORTED_PAYER_PATTERN = /\b(aetna|anthem|blue\s*cross|blue\s*shield|bcbs|bcbstx|wellpoint|wellcare|humana)\b/i;
 
 function asText(value: unknown): string {
   if (value == null) return "";
@@ -66,8 +67,17 @@ async function readWorkbookRows(buffer: ArrayBuffer): Promise<{ headers: string[
   return { headers: headers.filter(Boolean), rows };
 }
 
-function parseCredentials(rows: Record<string, string>[]): AvailityCredentials {
-  for (const row of rows) {
+function parseCredentials(rows: Record<string, string>[], projectId: string): AvailityCredentials {
+  const hasProjectColumn = rows.some((row) => findValue(row, ["Project", "Project Name", "Project ID"]));
+  const candidateRows = hasProjectColumn
+    ? rows.filter((row) => normalizeProjectId(findValue(row, ["Project", "Project Name", "Project ID"])) === projectId)
+    : rows;
+
+  if (hasProjectColumn && candidateRows.length === 0) {
+    throw new Error(`Missing Availity login details for project "${projectId}". Login Excel Project column must match the selected frontend project.`);
+  }
+
+  for (const row of candidateRows) {
     const rawLoginUrl = findValue(row, ["Link", "URL", "Login URL", "Portal Link", "LOGIN_URL_AVA"]);
     const username = findValue(row, ["Username", "User Name", "User ID", "USERNAME_AVA1"]);
     const password = findValue(row, ["Password", "PASSWORD_AVA1"]);
@@ -85,7 +95,11 @@ function parseCredentials(rows: Record<string, string>[]): AvailityCredentials {
     }
   }
 
-  throw new Error("Missing Availity login details. Login Excel must contain Link, Username, Password, and Secret Key.");
+  throw new Error(
+    hasProjectColumn
+      ? `Missing Availity login details for project "${projectId}". Login Excel must contain Project, Link, Username, Password, and Secret Key.`
+      : "Missing Availity login details. Login Excel must contain Link, Username, Password, and Secret Key."
+  );
 }
 
 function assertSupportedPayers(rows: AvailityInputRow[]): void {
@@ -95,13 +109,14 @@ function assertSupportedPayers(rows: AvailityInputRow[]): void {
 
   if (unsupported.length) {
     const unique = Array.from(new Set(unsupported)).slice(0, 5);
-    throw new Error(`Availity supports only Aetna, Blue Cross Blue Shield, Wellpoint, Wellcare, and Humana. Unsupported payer(s): ${unique.join(", ")}`);
+    throw new Error(`Availity supports only Aetna, Anthem-CA, Blue Cross Blue Shield, Wellpoint, Wellcare, and Humana. Unsupported payer(s): ${unique.join(", ")}`);
   }
 }
 
 export async function parseAvailityInput(formData: FormData): Promise<AvailityInput> {
   const credentialExcel = formData.get("credentialExcel");
   const inputExcel = formData.get("inputExcel");
+  const projectId = normalizeProjectId(formData.get("projectId"));
 
   if (!(credentialExcel instanceof File)) {
     throw new Error("Missing Availity login Excel file.");
@@ -115,7 +130,7 @@ export async function parseAvailityInput(formData: FormData): Promise<AvailityIn
   const inputRows = inputWorkbook.rows.map((data, index) => ({
     input_row_id: index + 1,
     source_row_number: index + 2,
-    data,
+    data: applyProjectColumnMapping(projectId, data),
   }));
 
   if (!inputRows.length) {
@@ -125,7 +140,8 @@ export async function parseAvailityInput(formData: FormData): Promise<AvailityIn
   assertSupportedPayers(inputRows);
 
   return {
-    credentials: parseCredentials(credentialRows.rows),
+    credentials: parseCredentials(credentialRows.rows, projectId),
+    projectId,
     inputHeaders: inputWorkbook.headers,
     inputRows,
     claimFileName: inputExcel.name || "availity_claims.xlsx",

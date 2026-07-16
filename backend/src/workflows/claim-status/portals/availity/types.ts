@@ -14,9 +14,17 @@ export type AvailityInputRow = {
 
 export type AvailityInput = {
   credentials: AvailityCredentials;
+  projectId: string;
   inputHeaders: string[];
   inputRows: AvailityInputRow[];
   claimFileName: string;
+};
+
+export type AvailityProviderMapping = {
+  project: string;
+  group: string;
+  providerName: string;
+  active: boolean;
 };
 
 export type AvailityOutputRow = Record<string, string | number>;

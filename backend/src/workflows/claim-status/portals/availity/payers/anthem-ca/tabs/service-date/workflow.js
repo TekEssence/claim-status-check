@@ -9,16 +9,15 @@ const { renderClaimSummary, renderFailedSummary } = require("../../../../legacy/
 const { normalizeStatus } = require("../../../../legacy/services/status-normalizer");
 const {
   extractInProcess,
-  extractWellcareDenied,
-  extractWellcarePaid,
+  extractWellcareDenied: extractAnthemCaDenied,
+  extractWellcarePaid: extractAnthemCaPaid,
   returnToResults,
   waitForClaimDetailPage
 } = require("../../../../legacy/pages/claim-detail.page");
 
 const SELECTORS = {
   serviceDateTab: "button[role='tab']:has-text('Service Dates'), a[role='button']:has-text('Service Dates')",
-  providerNpiRadio: "input[name='providerIdentifier'][value='npi']",
-  providerNpi: "input#providerNpi[name='providerNpi']",
+  providerTaxId: "input#providerTaxId",
   searchButton: "button#submit-byServiceDates[type='submit']",
   searchResultsHeading: "h5:has-text('Search Results')",
   tableRows: "tbody tr",
@@ -43,6 +42,14 @@ function normalizePatientNameWithoutInitial(value) {
   return normalizePatientName(cleaned.replace(/\b[A-Z]\.?$/i, ""));
 }
 
+function extractProviderTaxId(providerText) {
+  const parts = String(providerText || "")
+    .split(/\s+-\s+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  return parts.reverse().find((part) => /^\d{9}$/.test(part)) || "";
+}
+
 async function selectAutocompleteOption(scope, inputLocator, value) {
   await inputLocator.click({ force: true });
   await inputLocator.press(process.platform === "darwin" ? "Meta+A" : "Control+A").catch(() => {});
@@ -58,9 +65,39 @@ async function selectAutocompleteOption(scope, inputLocator, value) {
   }
 }
 
+async function fillProviderTaxId(frame, taxId) {
+  if (!taxId) {
+    throw new Error("Anthem-CA provider Tax ID could not be extracted from selected provider value.");
+  }
+
+  const taxIdInput = frame.locator(SELECTORS.providerTaxId).first();
+  await taxIdInput.waitFor({ state: "visible", timeout: 10000 });
+  await taxIdInput.click({ force: true });
+  await taxIdInput.press(process.platform === "darwin" ? "Meta+A" : "Control+A").catch(() => {});
+  await taxIdInput.press("Backspace").catch(() => {});
+  await taxIdInput.fill(taxId);
+  await humanDelay(400, 800);
+
+  const exactOption = frame.getByText(taxId, { exact: true }).last();
+  if (await exactOption.isVisible({ timeout: 2000 }).catch(() => false)) {
+    await exactOption.click();
+  } else {
+    await taxIdInput.press("Enter").catch(() => {});
+  }
+
+  await frame.waitForFunction(
+    (expectedTaxId) => {
+      const input = document.querySelector("input#providerTaxId");
+      return input && input.value && input.value.trim() === expectedTaxId;
+    },
+    taxId,
+    { timeout: 5000 }
+  );
+}
+
 async function selectServiceDateTab(page) {
   await withRetry(
-    "Selecting Wellcare Service Dates tab",
+    "Selecting Anthem-CA Service Dates tab",
     async () => {
       const frame = await getClaimStatusFrame(page);
       const tab = frame.locator(SELECTORS.serviceDateTab).first();
@@ -74,7 +111,7 @@ async function selectServiceDateTab(page) {
 
 async function selectProvider(page, providerName) {
   await withRetry(
-    `Selecting Wellcare provider ${providerName}`,
+    `Selecting Anthem-CA provider ${providerName}`,
     async () => {
       const frame = await getClaimStatusFrame(page);
       const providerLabel = frame.getByText("Select a Provider", { exact: true }).first();
@@ -82,24 +119,10 @@ async function selectProvider(page, providerName) {
       await providerInput.waitFor({ state: "visible", timeout: 15000 });
       await selectAutocompleteOption(frame, providerInput, providerName);
 
-      const npiRadio = frame.locator(SELECTORS.providerNpiRadio).first();
-      if (await npiRadio.isVisible({ timeout: 3000 }).catch(() => false)) {
-        const isChecked = await npiRadio.isChecked({ timeout: 500 }).catch(() => false);
-        if (!isChecked) {
-          await npiRadio.setChecked(true, { force: true }).catch(async () => {
-            await frame.getByText("Provider NPI", { exact: true }).click({ force: true });
-          });
-        }
-      }
-
-      await frame.waitForFunction(
-        () => {
-          const input = document.querySelector("input#providerNpi[name='providerNpi']");
-          return input && input.value && input.value.trim().length > 0;
-        },
-        null,
-        { timeout: 10000 }
-      );
+      const selectedProviderText = await providerInput.inputValue({ timeout: 3000 }).catch(() => providerName);
+      const providerTaxId = extractProviderTaxId(selectedProviderText || providerName);
+      logger.info(`Anthem-CA provider Tax ID extracted as "${providerTaxId || "blank"}" from provider value "${selectedProviderText || providerName}".`);
+      await fillProviderTaxId(frame, providerTaxId);
     },
     { retries: 2, retryDelayMs: 1200 }
   );
@@ -206,7 +229,7 @@ async function submitServiceDateSearch(page) {
   }
 
   await withRetry(
-    "Submitting Wellcare Service Dates search",
+    "Submitting Anthem-CA Service Dates search",
     async () => {
       for (let attempt = 1; attempt <= 3; attempt += 1) {
         const frame = await getClaimStatusFrame(page);
@@ -214,20 +237,20 @@ async function submitServiceDateSearch(page) {
         await searchButton.waitFor({ state: "visible", timeout: 15000 });
         await searchButton.scrollIntoViewIfNeeded().catch(() => {});
         await searchButton.click({ force: attempt > 1 });
-        logger.info(`Wellcare Service Dates Search clicked (attempt ${attempt}/3). Waiting for portal response.`);
+        logger.info(`Anthem-CA Service Dates Search clicked (attempt ${attempt}/3). Waiting for portal response.`);
         await humanDelay(1500, 2500);
 
         if (await resultIndicatorAppeared(5000)) {
-          logger.info(`Wellcare Service Dates search response appeared after submit attempt ${attempt}.`);
+          logger.info(`Anthem-CA Service Dates search response appeared after submit attempt ${attempt}.`);
           return;
         }
 
         if (attempt < 3) {
-          logger.warn(`Wellcare Service Dates search results did not appear within 5 seconds after submit attempt ${attempt}. Re-clicking Search.`);
+          logger.warn(`Anthem-CA Service Dates search results did not appear within 5 seconds after submit attempt ${attempt}. Re-clicking Search.`);
         }
       }
 
-      throw new Error("Wellcare Service Dates Search did not produce results, no-results message, or validation response after 3 attempts.");
+      throw new Error("Anthem-CA Service Dates Search did not produce results, no-results message, or validation response after 3 attempts.");
     },
     { retries: 1, retryDelayMs: 1200 }
   );
@@ -266,7 +289,7 @@ function parseDateValue(value) {
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
-async function getWellcareServiceDateRows(page) {
+async function getAnthemCaServiceDateRows(page) {
   const frame = await getClaimStatusFrame(page);
   const headers = await readColumnHeaders(frame);
   const rows = frame.locator(SELECTORS.tableRows);
@@ -301,7 +324,7 @@ async function getWellcareServiceDateRows(page) {
   return results;
 }
 
-function selectWellcareMatchedRows(matchedRows, sourceTab) {
+function selectAnthemCaMatchedRows(matchedRows, sourceTab) {
   if (matchedRows.length <= 1) {
     return {
       selectedRows: matchedRows[0] ? [matchedRows[0]] : [],
@@ -326,9 +349,9 @@ function selectWellcareMatchedRows(matchedRows, sourceTab) {
   };
 }
 
-async function extractWellcareMatchedRow(page, matchedRow, sourceTab) {
+async function extractAnthemCaMatchedRow(page, matchedRow, sourceTab) {
   logger.info(
-    `Preparing to extract Wellcare matched row: claim="${matchedRow.claimNumber}", status="${matchedRow.status.display}", service_date="${matchedRow.serviceDate}", billed="${matchedRow.billedAmount}", member_id="${matchedRow.memberId}"`
+    `Preparing to extract Anthem-CA matched row: claim="${matchedRow.claimNumber}", status="${matchedRow.status.display}", service_date="${matchedRow.serviceDate}", billed="${matchedRow.billedAmount}", member_id="${matchedRow.memberId}"`
   );
 
   if (matchedRow.status.type === "unsupported") {
@@ -340,10 +363,10 @@ async function extractWellcareMatchedRow(page, matchedRow, sourceTab) {
   }
 
   await matchedRow.row.click();
-  logger.info(`Clicked Wellcare matched result row for claim ${matchedRow.claimNumber}. Waiting for detail page.`);
+  logger.info(`Clicked Anthem-CA matched result row for claim ${matchedRow.claimNumber}. Waiting for detail page.`);
   await page.waitForLoadState("domcontentloaded").catch(() => {});
   await waitForClaimDetailPage(page);
-  logger.success(`Wellcare detail page loaded for claim ${matchedRow.claimNumber}`);
+  logger.success(`Anthem-CA detail page loaded for claim ${matchedRow.claimNumber}`);
 
   if (matchedRow.status.type === "in_process") {
     const extracted = await extractInProcess(page, matchedRow.status.display);
@@ -352,13 +375,13 @@ async function extractWellcareMatchedRow(page, matchedRow, sourceTab) {
   }
 
   if (matchedRow.status.type === "paid") {
-    const extracted = await extractWellcarePaid(page, matchedRow.status.display);
+    const extracted = await extractAnthemCaPaid(page, matchedRow.status.display);
     extracted.claimNumber = extracted.claimNumber || matchedRow.claimNumber;
     return extracted;
   }
 
   if (matchedRow.status.type === "denied") {
-    const extracted = await extractWellcareDenied(page, matchedRow.status.display);
+    const extracted = await extractAnthemCaDenied(page, matchedRow.status.display);
     extracted.claimNumber = extracted.claimNumber || matchedRow.claimNumber;
     return extracted;
   }
@@ -370,9 +393,9 @@ async function extractWellcareMatchedRow(page, matchedRow, sourceTab) {
   };
 }
 
-async function processWellcareServiceDateResults(page, row, provider, resultSummary, options = {}) {
+async function processAnthemCaServiceDateResults(page, row, provider, resultSummary, options = {}) {
   const sourceTab = "Service Dates";
-  const resultRows = await getWellcareServiceDateRows(page);
+  const resultRows = await getAnthemCaServiceDateRows(page);
   const inputDate = normalizeDateText(row.data["Service Date"]);
   const inputCharge = normalizeMoney(row.data.Charges);
   const inputMemberId = hasUsableValue(row.data["Subscriber No"]) ? normalizeMemberId(row.data["Subscriber No"]) : "";
@@ -388,7 +411,7 @@ async function processWellcareServiceDateResults(page, row, provider, resultSumm
 
   resultRows.forEach((result) => {
     logger.info(
-      `Parsed Wellcare Service Dates row ${result.index + 1}: service_date="${result.serviceDate}", billed="${result.billedAmount}", normalized_billed="${normalizeMoney(result.billedAmount)}", member_id="${result.memberId}", patient_name="${result.patientName}", finalized_date="${result.finalizedDate}", claim="${result.claimNumber}", status="${result.status.display}"`
+      `Parsed Anthem-CA Service Dates row ${result.index + 1}: service_date="${result.serviceDate}", billed="${result.billedAmount}", normalized_billed="${normalizeMoney(result.billedAmount)}", member_id="${result.memberId}", patient_name="${result.patientName}", finalized_date="${result.finalizedDate}", claim="${result.claimNumber}", status="${result.status.display}"`
     );
   });
 
@@ -400,7 +423,7 @@ async function processWellcareServiceDateResults(page, row, provider, resultSumm
   });
 
   if (matchedRows.length === 0 && options.projectId === "medrevenu" && inputMemberId && inputPatientName) {
-    logger.info("No Wellcare Service Dates rows matched Medrevenu Member ID. Falling back to Patient Name match.");
+    logger.info("No Anthem-CA Service Dates rows matched Medrevenu Member ID. Falling back to Patient Name match.");
     matchedRows = resultRows.filter((result) => {
       return result.serviceDate === inputDate
         && normalizeMoney(result.billedAmount) === inputCharge
@@ -410,7 +433,7 @@ async function processWellcareServiceDateResults(page, row, provider, resultSumm
   }
 
   if (matchedRows.length === 0 && options.projectId === "medrevenu" && inputPatientNameWithoutInitial) {
-    logger.info("No Wellcare Service Dates rows matched exact Medrevenu Patient Name. Falling back to Patient Name without trailing initial.");
+    logger.info("No Anthem-CA Service Dates rows matched exact Medrevenu Patient Name. Falling back to Patient Name without trailing initial.");
     matchedRows = resultRows.filter((result) => {
       return result.serviceDate === inputDate
         && normalizeMoney(result.billedAmount) === inputCharge
@@ -419,7 +442,7 @@ async function processWellcareServiceDateResults(page, row, provider, resultSumm
     matchLabel = "Service Date + Billed Amount + Patient Name without initial";
   }
 
-  logger.info(`Matched ${matchedRows.length} Wellcare Service Dates result row(s) by ${matchLabel}`);
+  logger.info(`Matched ${matchedRows.length} Anthem-CA Service Dates result row(s) by ${matchLabel}`);
 
   if (matchedRows.length === 0) {
     const returnedRowsSummary = resultRows.slice(0, 5).map((result, index) => {
@@ -442,7 +465,7 @@ async function processWellcareServiceDateResults(page, row, provider, resultSumm
     };
   }
 
-  const selection = selectWellcareMatchedRows(matchedRows, sourceTab);
+  const selection = selectAnthemCaMatchedRows(matchedRows, sourceTab);
   if (selection.notes) {
     logger.info(selection.notes);
   }
@@ -462,7 +485,7 @@ async function processWellcareServiceDateResults(page, row, provider, resultSumm
   const details = [];
   for (let index = 0; index < selection.selectedRows.length; index += 1) {
     const matchedRow = selection.selectedRows[index];
-    const extracted = await extractWellcareMatchedRow(page, matchedRow, sourceTab);
+    const extracted = await extractAnthemCaMatchedRow(page, matchedRow, sourceTab);
     const summaryContext = {
       ...extracted,
       payerName: row.data["Payer Name"] || "",
@@ -490,8 +513,8 @@ async function processWellcareServiceDateResults(page, row, provider, resultSumm
   };
 }
 
-async function searchWellcareServiceDatesWithProvider(page, providerName, rowData) {
-  logger.info(`Wellcare Service Dates provider attempt: ${providerName}`);
+async function searchAnthemCaServiceDatesWithProvider(page, providerName, rowData) {
+  logger.info(`Anthem-CA Service Dates provider attempt: ${providerName}`);
   await selectServiceDateTab(page);
   await selectProvider(page, providerName);
   await fillServiceDateSearchForm(page, rowData);
@@ -499,50 +522,52 @@ async function searchWellcareServiceDatesWithProvider(page, providerName, rowDat
 }
 
 async function processClaim(page, row, options = {}) {
-  logger.info("Using Wellcare workflow: Service Dates tab only.");
+  logger.info("Using Anthem-CA workflow: Service Dates tab only.");
   const providerOrder = Array.isArray(options.providerOrder) && options.providerOrder.length
     ? options.providerOrder
     : PROVIDERS;
 
   let lastProviderFailure = "";
   for (const provider of providerOrder) {
-    await searchWellcareServiceDatesWithProvider(page, provider, row.data);
+    await searchAnthemCaServiceDatesWithProvider(page, provider, row.data);
 
-    logger.info(`Waiting up to 5 seconds for ${provider} Wellcare Service Dates results to settle`);
+    logger.info(`Waiting up to 5 seconds for ${provider} Anthem-CA Service Dates results to settle`);
     const resultSummary = await waitForSearchResultsToSettle(page, 5000);
     logger.info(
-      `Wellcare Service Dates provider ${provider} result summary: heading="${resultSummary.headingText || "not found"}", total=${resultSummary.total ?? "unknown"}, rows=${resultSummary.resultRowCount ?? "unknown"}, no_results_message=${resultSummary.noResultsMessageVisible}, alert="${resultSummary.portalAlertMessage || ""}"`
+      `Anthem-CA Service Dates provider ${provider} result summary: heading="${resultSummary.headingText || "not found"}", total=${resultSummary.total ?? "unknown"}, rows=${resultSummary.resultRowCount ?? "unknown"}, no_results_message=${resultSummary.noResultsMessageVisible}, alert="${resultSummary.portalAlertMessage || ""}"`
     );
 
-    const resultRows = await getWellcareServiceDateRows(page);
+    const resultRows = await getAnthemCaServiceDateRows(page);
     if (resultSummary.hasPortalAlert && resultRows.length === 0) {
-      logger.warn(`Wellcare Service Dates provider ${provider} returned portal alert without claim rows: ${resultSummary.portalAlertMessage}`);
+      logger.warn(`Anthem-CA Service Dates provider ${provider} returned portal alert without claim rows: ${resultSummary.portalAlertMessage}`);
       lastProviderFailure = `Provider ${provider}: ${resultSummary.portalAlertMessage}`;
       continue;
     }
 
     if (resultRows.length === 0) {
-      logger.warn(`Wellcare Service Dates provider ${provider} returned no claim rows. Trying next provider if available.`);
+      logger.warn(`Anthem-CA Service Dates provider ${provider} returned no claim rows. Trying next provider if available.`);
       lastProviderFailure = `Provider ${provider}: no claim rows returned.`;
       continue;
     }
 
-    return processWellcareServiceDateResults(page, row, provider, resultSummary, options);
+    return processAnthemCaServiceDateResults(page, row, provider, resultSummary, options);
   }
 
   return {
     status: "failed",
-    summaries: [renderFailedSummary(lastProviderFailure || "Claim not found in Wellcare Service Dates tab for matching Service Date, Charges, and Member ID.")],
+    summaries: [renderFailedSummary(lastProviderFailure || "Claim not found in Anthem-CA Service Dates tab for matching Service Date, Charges, and Member ID.")],
     matchCount: 0,
     provider: providerOrder.join(", "),
     sourceTab: "Service Dates",
     notes: lastProviderFailure
-      ? `Searched Wellcare Service Dates providers: ${providerOrder.join(", ")}. Last provider failure: ${lastProviderFailure}`
-      : `Searched Wellcare Service Dates providers: ${providerOrder.join(", ")}. No matching Service Date + Charges + Member ID found.`
+      ? `Searched Anthem-CA Service Dates providers: ${providerOrder.join(", ")}. Last provider failure: ${lastProviderFailure}`
+      : `Searched Anthem-CA Service Dates providers: ${providerOrder.join(", ")}. No matching Service Date + Charges + Member ID found.`
   };
 }
 
 module.exports = {
-  name: "wellcare",
+  name: "anthem-ca",
   processClaim
 };
+
+
