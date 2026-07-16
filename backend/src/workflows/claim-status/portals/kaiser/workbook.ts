@@ -29,8 +29,8 @@ export type KaiserOutputRow = {
   patientTotal: string;
   netPayable: string;
   claimCodeDescriptionTable: string;
-  claimLevelCodes: string;
-  serviceLevelDescription: string;
+  denialCode: string;
+  denialDate: string;
   denialSource: string;
   finalStatus: string;
 };
@@ -83,8 +83,8 @@ const outputColumns: Array<ColumnDef<Omit<KaiserOutputRow, "inputData">>> = [
   { key: "patientTotal", header: "Patient Total", width: 14 },
   { key: "netPayable", header: "Net Payable", width: 14 },
   { key: "claimCodeDescriptionTable", header: "Claim Code Description Table", width: 80 },
-  { key: "claimLevelCodes", header: "Claim-Level Codes", width: 36 },
-  { key: "serviceLevelDescription", header: "Service-Level Description", width: 70 },
+  { key: "denialCode", header: "Denial Code", width: 70 },
+  { key: "denialDate", header: "Denial Date", width: 18 },
   { key: "denialSource", header: "Denial Source", width: 18 },
   { key: "finalStatus", header: "Final Status", width: 90 },
 ];

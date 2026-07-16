@@ -49,8 +49,14 @@ type ClaimDetails = {
   paymentAmount: string;
   claimCodeDescriptionTable: string;
   claimCodeDescriptions: Record<string, string>;
-  claimLevelCodes: string;
+  // Claim-Level and Service-Level each render as their own "Description | Date" table on the
+  // Kaiser Claim Codes widget. These are kept as separate description/date pairs (rather than
+  // the previous single blobbed-together string) so the denial reason and its date can be used
+  // independently - e.g. in the Denial Code / Denial Date output columns.
+  claimLevelDescription: string;
+  claimLevelDate: string;
   serviceLevelDescription: string;
+  serviceLevelDate: string;
   services: ServiceLine[];
 };
 
@@ -92,27 +98,17 @@ function moneyToNumber(value: string): number {
   return Number.isFinite(amount) ? amount : 0;
 }
 
-function splitClaimCodes(value: string): string[] {
-  return value
-    .split(/[,\s/]+/)
-    .map((code) => code.trim().toUpperCase())
-    .filter(Boolean);
-}
-
 function serviceCodeFromText(value: string): string {
   return extractCptFromServiceText(value);
 }
 
-function claimCodeDescriptionsForService(details: ClaimDetails, service: ServiceLine): string {
-  if (moneyToNumber(service.netPayable) > 0) return "";
-  const descriptions = splitClaimCodes(service.claimCodes)
-    .map((code) => details.claimCodeDescriptions[code])
-    .filter(Boolean);
-  return descriptions.join("; ");
-}
-
 function isServiceUnpaid(service: ServiceLine): boolean {
   return moneyToNumber(service.netPayable) <= 0;
+}
+
+function claimLevelDenialForService(details: ClaimDetails, service: ServiceLine): string {
+  if (!isServiceUnpaid(service)) return "";
+  return cleanText(details.claimLevelDescription);
 }
 
 function serviceLevelDenialForService(details: ClaimDetails, service: ServiceLine): string {
@@ -128,25 +124,23 @@ function serviceLevelDenialForService(details: ClaimDetails, service: ServiceLin
   return text;
 }
 
-function claimLevelAppliesToService(details: ClaimDetails, service: ServiceLine): boolean {
-  if (!details.claimLevelCodes.trim()) return false;
-  return isServiceUnpaid(service);
-}
+// Kaiser's Claim Codes widget puts a denial reason under exactly one of two sections:
+// - Claim-Level: the whole date-of-service claim was denied (every CPT line on it).
+// - Service-Level: only some of the claim's CPT lines were denied; others were paid.
+// Whichever section actually has content is the real denial reason for any unpaid line on that
+// claim - the Claim Code Description Table (CD/CEI04 etc.) is a separate, generic code glossary
+// and is intentionally NOT used to build this denial reason; it is still surfaced on its own via
+// the claimCodeDescriptionTable column for reference.
+function serviceSpecificDenial(details: ClaimDetails, service: ServiceLine): { text: string; source: string; date: string } {
+  if (moneyToNumber(service.netPayable) > 0) return { text: "", source: "", date: "" };
 
-function serviceSpecificDenial(details: ClaimDetails, service: ServiceLine): { text: string; source: string } {
-  if (moneyToNumber(service.netPayable) > 0) return { text: "", source: "" };
+  const claimLevel = claimLevelDenialForService(details, service);
+  if (claimLevel) return { text: claimLevel, source: "Claim-Level", date: cleanText(details.claimLevelDate) };
 
   const serviceLevel = serviceLevelDenialForService(details, service);
-  if (serviceLevel) return { text: serviceLevel, source: "Service-Level" };
+  if (serviceLevel) return { text: serviceLevel, source: "Service-Level", date: cleanText(details.serviceLevelDate) };
 
-  const codeDescriptions = claimCodeDescriptionsForService(details, service);
-  if (codeDescriptions) return { text: codeDescriptions, source: "Claim Codes" };
-
-  if (claimLevelAppliesToService(details, service)) {
-    return { text: cleanText(details.claimLevelCodes), source: "Claim-Level" };
-  }
-
-  return { text: "", source: "" };
+  return { text: "", source: "", date: "" };
 }
 
 function dateRangeForDos(dos: string): { fromDate: string; toDate: string } {
@@ -264,8 +258,8 @@ function baseOutputRow(inputRow: KaiserInputRow, botStatus: string, botMessage: 
     patientTotal: "",
     netPayable: "",
     claimCodeDescriptionTable: "",
-    claimLevelCodes: "",
-    serviceLevelDescription: "",
+    denialCode: "",
+    denialDate: "",
     denialSource: "",
     finalStatus: botMessage,
   };
@@ -276,9 +270,10 @@ function outputRowFromClaim(inputRow: KaiserInputRow, details: ClaimDetails, ser
   const paymentText = details.checkEft
     ? ` EFT/Check # ${details.checkEft}`
     : "";
+  const denialDateText = serviceDenial.date ? ` (${serviceDenial.date})` : "";
   const statusText = moneyToNumber(service.netPayable) > 0
     ? `DOS ${inputRow.dos}: Kaiser claim ${details.claimNumber} ${details.status || "found"} paid amount ${service.netPayable || details.paymentAmount}.${paymentText}`
-    : `DOS ${inputRow.dos}: Kaiser claim ${details.claimNumber} ${details.status || "found"} matched CPT ${inputRow.cptCode} with net payable ${service.netPayable || "0.00"}. ${serviceDenial.text || service.claimCodes || "No denial reason found."}`;
+    : `DOS ${inputRow.dos}: Kaiser claim ${details.claimNumber} ${details.status || "found"} matched CPT ${inputRow.cptCode} with net payable ${service.netPayable || "0.00"}. ${serviceDenial.text || service.claimCodes || "No denial reason found."}${denialDateText}`;
 
   return {
     ...baseOutputRow(inputRow, "Success", "Claim found."),
@@ -303,8 +298,8 @@ function outputRowFromClaim(inputRow: KaiserInputRow, details: ClaimDetails, ser
     patientTotal: service.patientTotal,
     netPayable: service.netPayable,
     claimCodeDescriptionTable: isServiceUnpaid(service) ? details.claimCodeDescriptionTable : "",
-    claimLevelCodes: isServiceUnpaid(service) ? details.claimLevelCodes : "",
-    serviceLevelDescription: serviceDenial.text,
+    denialCode: serviceDenial.text,
+    denialDate: serviceDenial.date,
     denialSource: serviceDenial.source,
     finalStatus: cleanText(statusText),
   };
@@ -1284,8 +1279,10 @@ function emptyClaimDetails(claimNumber: string): ClaimDetails {
     paymentAmount: "",
     claimCodeDescriptionTable: "",
     claimCodeDescriptions: {},
-    claimLevelCodes: "",
+    claimLevelDescription: "",
+    claimLevelDate: "",
     serviceLevelDescription: "",
+    serviceLevelDate: "",
     services: [],
   };
 }
@@ -1296,7 +1293,7 @@ function hasRealClaimDetails(details: ClaimDetails): boolean {
     || Boolean(details.checkEft.trim())
     || Boolean(details.paymentDate.trim())
     || Boolean(details.paymentAmount.trim())
-    || Boolean(details.claimLevelCodes.trim())
+    || Boolean(details.claimLevelDescription.trim())
     || Boolean(details.serviceLevelDescription.trim());
 }
 
@@ -1309,8 +1306,10 @@ function mergeClaimDetails(base: ClaimDetails, next: ClaimDetails): ClaimDetails
     paymentAmount: base.paymentAmount || next.paymentAmount,
     claimCodeDescriptionTable: base.claimCodeDescriptionTable || next.claimCodeDescriptionTable,
     claimCodeDescriptions: { ...next.claimCodeDescriptions, ...base.claimCodeDescriptions },
-    claimLevelCodes: base.claimLevelCodes || next.claimLevelCodes,
+    claimLevelDescription: base.claimLevelDescription || next.claimLevelDescription,
+    claimLevelDate: base.claimLevelDate || next.claimLevelDate,
     serviceLevelDescription: base.serviceLevelDescription || next.serviceLevelDescription,
+    serviceLevelDate: base.serviceLevelDate || next.serviceLevelDate,
     services: base.services.length >= next.services.length ? base.services : next.services,
   };
 }
@@ -1495,6 +1494,39 @@ async function extractClaimDetailsOnce(
         }
         return [];
       }
+      // Claim-Level and Service-Level denial tables render as an (icon, Description, Date)
+      // table - "Description" and "Date" are the only real column headers, the leading icon
+      // column is unlabeled. Reading this row-by-row (instead of taking the whole section's
+      // innerText, which mashes the "Description"/"Date" header words together with the actual
+      // denial text and date with no separator) is what makes it possible to use the denial
+      // description and its date as clean, independent values.
+      function descriptionDateRows(section: Element | null): Array<{ description: string; date: string }> {
+        if (!section) return [];
+        for (const table of Array.from(section.querySelectorAll("table")).filter(visible)) {
+          const rows = Array.from(table.querySelectorAll("tr"))
+            .filter((tr) => tr.closest("table") === table)
+            .filter(visible)
+            .map(directCells)
+            .filter((row) => row.some(Boolean));
+          const headerIndex = rows.findIndex((row) => {
+            const headers = row.map(normalizeHeader);
+            return headers.includes("description") && headers.includes("date");
+          });
+          if (headerIndex < 0) continue;
+          const headerRow = rows[headerIndex].map(normalizeHeader);
+          const descIndex = headerRow.indexOf("description");
+          const dateIndex = headerRow.indexOf("date");
+          const results: Array<{ description: string; date: string }> = [];
+          for (const row of rows.slice(headerIndex + 1)) {
+            const description = (row[descIndex] || "").trim();
+            const date = (row[dateIndex] || "").trim();
+            if (!description && !date) continue;
+            results.push({ description, date });
+          }
+          if (results.length) return results;
+        }
+        return [];
+      }
 
       const bodyText = text(document.body);
       const statusMatch = bodyText.match(/Status\s+(Approved|Denied|Pending|In Process|Processed|Rejected)/i);
@@ -1550,8 +1582,19 @@ async function extractClaimDetailsOnce(
           }
         }
       }
-      const claimLevelText = sectionText(/Claim-Level/i).replace(/^Claim-Level\s*/i, "") || "";
-      const serviceLevelText = sectionText(/Service-Level/i).replace(/^Service-Level\s*/i, "") || "";
+      const claimLevelRows = descriptionDateRows(findSectionByPattern(/Claim-Level/i));
+      const claimLevelDescription = claimLevelRows.map((row) => row.description).filter(Boolean).join("; ");
+      const claimLevelDate = claimLevelRows.map((row) => row.date).filter(Boolean).join("; ");
+
+      const serviceLevelRows = descriptionDateRows(findSectionByPattern(/Service-Level/i));
+      // The Service-Level section only renders its Description/Date table when it actually has
+      // codes; otherwise it just shows plain text like "No service-level claim codes." Fall back
+      // to that section's plain text (still needed so callers can recognize the "none" case) only
+      // when no structured Description/Date rows were found.
+      const serviceLevelDescription = serviceLevelRows.length
+        ? serviceLevelRows.map((row) => row.description).filter(Boolean).join("; ")
+        : sectionText(/Service-Level/i).replace(/^Service-Level\s*/i, "") || "";
+      const serviceLevelDate = serviceLevelRows.map((row) => row.date).filter(Boolean).join("; ");
 
       return {
         frameUrl: window.location.href,
@@ -1562,13 +1605,15 @@ async function extractClaimDetailsOnce(
         paymentAmount: paymentCells[2] || (totalPaymentMatch?.[1] ? `$${totalPaymentMatch[1]}` : ""),
         claimCodeDescriptionTable: codeDescriptionRows.join("\n"),
         claimCodeDescriptions,
-        claimLevelCodes: claimLevelText,
-        serviceLevelDescription: serviceLevelText,
+        claimLevelDescription,
+        claimLevelDate,
+        serviceLevelDescription,
+        serviceLevelDate,
         services,
         servicesSectionFound: serviceResult.sectionFound,
         servicesTableFound: serviceResult.tableFound,
-        claimLevelFound: Boolean(claimLevelText.trim()),
-        serviceLevelFound: Boolean(serviceLevelText.trim()),
+        claimLevelFound: Boolean(claimLevelDescription.trim()),
+        serviceLevelFound: Boolean(serviceLevelDescription.trim()) && !/no service-level claim codes/i.test(serviceLevelDescription),
         diagnostics: {
           frameUrl: window.location.href,
           servicesSectionFound: serviceResult.sectionFound,
@@ -1596,8 +1641,10 @@ async function extractClaimDetailsOnce(
       paymentAmount: extracted.paymentAmount,
       claimCodeDescriptionTable: extracted.claimCodeDescriptionTable,
       claimCodeDescriptions: extracted.claimCodeDescriptions,
-      claimLevelCodes: extracted.claimLevelCodes,
+      claimLevelDescription: extracted.claimLevelDescription,
+      claimLevelDate: extracted.claimLevelDate,
       serviceLevelDescription: extracted.serviceLevelDescription,
+      serviceLevelDate: extracted.serviceLevelDate,
       services: extracted.services,
     };
     if (hasRealClaimDetails(frameDetails)) merged = mergeClaimDetails(merged, frameDetails);
