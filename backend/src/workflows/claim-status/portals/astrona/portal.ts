@@ -240,42 +240,53 @@ function astronaClaimLinks(page: Page) {
 
 async function scrollAstronaResults(page: Page, visit: () => Promise<boolean | void>): Promise<void> {
   // The claims grid may be inside a modal-sized overflow container and may
-  // virtualize its rows. Visit every scroll position rather than assuming all
-  // result rows are simultaneously present in the DOM.
+  // virtualize/lazily-load its rows as you scroll — scrollHeight can grow
+  // *after* scrolling starts. Do not budget a fixed number of scroll steps
+  // up front; keep scrolling while position or height is still changing.
   const search = page.locator("#memberIdSearch");
   await search.scrollIntoViewIfNeeded().catch(() => {});
   const scrollables = page.locator("body");
-  const positions = await scrollables.evaluate(() => {
+
+  await scrollables.evaluate(() => {
     const all = [document.scrollingElement, ...Array.from(document.querySelectorAll("*"))]
       .filter((element): element is HTMLElement => element instanceof HTMLElement)
       .filter((element) => element.scrollHeight > element.clientHeight + 8)
       .sort((left, right) => right.scrollHeight - left.scrollHeight)
       .slice(0, 8);
     for (const element of all) element.scrollTop = 0;
-    return all.map((element) => ({ height: element.scrollHeight, viewport: element.clientHeight }));
   });
 
   await settle(page, 250);
   if (await visit()) return;
-  const steps = Math.max(1, ...positions.map(({ height, viewport }) => Math.ceil(height / Math.max(viewport * 0.7, 200))));
-  for (let step = 1; step <= Math.min(steps + 3, 60); step += 1) {
-    const moved = await scrollables.evaluate((_, currentStep) => {
+
+  let stableRounds = 0;
+  const maxSteps = 200;
+  for (let step = 1; step <= maxSteps; step += 1) {
+    const { moved, grew } = await scrollables.evaluate(() => {
       const all = [document.scrollingElement, ...Array.from(document.querySelectorAll("*"))]
         .filter((element): element is HTMLElement => element instanceof HTMLElement)
         .filter((element) => element.scrollHeight > element.clientHeight + 8)
         .sort((left, right) => right.scrollHeight - left.scrollHeight)
         .slice(0, 8);
       let changed = false;
+      let grew = false;
       for (const element of all) {
-        const before = element.scrollTop;
-        element.scrollTop = Math.min(element.scrollHeight, currentStep * Math.max(element.clientHeight * 0.7, 200));
-        if (Math.abs(element.scrollTop - before) > 1) changed = true;
+        const beforeTop = element.scrollTop;
+        const beforeHeight = element.scrollHeight;
+        element.scrollTop = Math.min(element.scrollHeight, element.scrollTop + Math.max(element.clientHeight * 0.7, 200));
+        if (Math.abs(element.scrollTop - beforeTop) > 1) changed = true;
+        if (element.scrollHeight > beforeHeight) grew = true;
       }
-      return changed;
-    }, step);
+      return { moved: changed, grew };
+    });
     await settle(page, 250);
     if (await visit()) return;
-    if (!moved && step > steps) break;
+    if (!moved && !grew) {
+      stableRounds += 1;
+      if (stableRounds >= 2) break;
+    } else {
+      stableRounds = 0;
+    }
   }
 }
 
@@ -307,31 +318,18 @@ export function astronaResultDosMatches(value: string, dos: string): boolean {
   return false;
 }
 
-export async function getAstronaClaimNumbersForRow(page: Page, inputRow: AstronaInputRow): Promise<string[]> {
+export async function getAstronaClaimNumbersForRow(page: Page, _inputRow: AstronaInputRow): Promise<string[]> {
   const matches = new Set<string>();
   await scrollAstronaResults(page, async () => {
     const claims = astronaClaimLinks(page);
     for (let index = 0; index < await claims.count(); index += 1) {
       const claim = claims.nth(index);
-      const result = await claim.evaluate((element) => {
-        const row = element.closest("tr,[role=row]") as HTMLElement | null;
-        const table = row?.closest("table,[role=table],[role=grid]");
-        const header = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, "");
-        const headers = Array.from(table?.querySelectorAll("th,[role=columnheader]") ?? []);
-        const cells = Array.from(row?.querySelectorAll("td,[role=cell],[role=gridcell]") ?? []);
-        const dateIndexes = headers.map((item, i) => ({ name: header(item.textContent ?? ""), i }))
-          .filter(({ name }) => ["dateofservice", "servicedate", "servicedates", "dos", "from", "to", "servicefrom", "serviceto", "fromdate", "todate"].includes(name))
-          .map(({ i }) => i);
-        return { claimNumber: (element.textContent ?? "").trim(), dateText: dateIndexes.map((i) => cells[i]?.textContent ?? "").join(" - ") || row?.innerText || "" };
-      }).catch(() => ({ claimNumber: "", dateText: "" }));
-      // Some Astrona result layouts render the service date in cards or a
-      // separate virtualized column, outside the claim link's table row. An
-      // empty/unparseable date here is not evidence of a mismatch: open the
-      // claim and make the final decision from its service lines.
-      const visibleDates = result.dateText.match(/\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4}|\d{4}-\d{1,2}-\d{1,2}/g) ?? [];
-      if (result.claimNumber && (!inputRow.dos || !visibleDates.length || astronaResultDosMatches(result.dateText, inputRow.dos))) {
-        matches.add(result.claimNumber);
-      }
+      const claimNumber = (await claim.innerText().catch(() => "")).trim();
+      // Astrona's visual grid can render the claim-number and Date of Service
+      // columns in separate virtualized DOM trees. Never reject a returned
+      // claim from the summary grid; open it and use detail service lines as
+      // the authoritative DOS/CPT source.
+      if (claimNumber) matches.add(claimNumber);
     }
   });
   return [...matches];
@@ -428,13 +426,22 @@ export function astronaServiceLinesForDosAndCpt(serviceLines: AstronaServiceLine
   return dosMatches.filter((line) => canonicalProcedureCode(line.cpt) === wantedCpt);
 }
 
-function canonicalName(value: string): string {
-  return value.toLowerCase().match(/[a-z0-9]+/g)?.sort().join("") ?? "";
+function canonicalNameTokens(value: string): string[] {
+  return (value.toLowerCase().match(/[a-z0-9]+/g) ?? [])
+    .filter((token) => token.length > 1 && !["jr", "sr", "ii", "iii", "iv"].includes(token))
+    .sort();
 }
 
 export function astronaClaimNameMatches(details: AstronaClaimDetails, row: AstronaInputRow): boolean {
   const portalName = details.memberName ?? "";
-  return !row.memberName || (Boolean(portalName) && canonicalName(portalName) === canonicalName(row.memberName));
+  if (!row.memberName) return true;
+  if (!portalName) return false;
+  const wanted = canonicalNameTokens(row.memberName);
+  const actual = canonicalNameTokens(portalName);
+  if (!wanted.length || !actual.length) return false;
+  const wantedInActual = wanted.every((token) => actual.includes(token));
+  const actualInWanted = actual.every((token) => wanted.includes(token));
+  return wantedInActual || actualInWanted;
 }
 
 export function astronaClaimDobMatches(details: AstronaClaimDetails, row: AstronaInputRow): boolean {
@@ -478,13 +485,13 @@ async function scrollAstronaClaimDetails(page: Page): Promise<ReturnType<Page["l
 export async function extractAstronaClaimDetails(page: Page, fallbackClaimNumber: string): Promise<AstronaClaimDetails> {
   const root = await scrollAstronaClaimDetails(page);
   const bodyText = await root.innerText();
-  const serviceLines = await root.locator("table").evaluateAll((tables) => {
+  const serviceLines = await root.locator("table,[role=table],[role=grid]").evaluateAll((tables) => {
     const normalizeHeader = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, "");
     const aliases: Record<string, string[]> = {
       from: ["from", "servicefrom", "fromdate"],
       to: ["to", "serviceto", "todate"],
-      fromTo: ["fromto", "servicefromto", "fromtodate", "servicedates"],
-      cpt: ["cpt", "cptcode", "procedure", "procedurecode", "servicecode"],
+      fromTo: ["fromto", "servicefromto", "fromtodate", "servicedates", "dateofservice", "dos"],
+      cpt: ["cpt", "cptcode", "procedure", "procedurecode", "servicecode", "servicescpt", "servicecpt"],
       modifier: ["modifier", "mod"],
       diagCode: ["diagcode", "diagnosiscode", "diagnosis", "dxcode"],
       qty: ["qty", "quantity", "units"],
@@ -499,12 +506,20 @@ export async function extractAstronaClaimDetails(page: Page, fallbackClaimNumber
     };
     const output: Record<string, string>[] = [];
     for (const table of tables) {
-      const rows = Array.from(table.querySelectorAll("tr"));
-      const headers = Array.from(rows[0]?.querySelectorAll("th,td") || []).map((cell) => normalizeHeader((cell.textContent || "").trim()));
+      const rows = Array.from(table.querySelectorAll("tr,[role=row]"));
+      const knownHeaders = new Set(Object.values(aliases).flat());
+      const headerCandidates = rows.map((row, rowIndex) => {
+        const headers = Array.from(row.querySelectorAll("th,td,[role=columnheader],[role=cell],[role=gridcell]"))
+          .map((cell) => normalizeHeader((cell.textContent || "").trim()));
+        return { rowIndex, headers, score: headers.filter((header) => knownHeaders.has(header)).length };
+      });
+      const selectedHeader = headerCandidates.sort((left, right) => right.score - left.score)[0];
+      if (!selectedHeader || selectedHeader.score < 2) continue;
+      const headers = selectedHeader.headers;
       const indexes = Object.fromEntries(Object.entries(aliases).map(([field, names]) => [field, headers.findIndex((header) => names.includes(header))]));
       if (indexes.cpt < 0 && indexes.net < 0) continue;
-      for (const row of rows.slice(1)) {
-        const cells = Array.from(row.querySelectorAll("td"));
+      for (const row of rows.slice(selectedHeader.rowIndex + 1)) {
+        const cells = Array.from(row.querySelectorAll("td,[role=cell],[role=gridcell]"));
         const line = Object.fromEntries(Object.entries(indexes).map(([field, index]) => [field, index >= 0 ? (cells[index]?.textContent || "").trim() : ""]));
         if (!line.from && !line.to && line.fromTo) {
           const dates = line.fromTo.match(/\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4}|\d{4}-\d{1,2}-\d{1,2}/g) || [];

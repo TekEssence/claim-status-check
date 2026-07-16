@@ -58,10 +58,10 @@ async function processRow(page: Page, row: AstronaInputRow, auditRows: Record<st
   if (!count) return astronaOutputRows(row, blankDetails(), "no_data", "No claim data found in portal.");
 
   const matchingClaimNumbers = await getAstronaClaimNumbersForRow(page, row);
-  record(auditRows, row, "claim_search", "filtered", `Opening ${matchingClaimNumbers.length} of ${count} claim(s) matching Member Name ${row.memberName} and Date of Service ${row.dos}.`);
+  record(auditRows, row, "claim_search", "filtered", `Opening all ${matchingClaimNumbers.length} discovered claim(s); DOS will be verified from claim detail service lines.`);
   if (!matchingClaimNumbers.length) {
-    await liveLog("warn", `Claims were returned, but no result matched input DOS ${row.dos}.`);
-    return astronaOutputRows(row, blankDetails(), "no_data", `No claim result row matched input DOS ${row.dos}.`);
+    await liveLog("warn", "The portal reported claims, but no claim-number links could be discovered while scrolling the results grid.");
+    return astronaOutputRows(row, blankDetails(), "no_data", "Portal reported claim results, but no claim-number links could be extracted from the results grid.");
   }
 
   const output: Record<string, unknown>[] = [];
@@ -155,9 +155,13 @@ export async function runAstronaClaimStatusJob(formData: FormData, context: Scra
         browser = session.browser;
         browserContext = session.context;
         page = await browserContext.newPage();
+        await context.log({ level: "info", message: `Opening Astrona login for ${batch.credentials.group}/${batch.credentials.payer}.` });
         await loginToAstrona(page, batch.credentials);
+        await context.log({ level: "info", message: `Astrona login successful for ${batch.credentials.group}/${batch.credentials.payer}. Selecting provider portal.` });
         await selectAstronaProviderPortal(page, batch.credentials.payer);
+        await context.log({ level: "info", message: `Provider portal ${batch.credentials.payer} selected. Opening Claims page.` });
         await goToAstronaClaims(page);
+        await context.log({ level: "info", message: `Astrona Claims page loaded. Starting ${batch.rows.length} member row(s).` });
         for (const row of batch.rows) {
           if (context.isCancelled?.()) throw new Error("Astrona processing was cancelled.");
           try {

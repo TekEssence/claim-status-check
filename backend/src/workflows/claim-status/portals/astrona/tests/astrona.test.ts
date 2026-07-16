@@ -3,7 +3,7 @@ import test from "node:test";
 import * as XLSX from "xlsx";
 import { readAstronaCredentials, readAstronaInputRows, routeAstronaRows } from "../input";
 import { astronaFinalStatus, astronaOutputRow, astronaOutputRows } from "../workbook";
-import { astronaMemberNameSearchCandidates, astronaProviderPortalMatches, astronaResultDosMatches, astronaServiceLinesForDos, astronaServiceLinesForDosAndCpt } from "../portal";
+import { astronaClaimNameMatches, astronaMemberNameSearchCandidates, astronaProviderPortalMatches, astronaResultDosMatches, astronaServiceLinesForDos, astronaServiceLinesForDosAndCpt } from "../portal";
 
 function buffer(rows: Record<string, string>[]): ArrayBuffer {
   const workbook = XLSX.utils.book_new();
@@ -155,4 +155,10 @@ test("Astrona result DOS matching supports exact dates and service ranges", () =
 test("Astrona service-line DOS matching accepts a DOS inside a From-To range", () => {
   const lines = [{ from: "04/20/2026", to: "04/23/2026", cpt: "99213", modifier: "", diagCode: "", qty: "1", billed: "", coPay: "", coInsure: "", deductible: "", adjustment: "", net: "$10.00", memoLine1: "" }];
   assert.equal(astronaServiceLinesForDos(lines, "04/22/2026").length, 1);
+});
+
+test("Astrona member matching tolerates middle initials and suffixes", () => {
+  const details = { memberName: "Doe, Jane M.", claimNumber: "", datePaid: "", checkNumber: "", portalStatus: "", netAmount: "", cptCodes: [], memoLine1: "", serviceLines: [] };
+  const row = readAstronaInputRows(buffer([{ Group: "ALPHA", Payer: "Payer One", "Member ID": "MEM-8", "Member Name": "Jane Doe" }]))[0];
+  assert.equal(astronaClaimNameMatches(details, row), true);
 });
