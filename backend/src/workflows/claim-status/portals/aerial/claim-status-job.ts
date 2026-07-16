@@ -4,7 +4,7 @@ import type { Browser, Page } from "playwright-core";
 import { closeAutomationResources } from "@/backend/src/core/runtime-config";
 import type { ScraperContext } from "../../types";
 import { launchAerialBrowser } from "./browser";
-import { parseAerialInput, type AerialInput } from "./input";
+import { AERIAL_SUBPORTAL_LABELS, parseAerialInput, type AerialInput } from "./input";
 import { createAerialOutputWorkbookBuffer, readAerialInputWorkbookFromBuffer, type AerialInputRow } from "./workbook";
 import { formatAerialLog, saveAerialLogFile } from "./log-file";
 import { loadAerialEnvironment } from "./env";
@@ -81,6 +81,18 @@ function baseOutputRow(inputRow: AerialInputRow): Record<string, any> {
   };
 }
 
+export function buildAerialNoDataOutputRow(inputRow: AerialInputRow): Record<string, any> {
+  return {
+    ...baseOutputRow(inputRow),
+    memberId: inputRow.normalized.subscriberNo,
+    claimStatus: "NO DATA",
+    finalStatus: "No data found in portal.",
+    result: "no_data",
+    notes: "No claim data found in portal.",
+    extractedAt: new Date().toISOString(),
+  };
+}
+
 function moneyToNumber(value: unknown): number {
   const amount = Number(String(value || "").replace(/[$,\s]/g, ""));
   return Number.isFinite(amount) ? amount : 0;
@@ -135,7 +147,7 @@ function addAudit(
 function addError(
   state: AerialRunState,
   runId: string,
-  inputRow: AerialInputRow,
+  inputRow: AerialInputRow | null,
   page: Page | null,
   failureStage: string,
   failureReason: string,
@@ -145,10 +157,10 @@ function addError(
   state.errorRows.push({
     run_id: runId,
     timestamp: new Date().toISOString(),
-    input_row_id: inputRow.input_row_id,
-    input_claim_no: inputRow["Claim No"] ?? "",
-    subscriber_no: inputRow.normalized?.subscriberNo ?? inputRow["Subscriber No"],
-    service_date: inputRow.normalized?.serviceDate ?? inputRow["Service Date"],
+    input_row_id: inputRow?.input_row_id ?? "",
+    input_claim_no: inputRow?.["Claim No"] ?? "",
+    subscriber_no: inputRow?.normalized?.subscriberNo ?? inputRow?.["Subscriber No"] ?? "",
+    service_date: inputRow?.normalized?.serviceDate ?? inputRow?.["Service Date"] ?? "",
     failure_stage: failureStage,
     failure_reason: failureReason,
     human_message: humanMessage,
@@ -319,9 +331,13 @@ async function processInputRow(
   addAudit(state, runId, inputRow, page, "row_search_completed", "completed", `Found ${resultCount} eye icon(s)`);
 
   if (resultCount === 0) {
-    const snapshotPath = await captureAerialDiagnostics(context, page, inputRow, "no-claim-results");
-    addError(state, runId, inputRow, page, "claims_search", "no_claims_or_no_eye_icons_found", "No open-record eye icons found after search.", snapshotPath);
-    return [{ ...baseOutputRow(inputRow), result: "failed", notes: "No open-record eye icons found after search.", extractedAt: new Date().toISOString() }];
+    addAudit(state, runId, inputRow, page, "claims_search_no_data", "completed", "No claim data found in portal.");
+    await context.log({
+      level: "info",
+      message: `No Aerial claim data found for row ${inputRow.input_row_id}.`,
+      rowIndex: inputRow.input_row_id,
+    });
+    return [buildAerialNoDataOutputRow(inputRow)];
   }
 
   let rows: Record<string, any>[] = [];
@@ -335,9 +351,21 @@ async function processInputRow(
   }
 
   if (!rows.length) {
-    const snapshotPath = await captureAerialDiagnostics(context, page, inputRow, "no-matching-results");
-    addError(state, runId, inputRow, page, "claims_search", "no_matching_result_rows", "Result rows were returned, but none matched Member ID and Date of Service.", snapshotPath);
-    return [{ ...baseOutputRow(inputRow), result: "failed", notes: "No result rows matched Member ID and Date of Service.", extractedAt: new Date().toISOString() }];
+    addAudit(
+      state,
+      runId,
+      inputRow,
+      page,
+      "claims_search_no_matching_data",
+      "completed",
+      "Portal rows were returned, but none matched Member ID and Date of Service.",
+    );
+    await context.log({
+      level: "info",
+      message: `No matching Aerial claim data found for row ${inputRow.input_row_id}.`,
+      rowIndex: inputRow.input_row_id,
+    });
+    return [buildAerialNoDataOutputRow(inputRow)];
   }
 
   return rows;
@@ -361,9 +389,14 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+export function shouldDownloadAerialRunLog(errorRows: Record<string, unknown>[], fatalError = false): boolean {
+  return fatalError || errorRows.length > 0;
+}
+
 async function emitAerialArtifacts(
   context: ScraperContext,
   state: AerialRunState,
+  options: { fatalError?: boolean } = {},
 ): Promise<void> {
   const workbookBuffer = createAerialOutputWorkbookBuffer(state.outputRows, {
     errorRows: state.errorRows,
@@ -374,28 +407,31 @@ async function emitAerialArtifacts(
   const logContent = formatAerialLog(state.auditRows, state.errorRows);
   const logPath = await saveAerialLogFile(context.jobId, logContent);
   await context.log({ level: "info", message: `Aerial log saved: ${logPath}` });
-  await context.emit(downloadableFileEvent("aerial-run.log", Buffer.from(logContent, "utf8"), "text/plain"));
+  if (shouldDownloadAerialRunLog(state.errorRows, options.fatalError)) {
+    await context.emit(downloadableFileEvent("aerial-run.log", Buffer.from(logContent, "utf8"), "text/plain"));
+  }
 }
 
 export async function runAerialClaimStatusJob(formData: FormData, context: ScraperContext): Promise<void> {
   loadAerialEnvironment();
-  const input: AerialInput = await parseAerialInput(formData);
   const state: AerialRunState = { outputRows: [], errorRows: [], auditRows: [] };
   const runId = createRunId();
   let browser: Browser | undefined;
   let page: Page | undefined;
 
   try {
+    const input: AerialInput = await parseAerialInput(formData);
+    const subportalLabel = AERIAL_SUBPORTAL_LABELS[input.subportal];
     const rows = readAerialInputWorkbookFromBuffer(input.inputWorkbookBuffer);
     const validRows = rows.filter((row) => row.validation_status === "valid");
-    await context.log({ level: "info", message: `Aerial input loaded: ${rows.length} row(s), ${validRows.length} valid.` });
+    await context.log({ level: "info", message: `Aerial / ${subportalLabel} input loaded: ${rows.length} row(s), ${validRows.length} valid.` });
     await context.emit({ type: "progress", completed: 0, total: rows.length });
 
     const browserSession = await launchAerialBrowser((message) => context.log({ level: "info", message }));
     browser = browserSession.browser;
     page = await browserSession.context.newPage();
 
-    addAudit(state, runId, null, page, "job_started", "started", "Aerial automation started");
+    addAudit(state, runId, null, page, "job_started", "started", `Aerial / ${subportalLabel} automation started`);
     await loginToAerial(page, input.credentials);
     addAudit(state, runId, null, page, "login_completed", "completed", "Login verified");
     await goToClaims(page, input.credentials);
@@ -438,8 +474,9 @@ export async function runAerialClaimStatusJob(formData: FormData, context: Scrap
   } catch (error) {
     const message = errorMessage(error);
     addAudit(state, runId, null, page ?? null, "job_failed", "failed", message);
+    addError(state, runId, null, page ?? null, "aerial_run", "fatal_run_error", message);
     await context.log({ level: "error", message: `Aerial run failed: ${message}` });
-    await emitAerialArtifacts(context, state).catch((artifactError) => {
+    await emitAerialArtifacts(context, state, { fatalError: true }).catch((artifactError) => {
       void context.log({ level: "error", message: `Failed to create Aerial partial output/log: ${errorMessage(artifactError)}` });
     });
     await context.emit({ type: "error", message });

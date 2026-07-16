@@ -1,5 +1,6 @@
 import { UnknownPortalError } from "../../core/errors";
 import { aerialScraper } from "./portals/aerial/scraper";
+import { astronaScraper } from "./portals/astrona/scraper";
 import { availityScraper } from "./portals/availity/scraper";
 import { blueShieldScraper } from "./portals/blue-shield/scraper";
 import { iehpScraper } from "./portals/iehp/scraper";
@@ -10,6 +11,7 @@ import type { AutomationRunner } from "../types";
 
 export const claimStatusPortalRegistry = {
   aerial: aerialScraper,
+  astrona: astronaScraper,
   availity: availityScraper,
   "blue-shield": blueShieldScraper,
   iehp: iehpScraper,

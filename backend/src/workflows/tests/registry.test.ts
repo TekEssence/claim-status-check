@@ -10,6 +10,14 @@ test("claim status portals resolve through the workflow registry", () => {
   assert.equal(runner.name, "IEHP Claim Status");
 });
 
+test("claim status resolves Astrona as an independent portal", () => {
+  const runner = getAutomationRunner("claim-status", "astrona");
+
+  assert.equal(runner.workflowId, "claim-status");
+  assert.equal(runner.portalId, "astrona");
+  assert.equal(runner.name, "Astrona Claim Status");
+});
+
 test("eligibility resolves Waystar without requiring a payer selection", () => {
   const runner = getAutomationRunner("eligibility-verification", "waystar");
 

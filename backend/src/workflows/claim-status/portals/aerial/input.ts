@@ -1,20 +1,22 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import * as XLSX from "xlsx";
 import { loadAerialEnvironment } from "./env";
+import { loadCredentialsForAerialSubportal } from "./common/credential-workbook";
+import type { AerialCredentials, AerialSubportal } from "./common/subportal";
+import { getAerialSubportal, resolveAerialSubportal } from "./subportals/registry";
 
-export type AerialCredentials = {
-  loginUrl: string;
-  username: string;
-  password: string;
-  successUrlFragment?: string;
-  claimsUrl: string;
-};
+export type { AerialCredentials, AerialSubportal } from "./common/subportal";
 
 export type AerialInput = {
+  subportal: AerialSubportal;
   credentials: AerialCredentials;
   inputWorkbookBuffer: ArrayBuffer;
   inputFileName: string;
+};
+
+export const AERIAL_SUBPORTAL_LABELS: Record<AerialSubportal, string> = {
+  pmg: getAerialSubportal("pmg").label,
+  "citrus-valley": getAerialSubportal("citrus-valley").label,
 };
 
 function asText(value: unknown): string {
@@ -23,10 +25,6 @@ function asText(value: unknown): string {
 
 function optionalEnv(name: string): string {
   return asText(process.env[name]);
-}
-
-function normalizeLoginUrl(rawLoginUrl: string): string {
-  return rawLoginUrl.startsWith("http") ? rawLoginUrl : `https://${rawLoginUrl}`;
 }
 
 function loadAerialCredentialsFromEnv(): AerialCredentials | null {
@@ -40,7 +38,7 @@ function loadAerialCredentialsFromEnv(): AerialCredentials | null {
   }
 
   return {
-    loginUrl: normalizeLoginUrl(rawLoginUrl),
+    loginUrl: rawLoginUrl.startsWith("http") ? rawLoginUrl : `https://${rawLoginUrl}`,
     username,
     password,
     claimsUrl: optionalEnv("PORTAL_AERIAL_CLAIMS_URL"),
@@ -48,60 +46,37 @@ function loadAerialCredentialsFromEnv(): AerialCredentials | null {
   };
 }
 
-function findValue(row: Record<string, unknown>, aliases: string[]): string {
-  const normalizedAliases = aliases.map((alias) => alias.trim().toLowerCase());
-  for (const [key, value] of Object.entries(row)) {
-    if (normalizedAliases.includes(key.trim().toLowerCase())) {
-      const text = asText(value);
-      if (text) return text;
-    }
-  }
-  return "";
-}
-
-function loadAerialCredentialsFromWorkbook(buffer: ArrayBuffer): AerialCredentials | null {
-  const workbook = XLSX.read(buffer, { type: "array" });
-  const sheet = workbook.Sheets[workbook.SheetNames[0]];
-  if (!sheet) return null;
-
-  const rows = XLSX.utils.sheet_to_json(sheet) as Record<string, unknown>[];
-  for (const row of rows) {
-    const rawLoginUrl = findValue(row, ["URL", "Login URL", "Aerial URL", "PORTAL_AERIAL_LOGIN_URL"]);
-    const username = findValue(row, ["User Name", "Username", "PORTAL_AERIAL_USERNAME"]);
-    const password = findValue(row, ["Password", "PORTAL_AERIAL_PASSWORD"]);
-
-    if (rawLoginUrl && username && password) {
-      return {
-        loginUrl: normalizeLoginUrl(rawLoginUrl),
-        username,
-        password,
-        claimsUrl: findValue(row, ["Claims URL", "PORTAL_AERIAL_CLAIMS_URL"]),
-        successUrlFragment: findValue(row, ["Success URL Fragment", "PORTAL_AERIAL_SUCCESS_URL_FRAGMENT"]),
-      };
-    }
-  }
-
-  return null;
+export function loadAerialCredentialsFromWorkbook(buffer: ArrayBuffer, subportal: AerialSubportal): AerialCredentials | null {
+  return loadCredentialsForAerialSubportal(buffer, getAerialSubportal(subportal));
 }
 
 async function loadOptionalWorkbookBuffer(file: FormDataEntryValue | null): Promise<ArrayBuffer | null> {
   return file instanceof File ? file.arrayBuffer() : null;
 }
 
-function resolveAerialCredentials(inputWorkbookBuffer: ArrayBuffer, credentialWorkbookBuffer: ArrayBuffer | null): AerialCredentials {
-  const envCredentials = loadAerialCredentialsFromEnv();
-  if (envCredentials) return envCredentials;
-
+function resolveAerialCredentials(
+  subportal: AerialSubportal,
+  inputWorkbookBuffer: ArrayBuffer,
+  credentialWorkbookBuffer: ArrayBuffer | null,
+): AerialCredentials {
+  const subportalDefinition = getAerialSubportal(subportal);
   if (credentialWorkbookBuffer) {
-    const credentialWorkbookCredentials = loadAerialCredentialsFromWorkbook(credentialWorkbookBuffer);
+    const credentialWorkbookCredentials = loadAerialCredentialsFromWorkbook(credentialWorkbookBuffer, subportal);
     if (credentialWorkbookCredentials) return credentialWorkbookCredentials;
   }
 
-  const workbookCredentials = loadAerialCredentialsFromWorkbook(inputWorkbookBuffer);
+  // Environment variables are the legacy PMG fallback. They must never be used
+  // by Citrus Valley because they are not scoped to a subportal.
+  if (subportalDefinition.allowEnvironmentCredentials) {
+    const envCredentials = loadAerialCredentialsFromEnv();
+    if (envCredentials) return envCredentials;
+  }
+
+  const workbookCredentials = loadAerialCredentialsFromWorkbook(inputWorkbookBuffer, subportal);
   if (workbookCredentials) return workbookCredentials;
 
   throw new Error(
-    "Missing Aerial credentials. Provide env credentials, upload an Aerial login Excel, or include URL/Login URL, User Name/Username, and Password columns in the uploaded Aerial claim workbook.",
+    `Missing ${AERIAL_SUBPORTAL_LABELS[subportal]} credentials. Upload an Aerial login Excel containing a matching Sub portal row with Login URL, Username, and Password.${subportal === "pmg" ? " Existing PMG environment credentials remain supported." : ""}`,
   );
 }
 
@@ -131,13 +106,15 @@ async function loadInputWorkbookBuffer(inputExcel: FormDataEntryValue | null): P
 
 export async function parseAerialInput(formData: FormData): Promise<AerialInput> {
   loadAerialEnvironment();
+  const subportal = resolveAerialSubportal(formData.get("aerialSubportal")).id;
   const credentialExcel = formData.get("credentialExcel");
   const inputExcel = formData.get("inputExcel");
   const credentialWorkbookBuffer = await loadOptionalWorkbookBuffer(credentialExcel);
   const inputWorkbook = await loadInputWorkbookBuffer(inputExcel);
 
   return {
-    credentials: resolveAerialCredentials(inputWorkbook.buffer, credentialWorkbookBuffer),
+    subportal,
+    credentials: resolveAerialCredentials(subportal, inputWorkbook.buffer, credentialWorkbookBuffer),
     inputWorkbookBuffer: inputWorkbook.buffer,
     inputFileName: inputWorkbook.fileName,
   };

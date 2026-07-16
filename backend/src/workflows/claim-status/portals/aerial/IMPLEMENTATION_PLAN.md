@@ -2,6 +2,39 @@
 
 ## Current Input Contract
 
+Aerial has two subportals that share this complete automation flow:
+
+```text
+PMG
+Citrus Valley
+```
+
+The request field `aerialSubportal` selects the credential row. Missing values
+default to `PMG` for backward compatibility. Credential workbooks may contain:
+
+```text
+Sub portal | Login URL | Username | Password
+PMG        | ...       | ...      | ...
+Citrus Valley | ...    | ...      | ...
+```
+
+Citrus Valley requires an explicitly matching row and never falls back to PMG
+or unscoped credentials. Older unscoped credential workbooks and Aerial
+environment credentials remain PMG-only fallbacks.
+
+Subportal routing is separated from shared business logic:
+
+```text
+subportals/PMG.ts
+subportals/CitrusValley.ts
+subportals/registry.ts
+common/subportal.ts
+common/credential-workbook.ts
+```
+
+The two subportal files contain only their routing policy. They both delegate to
+the same Aerial login, claim-search, extraction, pagination, and output modules.
+
 Aerial claim workbook columns are found by header name, not fixed position.
 
 Required claim workbook headers:
@@ -49,6 +82,25 @@ Output workbook must include these Aerial status fields:
 total_paid
 final_status
 ```
+
+When the portal returns no claim data, this is a valid business outcome rather
+than an automation error. The Output sheet keeps the input claim number, member
+ID, and service date and writes:
+
+```text
+result: no_data
+claim_status: NO DATA
+final_status: No data found in portal.
+notes: No claim data found in portal.
+```
+
+No-data rows remain in the Audit_Log sheet but do not create Error sheet rows or
+error screenshots.
+
+`aerial-run.log` is always retained in server storage for auditing, but it is
+downloaded by the browser only when the run contains a real row-level error or a
+fatal error such as browser launch, login, navigation, or extraction failure.
+Successful and no-data-only runs download only `aerial_output.xlsx`.
 
 `total_paid` is calculated by adding all extracted EOB service-line paid values for the input row.
 

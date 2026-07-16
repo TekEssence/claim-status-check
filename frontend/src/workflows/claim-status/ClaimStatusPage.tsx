@@ -34,7 +34,8 @@ import type { FileSystemFileHandle, WindowWithFilePicker } from "../../types/fil
 import type { ClaimRow, ErrorScreenshot, JobProgressValue, ScrapeJobEvent } from "../../types/job";
 import { IehpInputForm } from "./portals/iehp/IehpInputForm";
 import { IehpResultView } from "./portals/iehp/IehpResultView";
-import { AerialInputForm } from "./portals/aerial/AerialInputForm";
+import { AerialInputForm, type AerialSubportal } from "./portals/aerial/AerialInputForm";
+import { getAerialSubportal } from "./portals/aerial/subportals/registry";
 import { AerialResultView } from "./portals/aerial/AerialResultView";
 import { RegalInputForm } from "./portals/regal/RegalInputForm";
 import { RegalResultView } from "./portals/regal/RegalResultView";
@@ -42,10 +43,13 @@ import { BlueShieldInputForm } from "./portals/blue-shield/BlueShieldInputForm";
 import { BlueShieldResultView } from "./portals/blue-shield/BlueShieldResultView";
 import { AvailityInputForm } from "./portals/availity/AvailityInputForm";
 import { AvailityResultView } from "./portals/availity/AvailityResultView";
+import { AstronaInputForm } from "./portals/astrona/AstronaInputForm";
+import { AstronaResultView } from "./portals/astrona/AstronaResultView";
 import { OptumProInputForm } from "../../portals/optum-pro/OptumProInputForm";
 import { OptumProResultView } from "../../portals/optum-pro/OptumProResultView";
 import {
   aerialFrontendPortalConfig,
+  astronaFrontendPortalConfig,
   availityFrontendPortalConfig,
   blueShieldFrontendPortalConfig,
   claimStatusPortalRegistry,
@@ -86,7 +90,7 @@ type IehpWorkbookBundle = {
   worksheet: ExcelJS.Worksheet;
 };
 
-export type PortalId = "iehp" | "aerial" | "regal" | "blue-shield" | "availity" | "optum-pro";
+export type PortalId = "iehp" | "aerial" | "astrona" | "regal" | "blue-shield" | "availity" | "optum-pro";
 type DownloadFile = {
   filename: string;
   bytes: Uint8Array;
@@ -107,6 +111,7 @@ const DOWNLOADED_ARTIFACTS_PREFIX = "iehp-downloaded-artifacts:";
 const PORTAL_ROUTE_MAP: Record<PortalId, string> = {
   iehp: "/iehp",
   aerial: "/aerial",
+  astrona: "/astrona",
   regal: "/regal",
   "blue-shield": "/blue-shield",
   availity: "/availity",
@@ -114,7 +119,7 @@ const PORTAL_ROUTE_MAP: Record<PortalId, string> = {
 };
 
 function isPortalId(value: string): value is PortalId {
-  return value === "iehp" || value === "aerial" || value === "regal" || value === "blue-shield" || value === "availity" || value === "optum-pro";
+  return value === "iehp" || value === "aerial" || value === "astrona" || value === "regal" || value === "blue-shield" || value === "availity" || value === "optum-pro";
 }
 
 function canRestoreCurrentJob(job: CurrentScrapeJob): job is CurrentScrapeJob & { portalId: PortalId } {
@@ -200,6 +205,10 @@ const PORTAL_UI_META: Record<
     shortCode: "AC",
     logoClassName: "bg-[linear-gradient(180deg,#e0ecff_0%,#c7ddff_100%)] text-blue-700",
   },
+  astrona: {
+    shortCode: "AS",
+    logoClassName: "bg-[linear-gradient(180deg,#dff7f3_0%,#bdece4_100%)] text-teal-700",
+  },
   regal: {
     shortCode: "RP",
     logoClassName: "bg-white text-violet-700",
@@ -284,6 +293,10 @@ const PORTAL_WORKSPACE_META: Record<
   aerial: {
     heroDescription: "Upload your login workbook and claim details workbook to begin automated claim status verification.",
     processingDescription: "The platform validates workbook structure, secures the upload, and starts payer automation with live status tracking.",
+  },
+  astrona: {
+    heroDescription: "Upload Astrona Group/Payer credentials and member claim rows to begin automated claim-status verification.",
+    processingDescription: "Astrona isolates each Group and Payer login, selects the matching IPA, and extracts every available claim and service CPT.",
   },
   regal: {
     heroDescription: "Upload the Regal workbook package to start a guided automation workflow with secure validation and live progress tracking.",
@@ -653,8 +666,11 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
   const [claimFileName, setClaimFileName] = useState<string>("");
   const [aerialCredentialFile, setAerialCredentialFile] = useState<File | null>(null);
   const [aerialInputFile, setAerialInputFile] = useState<File | null>(null);
+  const [aerialSubportal, setAerialSubportal] = useState<AerialSubportal | null>(null);
   const [availityCredentialFile, setAvailityCredentialFile] = useState<File | null>(null);
   const [availityInputFile, setAvailityInputFile] = useState<File | null>(null);
+  const [astronaCredentialFile, setAstronaCredentialFile] = useState<File | null>(null);
+  const [astronaInputFile, setAstronaInputFile] = useState<File | null>(null);
   const [optumProLoginFile, setOptumProLoginFile] = useState<File | null>(null);
   const [optumProInputFile, setOptumProInputFile] = useState<File | null>(null);
   const [optumProJobId, setOptumProJobId] = useState<string>("");
@@ -711,6 +727,8 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
       ? iehpFrontendPortalConfig
       : effectivePortalId === "aerial"
         ? aerialFrontendPortalConfig
+        : effectivePortalId === "astrona"
+          ? astronaFrontendPortalConfig
         : effectivePortalId === "regal"
           ? regalFrontendPortalConfig
           : effectivePortalId === "blue-shield"
@@ -762,13 +780,23 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     () => Boolean(iehpLoginFile && claimFileHandle && !isProcessing),
     [iehpLoginFile, claimFileHandle, isProcessing],
   );
+  const selectedAerialSubportal = getAerialSubportal(aerialSubportal);
   const canSubmitAerial = useMemo(
-    () => Boolean(aerialInputFile && !isProcessing),
-    [aerialInputFile, isProcessing],
+    () => Boolean(
+      selectedAerialSubportal
+      && aerialInputFile
+      && (!selectedAerialSubportal.requiresCredentialFile || aerialCredentialFile)
+      && !isProcessing,
+    ),
+    [aerialCredentialFile, aerialInputFile, selectedAerialSubportal, isProcessing],
   );
   const canSubmitAvaility = useMemo(
     () => Boolean(availityCredentialFile && availityInputFile && !isProcessing),
     [availityCredentialFile, availityInputFile, isProcessing],
+  );
+  const canSubmitAstrona = useMemo(
+    () => Boolean(astronaCredentialFile && astronaInputFile && !isProcessing),
+    [astronaCredentialFile, astronaInputFile, isProcessing],
   );
   const canSubmitOptumPro = useMemo(
     () => Boolean(optumProLoginFile && optumProInputFile && !isProcessing),
@@ -787,6 +815,8 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
       ? canSubmitIehp
       : effectivePortalId === "aerial"
         ? canSubmitAerial
+        : effectivePortalId === "astrona"
+          ? canSubmitAstrona
         : effectivePortalId === "regal"
           ? canSubmitRegal
           : effectivePortalId === "blue-shield"
@@ -834,6 +864,15 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
       };
     }
 
+    if (effectivePortalId === "astrona") {
+      return {
+        claimFileLabel: astronaInputFile?.name ?? "",
+        claimReady: Boolean(astronaInputFile),
+        loginFileLabel: astronaCredentialFile?.name ?? "",
+        loginReady: Boolean(astronaCredentialFile),
+      };
+    }
+
     if (effectivePortalId === "blue-shield") {
       return {
         claimFileLabel: blueShieldInputFile?.name ?? "",
@@ -863,6 +902,8 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     aerialInputFile,
     availityCredentialFile,
     availityInputFile,
+    astronaCredentialFile,
+    astronaInputFile,
     blueShieldCredentialFile,
     blueShieldInputFile,
     claimFileName,
@@ -1042,6 +1083,8 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
           await reconnectAerialRun(currentJob);
         } else if (currentJob.portalId === "availity") {
           await reconnectDownloadOnlyRun(currentJob, "availity", "Availity");
+        } else if (currentJob.portalId === "astrona") {
+          await reconnectDownloadOnlyRun(currentJob, "astrona", "Astrona");
         } else if (currentJob.portalId === "regal") {
           await reconnectRegalRun(currentJob);
         } else if (currentJob.portalId === "optum-pro") {
@@ -1370,6 +1413,9 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     setClaimFileName("");
     setAerialCredentialFile(null);
     setAerialInputFile(null);
+    setAerialSubportal(null);
+    setAstronaCredentialFile(null);
+    setAstronaInputFile(null);
     setBlueShieldCredentialFile(null);
     setBlueShieldInputFile(null);
     setBlueShieldResetCheckpoint(false);
@@ -2380,10 +2426,22 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
       return;
     }
 
+    if (!aerialSubportal) {
+      setStatus("Please select PMG or Citrus Valley.");
+      return;
+    }
+
+    const subportalDefinition = getAerialSubportal(aerialSubportal);
+    if (subportalDefinition?.requiresCredentialFile && !aerialCredentialFile) {
+      setStatus(`Please provide the Aerial login Excel containing the ${subportalDefinition.label} row.`);
+      return;
+    }
+
     resetRunState("Starting Aerial scraper...");
 
     const formData = new FormData();
     formData.append("portalId", "aerial");
+    formData.append("aerialSubportal", aerialSubportal);
     if (aerialCredentialFile) {
       formData.append("credentialExcel", aerialCredentialFile);
     }
@@ -2537,6 +2595,66 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
   }
 
 
+
+  async function submitAstrona(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    if (!astronaCredentialFile || !astronaInputFile) {
+      setStatus("Please provide both the Astrona login Excel and claim Excel files.");
+      return;
+    }
+
+    resetRunState("Starting Astrona scraper...");
+    const formData = new FormData();
+    formData.append("portalId", "astrona");
+    formData.append("credentialExcel", astronaCredentialFile);
+    formData.append("inputExcel", astronaInputFile);
+    let hasError = false;
+    let wasCancelled = false;
+    let finalErrorMessage = "";
+    let subscribedJobId = "";
+    const streamAbortController = new AbortController();
+
+    try {
+      const jobId = await startScrapeJob(formData);
+      subscribedJobId = jobId;
+      setActiveJobId(jobId);
+      await subscribeToScrapeJobEvents({
+        jobId,
+        signal: streamAbortController.signal,
+        onEvent: async (eventData) => {
+          if (eventData.type === "log" && eventData.message) setLogs((prev) => [...prev, eventData.message ?? ""]);
+          else if (eventData.type === "progress" && typeof eventData.completed === "number" && typeof eventData.total === "number") setProgress({ completed: eventData.completed, total: eventData.total });
+          else if (eventData.type === "error_screenshot" && typeof eventData.index === "number" && eventData.image) setErrorScreenshots((prev) => [...prev, { index: eventData.index ?? -1, image: eventData.image ?? "" }]);
+          else if (eventData.type === "file_download" && eventData.filename && eventData.base64) {
+            const artifactKey = buildDownloadArtifactKey(eventData);
+            if (!hasDownloadedArtifact(subscribedJobId, artifactKey)) {
+              downloadBase64File(eventData.filename, eventData.base64, eventData.mimeType || "application/octet-stream");
+              rememberDownloadedArtifact(subscribedJobId, artifactKey);
+              setStatus(`Downloaded ${eventData.filename}`);
+            }
+          } else if (eventData.type === "warning" && eventData.message) {
+            setLogs((prev) => [...prev, eventData.message ?? ""]);
+            setStatus(eventData.message);
+          } else if (eventData.type === "error" && eventData.message) {
+            hasError = true;
+            finalErrorMessage = eventData.message;
+            setLogs((prev) => [...prev, `ERROR: ${eventData.message}`]);
+          } else if (eventData.type === "cancelled") wasCancelled = true;
+        },
+        onStreamError(error) {
+          hasError = true;
+          finalErrorMessage = getErrorMessage(error);
+          setLogs((prev) => [...prev, `STREAM ERROR: ${finalErrorMessage}`]);
+        },
+      });
+      setStatus(wasCancelled ? "Astrona processing cancelled." : hasError ? `Astrona processing finished with errors${finalErrorMessage ? `: ${finalErrorMessage}` : "."}` : "Astrona processing completed.");
+    } catch (error) {
+      setStatus(`Failed to process Astrona claims: ${getErrorMessage(error)}`);
+    } finally {
+      setIsProcessing(false);
+      setActiveJobId("");
+    }
+  }
 
   async function submitBlueShield(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -3787,8 +3905,10 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
                       credentialFileName={aerialCredentialFile?.name ?? ""}
                       inputFileName={aerialInputFile?.name ?? ""}
                       isProcessing={isProcessing}
+                      selectedSubportal={aerialSubportal}
                       onCredentialFileChange={setAerialCredentialFile}
                       onInputFileChange={setAerialInputFile}
+                      onSubportalChange={setAerialSubportal}
                       onSubmit={submitAerial}
                     />
                   ) : effectivePortalId === "regal" ? (
@@ -3810,6 +3930,16 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
                       onCredentialFileChange={setAvailityCredentialFile}
                       onInputFileChange={setAvailityInputFile}
                       onSubmit={submitAvaility}
+                    />
+                  ) : effectivePortalId === "astrona" ? (
+                    <AstronaInputForm
+                      canSubmit={canSubmitAstrona}
+                      credentialFileName={astronaCredentialFile?.name ?? ""}
+                      inputFileName={astronaInputFile?.name ?? ""}
+                      isProcessing={isProcessing}
+                      onCredentialFileChange={setAstronaCredentialFile}
+                      onInputFileChange={setAstronaInputFile}
+                      onSubmit={submitAstrona}
                     />
                   ) : effectivePortalId === "optum-pro" ? (
                     <OptumProInputForm
@@ -3879,6 +4009,10 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
               ) : effectivePortalId === "availity" ? (
                 <div className="mt-5">
                   <AvailityResultView errorScreenshots={errorScreenshots} logs={logs} progress={progress} status={status} />
+                </div>
+              ) : effectivePortalId === "astrona" ? (
+                <div className="mt-5">
+                  <AstronaResultView errorScreenshots={errorScreenshots} logs={logs} progress={progress} status={status} />
                 </div>
               ) : effectivePortalId === "optum-pro" ? (
                 <div className="mt-5">
