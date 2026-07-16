@@ -4,6 +4,7 @@ import { availityScraper } from "./portals/availity/scraper";
 import { blueShieldScraper } from "./portals/blue-shield/scraper";
 import { iehpScraper } from "./portals/iehp/scraper";
 import { kaiserScraper } from "./portals/kaiser/scraper";
+import { myFamilyScraper } from "./portals/my_family/scraper";
 import { regalScraper } from "./portals/regal/scraper";
 import { optumProScraper } from "../../scrapers/optum-pro/scraper";
 import type { PortalScraper } from "./types";
@@ -15,6 +16,7 @@ export const claimStatusPortalRegistry = {
   "blue-shield": blueShieldScraper,
   iehp: iehpScraper,
   kaiser: kaiserScraper,
+  "my-family": myFamilyScraper,
   "optum-pro": optumProScraper,
   regal: regalScraper,
 } satisfies Record<string, PortalScraper>;

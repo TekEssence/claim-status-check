@@ -3,6 +3,7 @@ import { availityFrontendPortalConfig } from "./portals/availity/portal-config";
 import { blueShieldFrontendPortalConfig } from "./portals/blue-shield/portal-config";
 import { iehpFrontendPortalConfig } from "./portals/iehp/portal-config";
 import { kaiserFrontendPortalConfig } from "./portals/kaiser/portal-config";
+import { myFamilyFrontendPortalConfig } from "./portals/my_family/portal-config";
 import { optumProFrontendPortalConfig } from "./portals/optum-pro/portal-config";
 import { regalFrontendPortalConfig } from "./portals/regal/portal-config";
 
@@ -12,6 +13,7 @@ export {
   blueShieldFrontendPortalConfig,
   iehpFrontendPortalConfig,
   kaiserFrontendPortalConfig,
+  myFamilyFrontendPortalConfig,
   optumProFrontendPortalConfig,
   regalFrontendPortalConfig,
 };
@@ -23,5 +25,6 @@ export const claimStatusPortalRegistry = [
   blueShieldFrontendPortalConfig,
   availityFrontendPortalConfig,
   kaiserFrontendPortalConfig,
+  myFamilyFrontendPortalConfig,
   optumProFrontendPortalConfig,
 ] as const;

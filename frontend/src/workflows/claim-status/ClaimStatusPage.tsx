@@ -45,6 +45,8 @@ import { AvailityInputForm } from "./portals/availity/AvailityInputForm";
 import { AvailityResultView } from "./portals/availity/AvailityResultView";
 import { KaiserInputForm } from "./portals/kaiser/KaiserInputForm";
 import { KaiserResultView } from "./portals/kaiser/KaiserResultView";
+import { MyFamilyInputForm } from "./portals/my_family/MyFamilyInputForm";
+import { MyFamilyResultView } from "./portals/my_family/MyFamilyResultView";
 import { OptumProInputForm } from "./portals/optum-pro/OptumProInputForm";
 import { OptumProResultView } from "./portals/optum-pro/OptumProResultView";
 import {
@@ -54,6 +56,7 @@ import {
   claimStatusPortalRegistry,
   iehpFrontendPortalConfig,
   kaiserFrontendPortalConfig,
+  myFamilyFrontendPortalConfig,
   optumProFrontendPortalConfig,
   regalFrontendPortalConfig,
 } from "./registry";
@@ -90,7 +93,7 @@ type IehpWorkbookBundle = {
   worksheet: ExcelJS.Worksheet;
 };
 
-export type PortalId = "iehp" | "aerial" | "regal" | "blue-shield" | "availity" | "kaiser" | "optum-pro";
+export type PortalId = "iehp" | "aerial" | "regal" | "blue-shield" | "availity" | "kaiser" | "my-family" | "optum-pro";
 type DownloadFile = {
   filename: string;
   bytes: Uint8Array;
@@ -115,11 +118,12 @@ const PORTAL_ROUTE_MAP: Record<PortalId, string> = {
   "blue-shield": "/blue-shield",
   availity: "/availity",
   kaiser: "/kaiser",
+  "my-family": "/my-family",
   "optum-pro": "/optum-pro",
 };
 
 function isPortalId(value: string): value is PortalId {
-  return value === "iehp" || value === "aerial" || value === "regal" || value === "blue-shield" || value === "availity" || value === "kaiser" || value === "optum-pro";
+  return value === "iehp" || value === "aerial" || value === "regal" || value === "blue-shield" || value === "availity" || value === "kaiser" || value === "my-family" || value === "optum-pro";
 }
 
 function canRestoreCurrentJob(job: CurrentScrapeJob): job is CurrentScrapeJob & { portalId: PortalId } {
@@ -273,6 +277,10 @@ const PORTAL_UI_META: Record<
       height: 32,
     },
   },
+  "my-family": {
+    shortCode: "MF",
+    logoClassName: "bg-[linear-gradient(180deg,#eaf6ff_0%,#d8ecff_100%)] text-blue-700",
+  },
   "optum-pro": {
     shortCode: "OP",
     logoClassName: "bg-white text-orange-600",
@@ -322,6 +330,10 @@ const PORTAL_WORKSPACE_META: Record<
   kaiser: {
     heroDescription: "Upload the Kaiser EpicLink login workbook and claim workbook to search claim status by Member ID, DOS, and CPT.",
     processingDescription: "Kaiser rows stream live progress and download an output workbook with claim, payment, service, and denial details.",
+  },
+  "my-family": {
+    heroDescription: "Upload the My family EZ-NET login workbook and claim workbook to search claims by Member ID or patient name and service date.",
+    processingDescription: "My family rows stream live progress and download an output workbook with claim, status, payment, and service-line details.",
   },
   "optum-pro": {
     heroDescription: "Upload the One Healthcare ID login workbook and Optum Pro claim workbook, then enter OTP when prompted.",
@@ -683,6 +695,8 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
   const [availityInputFile, setAvailityInputFile] = useState<File | null>(null);
   const [kaiserCredentialFile, setKaiserCredentialFile] = useState<File | null>(null);
   const [kaiserInputFile, setKaiserInputFile] = useState<File | null>(null);
+  const [myFamilyCredentialFile, setMyFamilyCredentialFile] = useState<File | null>(null);
+  const [myFamilyInputFile, setMyFamilyInputFile] = useState<File | null>(null);
   const [optumProLoginFile, setOptumProLoginFile] = useState<File | null>(null);
   const [optumProInputFile, setOptumProInputFile] = useState<File | null>(null);
   const [optumProJobId, setOptumProJobId] = useState<string>("");
@@ -747,6 +761,8 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
               ? availityFrontendPortalConfig
               : effectivePortalId === "kaiser"
                 ? kaiserFrontendPortalConfig
+              : effectivePortalId === "my-family"
+                ? myFamilyFrontendPortalConfig
               : effectivePortalId === "optum-pro"
                 ? optumProFrontendPortalConfig
             : null;
@@ -804,6 +820,10 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     () => Boolean(kaiserCredentialFile && kaiserInputFile && !isProcessing),
     [kaiserCredentialFile, kaiserInputFile, isProcessing],
   );
+  const canSubmitMyFamily = useMemo(
+    () => Boolean(myFamilyCredentialFile && myFamilyInputFile && !isProcessing),
+    [myFamilyCredentialFile, myFamilyInputFile, isProcessing],
+  );
   const canSubmitOptumPro = useMemo(
     () => Boolean(optumProLoginFile && optumProInputFile && !isProcessing),
     [optumProLoginFile, optumProInputFile, isProcessing],
@@ -829,6 +849,8 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
               ? canSubmitAvaility
               : effectivePortalId === "kaiser"
                 ? canSubmitKaiser
+              : effectivePortalId === "my-family"
+                ? canSubmitMyFamily
               : effectivePortalId === "optum-pro"
                 ? canSubmitOptumPro
             : false;
@@ -879,6 +901,15 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
       };
     }
 
+    if (effectivePortalId === "my-family") {
+      return {
+        claimFileLabel: myFamilyInputFile?.name ?? "",
+        claimReady: Boolean(myFamilyInputFile),
+        loginFileLabel: myFamilyCredentialFile?.name ?? "",
+        loginReady: Boolean(myFamilyCredentialFile),
+      };
+    }
+
     if (effectivePortalId === "blue-shield") {
       return {
         claimFileLabel: blueShieldInputFile?.name ?? "",
@@ -915,6 +946,8 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     iehpLoginFile,
     kaiserCredentialFile,
     kaiserInputFile,
+    myFamilyCredentialFile,
+    myFamilyInputFile,
     optumProInputFile,
     optumProLoginFile,
     regalClaimFile,
@@ -1091,6 +1124,8 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
           await reconnectDownloadOnlyRun(currentJob, "availity", "Availity");
         } else if (currentJob.portalId === "kaiser") {
           await reconnectDownloadOnlyRun(currentJob, "kaiser", "Kaiser");
+        } else if (currentJob.portalId === "my-family") {
+          await reconnectDownloadOnlyRun(currentJob, "my-family", "My family");
         } else if (currentJob.portalId === "regal") {
           await reconnectRegalRun(currentJob);
         } else if (currentJob.portalId === "optum-pro") {
@@ -1285,6 +1320,8 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     setBlueShieldOtpValue("");
     setKaiserCredentialFile(null);
     setKaiserInputFile(null);
+    setMyFamilyCredentialFile(null);
+    setMyFamilyInputFile(null);
     setOptumProJobId("");
     setOptumProOtpRequest(null);
     setOptumProOtpValue("");
@@ -1429,6 +1466,8 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     setBlueShieldOtpValue("");
     setKaiserCredentialFile(null);
     setKaiserInputFile(null);
+    setMyFamilyCredentialFile(null);
+    setMyFamilyInputFile(null);
     setOptumProLoginFile(null);
     setOptumProInputFile(null);
     setOptumProJobId("");
@@ -2666,6 +2705,89 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
       );
     } catch (error) {
       setStatus(`Failed to process Kaiser claims: ${getErrorMessage(error)}`);
+    } finally {
+      setIsProcessing(false);
+      setActiveJobId("");
+    }
+  }
+
+  async function submitMyFamily(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+
+    if (!myFamilyCredentialFile || !myFamilyInputFile) {
+      setStatus("Please provide both the My family login Excel and claim Excel files.");
+      return;
+    }
+
+    resetRunState("Starting My family scraper...");
+
+    const formData = new FormData();
+    formData.append("portalId", "my-family");
+    formData.append("credentialExcel", myFamilyCredentialFile);
+    formData.append("inputExcel", myFamilyInputFile);
+    formData.append("loginFileName", myFamilyCredentialFile.name);
+    formData.append("claimFileName", myFamilyInputFile.name);
+
+    let hasError = false;
+    let wasCancelled = false;
+    let finalErrorMessage = "";
+    let subscribedJobId = "";
+    const streamAbortController = new AbortController();
+
+    const handleJobEvent = async (eventData: ScrapeJobEvent) => {
+      if (eventData.type === "log" && eventData.message) {
+        setLogs((prev) => [...prev, eventData.message ?? ""]);
+      } else if (eventData.type === "progress" && typeof eventData.completed === "number" && typeof eventData.total === "number") {
+        setProgress({ completed: eventData.completed, total: eventData.total });
+      } else if (eventData.type === "error_screenshot" && typeof eventData.index === "number" && eventData.image) {
+        setErrorScreenshots((prev) => [...prev, { index: eventData.index ?? -1, image: eventData.image ?? "" }]);
+      } else if (eventData.type === "file_download" && eventData.filename && eventData.base64) {
+        const artifactKey = buildDownloadArtifactKey(eventData);
+        if (!hasDownloadedArtifact(subscribedJobId, artifactKey)) {
+          downloadBase64File(eventData.filename, eventData.base64, eventData.mimeType || "application/octet-stream");
+          rememberDownloadedArtifact(subscribedJobId, artifactKey);
+          setStatus(`Downloaded ${eventData.filename}`);
+        }
+      } else if (eventData.type === "warning" && eventData.message) {
+        setLogs((prev) => [...prev, eventData.message ?? ""]);
+        setStatus(eventData.message);
+      } else if (eventData.type === "error" && eventData.message) {
+        finalErrorMessage = eventData.message;
+        setLogs((prev) => [...prev, `ERROR: ${eventData.message}`]);
+        setStatus(`Error: ${eventData.message}`);
+        hasError = true;
+      } else if (eventData.type === "cancelled") {
+        wasCancelled = true;
+        setLogs((prev) => [...prev, eventData.message || "Processing cancelled."]);
+        setStatus(eventData.message || "Processing cancelled.");
+      }
+    };
+
+    try {
+      const jobId = await startScrapeJob(formData);
+      subscribedJobId = jobId;
+      setActiveJobId(jobId);
+      await subscribeToScrapeJobEvents({
+        jobId,
+        signal: streamAbortController.signal,
+        onEvent: handleJobEvent,
+        onStreamError(error) {
+          console.error("My family stream error:", error);
+          finalErrorMessage = getErrorMessage(error);
+          setLogs((prev) => [...prev, `STREAM ERROR: ${finalErrorMessage}`]);
+          setStatus(`Stream error: ${finalErrorMessage}`);
+          hasError = true;
+        },
+      });
+      setStatus(
+        wasCancelled
+          ? "My family processing cancelled."
+          : hasError
+            ? `My family processing finished with errors${finalErrorMessage ? `: ${finalErrorMessage}` : "."}`
+            : "My family processing completed.",
+      );
+    } catch (error) {
+      setStatus(`Failed to process My family claims: ${getErrorMessage(error)}`);
     } finally {
       setIsProcessing(false);
       setActiveJobId("");
@@ -3957,6 +4079,16 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
                       onInputFileChange={setKaiserInputFile}
                       onSubmit={submitKaiser}
                     />
+                  ) : effectivePortalId === "my-family" ? (
+                    <MyFamilyInputForm
+                      canSubmit={canSubmitMyFamily}
+                      credentialFileName={myFamilyCredentialFile?.name ?? ""}
+                      inputFileName={myFamilyInputFile?.name ?? ""}
+                      isProcessing={isProcessing}
+                      onCredentialFileChange={setMyFamilyCredentialFile}
+                      onInputFileChange={setMyFamilyInputFile}
+                      onSubmit={submitMyFamily}
+                    />
                   ) : effectivePortalId === "optum-pro" ? (
                     <OptumProInputForm
                       canSubmit={canSubmitOptumPro}
@@ -4029,6 +4161,10 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
               ) : effectivePortalId === "kaiser" ? (
                 <div className="mt-5">
                   <KaiserResultView errorScreenshots={errorScreenshots} logs={logs} progress={progress} status={status} />
+                </div>
+              ) : effectivePortalId === "my-family" ? (
+                <div className="mt-5">
+                  <MyFamilyResultView errorScreenshots={errorScreenshots} logs={logs} progress={progress} status={status} />
                 </div>
               ) : effectivePortalId === "optum-pro" ? (
                 <div className="mt-5">
