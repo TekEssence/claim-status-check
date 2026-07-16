@@ -27,6 +27,7 @@ import iehpLogo from "../../Assets/channels4_profile.jpg";
 import optumLogo from "../../Assets/optum-logo.svg";
 import regalLogo from "../../Assets/channels4_profile (1).jpg";
 import availityLogo from "../../Assets/availity-logo.jpg";
+import waystarLogo from "../../Assets/waystar-logo-vector.png";
 import { applyClaimRowUpdateToWorksheet, postProcessWorksheet } from "./portals/iehp/workbook";
 import { cancelScrapeJob as cancelScrapeJobRequest, getActiveScrapeJobErrorId, getCurrentScrapeJob, startScrapeJob, subscribeToScrapeJobEvents, submitScrapeJobInput, type CurrentScrapeJob } from "../../api/scrape-jobs-api";
 import { clearStoredRunContext, loadClaimFileHandle, loadIehpLoginFile, saveClaimFileHandle, saveIehpLoginFile } from "../../lib/run-context-store";
@@ -43,6 +44,7 @@ import { BlueShieldResultView } from "./portals/blue-shield/BlueShieldResultView
 import { AvailityInputForm } from "./portals/availity/AvailityInputForm";
 import { AvailityResultView } from "./portals/availity/AvailityResultView";
 import { OptumProInputForm } from "../../portals/optum-pro/OptumProInputForm";
+import { WaystarInputForm } from "./portals/waystar/WaystarInputForm";
 import { OptumProResultView } from "../../portals/optum-pro/OptumProResultView";
 import {
   aerialFrontendPortalConfig,
@@ -52,6 +54,7 @@ import {
   iehpFrontendPortalConfig,
   optumProFrontendPortalConfig,
   regalFrontendPortalConfig,
+  waystarFrontendPortalConfig,
 } from "./registry";
 
 type AuthUser = {
@@ -86,7 +89,7 @@ type IehpWorkbookBundle = {
   worksheet: ExcelJS.Worksheet;
 };
 
-export type PortalId = "iehp" | "aerial" | "regal" | "blue-shield" | "availity" | "optum-pro";
+export type PortalId = "iehp" | "aerial" | "regal" | "blue-shield" | "availity" | "waystar" | "optum-pro";
 type DownloadFile = {
   filename: string;
   bytes: Uint8Array;
@@ -110,11 +113,12 @@ const PORTAL_ROUTE_MAP: Record<PortalId, string> = {
   regal: "/regal",
   "blue-shield": "/blue-shield",
   availity: "/availity",
+  waystar: "/claim-status/waystar",
   "optum-pro": "/optum-pro",
 };
 
 function isPortalId(value: string): value is PortalId {
-  return value === "iehp" || value === "aerial" || value === "regal" || value === "blue-shield" || value === "availity" || value === "optum-pro";
+  return value === "iehp" || value === "aerial" || value === "regal" || value === "blue-shield" || value === "availity" || value === "waystar" || value === "optum-pro";
 }
 
 function canRestoreCurrentJob(job: CurrentScrapeJob): job is CurrentScrapeJob & { portalId: PortalId } {
@@ -251,6 +255,23 @@ const PORTAL_UI_META: Record<
       height: 32,
     },
   },
+  waystar: {
+    shortCode: "WS",
+    logoClassName: "bg-white text-slate-700",
+    logoSrc: waystarLogo,
+    cardLogoFrameClassName: "h-10 w-[6.1rem] rounded-[1rem] px-2.5",
+    cardLogoImageClassName: "h-full w-full scale-[1.55] object-contain",
+    cardLogoSize: {
+      width: 92,
+      height: 28,
+    },
+    heroLogoFrameClassName: "h-14 w-[8.8rem] rounded-[1.15rem] px-3",
+    heroLogoImageClassName: "h-full w-full scale-[1.18] object-contain object-left",
+    heroLogoSize: {
+      width: 136,
+      height: 40,
+    },
+  },
   "optum-pro": {
     shortCode: "OP",
     logoClassName: "bg-white text-orange-600",
@@ -296,6 +317,10 @@ const PORTAL_WORKSPACE_META: Record<
   availity: {
     heroDescription: "Upload your Availity login workbook and claim workbook to process Aetna, Blue Cross Blue Shield, Wellpoint, and Wellcare claim status checks.",
     processingDescription: "Availity requests stream live status over SSE and automatically download the completed output workbook.",
+  },
+  waystar: {
+    heroDescription: "Upload the Waystar login workbook and claim details workbook. Launch the Waystar claim status verification workspace.",
+    processingDescription: "Waystar uses the same shared upload workflow layout while backend processing is connected in a later task.",
   },
   "optum-pro": {
     heroDescription: "Upload the One Healthcare ID login workbook and Optum Pro claim workbook, then enter OTP when prompted.",
@@ -618,8 +643,8 @@ async function writeWorkbookToClaimFile(claimFileHandle: FileSystemFileHandle, e
 export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: PortalId | null }) {
   const router = useRouter();
   const pathname = usePathname();
-  const [authUser, setAuthUser] = useState<AuthUser | null>(() => readCachedAuthUser());
-  const [authLoading, setAuthLoading] = useState(() => readCachedAuthUser() === null);
+  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
   const [authUsername, setAuthUsername] = useState("");
   const [authPassword, setAuthPassword] = useState("");
   const [authConfirmPassword, setAuthConfirmPassword] = useState("");
@@ -655,6 +680,8 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
   const [aerialInputFile, setAerialInputFile] = useState<File | null>(null);
   const [availityCredentialFile, setAvailityCredentialFile] = useState<File | null>(null);
   const [availityInputFile, setAvailityInputFile] = useState<File | null>(null);
+  const [waystarLoginFile, setWaystarLoginFile] = useState<File | null>(null);
+  const [waystarInputFile, setWaystarInputFile] = useState<File | null>(null);
   const [optumProLoginFile, setOptumProLoginFile] = useState<File | null>(null);
   const [optumProInputFile, setOptumProInputFile] = useState<File | null>(null);
   const [optumProJobId, setOptumProJobId] = useState<string>("");
@@ -717,8 +744,10 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
             ? blueShieldFrontendPortalConfig
             : effectivePortalId === "availity"
               ? availityFrontendPortalConfig
-              : effectivePortalId === "optum-pro"
-                ? optumProFrontendPortalConfig
+              : effectivePortalId === "waystar"
+                ? waystarFrontendPortalConfig
+                : effectivePortalId === "optum-pro"
+                  ? optumProFrontendPortalConfig
             : null;
   const selectedPortalUiMeta = effectivePortalId ? PORTAL_UI_META[effectivePortalId] : null;
   const filteredPortals = useMemo(() => {
@@ -770,6 +799,10 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     () => Boolean(availityCredentialFile && availityInputFile && !isProcessing),
     [availityCredentialFile, availityInputFile, isProcessing],
   );
+  const canSubmitWaystar = useMemo(
+    () => Boolean(waystarLoginFile && waystarInputFile && !isProcessing),
+    [waystarInputFile, waystarLoginFile, isProcessing],
+  );
   const canSubmitOptumPro = useMemo(
     () => Boolean(optumProLoginFile && optumProInputFile && !isProcessing),
     [optumProLoginFile, optumProInputFile, isProcessing],
@@ -793,8 +826,10 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
             ? canSubmitBlueShield
             : effectivePortalId === "availity"
               ? canSubmitAvaility
-              : effectivePortalId === "optum-pro"
-                ? canSubmitOptumPro
+              : effectivePortalId === "waystar"
+                ? canSubmitWaystar
+                : effectivePortalId === "optum-pro"
+                  ? canSubmitOptumPro
             : false;
   const portalWorkflowMeta = effectivePortalId ? PORTAL_WORKSPACE_META[effectivePortalId] : null;
   const portalFileState = useMemo(() => {
@@ -843,6 +878,15 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
       };
     }
 
+    if (effectivePortalId === "waystar") {
+      return {
+        claimFileLabel: waystarInputFile?.name ?? "",
+        claimReady: Boolean(waystarInputFile),
+        loginFileLabel: waystarLoginFile?.name ?? "",
+        loginReady: Boolean(waystarLoginFile),
+      };
+    }
+
     if (effectivePortalId === "optum-pro") {
       return {
         claimFileLabel: optumProInputFile?.name ?? "",
@@ -872,6 +916,8 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     optumProLoginFile,
     regalClaimFile,
     regalLoginFile,
+    waystarInputFile,
+    waystarLoginFile,
   ]);
   const portalWorkflowStepIndex = useMemo(() => {
     const normalizedStatus = status.toLowerCase();
@@ -919,6 +965,12 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
   }
 
   useEffect(() => {
+    const cachedUser = readCachedAuthUser();
+    if (cachedUser) {
+      setAuthUser(cachedUser);
+      setAuthLoading(false);
+    }
+
     let mounted = true;
 
     fetch("/api/auth/me")
@@ -1171,6 +1223,89 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
       // Ignore storage failures.
     }
   }, [selectedPortalId, forcedPortalId]);
+
+  async function submitWaystar(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!waystarLoginFile || !waystarInputFile) {
+      setStatus("Please upload both the Waystar login workbook and claim details workbook.");
+      return;
+    }
+
+    resetRunState("Starting Waystar scraper...");
+
+    const formData = new FormData();
+    formData.append("portalId", "waystar");
+    formData.append("loginExcel", waystarLoginFile);
+    formData.append("inputExcel", waystarInputFile);
+    formData.append("loginFileName", waystarLoginFile.name);
+    formData.append("claimFileName", waystarInputFile.name);
+
+    let hasError = false;
+    let wasCancelled = false;
+    let finalErrorMessage = "";
+    let subscribedJobId = "";
+    const streamAbortController = new AbortController();
+
+    const handleJobEvent = async (eventData: ScrapeJobEvent) => {
+      if (eventData.type === "log" && eventData.message) {
+        setLogs((prev) => [...prev, eventData.message ?? ""]);
+      } else if (eventData.type === "progress" && typeof eventData.completed === "number" && typeof eventData.total === "number") {
+        setProgress({ completed: eventData.completed, total: eventData.total });
+      } else if (eventData.type === "error_screenshot" && typeof eventData.index === "number" && eventData.image) {
+        setErrorScreenshots((prev) => [...prev, { index: eventData.index ?? -1, image: eventData.image ?? "" }]);
+      } else if (eventData.type === "file_download" && eventData.filename && eventData.base64) {
+        const artifactKey = buildDownloadArtifactKey(eventData);
+        if (!hasDownloadedArtifact(subscribedJobId, artifactKey)) {
+          downloadBase64File(eventData.filename, eventData.base64, eventData.mimeType || "application/octet-stream");
+          rememberDownloadedArtifact(subscribedJobId, artifactKey);
+          setStatus(`Downloaded ${eventData.filename}`);
+        }
+      } else if (eventData.type === "warning" && eventData.message) {
+        setLogs((prev) => [...prev, eventData.message ?? ""]);
+        setStatus(eventData.message);
+      } else if (eventData.type === "error" && eventData.message) {
+        finalErrorMessage = eventData.message;
+        setLogs((prev) => [...prev, `ERROR: ${eventData.message}`]);
+        setStatus(`Error: ${eventData.message}`);
+        hasError = true;
+      } else if (eventData.type === "cancelled") {
+        wasCancelled = true;
+        setLogs((prev) => [...prev, eventData.message || "Processing cancelled."]);
+        setStatus(eventData.message || "Processing cancelled.");
+      }
+    };
+
+    try {
+      const jobId = await startScrapeJob(formData);
+      subscribedJobId = jobId;
+      setActiveJobId(jobId);
+      await subscribeToScrapeJobEvents({
+        jobId,
+        signal: streamAbortController.signal,
+        onEvent: handleJobEvent,
+        onStreamError(error) {
+          console.error("Waystar stream error:", error);
+          finalErrorMessage = getErrorMessage(error);
+          setLogs((prev) => [...prev, `STREAM ERROR: ${finalErrorMessage}`]);
+          setStatus(`Stream error: ${finalErrorMessage}`);
+          hasError = true;
+        },
+      });
+      setStatus(
+        wasCancelled
+          ? "Waystar processing cancelled."
+          : hasError
+          ? `Waystar processing finished with errors${finalErrorMessage ? `: ${finalErrorMessage}` : "."}`
+          : "Waystar processing completed.",
+      );
+    } catch (error) {
+      setStatus(`Failed to process Waystar claims: ${getErrorMessage(error)}`);
+    } finally {
+      setIsProcessing(false);
+      setActiveJobId("");
+    }
+  }
 
   function resetRunState(message: string) {
     setIsProcessing(true);
@@ -3811,6 +3946,16 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
                       onInputFileChange={setAvailityInputFile}
                       onSubmit={submitAvaility}
                     />
+                  ) : effectivePortalId === "waystar" ? (
+                    <WaystarInputForm
+                      canSubmit={canSubmitWaystar}
+                      inputFileName={waystarInputFile?.name ?? ""}
+                      isProcessing={isProcessing}
+                      loginFileName={waystarLoginFile?.name ?? ""}
+                      onInputFileChange={setWaystarInputFile}
+                      onLoginFileChange={setWaystarLoginFile}
+                      onSubmit={submitWaystar}
+                    />
                   ) : effectivePortalId === "optum-pro" ? (
                     <OptumProInputForm
                       canSubmit={canSubmitOptumPro}
@@ -3879,6 +4024,10 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
               ) : effectivePortalId === "availity" ? (
                 <div className="mt-5">
                   <AvailityResultView errorScreenshots={errorScreenshots} logs={logs} progress={progress} status={status} />
+                </div>
+              ) : effectivePortalId === "waystar" ? (
+                <div className="mt-5 rounded-[1.2rem] border border-sky-100 bg-white/92 p-5 text-sm text-slate-600 shadow-[0_12px_26px_rgba(148,163,184,0.1)]">
+                  {status || "Waystar frontend upload placeholders are ready. Workflow processing will be connected in a later task."}
                 </div>
               ) : effectivePortalId === "optum-pro" ? (
                 <div className="mt-5">

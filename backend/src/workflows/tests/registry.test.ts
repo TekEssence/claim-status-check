@@ -10,6 +10,14 @@ test("claim status portals resolve through the workflow registry", () => {
   assert.equal(runner.name, "IEHP Claim Status");
 });
 
+test("claim status resolves Waystar through the workflow registry", () => {
+  const runner = getAutomationRunner("claim-status", "waystar");
+
+  assert.equal(runner.workflowId, "claim-status");
+  assert.equal(runner.portalId, "waystar");
+  assert.equal(runner.name, "Waystar Claim Status");
+});
+
 test("eligibility resolves Waystar without requiring a payer selection", () => {
   const runner = getAutomationRunner("eligibility-verification", "waystar");
 
