@@ -3,7 +3,7 @@ import { closeAutomationResources } from "@/backend/src/core/runtime-config";
 import type { ScraperContext } from "../../types";
 import { launchAstronaBrowser } from "./browser";
 import { parseAstronaInput, readAstronaCredentials, readAstronaInputRows, routeAstronaRows } from "./input";
-import { astronaClaimDobMatches, astronaClaimNameMatches, astronaMemberNameSearchCandidates, astronaServiceLinesForDosAndCpt, astronaShowsNoClaimResults, extractAstronaClaimDetails, getAstronaClaimCount, getAstronaClaimNumbersForRow, goToAstronaClaims, loginToAstrona, openAstronaClaimByNumber, returnToAstronaResults, searchAstronaClaims, selectAstronaProviderPortal, signOutAstrona } from "./portal";
+import { astronaClaimDobMatches, astronaClaimNameMatches, astronaMemberNameSearchCandidates, astronaServiceLinesForDosAndCpt, astronaShowsNoClaimResults, extractAstronaClaimDetails, getAstronaClaimCount, getAstronaClaimNumbersForRow, goToAstronaClaims, goToNextAstronaClaimsPage, loginToAstrona, openAstronaClaimByNumber, returnToAstronaResults, searchAstronaClaims, selectAstronaProviderPortal, signOutAstrona } from "./portal";
 import type { AstronaClaimDetails, AstronaInputRow } from "./types";
 import { astronaOutputRows, createAstronaWorkbook } from "./workbook";
 
@@ -57,45 +57,62 @@ async function processRow(page: Page, row: AstronaInputRow, auditRows: Record<st
   await liveLog(count ? "info" : "warn", count ? `Portal returned ${count} claim(s); checking DOS and service lines.` : "No claims were returned by the portal search.");
   if (!count) return astronaOutputRows(row, blankDetails(), "no_data", "No claim data found in portal.");
 
-  const matchingClaimNumbers = await getAstronaClaimNumbersForRow(page, row);
-  record(auditRows, row, "claim_search", "filtered", `Opening all ${matchingClaimNumbers.length} discovered claim(s); DOS will be verified from claim detail service lines.`);
-  if (!matchingClaimNumbers.length) {
-    await liveLog("warn", "The portal reported claims, but no claim-number links could be discovered while scrolling the results grid.");
-    return astronaOutputRows(row, blankDetails(), "no_data", "Portal reported claim results, but no claim-number links could be extracted from the results grid.");
-  }
-
   const output: Record<string, unknown>[] = [];
   let matchedNameAndDos = false;
   let dobMismatch = false;
   const availablePortalDos = new Set<string>();
-  for (const claimNumber of matchingClaimNumbers) {
-    await liveLog("info", `Opening claim ${claimNumber} and reading all service lines.`);
-    const opened = await openAstronaClaimByNumber(page, claimNumber);
-    try {
-      const details = await extractAstronaClaimDetails(page, opened.claimNumber);
-      if (!astronaClaimNameMatches(details, row)) continue;
-      for (const line of details.serviceLines) {
-        if (line.from) availablePortalDos.add(line.from);
-        if (line.to) availablePortalDos.add(line.to);
+  const processedClaims = new Set<string>();
+  let resultsPage = 1;
+  let discoveredClaimLinks = false;
+  while (true) {
+    const pageClaimNumbers = await getAstronaClaimNumbersForRow(page, row);
+    if (pageClaimNumbers.length) discoveredClaimLinks = true;
+    record(auditRows, row, "claim_search", "filtered", `Results page ${resultsPage}: opening ${pageClaimNumbers.length} discovered claim(s); DOS will be verified from claim detail service lines.`);
+    await liveLog("info", `Checking Astrona results page ${resultsPage} (${pageClaimNumbers.length} claim(s)).`);
+
+    for (const claimNumber of pageClaimNumbers) {
+      if (processedClaims.has(claimNumber)) continue;
+      processedClaims.add(claimNumber);
+      await liveLog("info", `Opening claim ${claimNumber} and reading all service lines.`);
+      const opened = await openAstronaClaimByNumber(page, claimNumber);
+      try {
+        const details = await extractAstronaClaimDetails(page, opened.claimNumber);
+        if (!astronaClaimNameMatches(details, row)) continue;
+        for (const line of details.serviceLines) {
+          if (line.from) availablePortalDos.add(line.from);
+          if (line.to) availablePortalDos.add(line.to);
+        }
+        const serviceLines = astronaServiceLinesForDosAndCpt(details.serviceLines, row.dos, row.cptCode);
+        await liveLog("info", `Claim ${claimNumber}: extracted ${details.serviceLines.length} service line(s); ${serviceLines.length} matched the requested DOS/CPT.`);
+        if ((row.dos || row.cptCode) && !serviceLines.length) continue;
+        matchedNameAndDos = true;
+        if (!astronaClaimDobMatches(details, row)) {
+          dobMismatch = true;
+          continue;
+        }
+        if (serviceLines.length || !row.dos) {
+          output.push(...astronaOutputRows(row, {
+            ...details,
+            cptCodes: row.dos ? Array.from(new Set(serviceLines.map((line) => line.cpt).filter(Boolean))) : details.cptCodes,
+            serviceLines,
+          }));
+        }
+      } finally {
+        await returnToAstronaResults(page, opened.originalUrl);
       }
-      const serviceLines = astronaServiceLinesForDosAndCpt(details.serviceLines, row.dos, row.cptCode);
-      await liveLog("info", `Claim ${claimNumber}: extracted ${details.serviceLines.length} service line(s); ${serviceLines.length} matched the requested DOS/CPT.`);
-      if ((row.dos || row.cptCode) && !serviceLines.length) continue;
-      matchedNameAndDos = true;
-      if (!astronaClaimDobMatches(details, row)) {
-        dobMismatch = true;
-        continue;
-      }
-      if (serviceLines.length || !row.dos) {
-        output.push(...astronaOutputRows(row, {
-          ...details,
-          cptCodes: row.dos ? Array.from(new Set(serviceLines.map((line) => line.cpt).filter(Boolean))) : details.cptCodes,
-          serviceLines,
-        }));
-      }
-    } finally {
-      await returnToAstronaResults(page, opened.originalUrl);
     }
+
+    if (resultsPage >= 5) {
+      await liveLog("info", "Reached the maximum of 5 Astrona result pages for this member.");
+      break;
+    }
+    if (!await goToNextAstronaClaimsPage(page)) break;
+    resultsPage += 1;
+    await liveLog("info", `Requested DOS was not confirmed on the previous results page; moving to page ${resultsPage}.`);
+  }
+  if (!discoveredClaimLinks) {
+    await liveLog("warn", "The portal reported claims, but no claim-number links could be discovered while checking all result pages.");
+    return astronaOutputRows(row, blankDetails(), "no_data", "Portal reported claim results, but no claim-number links could be extracted from the results grid.");
   }
   if (!output.length && dobMismatch) {
     await liveLog("warn", "Member name and DOS matched, but portal DOB did not match the input DOB.");
@@ -103,7 +120,7 @@ async function processRow(page: Page, row: AstronaInputRow, auditRows: Record<st
   }
   if (!output.length && !matchedNameAndDos) {
     const available = availablePortalDos.size ? ` Playwright saw portal DOS: ${[...availablePortalDos].join(", ")}.` : " Playwright did not extract any service-line DOS values from the opened claims.";
-    const message = `No portal claim matched input Member Name, DOS, and CPT/Procedure Code.${available}`;
+    const message = `No data found after checking ${resultsPage} Astrona result page(s) for the input Member Name, DOS, and CPT/Procedure Code.${available}`;
     await liveLog("warn", message);
     return astronaOutputRows(row, blankDetails(), "no_data", message);
   }

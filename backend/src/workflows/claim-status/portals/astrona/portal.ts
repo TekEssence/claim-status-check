@@ -256,11 +256,14 @@ async function scrollAstronaResults(page: Page, visit: () => Promise<boolean | v
     for (const element of all) element.scrollTop = 0;
   });
 
-  await settle(page, 250);
+  await settle(page, 80);
   if (await visit()) return;
 
   let stableRounds = 0;
-  const maxSteps = 200;
+  // Astrona currently exposes at most the selected rows-per-page (normally
+  // ten). A small bounded scan is enough to materialize those rows and avoids
+  // spending up to 50 seconds walking unrelated page containers.
+  const maxSteps = 12;
   for (let step = 1; step <= maxSteps; step += 1) {
     const { moved, grew } = await scrollables.evaluate(() => {
       const all = [document.scrollingElement, ...Array.from(document.querySelectorAll("*"))]
@@ -273,13 +276,13 @@ async function scrollAstronaResults(page: Page, visit: () => Promise<boolean | v
       for (const element of all) {
         const beforeTop = element.scrollTop;
         const beforeHeight = element.scrollHeight;
-        element.scrollTop = Math.min(element.scrollHeight, element.scrollTop + Math.max(element.clientHeight * 0.7, 200));
+        element.scrollTop = Math.min(element.scrollHeight, element.scrollTop + Math.max(element.clientHeight, 400));
         if (Math.abs(element.scrollTop - beforeTop) > 1) changed = true;
         if (element.scrollHeight > beforeHeight) grew = true;
       }
       return { moved: changed, grew };
     });
-    await settle(page, 250);
+    await settle(page, 60);
     if (await visit()) return;
     if (!moved && !grew) {
       stableRounds += 1;
@@ -297,6 +300,10 @@ export async function astronaShowsNoClaimResults(page: Page): Promise<boolean> {
 
 export async function getAstronaClaimCount(page: Page): Promise<number> {
   if (await astronaShowsNoClaimResults(page)) return 0;
+  // Search result presence only; the complete bounded scan happens once in
+  // getAstronaClaimNumbersForRow immediately before extraction.
+  const visibleCount = await astronaClaimLinks(page).count();
+  if (visibleCount) return visibleCount;
   const claimNumbers = new Set<string>();
   await scrollAstronaResults(page, async () => {
     for (const value of await astronaClaimLinks(page).allInnerTexts()) claimNumbers.add(value.trim());
@@ -333,6 +340,30 @@ export async function getAstronaClaimNumbersForRow(page: Page, _inputRow: Astron
     }
   });
   return [...matches];
+}
+
+export async function goToNextAstronaClaimsPage(page: Page): Promise<boolean> {
+  const next = page
+    .locator('a[aria-label="Go to next page"], button[aria-label="Go to next page"], [role=button][aria-label="Go to next page"]')
+    .or(page.getByRole("button", { name: /^(next|go to next page)$/i }))
+    .or(page.getByRole("link", { name: /^(next|go to next page)$/i }))
+    .or(page.locator("button,a,[role=button]").filter({ hasText: /^\s*next\s*$/i }))
+    .first();
+  if (!await next.isVisible().catch(() => false)) return false;
+  const unavailable = await next.evaluate((element) => {
+    const control = element as HTMLButtonElement;
+    return control.disabled
+      || element.getAttribute("aria-disabled") === "true"
+      || element.hasAttribute("disabled")
+      || element.getAttribute("data-disabled") === "true";
+  }).catch(() => true);
+  if (unavailable) return false;
+
+  await next.scrollIntoViewIfNeeded().catch(() => {});
+  await next.click();
+  await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
+  await settle(page, 300);
+  return true;
 }
 
 export async function getAstronaClaimIndexesForRow(page: Page, inputRow: AstronaInputRow): Promise<number[]> {
@@ -383,7 +414,7 @@ export async function openAstronaClaimByNumber(page: Page, claimNumber: string):
   const originalUrl = page.url();
   await target.click();
   await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
-  await settle(page, 1000);
+  await settle(page, 300);
   return { claimNumber, originalUrl };
 }
 
@@ -460,25 +491,23 @@ async function scrollAstronaClaimDetails(page: Page): Promise<ReturnType<Page["l
     }
   }
 
-  for (let attempt = 0; attempt < 20; attempt += 1) {
+  for (let attempt = 0; attempt < 6; attempt += 1) {
     const reachedBottom = await root.evaluate((element) => {
       const elements = [element, ...Array.from(element.querySelectorAll("*"))]
         .filter((candidate): candidate is HTMLElement => candidate instanceof HTMLElement);
       const horizontal = elements.filter((candidate) => candidate.scrollWidth > candidate.clientWidth + 8);
-      for (const container of horizontal) {
-        container.scrollBy({ left: Math.max(300, container.clientWidth * 0.75), behavior: "smooth" });
-      }
+      for (const container of horizontal) container.scrollLeft = container.scrollWidth;
       const scrollable = elements
         .filter((candidate) => candidate.scrollHeight > candidate.clientHeight + 8)
         .sort((left, right) => right.scrollHeight - left.scrollHeight)[0] as HTMLElement | undefined;
       if (!scrollable) return true;
-      scrollable.scrollBy({ top: Math.max(250, scrollable.clientHeight * 0.7), behavior: "smooth" });
+      scrollable.scrollTop = Math.min(scrollable.scrollHeight, scrollable.scrollTop + Math.max(500, scrollable.clientHeight));
       return scrollable.scrollTop + scrollable.clientHeight >= scrollable.scrollHeight - 8;
     });
-    await settle(page, 250);
+    await settle(page, 80);
     if (reachedBottom) break;
   }
-  await settle(page, 700);
+  await settle(page, 200);
   return root;
 }
 
@@ -568,7 +597,7 @@ export async function returnToAstronaResults(page: Page, originalUrl: string): P
     const iconClose = dialog.locator("button:has(svg.lucide-x), button:has(svg[class*=lucide-x]), button:has([data-lucide=x])").first();
     const close = await namedClose.isVisible().catch(() => false) ? namedClose : iconClose;
     if (await close.isVisible().catch(() => false)) {
-      await settle(page, 500);
+      await settle(page, 150);
       await close.click();
       await dialog.waitFor({ state: "hidden", timeout: 10000 }).catch(() => {});
       closedDialog = true;
@@ -578,7 +607,7 @@ export async function returnToAstronaResults(page: Page, originalUrl: string): P
   if (!closedDialog && page.url() !== originalUrl) await page.goBack({ waitUntil: "domcontentloaded" });
   else if (!closedDialog) await page.keyboard.press("Escape");
   await page.locator("#memberIdSearch").waitFor({ state: "visible", timeout: 10000 }).catch(() => {});
-  await settle(page, 700);
+  await settle(page, 250);
 }
 
 export async function signOutAstrona(page: Page): Promise<void> {
