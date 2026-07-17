@@ -1,5 +1,6 @@
 import { isAuthDbConnectionError } from "@/lib/auth/db";
 import { betterAuthInstance } from "@/lib/auth/better-auth";
+import { runBetterAuthWithDbRetry } from "@/lib/auth/better-auth-retry";
 import { appendSetCookieHeaders } from "@/lib/auth/response";
 
 export const runtime = "nodejs";
@@ -41,7 +42,7 @@ export async function POST(req: Request) {
 
     let betterAuthResponse: Response | null = null;
     for (const mode of loginModes) {
-      betterAuthResponse = await attemptBetterAuthLogin(mode);
+      betterAuthResponse = await runBetterAuthWithDbRetry(() => attemptBetterAuthLogin(mode));
       if (betterAuthResponse.ok || betterAuthResponse.status !== 401) {
         break;
       }

@@ -1,5 +1,6 @@
 import { cookies, headers as nextHeaders } from "next/headers";
 import { betterAuthInstance } from "./better-auth";
+import { runBetterAuthWithDbRetry } from "./better-auth-retry";
 import { getActiveAuthUser, type AuthUser } from "./db";
 
 export type AuthSession = AuthUser & {
@@ -18,9 +19,10 @@ function clearBetterAuthCookie(cookieStore: Awaited<ReturnType<typeof cookies>>,
 
 export async function getSessionFromCookies(requestHeaders?: Headers): Promise<AuthSession | null> {
   try {
-    const authResult = await betterAuthInstance.api.getSession({
-      headers: requestHeaders ?? new Headers(await nextHeaders()),
-    });
+    const headers = requestHeaders ?? new Headers(await nextHeaders());
+    const authResult = await runBetterAuthWithDbRetry(() =>
+      betterAuthInstance.api.getSession({ headers }),
+    );
 
     if (!authResult?.session || !authResult?.user) {
       return null;

@@ -2,6 +2,7 @@ import { UnknownPortalError } from "../../core/errors";
 import { aerialScraper } from "./portals/aerial/scraper";
 import { availityScraper } from "./portals/availity/scraper";
 import { blueShieldScraper } from "./portals/blue-shield/scraper";
+import { cignaScraper } from "./portals/cigna/scraper";
 import { iehpScraper } from "./portals/iehp/scraper";
 import { kaiserScraper } from "./portals/kaiser/scraper";
 import { myFamilyScraper } from "./portals/my_family/scraper";
@@ -14,6 +15,7 @@ export const claimStatusPortalRegistry = {
   aerial: aerialScraper,
   availity: availityScraper,
   "blue-shield": blueShieldScraper,
+  cigna: cignaScraper,
   iehp: iehpScraper,
   kaiser: kaiserScraper,
   "my-family": myFamilyScraper,

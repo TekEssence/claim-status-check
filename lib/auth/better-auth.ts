@@ -25,61 +25,69 @@ function getSecret(): string {
   );
 }
 
-export const betterAuthInstance = betterAuth({
-  baseURL: getBaseUrl(),
-  basePath: "/api/better-auth",
-  secret: getSecret(),
-  database: drizzleAdapter(getDb(), {
-    provider: "pg",
-    schema: betterAuthSchema,
-  }),
-  emailAndPassword: {
-    enabled: true,
-    disableSignUp: true,
-    requireEmailVerification: false,
-    password: {
-      hash: hashPassword,
-      verify: ({ hash, password }) => verifyPassword(password, hash),
-    },
-  },
-  user: {
-    modelName: "authUsers",
-    additionalFields: {
-      mustResetPassword: {
-        type: "boolean",
-        required: false,
-        defaultValue: false,
-        input: false,
-      },
-      isActive: {
-        type: "boolean",
-        required: false,
-        defaultValue: true,
-        input: false,
-      },
-      legacyUserId: {
-        type: "string",
-        required: false,
-        input: false,
-      },
-    },
-  },
-  session: {
-    modelName: "authSessions",
-  },
-  account: {
-    modelName: "authAccounts",
-  },
-  verification: {
-    modelName: "authVerifications",
-  },
-  trustedOrigins: [getBaseUrl()],
-  plugins: [
-    username(),
-    admin({
-      adminRoles: ["ADMIN"],
-      defaultRole: "USER",
+function createBetterAuthInstance() {
+  return betterAuth({
+    baseURL: getBaseUrl(),
+    basePath: "/api/better-auth",
+    secret: getSecret(),
+    database: drizzleAdapter(getDb(), {
+      provider: "pg",
+      schema: betterAuthSchema,
     }),
-    nextCookies(),
-  ],
-});
+    emailAndPassword: {
+      enabled: true,
+      disableSignUp: true,
+      requireEmailVerification: false,
+      password: {
+        hash: hashPassword,
+        verify: ({ hash, password }) => verifyPassword(password, hash),
+      },
+    },
+    user: {
+      modelName: "authUsers",
+      additionalFields: {
+        mustResetPassword: {
+          type: "boolean",
+          required: false,
+          defaultValue: false,
+          input: false,
+        },
+        isActive: {
+          type: "boolean",
+          required: false,
+          defaultValue: true,
+          input: false,
+        },
+        legacyUserId: {
+          type: "string",
+          required: false,
+          input: false,
+        },
+      },
+    },
+    session: {
+      modelName: "authSessions",
+    },
+    account: {
+      modelName: "authAccounts",
+    },
+    verification: {
+      modelName: "authVerifications",
+    },
+    trustedOrigins: [getBaseUrl()],
+    plugins: [
+      username(),
+      admin({
+        adminRoles: ["ADMIN"],
+        defaultRole: "USER",
+      }),
+      nextCookies(),
+    ],
+  });
+}
+
+export let betterAuthInstance = createBetterAuthInstance();
+
+export function resetBetterAuthInstance(): void {
+  betterAuthInstance = createBetterAuthInstance();
+}

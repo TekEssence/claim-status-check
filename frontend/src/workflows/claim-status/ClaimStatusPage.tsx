@@ -23,8 +23,10 @@ import {
 import claimStatusHeroImage from "../../Assets/ChatGPT Image Jun 30, 2026, 12_47_57 PM.png";
 import dashboardWelcomeImage from "../../Assets/ChatGPT Image Jul 1, 2026, 10_55_01 AM.png";
 import blueShieldCaliforniaLogo from "../../Assets/customerlogo-blue-shield-california-clr.svg";
+import cignaLogo from "../../Assets/cigna-healthcare-logo.svg";
 import iehpLogo from "../../Assets/channels4_profile.jpg";
 import kaiserLogo from "../../Assets/kaiser-permanente-logo.svg";
+import myFamilyLogo from "../../Assets/my-family-medical-group-logo.svg";
 import optumLogo from "../../Assets/optum-logo.svg";
 import regalLogo from "../../Assets/channels4_profile (1).jpg";
 import availityLogo from "../../Assets/availity-logo.jpg";
@@ -43,6 +45,8 @@ import { BlueShieldInputForm } from "./portals/blue-shield/BlueShieldInputForm";
 import { BlueShieldResultView } from "./portals/blue-shield/BlueShieldResultView";
 import { AvailityInputForm } from "./portals/availity/AvailityInputForm";
 import { AvailityResultView } from "./portals/availity/AvailityResultView";
+import { CignaInputForm } from "./portals/cigna/CignaInputForm";
+import { CignaResultView } from "./portals/cigna/CignaResultView";
 import { KaiserInputForm } from "./portals/kaiser/KaiserInputForm";
 import { KaiserResultView } from "./portals/kaiser/KaiserResultView";
 import { MyFamilyInputForm } from "./portals/my_family/MyFamilyInputForm";
@@ -54,6 +58,7 @@ import {
   availityFrontendPortalConfig,
   blueShieldFrontendPortalConfig,
   claimStatusPortalRegistry,
+  cignaFrontendPortalConfig,
   iehpFrontendPortalConfig,
   kaiserFrontendPortalConfig,
   myFamilyFrontendPortalConfig,
@@ -93,7 +98,7 @@ type IehpWorkbookBundle = {
   worksheet: ExcelJS.Worksheet;
 };
 
-export type PortalId = "iehp" | "aerial" | "regal" | "blue-shield" | "availity" | "kaiser" | "my-family" | "optum-pro";
+export type PortalId = "iehp" | "aerial" | "regal" | "blue-shield" | "availity" | "cigna" | "kaiser" | "my-family" | "optum-pro";
 type DownloadFile = {
   filename: string;
   bytes: Uint8Array;
@@ -117,13 +122,14 @@ const PORTAL_ROUTE_MAP: Record<PortalId, string> = {
   regal: "/regal",
   "blue-shield": "/blue-shield",
   availity: "/availity",
+  cigna: "/cigna",
   kaiser: "/kaiser",
   "my-family": "/my-family",
   "optum-pro": "/optum-pro",
 };
 
 function isPortalId(value: string): value is PortalId {
-  return value === "iehp" || value === "aerial" || value === "regal" || value === "blue-shield" || value === "availity" || value === "kaiser" || value === "my-family" || value === "optum-pro";
+  return value === "iehp" || value === "aerial" || value === "regal" || value === "blue-shield" || value === "availity" || value === "cigna" || value === "kaiser" || value === "my-family" || value === "optum-pro";
 }
 
 function canRestoreCurrentJob(job: CurrentScrapeJob): job is CurrentScrapeJob & { portalId: PortalId } {
@@ -260,6 +266,23 @@ const PORTAL_UI_META: Record<
       height: 32,
     },
   },
+  cigna: {
+    shortCode: "CG",
+    logoClassName: "bg-white text-blue-700",
+    logoSrc: cignaLogo,
+    cardLogoFrameClassName: "h-10 w-[5.6rem] rounded-[1rem] px-2",
+    cardLogoImageClassName: "h-7 w-full object-contain",
+    cardLogoSize: {
+      width: 82,
+      height: 36,
+    },
+    heroLogoFrameClassName: "h-14 w-[8rem] rounded-[1.15rem] px-3",
+    heroLogoImageClassName: "h-10 w-full object-contain",
+    heroLogoSize: {
+      width: 116,
+      height: 52,
+    },
+  },
   kaiser: {
     shortCode: "KP",
     logoClassName: "bg-white text-cyan-700",
@@ -279,7 +302,20 @@ const PORTAL_UI_META: Record<
   },
   "my-family": {
     shortCode: "MF",
-    logoClassName: "bg-[linear-gradient(180deg,#eaf6ff_0%,#d8ecff_100%)] text-blue-700",
+    logoClassName: "bg-[#111827] text-cyan-700",
+    logoSrc: myFamilyLogo,
+    cardLogoFrameClassName: "h-10 w-[8.8rem] rounded-[1rem] px-1.5",
+    cardLogoImageClassName: "h-full w-full object-contain",
+    cardLogoSize: {
+      width: 132,
+      height: 40,
+    },
+    heroLogoFrameClassName: "h-14 w-[12.5rem] rounded-[1.15rem] px-2",
+    heroLogoImageClassName: "h-full w-full object-contain",
+    heroLogoSize: {
+      width: 184,
+      height: 55,
+    },
   },
   "optum-pro": {
     shortCode: "OP",
@@ -326,6 +362,10 @@ const PORTAL_WORKSPACE_META: Record<
   availity: {
     heroDescription: "Upload your Availity login workbook and claim workbook to process Aetna, Blue Cross Blue Shield, Wellpoint, and Wellcare claim status checks.",
     processingDescription: "Availity requests stream live status over SSE and automatically download the completed output workbook.",
+  },
+  cigna: {
+    heroDescription: "Upload the Cigna login workbook and claim workbook to search Cigna for Health Care Professionals by patient ID, patient name, DOS, and CPT.",
+    processingDescription: "Cigna rows stream live progress and download an output workbook with claim, payment, procedure, and remark-code details.",
   },
   kaiser: {
     heroDescription: "Upload the Kaiser EpicLink login workbook and claim workbook to search claim status by Member ID, DOS, and CPT.",
@@ -693,6 +733,8 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
   const [aerialInputFile, setAerialInputFile] = useState<File | null>(null);
   const [availityCredentialFile, setAvailityCredentialFile] = useState<File | null>(null);
   const [availityInputFile, setAvailityInputFile] = useState<File | null>(null);
+  const [cignaCredentialFile, setCignaCredentialFile] = useState<File | null>(null);
+  const [cignaInputFile, setCignaInputFile] = useState<File | null>(null);
   const [kaiserCredentialFile, setKaiserCredentialFile] = useState<File | null>(null);
   const [kaiserInputFile, setKaiserInputFile] = useState<File | null>(null);
   const [myFamilyCredentialFile, setMyFamilyCredentialFile] = useState<File | null>(null);
@@ -759,6 +801,8 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
             ? blueShieldFrontendPortalConfig
             : effectivePortalId === "availity"
               ? availityFrontendPortalConfig
+              : effectivePortalId === "cigna"
+                ? cignaFrontendPortalConfig
               : effectivePortalId === "kaiser"
                 ? kaiserFrontendPortalConfig
               : effectivePortalId === "my-family"
@@ -816,6 +860,10 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     () => Boolean(availityCredentialFile && availityInputFile && !isProcessing),
     [availityCredentialFile, availityInputFile, isProcessing],
   );
+  const canSubmitCigna = useMemo(
+    () => Boolean(cignaCredentialFile && cignaInputFile && !isProcessing),
+    [cignaCredentialFile, cignaInputFile, isProcessing],
+  );
   const canSubmitKaiser = useMemo(
     () => Boolean(kaiserCredentialFile && kaiserInputFile && !isProcessing),
     [kaiserCredentialFile, kaiserInputFile, isProcessing],
@@ -847,6 +895,8 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
             ? canSubmitBlueShield
             : effectivePortalId === "availity"
               ? canSubmitAvaility
+              : effectivePortalId === "cigna"
+                ? canSubmitCigna
               : effectivePortalId === "kaiser"
                 ? canSubmitKaiser
               : effectivePortalId === "my-family"
@@ -889,6 +939,15 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
         claimReady: Boolean(availityInputFile),
         loginFileLabel: availityCredentialFile?.name ?? "",
         loginReady: Boolean(availityCredentialFile),
+      };
+    }
+
+    if (effectivePortalId === "cigna") {
+      return {
+        claimFileLabel: cignaInputFile?.name ?? "",
+        claimReady: Boolean(cignaInputFile),
+        loginFileLabel: cignaCredentialFile?.name ?? "",
+        loginReady: Boolean(cignaCredentialFile),
       };
     }
 
@@ -941,6 +1000,8 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     availityInputFile,
     blueShieldCredentialFile,
     blueShieldInputFile,
+    cignaCredentialFile,
+    cignaInputFile,
     claimFileName,
     effectivePortalId,
     iehpLoginFile,
@@ -1122,6 +1183,8 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
           await reconnectAerialRun(currentJob);
         } else if (currentJob.portalId === "availity") {
           await reconnectDownloadOnlyRun(currentJob, "availity", "Availity");
+        } else if (currentJob.portalId === "cigna") {
+          await reconnectDownloadOnlyRun(currentJob, "cigna", "Cigna");
         } else if (currentJob.portalId === "kaiser") {
           await reconnectDownloadOnlyRun(currentJob, "kaiser", "Kaiser");
         } else if (currentJob.portalId === "my-family") {
@@ -1318,6 +1381,8 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     setBlueShieldJobId("");
     setBlueShieldOtpRequest(null);
     setBlueShieldOtpValue("");
+    setCignaCredentialFile(null);
+    setCignaInputFile(null);
     setKaiserCredentialFile(null);
     setKaiserInputFile(null);
     setMyFamilyCredentialFile(null);
@@ -1464,6 +1529,8 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     setBlueShieldJobId("");
     setBlueShieldOtpRequest(null);
     setBlueShieldOtpValue("");
+    setCignaCredentialFile(null);
+    setCignaInputFile(null);
     setKaiserCredentialFile(null);
     setKaiserInputFile(null);
     setMyFamilyCredentialFile(null);
@@ -2705,6 +2772,89 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
       );
     } catch (error) {
       setStatus(`Failed to process Kaiser claims: ${getErrorMessage(error)}`);
+    } finally {
+      setIsProcessing(false);
+      setActiveJobId("");
+    }
+  }
+
+  async function submitCigna(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+
+    if (!cignaCredentialFile || !cignaInputFile) {
+      setStatus("Please provide both the Cigna login Excel and claim Excel files.");
+      return;
+    }
+
+    resetRunState("Starting Cigna scraper...");
+
+    const formData = new FormData();
+    formData.append("portalId", "cigna");
+    formData.append("credentialExcel", cignaCredentialFile);
+    formData.append("inputExcel", cignaInputFile);
+    formData.append("loginFileName", cignaCredentialFile.name);
+    formData.append("claimFileName", cignaInputFile.name);
+
+    let hasError = false;
+    let wasCancelled = false;
+    let finalErrorMessage = "";
+    let subscribedJobId = "";
+    const streamAbortController = new AbortController();
+
+    const handleJobEvent = async (eventData: ScrapeJobEvent) => {
+      if (eventData.type === "log" && eventData.message) {
+        setLogs((prev) => [...prev, eventData.message ?? ""]);
+      } else if (eventData.type === "progress" && typeof eventData.completed === "number" && typeof eventData.total === "number") {
+        setProgress({ completed: eventData.completed, total: eventData.total });
+      } else if (eventData.type === "error_screenshot" && typeof eventData.index === "number" && eventData.image) {
+        setErrorScreenshots((prev) => [...prev, { index: eventData.index ?? -1, image: eventData.image ?? "" }]);
+      } else if (eventData.type === "file_download" && eventData.filename && eventData.base64) {
+        const artifactKey = buildDownloadArtifactKey(eventData);
+        if (!hasDownloadedArtifact(subscribedJobId, artifactKey)) {
+          downloadBase64File(eventData.filename, eventData.base64, eventData.mimeType || "application/octet-stream");
+          rememberDownloadedArtifact(subscribedJobId, artifactKey);
+          setStatus(`Downloaded ${eventData.filename}`);
+        }
+      } else if (eventData.type === "warning" && eventData.message) {
+        setLogs((prev) => [...prev, eventData.message ?? ""]);
+        setStatus(eventData.message);
+      } else if (eventData.type === "error" && eventData.message) {
+        finalErrorMessage = eventData.message;
+        setLogs((prev) => [...prev, `ERROR: ${eventData.message}`]);
+        setStatus(`Error: ${eventData.message}`);
+        hasError = true;
+      } else if (eventData.type === "cancelled") {
+        wasCancelled = true;
+        setLogs((prev) => [...prev, eventData.message || "Processing cancelled."]);
+        setStatus(eventData.message || "Processing cancelled.");
+      }
+    };
+
+    try {
+      const jobId = await startScrapeJob(formData);
+      subscribedJobId = jobId;
+      setActiveJobId(jobId);
+      await subscribeToScrapeJobEvents({
+        jobId,
+        signal: streamAbortController.signal,
+        onEvent: handleJobEvent,
+        onStreamError(error) {
+          console.error("Cigna stream error:", error);
+          finalErrorMessage = getErrorMessage(error);
+          setLogs((prev) => [...prev, `STREAM ERROR: ${finalErrorMessage}`]);
+          setStatus(`Stream error: ${finalErrorMessage}`);
+          hasError = true;
+        },
+      });
+      setStatus(
+        wasCancelled
+          ? "Cigna processing cancelled."
+          : hasError
+            ? `Cigna processing finished with errors${finalErrorMessage ? `: ${finalErrorMessage}` : "."}`
+            : "Cigna processing completed.",
+      );
+    } catch (error) {
+      setStatus(`Failed to process Cigna claims: ${getErrorMessage(error)}`);
     } finally {
       setIsProcessing(false);
       setActiveJobId("");
@@ -4069,6 +4219,16 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
                       onInputFileChange={setAvailityInputFile}
                       onSubmit={submitAvaility}
                     />
+                  ) : effectivePortalId === "cigna" ? (
+                    <CignaInputForm
+                      canSubmit={canSubmitCigna}
+                      credentialFileName={cignaCredentialFile?.name ?? ""}
+                      inputFileName={cignaInputFile?.name ?? ""}
+                      isProcessing={isProcessing}
+                      onCredentialFileChange={setCignaCredentialFile}
+                      onInputFileChange={setCignaInputFile}
+                      onSubmit={submitCigna}
+                    />
                   ) : effectivePortalId === "kaiser" ? (
                     <KaiserInputForm
                       canSubmit={canSubmitKaiser}
@@ -4157,6 +4317,10 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
               ) : effectivePortalId === "availity" ? (
                 <div className="mt-5">
                   <AvailityResultView errorScreenshots={errorScreenshots} logs={logs} progress={progress} status={status} />
+                </div>
+              ) : effectivePortalId === "cigna" ? (
+                <div className="mt-5">
+                  <CignaResultView errorScreenshots={errorScreenshots} logs={logs} progress={progress} status={status} />
                 </div>
               ) : effectivePortalId === "kaiser" ? (
                 <div className="mt-5">
