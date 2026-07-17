@@ -1,9 +1,9 @@
 import path from "node:path";
 import ExcelJS from "exceljs";
-import { applyProjectColumnMapping, normalizeProjectId } from "./project-config";
+import { applyProjectColumnMapping, applyProjectPreprocessing, normalizeProjectId } from "./project-config";
 import type { AvailityCredentials, AvailityInput, AvailityInputRow } from "./types";
 
-const SUPPORTED_PAYER_PATTERN = /\b(aetna|anthem|blue\s*cross|blue\s*shield|bcbs|bcbstx|wellpoint|wellcare|humana)\b/i;
+const SUPPORTED_PAYER_PATTERN = /\b(aetna|anthem|blue\s*cross|blue\s*shield|bcbs|bcbstx|wellpoint|wellcare|humana|molina)\b/i;
 
 function asText(value: unknown): string {
   if (value == null) return "";
@@ -109,7 +109,7 @@ function assertSupportedPayers(rows: AvailityInputRow[]): void {
 
   if (unsupported.length) {
     const unique = Array.from(new Set(unsupported)).slice(0, 5);
-    throw new Error(`Availity supports only Aetna, Anthem-CA, Blue Cross Blue Shield, Wellpoint, Wellcare, and Humana. Unsupported payer(s): ${unique.join(", ")}`);
+    throw new Error(`Availity supports only Aetna, Anthem-CA, Blue Cross Blue Shield, Wellpoint, Wellcare, Humana, and Molina. Unsupported payer(s): ${unique.join(", ")}`);
   }
 }
 
@@ -127,11 +127,12 @@ export async function parseAvailityInput(formData: FormData): Promise<AvailityIn
 
   const credentialRows = await readWorkbookRows(await credentialExcel.arrayBuffer());
   const inputWorkbook = await readWorkbookRows(await inputExcel.arrayBuffer());
-  const inputRows = inputWorkbook.rows.map((data, index) => ({
+  const mappedInputRows = inputWorkbook.rows.map((data, index) => ({
     input_row_id: index + 1,
     source_row_number: index + 2,
     data: applyProjectColumnMapping(projectId, data),
   }));
+  const inputRows = applyProjectPreprocessing(projectId, mappedInputRows);
 
   if (!inputRows.length) {
     throw new Error("Availity claim Excel file contains no rows.");

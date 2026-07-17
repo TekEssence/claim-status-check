@@ -45,6 +45,19 @@ function findRowValue(row: AvailityInputRow, aliases: string[]): string {
   return "";
 }
 
+function parseMoney(value: unknown): number | null {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+  const isNegative = /^\(.*\)$/.test(raw);
+  const numeric = Number(raw.replace(/[()$,\s]/g, ""));
+  if (!Number.isFinite(numeric)) return null;
+  return isNegative ? -numeric : numeric;
+}
+
+function formatMoney(value: number): string {
+  return value.toFixed(2);
+}
+
 export function normalizeProjectId(value: unknown): string {
   const normalized = normalizeAlias(value || "minimax");
   if (!normalized || normalized === "minimax") return "minimax";
@@ -57,14 +70,57 @@ export function applyProjectColumnMapping(projectId: string, data: Record<string
     return data;
   }
 
+  const lineBilledAmount = findDataValue(data, ["Billed Amount"]) || data["Line Billed Amount"] || data.Charges || "";
+
   return {
     ...data,
     "Payer Name": findDataValue(data, ["Responsible Payer"]) || data["Payer Name"] || "",
     "Service Date": findDataValue(data, ["DOS"]) || data["Service Date"] || "",
-    Charges: findDataValue(data, ["Billed Amount"]) || data.Charges || "",
+    Charges: lineBilledAmount,
+    "Line Billed Amount": lineBilledAmount,
+    "Account Number": findDataValue(data, ["Account Number", "Account No", "Account"]) || data["Account Number"] || "",
+    Episode_DOS: findDataValue(data, ["Episode_DOS", "Episode DOS", "Episode Dos"]) || data.Episode_DOS || "",
     Group: findDataValue(data, ["Group"]) || data.Group || "",
     "Subscriber No": findDataValue(data, ["Member ID"]) || data["Subscriber No"] || "",
   };
+}
+
+export function applyProjectPreprocessing(projectId: string, rows: AvailityInputRow[]): AvailityInputRow[] {
+  if (projectId !== "medrevenu") {
+    return rows;
+  }
+
+  const totals = new Map<string, number>();
+  for (const row of rows) {
+    const accountNumber = findRowValue(row, ["Account Number", "Account No", "Account"]);
+    const episodeDos = findRowValue(row, ["Episode_DOS", "Episode DOS", "Episode Dos"]);
+    const billedAmount = parseMoney(findRowValue(row, ["Line Billed Amount", "Billed Amount", "Charges"]));
+    if (!accountNumber || !episodeDos || billedAmount == null) {
+      continue;
+    }
+
+    const groupKey = `${normalizeLookup(accountNumber)}|${normalizeLookup(episodeDos)}`;
+    totals.set(groupKey, (totals.get(groupKey) || 0) + billedAmount);
+  }
+
+  return rows.map((row) => {
+    const accountNumber = findRowValue(row, ["Account Number", "Account No", "Account"]);
+    const episodeDos = findRowValue(row, ["Episode_DOS", "Episode DOS", "Episode Dos"]);
+    const groupKey = `${normalizeLookup(accountNumber)}|${normalizeLookup(episodeDos)}`;
+    const total = totals.get(groupKey);
+    if (!accountNumber || !episodeDos || total == null) {
+      return row;
+    }
+
+    return {
+      ...row,
+      data: {
+        ...row.data,
+        Charges: formatMoney(total),
+        "Claim Level Billed Amount": formatMoney(total),
+      },
+    };
+  });
 }
 
 export async function readAvailityProviderMapping(): Promise<AvailityProviderMapping[]> {
