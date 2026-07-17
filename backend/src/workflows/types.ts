@@ -4,7 +4,7 @@ export type LogEvent = {
   level: "debug" | "info" | "warn" | "error";
   message: string;
   eventName?: string;
-  rowIndex?: number;
+  rowIndex?: number | string;
   meta?: Record<string, unknown>;
 };
 

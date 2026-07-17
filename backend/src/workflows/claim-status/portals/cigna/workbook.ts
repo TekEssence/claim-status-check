@@ -69,6 +69,8 @@ type ColumnDef<T> = {
   width: number;
 };
 
+const excludedOutputHeaders = new Set(["Patient Name", "Provider Name", "Provider Account Number"]);
+
 const outputColumns: Array<ColumnDef<Omit<CignaOutputRow, "inputData">>> = [
   { key: "inputRowId", header: "Input Row", width: 12 },
   { key: "botStatus", header: "Bot Status", width: 18 },
@@ -82,9 +84,6 @@ const outputColumns: Array<ColumnDef<Omit<CignaOutputRow, "inputData">>> = [
   { key: "taxId", header: "TIN", width: 16 },
   { key: "claimNumber", header: "Claim Number", width: 20 },
   { key: "claimStatus", header: "Claim Status", width: 16 },
-  { key: "patientName", header: "Patient Name", width: 28 },
-  { key: "providerName", header: "Provider Name", width: 28 },
-  { key: "providerAccountNumber", header: "Provider Account Number", width: 24 },
   { key: "dateReceived", header: "Date Received", width: 16 },
   { key: "dateProcessed", header: "Date Processed", width: 16 },
   { key: "datesOfService", header: "Dates of Service", width: 24 },
@@ -140,6 +139,7 @@ function inputColumnHeaders(rows: CignaOutputRow[]): string[] {
   const headers: string[] = [];
   for (const row of rows) {
     for (const key of Object.keys(row.inputData)) {
+      if (excludedOutputHeaders.has(key)) continue;
       if (!headers.includes(key)) headers.push(key);
     }
   }

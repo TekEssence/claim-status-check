@@ -7,8 +7,10 @@ export type CignaCredentials = {
   password: string;
 };
 
+type CignaInputRowId = number & string;
+
 export type CignaInputRow = Record<string, unknown> & {
-  inputRowId: number;
+  inputRowId: CignaInputRowId;
   memberId: string;
   patientFirstName: string;
   patientLastName: string;
@@ -160,7 +162,7 @@ export function readCignaInputWorkbook(buffer: ArrayBuffer): CignaInputRow[] {
           : "";
       return {
         ...row,
-        inputRowId: index + 2,
+        inputRowId: (index + 2) as CignaInputRowId,
         memberId,
         patientFirstName,
         patientLastName,

@@ -64,6 +64,18 @@ type ClaimDetails = {
 
 const OUTPUT_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 
+// Adaptive-wait tuning. These replace blind fixed-length waits with polling
+// loops that return as soon as the page shows either "results" or "no
+// results" (instead of always waiting the full ms) but that will keep
+// polling up to this ceiling for slow-loading pages (instead of timing out
+// too early). If these ever need to be shared with other Cigna jobs, move
+// them into cignaConfig.timing alongside betweenRowsMs/postSearchMs/etc.
+const SEARCH_OUTCOME_POLL_MS = 300;
+const SEARCH_OUTCOME_TIMEOUT_MS = 25000;
+const CLAIM_ROW_TIMEOUT_MS = 20000;
+const CLAIM_DETAIL_LOAD_TIMEOUT_MS = 20000;
+const CLAIM_DETAIL_OPEN_ATTEMPTS = 3;
+
 function nowIso(): string {
   return new Date().toISOString();
 }
@@ -80,6 +92,56 @@ function maskValue(value: string): string {
   const text = value.trim();
   if (text.length <= 4) return "****";
   return `${"*".repeat(text.length - 4)}${text.slice(-4)}`;
+}
+
+// Cigna's search rejects legal suffixes (Jr., Sr., II, III, IV...) packed
+// into the Last name field even though the results table happily displays
+// "Garcia III" - searching "Garcia III" returns 0 results while "Garcia"
+// returns the real matches. Likewise a middle name/initial in First name
+// ("Arthur J") can prevent a match. These helpers build a short, ordered
+// list of name variants to retry the search with before giving up.
+const NAME_SUFFIX_REGEX = /\s+(jr\.?|sr\.?|ii|iii|iv|v)\.?$/i;
+
+function stripNameSuffix(name: string): string {
+  return name.replace(NAME_SUFFIX_REGEX, "").trim();
+}
+
+function lastNameCandidates(lastName: string): string[] {
+  const trimmed = cleanText(lastName || "");
+  if (!trimmed) return [""];
+  const candidates = [trimmed];
+  const stripped = stripNameSuffix(trimmed);
+  if (stripped && stripped !== trimmed) candidates.push(stripped);
+  return candidates;
+}
+
+function firstNameCandidates(firstName: string): string[] {
+  const trimmed = cleanText(firstName || "");
+  if (!trimmed) return [""];
+  const candidates = [trimmed];
+  const firstToken = trimmed.split(" ")[0];
+  if (firstToken && firstToken !== trimmed) candidates.push(firstToken);
+  return candidates;
+}
+
+// Ordered, de-duplicated {first, last} pairs to try, cheapest/most-exact
+// first. The Patient ID field never changes across attempts, so this only
+// helps the search find the right patient - it can't widen the match to a
+// different person.
+function nameSearchAttempts(inputRow: CignaInputRow): Array<{ first: string; last: string }> {
+  const lastNames = lastNameCandidates(inputRow.patientLastName);
+  const firstNames = firstNameCandidates(inputRow.patientFirstName);
+  const attempts: Array<{ first: string; last: string }> = [];
+  const seen = new Set<string>();
+  for (const last of lastNames) {
+    for (const first of firstNames) {
+      const key = `${first}||${last}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      attempts.push({ first, last });
+    }
+  }
+  return attempts;
 }
 
 function normalizeDateComparable(value: string): string {
@@ -396,6 +458,65 @@ async function clearSearch(page: Page): Promise<void> {
   await findVisibleLocator(page, cignaConfig.selectors.claimSearchHeading, 30000);
 }
 
+// Polls the page after clicking Search instead of doing one blind fixed
+// wait. Returns as soon as either a result row or the "no results" empty
+// state shows up (fast when Cigna is fast), but keeps polling up to
+// SEARCH_OUTCOME_TIMEOUT_MS for slow loads (instead of a hard 10s timeout
+// that fires while the table is still rendering).
+async function waitForSearchOutcome(page: Page): Promise<"results" | "empty" | "timeout"> {
+  const rowLocator = page.locator(`${cignaConfig.selectors.resultsBody} tr`).first();
+  const emptyLocator = page.getByText(/no results for the parameters chosen/i).first();
+  const deadline = Date.now() + SEARCH_OUTCOME_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    if (await rowLocator.isVisible().catch(() => false)) return "results";
+    if (await emptyLocator.isVisible().catch(() => false)) return "empty";
+    await page.waitForTimeout(SEARCH_OUTCOME_POLL_MS);
+  }
+  return "timeout";
+}
+
+async function fillNameFields(page: Page, firstName: string, lastName: string, context: ScraperContext, rowId: string): Promise<void> {
+  // Fill by exact data-test-id selectors (not label text) so we never hit
+  // Cigna's duplicate/mismatched <label for> markup on this form.
+  const firstNameFilled = await fillBySelector(page, cignaConfig.selectors.firstName, firstName);
+  const lastNameFilled = await fillBySelector(page, cignaConfig.selectors.lastName, lastName);
+  if (firstName && !firstNameFilled) {
+    await context.log({ level: "warn", message: "Could not fill First name field.", rowIndex: rowId });
+  }
+  if (lastName && !lastNameFilled) {
+    await context.log({ level: "warn", message: "Could not fill Last name field.", rowIndex: rowId });
+  }
+}
+
+async function runSearchAttempt(
+  page: Page,
+  inputRow: CignaInputRow,
+  firstName: string,
+  lastName: string,
+  context: ScraperContext,
+): Promise<SearchResultRow[]> {
+  await fillNameFields(page, firstName, lastName, context, inputRow.inputRowId);
+  const memberIdFilled = await fillBySelector(page, cignaConfig.selectors.memberId, inputRow.memberId);
+  if (!memberIdFilled) throw new Error("Could not fill the Cigna Patient ID field.");
+
+  const clicked = await clickIfVisible(page, cignaConfig.selectors.searchButton, 8000);
+  if (!clicked) throw new Error("Could not click the Cigna Search button.");
+
+  const outcome = await waitForSearchOutcome(page);
+  if (outcome === "empty") return [];
+  if (outcome === "timeout") {
+    await context
+      .log({
+        level: "warn",
+        message: `Cigna search results took longer than ${SEARCH_OUTCOME_TIMEOUT_MS}ms for row ${inputRow.inputRowId}; reading whatever loaded.`,
+        rowIndex: inputRow.inputRowId,
+      })
+      .catch(() => {});
+  }
+  await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
+  return extractSearchRows(page);
+}
+
 async function submitSearch(page: Page, inputRow: CignaInputRow, context: ScraperContext): Promise<SearchResultRow[]> {
   await clearSearch(page);
 
@@ -412,33 +533,26 @@ async function submitSearch(page: Page, inputRow: CignaInputRow, context: Scrape
     });
   }
 
-  // Fill by exact data-test-id selectors (not label text) so we never hit
-  // Cigna's duplicate/mismatched <label for> markup on this form.
-  const firstNameFilled = await fillBySelector(page, cignaConfig.selectors.firstName, inputRow.patientFirstName);
-  const lastNameFilled = await fillBySelector(page, cignaConfig.selectors.lastName, inputRow.patientLastName);
-  const memberIdFilled = await fillBySelector(page, cignaConfig.selectors.memberId, inputRow.memberId);
-
-  if (!memberIdFilled) {
-    throw new Error("Could not fill the Cigna Patient ID field.");
+  // Try the name as given first, then progressively simplified variants
+  // (suffix stripped from last name, middle name/initial dropped from first
+  // name) if the exact name comes back empty. The Patient ID is identical
+  // on every attempt, so this can only help find the same patient - it
+  // can never match a different one.
+  const attempts = nameSearchAttempts(inputRow);
+  let lastResults: SearchResultRow[] = [];
+  for (let i = 0; i < attempts.length; i += 1) {
+    const { first, last } = attempts[i];
+    await context.log({
+      level: "info",
+      message: `Searching Cigna row ${inputRow.inputRowId}: ${last || "(blank)"}, ${first || "(blank)"}, member ${maskValue(inputRow.memberId)}${
+        i > 0 ? " [fallback name variant]" : ""
+      }.`,
+      rowIndex: inputRow.inputRowId,
+    });
+    lastResults = await runSearchAttempt(page, inputRow, first, last, context);
+    if (lastResults.length) return lastResults;
   }
-  if (inputRow.patientFirstName && !firstNameFilled) {
-    await context.log({ level: "warn", message: "Could not fill First name field.", rowIndex: inputRow.inputRowId });
-  }
-  if (inputRow.patientLastName && !lastNameFilled) {
-    await context.log({ level: "warn", message: "Could not fill Last name field.", rowIndex: inputRow.inputRowId });
-  }
-
-  await context.log({
-    level: "info",
-    message: `Searching Cigna row ${inputRow.inputRowId}: ${inputRow.patientLastName}, ${inputRow.patientFirstName}, member ${maskValue(inputRow.memberId)}.`,
-    rowIndex: inputRow.inputRowId,
-  });
-
-  const clicked = await clickIfVisible(page, cignaConfig.selectors.searchButton, 8000);
-  if (!clicked) throw new Error("Could not click the Cigna Search button.");
-  await page.waitForTimeout(cignaConfig.timing.postSearchMs);
-  await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
-  return extractSearchRows(page);
+  return lastResults;
 }
 
 async function extractSearchRows(page: Page): Promise<SearchResultRow[]> {
@@ -481,18 +595,40 @@ function rowMatchesInput(row: SearchResultRow, inputRow: CignaInputRow): boolean
   return dosMatches && memberMatches && tinMatches;
 }
 
-async function openClaimDetail(page: Page, result: SearchResultRow): Promise<void> {
-  const link = page
-    .locator(`${cignaConfig.selectors.resultsBody} tr`)
-    .filter({ hasText: result.claimNumber })
-    .locator("[data-test-id='c360-result-table-claimRefNumber-cell'] a")
-    .first();
-  await Promise.all([
-    page.waitForLoadState("domcontentloaded", { timeout: 30000 }).catch(() => {}),
-    link.click({ timeout: 10000 }),
-  ]);
-  await page.waitForTimeout(cignaConfig.timing.detailLoadMs);
-  await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
+async function openClaimDetail(page: Page, result: SearchResultRow, context: ScraperContext): Promise<void> {
+  const rowLocator = page.locator(`${cignaConfig.selectors.resultsBody} tr`).filter({ hasText: result.claimNumber });
+  const linkLocator = rowLocator.locator("[data-test-id='c360-result-table-claimRefNumber-cell'] a").first();
+
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= CLAIM_DETAIL_OPEN_ATTEMPTS; attempt += 1) {
+    try {
+      // Wait for the specific row to actually be visible before clicking -
+      // this is what was firing "Timeout 10000ms exceeded" when the table
+      // was still rendering after search.
+      await rowLocator.first().waitFor({ state: "visible", timeout: CLAIM_ROW_TIMEOUT_MS });
+      await linkLocator.waitFor({ state: "visible", timeout: CLAIM_ROW_TIMEOUT_MS });
+      await Promise.all([
+        page.waitForLoadState("domcontentloaded", { timeout: 30000 }).catch(() => {}),
+        linkLocator.click({ timeout: CLAIM_ROW_TIMEOUT_MS }),
+      ]);
+      await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
+      // Confirm the detail page actually rendered (not just navigated) before
+      // treating this as success, instead of a blind fixed-length wait.
+      const loaded = await findVisibleLocator(page, "[data-test-id='claim-reference-number']", CLAIM_DETAIL_LOAD_TIMEOUT_MS);
+      if (!loaded) throw new Error("Claim detail page did not render after clicking the claim link.");
+      return;
+    } catch (error) {
+      lastError = error;
+      await context
+        .log({
+          level: "warn",
+          message: `Attempt ${attempt}/${CLAIM_DETAIL_OPEN_ATTEMPTS} to open claim ${result.claimNumber} failed: ${errorMessage(error)}`,
+        })
+        .catch(() => {});
+      if (attempt < CLAIM_DETAIL_OPEN_ATTEMPTS) await page.waitForTimeout(1000);
+    }
+  }
+  throw new Error(`Could not open claim detail for ${result.claimNumber}: ${errorMessage(lastError)}`);
 }
 
 async function extractClaimDetails(page: Page, fallback: SearchResultRow): Promise<ClaimDetails> {
@@ -632,7 +768,7 @@ async function processRow(page: Page, inputRow: CignaInputRow, state: CignaWorkb
   for (const result of rowsToCheck) {
     let detailOpened = false;
     try {
-      await openClaimDetail(page, result);
+      await openClaimDetail(page, result, context);
       detailOpened = true;
       const details = await extractClaimDetails(page, result);
       const procedures = findMatchingProcedures(details, inputRow);
@@ -646,8 +782,30 @@ async function processRow(page: Page, inputRow: CignaInputRow, state: CignaWorkb
         message: `CPT ${inputRow.cptCode} not found in Cigna claim ${details.claimNumber || result.claimNumber}.`,
         rowIndex: inputRow.inputRowId,
       });
+    } catch (error) {
+      // A single candidate claim failing to open (timeout, stale row, etc.)
+      // should not abort every other candidate for this row - log it and
+      // move on to the next one instead.
+      const message = errorMessage(error);
+      await context
+        .log({
+          level: "warn",
+          message: `Could not open/read Cigna claim ${result.claimNumber} for row ${inputRow.inputRowId}: ${message}. Trying next candidate.`,
+          rowIndex: inputRow.inputRowId,
+        })
+        .catch(() => {});
+      addAudit(state, inputRow, "detail", "warning", `Could not open claim ${result.claimNumber}: ${message}`);
     } finally {
-      if (detailOpened && !context.isCancelled?.()) await goBackToSearch(page, context);
+      if (context.isCancelled?.()) {
+        // no-op, loop will exit on next iteration check upstream
+      } else if (detailOpened) {
+        await goBackToSearch(page, context);
+      } else {
+        // The click/open itself failed, possibly leaving the page in an
+        // unknown state - make sure we're back on a usable search page
+        // before trying the next candidate claim.
+        await openClaimSearch(page, context).catch(() => {});
+      }
     }
   }
 
