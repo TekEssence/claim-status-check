@@ -60,7 +60,7 @@ export function CignaInputForm({
         <Play className="h-4 w-4" strokeWidth={2.2} />
         {isProcessing ? "Processing..." : "Start processing"}
       </button>
-      <p className="text-center text-sm text-slate-500">If Cigna asks for email verification, complete it in the visible browser window.</p>
+      <p className="text-center text-sm text-slate-500">If Cigna asks for email verification, enter the code here when prompted.</p>
     </form>
   );
 }

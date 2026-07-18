@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { Browser, Locator, Page } from "playwright-core";
 import { closeAutomationResources } from "@/backend/src/core/runtime-config";
+import { waitForScrapeJobInput } from "@/backend/src/jobs/job-store";
 import type { ScraperContext } from "../../types";
 import { launchCignaBrowser } from "./browser";
 import { cignaConfig } from "./config";
@@ -377,22 +378,11 @@ async function captureDiagnostics(context: ScraperContext, page: Page, inputRow:
 }
 
 async function submitOtp(page: Page, context: ScraperContext): Promise<void> {
+  const timeoutMs = cignaConfig.timing.mfaWaitMs;
   await context.log({
-    level: "warn",
-    message: "Cigna requires a verification code. Enter the code on the run screen to continue.",
+    level: "info",
+    message: "Cigna requires a verification code. Waiting for user to enter the code in the frontend.",
   });
-
-  // Ask the frontend to prompt the user for the OTP, exactly like the Optum
-  // portal does. requestOtp() should resolve with the code once the user
-  // types it in the run screen. This is cast through `unknown` because
-  // ScraperContext's shared type (../../types) hasn't been shown to us -
-  // point this at whatever method Optum's job.ts actually calls
-  // (e.g. requestOtp / waitForOtp / promptForCode) so the two portals share
-  // one contract.
-  const otpAwareContext = context as unknown as {
-    requestOtp?: (options: { message: string }) => Promise<string | null>;
-  };
-  const otpCode = await otpAwareContext.requestOtp?.({ message: "Enter the 6-digit Cigna verification code." }).catch(() => null) ?? null;
 
   const codeInput = await findVisibleLocator(page, cignaConfig.selectors.otpInput, 15000);
   if (!codeInput) {
@@ -400,19 +390,20 @@ async function submitOtp(page: Page, context: ScraperContext): Promise<void> {
     return;
   }
 
-  if (otpCode) {
-    await codeInput.click({ timeout: 3000 }).catch(() => {});
-    await codeInput.fill("");
-    await codeInput.fill(otpCode);
-    await clickIfVisible(page, cignaConfig.selectors.otpContinue, 5000);
-  } else {
-    // Fallback: no frontend OTP channel wired up yet - wait for the person to
-    // type the code directly into the visible browser window.
-    await context.log({
-      level: "warn",
-      message: "No OTP received from the run screen; waiting for the code to be entered in the visible browser instead.",
-    });
-  }
+  const codePromise = waitForScrapeJobInput(context.jobId, "cigna_otp", timeoutMs);
+  await context.emit({
+    type: "input_request",
+    inputName: "cigna_otp",
+    label: "Cigna verification code",
+    message: "Enter the 6-digit Cigna email verification code within 3 minutes.",
+    timeoutMs,
+  });
+
+  const code = await codePromise;
+  await codeInput.click({ timeout: 3000 }).catch(() => {});
+  await codeInput.fill("");
+  await codeInput.fill(code);
+  await clickIfVisible(page, cignaConfig.selectors.otpContinue, 5000);
 
   await page.waitForURL(/cignaforhcp\.cigna\.com\/app\//i, { timeout: cignaConfig.timing.mfaWaitMs }).catch(() => {});
 }
@@ -754,7 +745,18 @@ async function goBackToSearch(page: Page, context: ScraperContext): Promise<void
     await page.goto(cignaConfig.claimSearchUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
   }
   await findVisibleLocator(page, cignaConfig.selectors.claimSearchHeading, 30000);
-  await clearSearch(page);
+  // Deliberately NOT calling clearSearch() here. goBackToSearch() is used
+  // inside processRow's candidate loop to return to the *same* results list
+  // so the next candidate claim can be opened - it is not "start a new
+  // search". clearSearch() clicks Cigna's "Clear all"/reset control, which
+  // wipes the results table and resets the search-type radio back to
+  // Cigna's default "Date of birth/Cigna patient ID". That's exactly what
+  // was causing the reported symptoms: landing back on the Date of
+  // birth/Cigna patient ID section (no name fields to fill), and the next
+  // candidate claim number then timing out in openClaimDetail() - the row
+  // wasn't stale, it had actually been cleared out. submitSearch() already
+  // calls clearSearch() itself at the start of every new input row, so
+  // nothing is lost by not also clearing here.
 }
 
 async function processRow(page: Page, inputRow: CignaInputRow, state: CignaWorkbookState, context: ScraperContext): Promise<void> {

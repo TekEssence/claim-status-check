@@ -735,6 +735,9 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
   const [availityInputFile, setAvailityInputFile] = useState<File | null>(null);
   const [cignaCredentialFile, setCignaCredentialFile] = useState<File | null>(null);
   const [cignaInputFile, setCignaInputFile] = useState<File | null>(null);
+  const [cignaJobId, setCignaJobId] = useState<string>("");
+  const [cignaOtpRequest, setCignaOtpRequest] = useState<{ inputName: string; label: string; message: string } | null>(null);
+  const [cignaOtpValue, setCignaOtpValue] = useState<string>("");
   const [kaiserCredentialFile, setKaiserCredentialFile] = useState<File | null>(null);
   const [kaiserInputFile, setKaiserInputFile] = useState<File | null>(null);
   const [myFamilyCredentialFile, setMyFamilyCredentialFile] = useState<File | null>(null);
@@ -1335,6 +1338,9 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     setBlueShieldJobId("");
     setBlueShieldOtpRequest(null);
     setBlueShieldOtpValue("");
+    setCignaJobId("");
+    setCignaOtpRequest(null);
+    setCignaOtpValue("");
     setOptumProJobId("");
     setOptumProOtpRequest(null);
     setOptumProOtpValue("");
@@ -1381,6 +1387,9 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     setBlueShieldJobId("");
     setBlueShieldOtpRequest(null);
     setBlueShieldOtpValue("");
+    setCignaJobId("");
+    setCignaOtpRequest(null);
+    setCignaOtpValue("");
     setCignaCredentialFile(null);
     setCignaInputFile(null);
     setKaiserCredentialFile(null);
@@ -1531,6 +1540,9 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     setBlueShieldOtpValue("");
     setCignaCredentialFile(null);
     setCignaInputFile(null);
+    setCignaJobId("");
+    setCignaOtpRequest(null);
+    setCignaOtpValue("");
     setKaiserCredentialFile(null);
     setKaiserInputFile(null);
     setMyFamilyCredentialFile(null);
@@ -1554,7 +1566,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
   }
 
   async function cancelActiveJob() {
-    const jobId = pendingBlueShieldRestoreJob?.jobId || pendingIehpRestoreJob?.jobId || activeJobId || regalJobId || optumProJobId;
+    const jobId = pendingBlueShieldRestoreJob?.jobId || pendingIehpRestoreJob?.jobId || activeJobId || regalJobId || cignaJobId || optumProJobId;
     if (!jobId || isCancellingJob) return;
 
     setIsCancellingJob(true);
@@ -1568,6 +1580,9 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
       setRegalJobId("");
       setRegalOtpRequest(null);
       setRegalOtpValue("");
+      setCignaJobId("");
+      setCignaOtpRequest(null);
+      setCignaOtpValue("");
       setOptumProJobId("");
       setOptumProOtpRequest(null);
       setOptumProOtpValue("");
@@ -2806,6 +2821,14 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
         setLogs((prev) => [...prev, eventData.message ?? ""]);
       } else if (eventData.type === "progress" && typeof eventData.completed === "number" && typeof eventData.total === "number") {
         setProgress({ completed: eventData.completed, total: eventData.total });
+      } else if (eventData.type === "input_request" && eventData.inputName) {
+        setCignaOtpRequest({
+          inputName: eventData.inputName,
+          label: eventData.label || "Cigna verification code",
+          message: eventData.message || "Enter the 6-digit Cigna email verification code.",
+        });
+        setCignaOtpValue("");
+        setStatus(eventData.message || "Waiting for Cigna verification code.");
       } else if (eventData.type === "error_screenshot" && typeof eventData.index === "number" && eventData.image) {
         setErrorScreenshots((prev) => [...prev, { index: eventData.index ?? -1, image: eventData.image ?? "" }]);
       } else if (eventData.type === "file_download" && eventData.filename && eventData.base64) {
@@ -2833,6 +2856,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     try {
       const jobId = await startScrapeJob(formData);
       subscribedJobId = jobId;
+      setCignaJobId(jobId);
       setActiveJobId(jobId);
       await subscribeToScrapeJobEvents({
         jobId,
@@ -2858,6 +2882,23 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     } finally {
       setIsProcessing(false);
       setActiveJobId("");
+    }
+  }
+
+  async function submitCignaOtp() {
+    if (!cignaJobId || !cignaOtpRequest || !cignaOtpValue.trim()) return;
+
+    try {
+      await submitScrapeJobInput({
+        jobId: cignaJobId,
+        inputName: cignaOtpRequest.inputName,
+        value: cignaOtpValue.trim(),
+      });
+      setCignaOtpRequest(null);
+      setCignaOtpValue("");
+      setStatus("Cigna verification code submitted.");
+    } catch (error) {
+      setStatus(`Failed to submit Cigna OTP: ${getErrorMessage(error)}`);
     }
   }
 
@@ -4320,7 +4361,16 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
                 </div>
               ) : effectivePortalId === "cigna" ? (
                 <div className="mt-5">
-                  <CignaResultView errorScreenshots={errorScreenshots} logs={logs} progress={progress} status={status} />
+                  <CignaResultView
+                    errorScreenshots={errorScreenshots}
+                    logs={logs}
+                    onOtpChange={setCignaOtpValue}
+                    onOtpSubmit={submitCignaOtp}
+                    otpRequest={cignaOtpRequest}
+                    otpValue={cignaOtpValue}
+                    progress={progress}
+                    status={status}
+                  />
                 </div>
               ) : effectivePortalId === "kaiser" ? (
                 <div className="mt-5">
