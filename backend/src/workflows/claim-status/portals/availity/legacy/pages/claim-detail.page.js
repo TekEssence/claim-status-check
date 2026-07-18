@@ -870,6 +870,7 @@ async function extractDenied(page, status) {
     claimNumber: await getClaimNumber(page),
     claimStatus: status,
     receivedDate: await getLabelValue(page, "Received Date", 4000),
+    checkDate: await getLabelValue(page, "Check Date", 4000),
     lines
   };
 }
@@ -925,6 +926,7 @@ async function extractWellcareDenied(page, status) {
     claimNumber: await getLabelValue(page, "Claim Number", 4000),
     claimStatus: status,
     receivedDate: await getLabelValue(page, "Received Date", 4000),
+    checkDate: await getLabelValue(page, "Check Date", 4000),
     lines
   };
 }
@@ -1074,6 +1076,7 @@ async function extractHipaaDenied(page, status, options = {}) {
     claimNumber: await getInfoPanelValue(page, "Claim Number"),
     claimStatus: status,
     receivedDate: await getInfoPanelValue(page, "Received Date"),
+    checkDate: await getInfoPanelValue(page, "Check Date"),
     lines
   };
 }

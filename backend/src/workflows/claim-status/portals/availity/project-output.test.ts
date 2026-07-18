@@ -63,6 +63,7 @@ describe("applyProjectOutputStrategy", () => {
           receivedDate: "06/10/2026",
           claimNumber: "320357178700",
           checkNumber: "1005020411",
+          checkDate: "06/30/2026",
           checkAmount: "$50.00",
           lines: [
             { procedureCode: "G8427", paid: "$0.00" },
@@ -73,6 +74,10 @@ describe("applyProjectOutputStrategy", () => {
     });
 
     assert.match(String(outputRow.bot_updated_claim_status), /CPT 99214/);
+    assert.match(String(outputRow.bot_updated_claim_status), /claim received on 06\/10\/2026/);
+    assert.doesNotMatch(String(outputRow.bot_updated_claim_status), /claim received on 06\/18\/2026/);
+    assert.match(String(outputRow.bot_updated_claim_status), /paid on 06\/30\/2026/);
+    assert.doesNotMatch(String(outputRow.bot_updated_claim_status), /paid on 06\/18\/2026/);
     assert.match(String(outputRow.bot_updated_claim_status), /paid amount \$25\.00/);
     assert.match(String(outputRow.bot_updated_claim_status), /copay of \$5\.00, coinsurance of \$10\.00, and deductible of \$0\.00/);
     assert.match(String(outputRow.bot_updated_claim_status), /Check Amount: \$50\.00/);
@@ -112,7 +117,8 @@ describe("applyProjectOutputStrategy", () => {
           type: "denied",
           serviceDate: "05/27/2025",
           finalizedDate: "03/11/2026",
-          receivedDate: "03/11/2026",
+          receivedDate: "03/10/2026",
+          checkDate: "03/12/2026",
           claimNumber: "2026070DI9751",
           lines: [{
             procedureCode: "99204",
@@ -123,7 +129,7 @@ describe("applyProjectOutputStrategy", () => {
       },
     });
 
-    assert.match(String(outputRow.bot_updated_claim_status), /claim received on 03\/11\/2026 denied on 03\/11\/2026/);
+    assert.match(String(outputRow.bot_updated_claim_status), /claim received on 03\/10\/2026 denied on 03\/12\/2026/);
     assert.match(String(outputRow.bot_updated_claim_status), /expired\. and 00312:/);
     assert.doesNotMatch(String(outputRow.bot_updated_claim_status), /\|/);
   });

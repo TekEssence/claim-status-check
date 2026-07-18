@@ -93,12 +93,13 @@ function renderMedrevenuCptSummary(detail: ClaimDetail, line: ClaimLineDetail, i
   const serviceDate = valueOrBlank(detail.serviceDate);
   const receivedDate = valueOrBlank(detail.receivedDate);
   const finalizedDate = valueOrBlank(detail.finalizedDate);
+  const checkDate = valueOrBlank(detail.checkDate);
   const claimNumber = valueOrBlank(detail.claimNumber);
   const procedureCode = valueOrBlank(line.procedureCode || inputCpt);
   const status = asText(detail.type || detail.claimStatus).toLowerCase();
 
   if (status.includes("denied")) {
-    return `DOS ${serviceDate}: Checked Availity portal CPT ${procedureCode} claim received on ${receivedDate} denied on ${finalizedDate} denial reason ${valueOrBlank(lineDeniedReason(line))}. Claim# ${claimNumber}.`;
+    return `DOS ${serviceDate}: Checked Availity portal CPT ${procedureCode} claim received on ${receivedDate} denied on ${checkDate} denial reason ${valueOrBlank(lineDeniedReason(line))}. Claim# ${claimNumber}.`;
   }
 
   if (status.includes("paid") || moneyToNumber(linePaidAmount(line)) > 0) {
@@ -110,7 +111,7 @@ function renderMedrevenuCptSummary(detail: ClaimDetail, line: ClaimLineDetail, i
     const checkAmount = valueOrBlank(detail.checkAmount || detail.paidAmount);
     const billedAmount = asText(line.billed) ? ` Billed Amount: ${valueOrBlank(line.billed)}.` : "";
     const allowedAmount = asText(line.allowed) ? ` Allowed Amount: ${valueOrBlank(line.allowed)}.` : "";
-    return `DOS ${serviceDate}: Checked Availity portal CPT ${procedureCode} claim received on ${receivedDate} paid on ${finalizedDate} paid amount ${paidAmount} with copay of ${copay}, coinsurance of ${coinsurance}, and deductible of ${deductible} EFT/Check # ${checkNumber}. Claim #: ${claimNumber}. Check Amount: ${checkAmount}.${billedAmount}${allowedAmount}`;
+    return `DOS ${serviceDate}: Checked Availity portal CPT ${procedureCode} claim received on ${receivedDate} paid on ${checkDate} paid amount ${paidAmount} with copay of ${copay}, coinsurance of ${coinsurance}, and deductible of ${deductible} EFT/Check # ${checkNumber}. Claim #: ${claimNumber}. Check Amount: ${checkAmount}.${billedAmount}${allowedAmount}`;
   }
 
   return `DOS ${serviceDate}: Checked Availity portal CPT ${procedureCode} claim processed on ${finalizedDate} current status ${valueOrBlank(detail.claimStatus || detail.type)}. Claim# ${claimNumber}.`;
