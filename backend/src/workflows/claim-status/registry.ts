@@ -1,46 +1,54 @@
 import { UnknownPortalError } from "../../core/errors";
-import { aerialScraper } from "./portals/aerial/scraper";
-import { availityScraper } from "./portals/availity/scraper";
-import { blueShieldScraper } from "./portals/blue-shield/scraper";
-import { iehpScraper } from "./portals/iehp/scraper";
-import { regalScraper } from "./portals/regal/scraper";
-import { uhcScraper } from "./portals/uhc/scraper";
-import { optumProScraper } from "../../scrapers/optum-pro/scraper";
 import type { PortalScraper } from "./types";
 import type { AutomationRunner } from "../types";
 
-export const claimStatusPortalRegistry = {
-  aerial: aerialScraper,
-  availity: availityScraper,
-  "blue-shield": blueShieldScraper,
-  iehp: iehpScraper,
-  "optum-pro": optumProScraper,
-  regal: regalScraper,
-  uhc: uhcScraper,
-} satisfies Record<string, PortalScraper>;
+type PortalScraperLoader = () => Promise<PortalScraper>;
 
-export function getClaimStatusScraper(portalId: string): PortalScraper {
-  const scraper = claimStatusPortalRegistry[
-    portalId as keyof typeof claimStatusPortalRegistry
+const claimStatusPortalLoaders = {
+  aerial: async () => (await import("./portals/aerial/scraper")).aerialScraper,
+  availity: async () => (await import("./portals/availity/scraper")).availityScraper,
+  "blue-shield": async () => (await import("./portals/blue-shield/scraper")).blueShieldScraper,
+  iehp: async () => (await import("./portals/iehp/scraper")).iehpScraper,
+  "optum-pro": async () => (await import("../../scrapers/optum-pro/scraper")).optumProScraper,
+  regal: async () => (await import("./portals/regal/scraper")).regalScraper,
+  uhc: async () => (await import("./portals/uhc/scraper")).uhcScraper,
+} satisfies Record<string, PortalScraperLoader>;
+
+const claimStatusPortalNames = {
+  aerial: "Aerial Care Claim Status",
+  availity: "Availity Claim Status",
+  "blue-shield": "Blue Shield Claim Status",
+  iehp: "IEHP Claim Status",
+  "optum-pro": "Optum Pro Claim Status",
+  regal: "Regal Claim Status",
+  uhc: "UHC Claim Status",
+} satisfies Record<keyof typeof claimStatusPortalLoaders, string>;
+
+export async function getClaimStatusScraper(portalId: string): Promise<PortalScraper> {
+  const loadScraper = claimStatusPortalLoaders[
+    portalId as keyof typeof claimStatusPortalLoaders
   ];
-  if (!scraper) throw new UnknownPortalError(portalId);
-  return scraper;
+  if (!loadScraper) throw new UnknownPortalError(portalId);
+  return loadScraper();
 }
 
 export function getClaimStatusRunner(portalId: string): AutomationRunner {
-  const scraper = getClaimStatusScraper(portalId);
+  if (!(portalId in claimStatusPortalLoaders)) throw new UnknownPortalError(portalId);
   return {
     workflowId: "claim-status",
     portalId,
-    name: scraper.name,
-    validateInput: (input) => scraper.validateInput(input),
-    run: (input, context) => scraper.run(input, context),
+    name: claimStatusPortalNames[portalId as keyof typeof claimStatusPortalNames],
+    validateInput: (input) => input,
+    run: async (input, context) => {
+      const scraper = await getClaimStatusScraper(portalId);
+      await scraper.run(scraper.validateInput(input), context);
+    },
   };
 }
 
 export function listClaimStatusPortals() {
-  return Object.values(claimStatusPortalRegistry).map((scraper) => ({
-    id: scraper.id,
-    name: scraper.name,
+  return Object.keys(claimStatusPortalLoaders).map((id) => ({
+    id,
+    name: claimStatusPortalNames[id as keyof typeof claimStatusPortalNames],
   }));
 }

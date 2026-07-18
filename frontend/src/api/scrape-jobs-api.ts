@@ -43,8 +43,19 @@ export async function startScrapeJob(formData: FormData): Promise<string> {
   });
 
   if (!response.ok) {
-    const body = await response.json().catch(() => ({})) as { error?: string; jobId?: string };
-    const message = body.error || `Failed to start scrape job: ${response.status}`;
+    const rawBody = await response.text().catch(() => "");
+    let body: { error?: string; jobId?: string; stage?: string; portalId?: string } = {};
+    try {
+      body = rawBody ? JSON.parse(rawBody) as typeof body : {};
+    } catch {
+      body = {};
+    }
+    const stageSuffix = body.stage ? ` Stage: ${body.stage}.` : "";
+    const portalSuffix = body.portalId ? ` Portal: ${body.portalId}.` : "";
+    const serverText = rawBody && !body.error ? ` Server response: ${rawBody.slice(0, 300)}` : "";
+    const message = body.error
+      ? `${body.error}${portalSuffix}${stageSuffix}`
+      : `Failed to start scrape job: ${response.status}.${portalSuffix}${stageSuffix}${serverText}`;
     if (response.status === 409 && body.jobId) {
       throw new ActiveScrapeJobError(message, body.jobId);
     }
