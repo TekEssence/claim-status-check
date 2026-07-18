@@ -75,6 +75,15 @@ const SEARCH_OUTCOME_TIMEOUT_MS = 25000;
 const CLAIM_ROW_TIMEOUT_MS = 20000;
 const CLAIM_DETAIL_LOAD_TIMEOUT_MS = 20000;
 const CLAIM_DETAIL_OPEN_ATTEMPTS = 3;
+// The "Claim Search" breadcrumb link (see goBackToSearch) was previously
+// only given 1500ms to appear before falling back to a full page reload.
+// Claim detail pages can take longer than that to finish rendering, so the
+// breadcrumb was frequently missed and the fallback reload fired on almost
+// every row - resetting the search page to Cigna's default radio option
+// ("Date of birth/Cigna patient ID") instead of preserving "Name/Cigna
+// patient ID". Give it a real timeout, in line with the other detail-page
+// waits in this file.
+const CLAIM_SEARCH_BREADCRUMB_TIMEOUT_MS = 15000;
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -728,7 +737,20 @@ function findMatchingProcedures(details: ClaimDetails, inputRow: CignaInputRow):
 
 async function goBackToSearch(page: Page, context: ScraperContext): Promise<void> {
   await context.log({ level: "info", message: "Returning to Cigna Claim Search page." }).catch(() => {});
-  if (!(await clickIfVisible(page, cignaConfig.selectors.claimSearchBreadcrumb, 1500))) {
+  const clickedBreadcrumb = await clickIfVisible(
+    page,
+    cignaConfig.selectors.claimSearchBreadcrumb,
+    CLAIM_SEARCH_BREADCRUMB_TIMEOUT_MS,
+  );
+  if (clickedBreadcrumb) {
+    await context.log({ level: "info", message: "Clicked the 'Claim Search' breadcrumb link." }).catch(() => {});
+  } else {
+    await context
+      .log({
+        level: "warn",
+        message: "Could not find the 'Claim Search' breadcrumb link; reloading the Claim Search page directly instead.",
+      })
+      .catch(() => {});
     await page.goto(cignaConfig.claimSearchUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
   }
   await findVisibleLocator(page, cignaConfig.selectors.claimSearchHeading, 30000);

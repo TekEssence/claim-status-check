@@ -29,7 +29,13 @@ export const cignaConfig = {
     memberId: "#memberId, [data-test-id='patient-memberId']",
     searchButton: "[data-test-id='patient-search-button']",
     clearAll: "[data-test-id='reset']",
-    claimSearchBreadcrumb: "[data-test-id='breadcrumb-0']",
+    // The "Claim Search" link at the top of the claim detail page
+    // (breadcrumb-0 = "Claim Search", breadcrumb-1 = current claim number).
+    // Text-based fallback included in case the data-test-id is ever
+    // missing/renamed - "Claim Search" (this link) never collides with the
+    // top nav's "Search Claims" dropdown item, which uses different word
+    // order.
+    claimSearchBreadcrumb: "[data-test-id='breadcrumb-0'], a:text-is('Claim Search')",
     // Results table
     resultsTable: "[data-test-id='claims-threesixty-search-result-table']",
     resultsBody: "[data-test-id='claims-threesixty-search-result-table-content']",
