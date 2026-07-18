@@ -85,6 +85,15 @@ const CLAIM_DETAIL_OPEN_ATTEMPTS = 3;
 // patient ID". Give it a real timeout, in line with the other detail-page
 // waits in this file.
 const CLAIM_SEARCH_BREADCRUMB_TIMEOUT_MS = 15000;
+// How many times in a row we'll show the OTP box again after a
+// rejected/expired code before giving up on this login attempt.
+const OTP_MAX_ATTEMPTS = 5;
+// How many times in a row we'll try logging back in after the Cigna session
+// drops mid-run before giving up on the whole job. This is a *consecutive
+// failure* cap, not a per-row cap - it resets to 0 after any successful
+// re-login, so a session that drops occasionally over a long run doesn't
+// exhaust it.
+const MAX_SESSION_RELOGIN_ATTEMPTS = 3;
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -377,35 +386,90 @@ async function captureDiagnostics(context: ScraperContext, page: Page, inputRow:
   }
 }
 
-async function submitOtp(page: Page, context: ScraperContext): Promise<void> {
-  const timeoutMs = cignaConfig.timing.mfaWaitMs;
-  await context.log({
-    level: "info",
-    message: "Cigna requires a verification code. Waiting for user to enter the code in the frontend.",
-  });
+// Present on every authenticated page (see cignaConfig.selectors.loggedInIndicator).
+async function isLoggedIn(page: Page): Promise<boolean> {
+  return Boolean(await findVisibleLocator(page, cignaConfig.selectors.loggedInIndicator, 1500));
+}
 
+// True once we're confident a submitted OTP was rejected (explicit error
+// text), or once we've waited a bit and are neither logged in nor showing an
+// error but the code field is still sitting there unconsumed - in either
+// case, the safe move is to ask for a fresh code rather than hang until the
+// caller's outer timeout.
+async function otpAttemptFailed(page: Page): Promise<boolean> {
+  if (await findVisibleLocator(page, cignaConfig.selectors.otpErrorMessage, 1000)) return true;
+  if (await findVisibleLocator(page, cignaConfig.selectors.otpInput, 1000)) return true;
+  return false;
+}
+
+async function submitOtp(page: Page, context: ScraperContext): Promise<void> {
   const codeInput = await findVisibleLocator(page, cignaConfig.selectors.otpInput, 15000);
   if (!codeInput) {
     // No OTP field appeared (maybe "remember this device" skipped it) - nothing to do.
     return;
   }
 
-  const codePromise = waitForScrapeJobInput(context.jobId, "cigna_otp", timeoutMs);
-  await context.emit({
-    type: "input_request",
-    inputName: "cigna_otp",
-    label: "Cigna verification code",
-    message: "Enter the 6-digit Cigna email verification code within 3 minutes.",
-    timeoutMs,
-  });
+  const timeoutMs = cignaConfig.timing.mfaWaitMs;
+  let promptMessage = "Enter the 6-digit Cigna email verification code within 3 minutes.";
 
-  const code = await codePromise;
-  await codeInput.click({ timeout: 3000 }).catch(() => {});
-  await codeInput.fill("");
-  await codeInput.fill(code);
-  await clickIfVisible(page, cignaConfig.selectors.otpContinue, 5000);
+  for (let attempt = 1; attempt <= OTP_MAX_ATTEMPTS; attempt += 1) {
+    if (context.isCancelled?.()) return;
 
-  await page.waitForURL(/cignaforhcp\.cigna\.com\/app\//i, { timeout: cignaConfig.timing.mfaWaitMs }).catch(() => {});
+    await context
+      .log({
+        level: "info",
+        message:
+          attempt === 1
+            ? "Cigna requires a verification code. Waiting for user to enter the code in the frontend."
+            : `Cigna verification code was rejected (attempt ${attempt}/${OTP_MAX_ATTEMPTS}). Waiting for a new code.`,
+      })
+      .catch(() => {});
+
+    const codePromise = waitForScrapeJobInput(context.jobId, "cigna_otp", timeoutMs);
+    await context.emit({
+      type: "input_request",
+      inputName: "cigna_otp",
+      label: "Cigna verification code",
+      message: promptMessage,
+      timeoutMs,
+    });
+
+    const code = await codePromise;
+
+    const input = await findVisibleLocator(page, cignaConfig.selectors.otpInput, 5000);
+    if (!input) {
+      // The field disappeared entirely (e.g. the page moved on some other
+      // way while we were waiting) - nothing left to retry against.
+      return;
+    }
+    await input.click({ timeout: 3000 }).catch(() => {});
+    await input.fill(""); // clear the previously entered code before typing the new one
+    await input.fill(code);
+    await clickIfVisible(page, cignaConfig.selectors.otpContinue, 5000);
+
+    // Keep the job waiting while the portal validates the code, instead of
+    // deciding pass/fail the instant the click resolves.
+    await page.waitForLoadState("domcontentloaded", { timeout: 15000 }).catch(() => {});
+    await page.waitForTimeout(1500);
+    if (await isLoggedIn(page)) {
+      await context.log({ level: "info", message: "Cigna verification code accepted." }).catch(() => {});
+      return;
+    }
+    if (!(await otpAttemptFailed(page))) {
+      // Not obviously accepted or rejected yet - give the page a bit longer
+      // to finish navigating before deciding this attempt failed.
+      await page.waitForURL(/cignaforhcp\.cigna\.com\/app\//i, { timeout: 8000 }).catch(() => {});
+      if (await isLoggedIn(page)) return;
+    }
+
+    await context
+      .log({ level: "warn", message: "The verification code is invalid or expired. Please enter the new code." })
+      .catch(() => {});
+    promptMessage = "The verification code is invalid or expired. Please enter the new code.";
+    // Loop continues: field is re-cleared and a fresh input_request is sent above.
+  }
+
+  throw new Error(`Cigna verification code was rejected ${OTP_MAX_ATTEMPTS} time(s) in a row.`);
 }
 
 async function login(page: Page, input: Awaited<ReturnType<typeof parseCignaInput>>, context: ScraperContext): Promise<void> {
@@ -440,6 +504,20 @@ async function login(page: Page, input: Awaited<ReturnType<typeof parseCignaInpu
     throw new Error("Cigna login failed or did not leave the password page.");
   }
   await context.log({ level: "info", message: "Cigna login completed." });
+}
+
+// Best-effort detection that the Cigna session has dropped mid-run (portal
+// timeout, forced logout, etc). Cigna's exact "session expired" wording
+// hasn't been confirmed against a live example - if this ever
+// under/over-fires in practice, tighten/loosen the regex below rather than
+// relying on the URL/field checks alone.
+async function isSessionLoggedOut(page: Page): Promise<boolean> {
+  if (/\/login(\/|$|\?)/i.test(page.url())) return true;
+  if (await findVisibleLocator(page, cignaConfig.selectors.username, 800)) return true;
+  if (await findVisibleLocator(page, cignaConfig.selectors.password, 800)) return true;
+  const bodyText = await visibleBodyText(page);
+  if (/session (has )?expired|sign in to continue|please (sign|log) in again|you.{0,10}(have been|were) logged out/i.test(bodyText)) return true;
+  return false;
 }
 
 async function openClaimSearch(page: Page, context: ScraperContext): Promise<void> {
@@ -870,21 +948,76 @@ export async function runCignaClaimStatusJob(formData: FormData, context: Scrape
     await openClaimSearch(page, context);
 
     let completed = 0;
-    for (const row of rows) {
+    let sessionReloginAttempts = 0;
+    rowLoop: for (const row of rows) {
       if (context.isCancelled?.()) {
         await context.log({ level: "warn", message: "Cigna run stopped by user. Creating partial output." });
         await context.emit({ type: "cancelled", message: "Cigna scraping stopped. Partial workbook downloaded." });
         break;
       }
-      try {
-        await processRow(page, row, state, context);
-      } catch (error) {
-        const message = errorMessage(error);
-        state.outputRows.push(baseOutputRow(row, "Portal Error", message));
-        addAudit(state, row, "row_processing", "failed", message);
-        if (page) await captureDiagnostics(context, page, row, "row-error");
-        if (page) await openClaimSearch(page, context).catch(() => {});
+
+      // Inner retry loop: keeps working on THIS row (never advances/marks it
+      // failed) if the reason it didn't finish was a dropped Cigna session -
+      // it only exits once the row is actually processed, cancellation is
+      // requested, or a non-session error is recorded for it.
+      while (true) {
+        if (context.isCancelled?.()) {
+          await context.log({ level: "warn", message: "Cigna run stopped by user. Creating partial output." });
+          await context.emit({ type: "cancelled", message: "Cigna scraping stopped. Partial workbook downloaded." });
+          break rowLoop;
+        }
+
+        if (await isSessionLoggedOut(page)) {
+          sessionReloginAttempts += 1;
+          if (sessionReloginAttempts > MAX_SESSION_RELOGIN_ATTEMPTS) {
+            throw new Error(`Cigna session logged out and could not be restored after ${MAX_SESSION_RELOGIN_ATTEMPTS} attempt(s).`);
+          }
+          await context
+            .log({
+              level: "warn",
+              message: `Cigna session appears to have logged out; logging back in (attempt ${sessionReloginAttempts}/${MAX_SESSION_RELOGIN_ATTEMPTS}).`,
+              rowIndex: row.inputRowId,
+            })
+            .catch(() => {});
+          try {
+            await login(page, input, context);
+            await openClaimSearch(page, context);
+            sessionReloginAttempts = 0; // reset after a clean recovery
+            addAudit(state, row, "session", "recovered", "Re-authenticated after a Cigna session logout.");
+          } catch (loginError) {
+            await context
+              .log({ level: "error", message: `Could not log back in to Cigna: ${errorMessage(loginError)}` })
+              .catch(() => {});
+            await page.waitForTimeout(2000);
+          }
+          continue; // re-check session state / retry this same row
+        }
+
+        try {
+          await processRow(page, row, state, context);
+          break; // row done - exit the retry loop and advance to the next row
+        } catch (error) {
+          if (await isSessionLoggedOut(page)) {
+            // Session dropped mid-row - loop back to the top, log back in,
+            // and retry this exact row instead of recording it as failed.
+            await context
+              .log({
+                level: "warn",
+                message: `Cigna session was lost while processing row ${row.inputRowId}; will log back in and retry this row.`,
+                rowIndex: row.inputRowId,
+              })
+              .catch(() => {});
+            continue;
+          }
+          const message = errorMessage(error);
+          state.outputRows.push(baseOutputRow(row, "Portal Error", message));
+          addAudit(state, row, "row_processing", "failed", message);
+          await captureDiagnostics(context, page, row, "row-error");
+          await openClaimSearch(page, context).catch(() => {});
+          break;
+        }
       }
+
       completed += 1;
       await context.emit({ type: "progress", completed, total: rows.length });
       await page.waitForTimeout(cignaConfig.timing.betweenRowsMs);

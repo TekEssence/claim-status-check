@@ -20,6 +20,15 @@ export const cignaConfig = {
     otpInput: "#code",
     otpContinue: "button[data-action-button-primary='true']",
     otpResend: "button[value='resend-code']",
+    // Best-effort signal that a submitted OTP was rejected. Cigna's exact
+    // wording/markup for this hasn't been confirmed against a live "wrong
+    // code" screen - adjust this regex/selector if the real error message
+    // differs once seen in practice.
+    otpErrorMessage: "text=/invalid.*code|incorrect.*code|code.*incorrect|code.*expired|expired.*code/i",
+    // Present on every authenticated page (top-right "Logout" link in every
+    // screenshot so far) - used both to confirm a login/OTP attempt
+    // succeeded and to detect a mid-run session logout.
+    loggedInIndicator: "text=/Logout/i",
     // Claim search page
     claimSearchHeading: "text=/Claims search/i",
     // The 4 patient search-type radios. We only ever use idName ("Name/Cigna patient ID").
