@@ -18,6 +18,7 @@ export type ScrapeJobEvent = {
   completed?: number;
   total?: number;
   index?: number;
+  rowIndex?: number;
   image?: string;
   html?: string;
   base64?: string;
@@ -35,4 +36,7 @@ export type ScrapeJobEvent = {
   }>;
   timeoutMs?: number;
   update?: Record<string, unknown>;
+  providerStage?: "corporate" | "care";
+  corporateTaxIdOwners?: string[];
+  careProviders?: string[];
 };

@@ -3,6 +3,7 @@ import { availityFrontendPortalConfig } from "./portals/availity/portal-config";
 import { blueShieldFrontendPortalConfig } from "./portals/blue-shield/portal-config";
 import { iehpFrontendPortalConfig } from "./portals/iehp/portal-config";
 import { regalFrontendPortalConfig } from "./portals/regal/portal-config";
+import { uhcFrontendPortalConfig } from "./portals/uhc/portal-config";
 import { optumProFrontendPortalConfig } from "../../portals/optum-pro/portal-config";
 
 export {
@@ -12,6 +13,7 @@ export {
   iehpFrontendPortalConfig,
   optumProFrontendPortalConfig,
   regalFrontendPortalConfig,
+  uhcFrontendPortalConfig,
 };
 
 export const claimStatusPortalRegistry = [
@@ -19,6 +21,7 @@ export const claimStatusPortalRegistry = [
   aerialFrontendPortalConfig,
   regalFrontendPortalConfig,
   blueShieldFrontendPortalConfig,
+  uhcFrontendPortalConfig,
   availityFrontendPortalConfig,
   optumProFrontendPortalConfig,
 ] as const;

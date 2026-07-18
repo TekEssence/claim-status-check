@@ -4,6 +4,7 @@ import { availityScraper } from "./portals/availity/scraper";
 import { blueShieldScraper } from "./portals/blue-shield/scraper";
 import { iehpScraper } from "./portals/iehp/scraper";
 import { regalScraper } from "./portals/regal/scraper";
+import { uhcScraper } from "./portals/uhc/scraper";
 import { optumProScraper } from "../../scrapers/optum-pro/scraper";
 import type { PortalScraper } from "./types";
 import type { AutomationRunner } from "../types";
@@ -15,6 +16,7 @@ export const claimStatusPortalRegistry = {
   iehp: iehpScraper,
   "optum-pro": optumProScraper,
   regal: regalScraper,
+  uhc: uhcScraper,
 } satisfies Record<string, PortalScraper>;
 
 export function getClaimStatusScraper(portalId: string): PortalScraper {

@@ -1,6 +1,10 @@
-import { and, asc, desc, eq, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { isRetryableDbError, runDbWithRetry } from "@/db";
-import { scrapeJobArtifacts, scrapeJobLogs, scrapeJobs } from "@/db/schema/scrape-jobs";
+import {
+  automationJobArtifacts,
+  automationJobLogs,
+  automationJobs,
+} from "@/db/schema/automation-jobs";
 
 export type PersistentScrapeJobStatus = "running" | "waiting_resume" | "completed" | "failed" | "cancelled";
 
@@ -32,7 +36,6 @@ export type PersistentScrapeJobArtifact = {
   contentBase64?: string;
 };
 
-type ScrapeJobRow = typeof scrapeJobs.$inferSelect;
 export type UserDashboardStats = {
   availablePortals: number;
   completedClaimsToday: number;
@@ -40,6 +43,8 @@ export type UserDashboardStats = {
   portalsRunToday: number;
   runningJobs: number;
 };
+
+type AutomationJobRow = typeof automationJobs.$inferSelect;
 
 export function isScrapeJobDbConnectionError(error: unknown): boolean {
   const code = typeof error === "object" && error !== null && "code" in error ? String((error as { code?: unknown }).code ?? "") : "";
@@ -58,7 +63,7 @@ export function isScrapeJobDbConnectionError(error: unknown): boolean {
 }
 
 function mapPersistentScrapeJob(
-  row: ScrapeJobRow,
+  row: AutomationJobRow,
   logs: string[],
   artifacts: PersistentScrapeJobArtifact[],
 ): PersistentScrapeJob {
@@ -68,15 +73,23 @@ function mapPersistentScrapeJob(
     portalId: row.portalId,
     status: row.status as PersistentScrapeJobStatus,
     currentCompleted: row.currentCompleted,
-    totalRows: row.totalRows,
-    claimFileName: row.claimFileName,
-    loginFileName: row.loginFileName,
+    totalRows: row.totalItems,
+    claimFileName: row.primaryInputFileName,
+    loginFileName: row.credentialFileName,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     finishedAt: row.finishedAt,
     logs,
     artifacts,
   };
+}
+
+async function hydrateScrapeJob(row: AutomationJobRow): Promise<PersistentScrapeJob> {
+  const [logs, artifacts] = await Promise.all([
+    getScrapeJobLogs(row.jobId),
+    getScrapeJobArtifacts(row.jobId),
+  ]);
+  return mapPersistentScrapeJob(row, logs, artifacts);
 }
 
 export async function createPersistentScrapeJob(params: {
@@ -91,28 +104,35 @@ export async function createPersistentScrapeJob(params: {
   const now = new Date().toISOString();
   await runDbWithRetry((db) =>
     db
-      .insert(scrapeJobs)
+      .insert(automationJobs)
       .values({
         jobId: params.jobId,
         userId: params.userId,
+        workflowId: "claim-status",
         portalId: params.portalId,
+        payerId: null,
         status: "running",
         currentCompleted: params.currentCompleted ?? 0,
-        totalRows: params.totalRows ?? 0,
-        claimFileName: params.claimFileName ?? "",
-        loginFileName: params.loginFileName ?? "",
+        totalItems: params.totalRows ?? 0,
+        primaryInputFileName: params.claimFileName ?? "",
+        credentialFileName: params.loginFileName ?? "",
+        metadataJson: { source: "scrape-jobs-api" },
         createdAt: now,
         updatedAt: now,
         finishedAt: null,
       })
       .onConflictDoUpdate({
-        target: scrapeJobs.jobId,
+        target: automationJobs.jobId,
         set: {
+          workflowId: "claim-status",
+          portalId: params.portalId,
+          payerId: null,
           status: "running",
           currentCompleted: params.currentCompleted ?? 0,
-          totalRows: params.totalRows ?? 0,
-          claimFileName: params.claimFileName ?? "",
-          loginFileName: params.loginFileName ?? "",
+          totalItems: params.totalRows ?? 0,
+          primaryInputFileName: params.claimFileName ?? "",
+          credentialFileName: params.loginFileName ?? "",
+          metadataJson: { source: "scrape-jobs-api" },
           updatedAt: now,
           finishedAt: null,
         },
@@ -124,53 +144,50 @@ export async function getActiveScrapeJobForUser(userId: string): Promise<Persist
   const rows = await runDbWithRetry((db) =>
     db
       .select()
-      .from(scrapeJobs)
+      .from(automationJobs)
       .where(
         and(
-          eq(scrapeJobs.userId, userId),
-          or(
-            eq(scrapeJobs.status, "running"),
-            eq(scrapeJobs.status, "waiting_resume"),
-          ),
+          eq(automationJobs.userId, userId),
+          eq(automationJobs.workflowId, "claim-status"),
+          inArray(automationJobs.status, ["running", "waiting_resume"]),
         ),
       )
-      .orderBy(desc(scrapeJobs.updatedAt))
+      .orderBy(desc(automationJobs.updatedAt))
       .limit(10),
   );
 
   const row = rows.find((candidate) =>
     candidate.status === "running" ||
-    (candidate.status === "waiting_resume" && (candidate.totalRows <= 0 || candidate.currentCompleted < candidate.totalRows)),
+    (candidate.status === "waiting_resume" && (candidate.totalItems <= 0 || candidate.currentCompleted < candidate.totalItems)),
   );
-  if (!row) return null;
-  const logs = await getScrapeJobLogs(row.jobId);
-  const artifacts = await getScrapeJobArtifacts(row.jobId);
-  return mapPersistentScrapeJob(row, logs, artifacts);
+  return row ? hydrateScrapeJob(row) : null;
 }
 
 export async function getScrapeJobByIdForUser(jobId: string, userId: string): Promise<PersistentScrapeJob | null> {
   const rows = await runDbWithRetry((db) =>
     db
       .select()
-      .from(scrapeJobs)
-      .where(and(eq(scrapeJobs.jobId, jobId), eq(scrapeJobs.userId, userId)))
+      .from(automationJobs)
+      .where(
+        and(
+          eq(automationJobs.jobId, jobId),
+          eq(automationJobs.userId, userId),
+          eq(automationJobs.workflowId, "claim-status"),
+        ),
+      )
       .limit(1),
   );
 
-  const row = rows[0];
-  if (!row) return null;
-  const logs = await getScrapeJobLogs(row.jobId);
-  const artifacts = await getScrapeJobArtifacts(row.jobId);
-  return mapPersistentScrapeJob(row, logs, artifacts);
+  return rows[0] ? hydrateScrapeJob(rows[0]) : null;
 }
 
 async function getScrapeJobLogs(jobId: string): Promise<string[]> {
   const rows = await runDbWithRetry((db) =>
     db
-      .select({ message: scrapeJobLogs.message })
-      .from(scrapeJobLogs)
-      .where(eq(scrapeJobLogs.jobId, jobId))
-      .orderBy(asc(scrapeJobLogs.id)),
+      .select({ message: automationJobLogs.message })
+      .from(automationJobLogs)
+      .where(eq(automationJobLogs.jobId, jobId))
+      .orderBy(asc(automationJobLogs.id)),
   );
   return rows.map((row) => row.message);
 }
@@ -179,9 +196,9 @@ async function getScrapeJobArtifacts(jobId: string): Promise<PersistentScrapeJob
   const rows = await runDbWithRetry((db) =>
     db
       .select()
-      .from(scrapeJobArtifacts)
-      .where(eq(scrapeJobArtifacts.jobId, jobId))
-      .orderBy(asc(scrapeJobArtifacts.id)),
+      .from(automationJobArtifacts)
+      .where(eq(automationJobArtifacts.jobId, jobId))
+      .orderBy(asc(automationJobArtifacts.id)),
   );
 
   return rows.map((row) => ({
@@ -197,12 +214,15 @@ async function getScrapeJobArtifacts(jobId: string): Promise<PersistentScrapeJob
 }
 
 export async function appendScrapeJobLog(jobId: string, message: string): Promise<void> {
-  const now = new Date().toISOString();
   await runDbWithRetry((db) =>
-    db.insert(scrapeJobLogs).values({
+    db.insert(automationJobLogs).values({
       jobId,
+      level: "info",
       message,
-      createdAt: now,
+      eventName: null,
+      rowIndex: null,
+      metadataJson: {},
+      createdAt: new Date().toISOString(),
     }),
   );
 }
@@ -215,16 +235,16 @@ export async function appendScrapeJobArtifact(params: {
   mimeType?: string;
   pathOrKey?: string;
 }): Promise<void> {
-  const now = new Date().toISOString();
   await runDbWithRetry((db) =>
-    db.insert(scrapeJobArtifacts).values({
+    db.insert(automationJobArtifacts).values({
       jobId: params.jobId,
       rowIndex: params.rowIndex ?? null,
       artifactType: params.artifactType,
       filename: params.filename ?? null,
       mimeType: params.mimeType ?? null,
       pathOrKey: params.pathOrKey ?? null,
-      createdAt: now,
+      metadataJson: {},
+      createdAt: new Date().toISOString(),
     }),
   );
 }
@@ -235,33 +255,27 @@ export async function updateScrapeJobSnapshot(params: {
   currentCompleted?: number;
   totalRows?: number;
 }): Promise<void> {
-  const now = new Date().toISOString();
-  const existingRows = await runDbWithRetry((db) =>
-    db
-      .select()
-      .from(scrapeJobs)
-      .where(eq(scrapeJobs.jobId, params.jobId))
-      .limit(1),
+  const rows = await runDbWithRetry((db) =>
+    db.select().from(automationJobs).where(eq(automationJobs.jobId, params.jobId)).limit(1),
   );
-  const existing = existingRows[0];
-  if (!existing) {
-    return;
-  }
+  const existing = rows[0];
+  if (!existing) return;
 
   const nextStatus = params.status ?? (existing.status as PersistentScrapeJobStatus);
   const isTerminalStatus = nextStatus === "completed" || nextStatus === "failed" || nextStatus === "cancelled";
+  const now = new Date().toISOString();
 
   await runDbWithRetry((db) =>
     db
-      .update(scrapeJobs)
+      .update(automationJobs)
       .set({
         status: nextStatus,
         currentCompleted: params.currentCompleted ?? existing.currentCompleted,
-        totalRows: params.totalRows ?? existing.totalRows,
+        totalItems: params.totalRows ?? existing.totalItems,
         updatedAt: now,
         finishedAt: isTerminalStatus ? now : existing.finishedAt,
       })
-      .where(eq(scrapeJobs.jobId, params.jobId)),
+      .where(eq(automationJobs.jobId, params.jobId)),
   );
 }
 
@@ -269,13 +283,13 @@ export async function getDashboardStatsForUser(userId: string, availablePortals:
   const rows = await runDbWithRetry((db) =>
     db
       .select({
-        portalsRunToday: sql<number>`COALESCE(COUNT(DISTINCT ${scrapeJobs.portalId}) FILTER (WHERE ${scrapeJobs.createdAt} >= CURRENT_DATE), 0)`,
-        completedClaimsToday: sql<number>`COALESCE(SUM(${scrapeJobs.currentCompleted}) FILTER (WHERE ${scrapeJobs.status} = 'completed' AND ${scrapeJobs.updatedAt} >= CURRENT_DATE), 0)`,
-        failedJobsToday: sql<number>`COALESCE(COUNT(*) FILTER (WHERE ${scrapeJobs.status} = 'failed' AND ${scrapeJobs.updatedAt} >= CURRENT_DATE), 0)`,
-        runningJobs: sql<number>`COALESCE(COUNT(*) FILTER (WHERE ${scrapeJobs.status} IN ('running', 'waiting_resume')), 0)`,
+        portalsRunToday: sql<number>`COALESCE(COUNT(DISTINCT ${automationJobs.portalId}) FILTER (WHERE ${automationJobs.createdAt} >= CURRENT_DATE), 0)`,
+        completedClaimsToday: sql<number>`COALESCE(SUM(${automationJobs.currentCompleted}) FILTER (WHERE ${automationJobs.status} = 'completed' AND ${automationJobs.updatedAt} >= CURRENT_DATE), 0)`,
+        failedJobsToday: sql<number>`COALESCE(COUNT(*) FILTER (WHERE ${automationJobs.status} = 'failed' AND ${automationJobs.updatedAt} >= CURRENT_DATE), 0)`,
+        runningJobs: sql<number>`COALESCE(COUNT(*) FILTER (WHERE ${automationJobs.status} IN ('running', 'waiting_resume')), 0)`,
       })
-      .from(scrapeJobs)
-      .where(eq(scrapeJobs.userId, userId)),
+      .from(automationJobs)
+      .where(and(eq(automationJobs.userId, userId), eq(automationJobs.workflowId, "claim-status"))),
   );
 
   const row = rows[0];
