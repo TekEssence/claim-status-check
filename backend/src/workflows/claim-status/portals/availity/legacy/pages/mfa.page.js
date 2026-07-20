@@ -45,7 +45,7 @@ async function waitForMfaSubmitOutcome(page, previousUrl, timeoutMs = 20000) {
   return "timeout";
 }
 
-async function handleMfa(page, totpSecret, maxAttempts, totpTimeOffsetSeconds = 0, totpMinValidSeconds = 20) {
+async function handleMfa(page, totpSecret, maxAttempts, totpTimeOffsetSeconds = 0, totpMinValidSeconds = 20, mfaConfig = {}) {
   const directCodePage = await isVisibleQuick(page, SELECTORS.codeInput, 4000);
 
   if (!directCodePage) {
@@ -86,10 +86,10 @@ async function handleMfa(page, totpSecret, maxAttempts, totpTimeOffsetSeconds = 
       secondsRemaining = 30 - (nowSec % 30);
     }
 
-    let otpCode = generateTotp(totpSecret, totpTimeOffsetSeconds);
+    let otpCode = generateTotp(totpSecret, totpTimeOffsetSeconds, mfaConfig);
     if (previousOtp && otpCode === previousOtp) {
       await wait(12000);
-      otpCode = generateTotp(totpSecret, totpTimeOffsetSeconds);
+      otpCode = generateTotp(totpSecret, totpTimeOffsetSeconds, mfaConfig);
     }
     previousOtp = otpCode;
 

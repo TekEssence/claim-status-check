@@ -1,7 +1,8 @@
 import path from "node:path";
 import ExcelJS from "exceljs";
-import type { AvailityInputRow, AvailityProviderMapping } from "./types";
+import type { AvailityInputRow, AvailityMfaConfig, AvailityProviderMapping } from "./types";
 import projectOrganizationMapping from "./config/project-organization-mapping.json";
+import projectMfaConfig from "./config/project-mfa-config.json";
 
 function asText(value: unknown): string {
   if (value == null) return "";
@@ -65,6 +66,11 @@ export function normalizeProjectId(value: unknown): string {
   if (normalized === "medrevenu" || normalized === "medrevenue") return "medrevenu";
   if (normalized === "charm") return "charm";
   throw new Error(`Unsupported Availity project "${asText(value)}". Supported projects: Minimax, Medrevenu, Charm.`);
+}
+
+export function getMfaConfigForProject(projectId: string): AvailityMfaConfig {
+  const configs = projectMfaConfig as Record<string, AvailityMfaConfig | undefined>;
+  return configs[projectId] ?? configs.default ?? { totpSecretFormat: "base32" };
 }
 
 export function applyProjectColumnMapping(projectId: string, data: Record<string, string>): Record<string, string> {

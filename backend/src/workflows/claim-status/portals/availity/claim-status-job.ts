@@ -4,7 +4,7 @@ import type { ScraperContext } from "../../types";
 import { launchAvailityBrowser } from "./browser";
 import { parseAvailityInput, readAvailityPayerMapping } from "./input";
 import { createAvailityOutputWorkbookBuffer } from "./output-writer";
-import { getOrganizationForRow, getProviderOrderForRow, readAvailityProviderMapping } from "./project-config";
+import { getMfaConfigForProject, getOrganizationForRow, getProviderOrderForRow, readAvailityProviderMapping } from "./project-config";
 import { applyProjectOutputStrategy } from "./project-output";
 import type { AvailityAuditRow, AvailityErrorRow, AvailityInputRow, AvailityOutputRow, AvailityProviderMapping } from "./types";
 
@@ -181,7 +181,7 @@ async function loginToAvaility(page: Page, input: Awaited<ReturnType<typeof pars
   await page.goto(input.credentials.loginUrl, { waitUntil: "domcontentloaded" });
   await page.waitForLoadState("networkidle").catch(() => {});
   await submitLogin(page, input.credentials.username, input.credentials.password);
-  await handleMfa(page, input.credentials.totpSecret, 2, 0, 20);
+  await handleMfa(page, input.credentials.totpSecret, 2, 0, 20, getMfaConfigForProject(input.projectId));
 
   if (input.credentials.successUrlFragment) {
     await page.waitForURL(`**${input.credentials.successUrlFragment}**`, { timeout: 30000 }).catch(() => {});

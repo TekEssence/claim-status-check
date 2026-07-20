@@ -1,0 +1,8 @@
+{
+  "default": {
+    "totpSecretFormat": "base32"
+  },
+  "charm": {
+    "totpSecretFormat": "google-authenticator-migration"
+  }
+}

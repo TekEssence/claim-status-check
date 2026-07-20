@@ -20,6 +20,10 @@ export type AvailityInput = {
   claimFileName: string;
 };
 
+export type AvailityMfaConfig = {
+  totpSecretFormat: "base32" | "google-authenticator-migration";
+};
+
 export type AvailityProviderMapping = {
   project: string;
   group: string;
