@@ -15,6 +15,22 @@ export function astronaFinalStatus(netAmount: string): "Paid" | "Denied" | "Unkn
   return parsed === 0 ? "Denied" : "Paid";
 }
 
+export function astronaFinalStatusText(row: AstronaInputRow, details: AstronaClaimDetails, serviceLine: AstronaServiceLine): string {
+  const net = serviceLine.net || details.netAmount;
+  const outcome = astronaFinalStatus(net);
+  const dos = row.dos || serviceLine.from || serviceLine.to;
+  const received = details.dateReceived || "";
+  const claimNumber = details.claimNumber || "";
+  if (outcome === "Paid") {
+    return `DOS ${dos}: Checked Astrona portal claim received on ${received} paid on ${details.datePaid || ""} paid amount ${net} EFT/Check # ${details.checkNumber || ""}. Claim # ${claimNumber}.`;
+  }
+  if (outcome === "Denied") {
+    const denialReason = serviceLine.memoLine1 || details.memoLine1 || details.portalStatus || "";
+    return `DOS ${dos}: Checked Astrona portal claim received on ${received} denied on ${details.dateDenied || details.datePaid || ""} denial reason ${denialReason}. Claim# ${claimNumber}.`;
+  }
+  return `DOS ${dos}: Checked Astrona portal claim status ${details.portalStatus || "Unknown"}. Claim# ${claimNumber}.`;
+}
+
 function emptyServiceLine(): AstronaServiceLine {
   return { from: "", to: "", cpt: "", modifier: "", diagCode: "", qty: "", billed: "", coPay: "", coInsure: "", deductible: "", adjustment: "", net: "", memoLine1: "" };
 }
@@ -54,7 +70,8 @@ export function astronaOutputRows(row: AstronaInputRow, details: AstronaClaimDet
     net_amount: net,
     services_cpt: details.cptCodes.join("; "),
     memo_line_1: memoLine1,
-    final_status: astronaFinalStatus(net),
+    claim_outcome: astronaFinalStatus(net),
+    final_status: result === "success" ? astronaFinalStatusText(row, details, serviceLine) : (notes || "No data found in portal."),
     result,
     notes,
     extracted_at: new Date().toISOString(),

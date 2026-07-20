@@ -21,21 +21,28 @@ function normalizeLoginUrl(rawLoginUrl: string): string {
   return rawLoginUrl.startsWith("http") ? rawLoginUrl : `https://${rawLoginUrl}`;
 }
 
+function normalizeGroup(value: string): string {
+  return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "");
+}
+
 export function loadCredentialsForAerialSubportal(
   buffer: ArrayBuffer,
   subportal: AerialSubportalDefinition,
+  group = "",
 ): AerialCredentials | null {
   const workbook = XLSX.read(buffer, { type: "array" });
   const sheet = workbook.Sheets[workbook.SheetNames[0]];
   if (!sheet) return null;
 
   const aliases = subportal.aliases.map(normalizeAerialSubportalName);
+  const wantedGroup = normalizeGroup(group);
   const rows = XLSX.utils.sheet_to_json(sheet) as Record<string, unknown>[];
   let legacyCredentials: AerialCredentials | null = null;
 
   for (const row of rows) {
     const rowSubportalText = findValue(row, ["Sub portal", "Subportal", "Portal"]);
     const rowSubportal = normalizeAerialSubportalName(rowSubportalText);
+    const rowGroup = normalizeGroup(findValue(row, ["Group", "Group Name", "Medical Group"]));
     const rawLoginUrl = findValue(row, ["URL", "Login URL", "Aerial URL", "PORTAL_AERIAL_LOGIN_URL"]);
     const username = findValue(row, ["User Name", "Username", "PORTAL_AERIAL_USERNAME"]);
     const password = findValue(row, ["Password", "PORTAL_AERIAL_PASSWORD"]);
@@ -49,6 +56,11 @@ export function loadCredentialsForAerialSubportal(
       claimsUrl: findValue(row, ["Claims URL", "PORTAL_AERIAL_CLAIMS_URL"]),
       successUrlFragment: findValue(row, ["Success URL Fragment", "PORTAL_AERIAL_SUCCESS_URL_FRAGMENT"]),
     };
+
+    if (wantedGroup) {
+      if (rowGroup === wantedGroup && (!rowSubportalText || aliases.includes(rowSubportal))) return credentials;
+      continue;
+    }
 
     if (aliases.includes(rowSubportal)) return credentials;
 

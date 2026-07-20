@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { aerialServiceLinesForDate } from "../claim-status-job";
 
 function parseServiceLinesFromRows(rows: string[][]): string[] {
   const serviceCodes: string[] = [];
@@ -36,4 +37,14 @@ test("Aerial member id matching ignores subscriber number casing", () => {
   const normalizeMemberId = (value: string) => value.replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
 
   assert.equal(normalizeMemberId("98071313E"), normalizeMemberId("98071313e"));
+});
+
+test("Citrus Valley matches input DOS against detail lines inside a later summary DOS claim", () => {
+  const lines = [
+    { serviceDate: "06/02/2025", serviceCode: "99223" },
+    { serviceDate: "06/03/2025", serviceCode: "99232" },
+    { serviceDate: "06/08/2025", serviceCode: "99233" },
+  ];
+  assert.deepEqual(aerialServiceLinesForDate(lines, "6/2/2025").map((line) => line.serviceCode), ["99223"]);
+  assert.deepEqual(aerialServiceLinesForDate(lines, "06/03/2025").map((line) => line.serviceCode), ["99232"]);
 });

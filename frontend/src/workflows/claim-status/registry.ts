@@ -1,5 +1,6 @@
 import { aerialFrontendPortalConfig } from "./portals/aerial/portal-config";
 import { astronaFrontendPortalConfig } from "./portals/astrona/portal-config";
+import { allCareFrontendPortalConfig } from "./portals/all-care/portal-config";
 import { availityFrontendPortalConfig } from "./portals/availity/portal-config";
 import { blueShieldFrontendPortalConfig } from "./portals/blue-shield/portal-config";
 import { iehpFrontendPortalConfig } from "./portals/iehp/portal-config";
@@ -8,6 +9,7 @@ import { optumProFrontendPortalConfig } from "../../portals/optum-pro/portal-con
 
 export {
   aerialFrontendPortalConfig,
+  allCareFrontendPortalConfig,
   astronaFrontendPortalConfig,
   availityFrontendPortalConfig,
   blueShieldFrontendPortalConfig,
@@ -18,6 +20,7 @@ export {
 
 export const claimStatusPortalRegistry = [
   iehpFrontendPortalConfig,
+  allCareFrontendPortalConfig,
   aerialFrontendPortalConfig,
   astronaFrontendPortalConfig,
   regalFrontendPortalConfig,

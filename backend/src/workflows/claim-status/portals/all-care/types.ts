@@ -1,4 +1,4 @@
-export type AstronaCredentials = {
+export type AllCareCredentials = {
   group: string;
   payer: string;
   loginUrl: string;
@@ -6,7 +6,7 @@ export type AstronaCredentials = {
   password: string;
 };
 
-export type AstronaInputRow = {
+export type AllCareInputRow = {
   inputRowId: number;
   group: string;
   payer: string;
@@ -19,17 +19,19 @@ export type AstronaInputRow = {
   validationMessage: string;
 };
 
-export type AstronaCredentialBatch = {
-  credentials: AstronaCredentials;
-  rows: AstronaInputRow[];
+export type AllCareCredentialBatch = {
+  credentials: AllCareCredentials;
+  rows: AllCareInputRow[];
 };
 
-export type AstronaInput = {
+export type AllCareInput = {
   credentialWorkbookBuffer: ArrayBuffer;
   inputWorkbookBuffer: ArrayBuffer;
 };
 
-export type AstronaClaimDetails = {
+export type AllCareClaimDetails = {
+  vendorName?: string;
+  checkAmount?: string;
   memberName?: string;
   memberDob?: string;
   claimNumber: string;
@@ -41,10 +43,16 @@ export type AstronaClaimDetails = {
   netAmount: string;
   cptCodes: string[];
   memoLine1: string;
-  serviceLines: AstronaServiceLine[];
+  serviceLines: AllCareServiceLine[];
 };
 
-export type AstronaServiceLine = {
+export type AllCareServiceLine = {
+  claim?: string;
+  vendorName?: string;
+  dateReceived?: string;
+  dateFinalized?: string;
+  check?: string;
+  checkAmount?: string;
   from: string;
   to: string;
   cpt: string;
@@ -52,10 +60,16 @@ export type AstronaServiceLine = {
   diagCode: string;
   qty: string;
   billed: string;
+  allowed?: string;
   coPay: string;
   coInsure: string;
   deductible: string;
+  seq?: string;
   adjustment: string;
+  withhold?: string;
+  interest?: string;
   net: string;
+  carc?: string;
+  rarc?: string;
   memoLine1: string;
 };

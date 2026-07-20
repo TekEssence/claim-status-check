@@ -15,6 +15,10 @@ function readCredentials(rows: Array<Record<string, string | undefined>>, subpor
   return loadAerialCredentialsFromWorkbook(credentialWorkbookBuffer(rows), subportal);
 }
 
+function readGroupCredentials(rows: Array<Record<string, string | undefined>>, group: string, subportal: AerialSubportal = "citrus-valley") {
+  return loadAerialCredentialsFromWorkbook(credentialWorkbookBuffer(rows), subportal, group);
+}
+
 test("Aerial selects only the requested subportal credential row", () => {
   const rows = [
     { "Sub portal": "PMG", "Login URL": "https://pmg.example/login", Username: "pmg-user", Password: "pmg-secret" },
@@ -60,6 +64,29 @@ test("Citrus Valley never falls back to PMG or an unscoped credential row", () =
   ];
 
   assert.equal(readCredentials(rows, "citrus-valley"), null);
+});
+
+test("Citrus Valley selects credentials primarily by normalized Group", () => {
+  const rows = [
+    { Group: "IPPS", "Login URL": "https://ipps.example/login", Username: "ipps-user", Password: "ipps-secret" },
+    { Group: "BZA", "Login URL": "https://bza.example/login", Username: "bza-user", Password: "bza-secret" },
+  ];
+
+  assert.equal(readGroupCredentials(rows, " ipps ")?.username, "ipps-user");
+  assert.equal(readGroupCredentials(rows, "B-Z-A")?.username, "bza-user");
+  assert.equal(readGroupCredentials(rows, "UNKNOWN"), null);
+});
+
+test("Aerial isolates identical Groups by Sub portal and Group", () => {
+  const rows = [
+    { "Sub portal": "PMG", Group: "IPMG", "Login URL": "https://pmg.example/login", Username: "pmg-ipmg", Password: "pmg-secret" },
+    { "Sub portal": "Citrus Valley", Group: "IPMG", "Login URL": "https://citrus.example/login", Username: "citrus-ipmg", Password: "citrus-secret" },
+    { "Sub portal": "Citrus Valley", Group: "IPHS", "Login URL": "https://iphs.example/login", Username: "citrus-iphs", Password: "iphs-secret" },
+  ];
+
+  assert.equal(readGroupCredentials(rows, "IPMG", "pmg")?.username, "pmg-ipmg");
+  assert.equal(readGroupCredentials(rows, "IPMG", "citrus-valley")?.username, "citrus-ipmg");
+  assert.equal(readGroupCredentials(rows, "IPHS", "citrus-valley")?.username, "citrus-iphs");
 });
 
 test("Aerial backend router preserves PMG as the legacy default", () => {

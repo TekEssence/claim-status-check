@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import * as XLSX from "xlsx";
 import { readAstronaCredentials, readAstronaInputRows, routeAstronaRows } from "../input";
-import { astronaFinalStatus, astronaOutputRow, astronaOutputRows } from "../workbook";
+import { astronaFinalStatus, astronaFinalStatusText, astronaOutputRow, astronaOutputRows } from "../workbook";
 import { astronaClaimNameMatches, astronaMemberNameSearchCandidates, astronaProviderPortalMatches, astronaResultDosMatches, astronaServiceLinesForDos, astronaServiceLinesForDosAndCpt } from "../portal";
 
 function buffer(rows: Record<string, string>[]): ArrayBuffer {
@@ -94,7 +94,8 @@ test("Astrona output keeps member data, all CPTs, and denial memo", () => {
   assert.equal(output.member_id, "MEM-3");
   assert.equal(output.services_cpt, "99213; 80053");
   assert.equal(output.memo_line_1, "Not medically necessary");
-  assert.equal(output.final_status, "Denied");
+  assert.equal(output.claim_outcome, "Denied");
+  assert.match(String(output.final_status), /Checked Astrona portal/);
 });
 
 test("Astrona expands every aligned service line into its own output row", () => {
@@ -109,12 +110,22 @@ test("Astrona expands every aligned service line into its own output row", () =>
 
   assert.equal(output.length, 2);
   assert.deepEqual(
-    output.map((line) => [line.from, line.to, line.cpt, line.modifier, line.diag_code, line.qty, line.billed, line.co_pay, line.co_insure, line.deductible, line.adjustment, line.net, line.memo_line_1, line.final_status]),
+    output.map((line) => [line.from, line.to, line.cpt, line.modifier, line.diag_code, line.qty, line.billed, line.co_pay, line.co_insure, line.deductible, line.adjustment, line.net, line.memo_line_1, line.claim_outcome]),
     [
       ["07/01/2026", "07/01/2026", "99213", "25", "R10.9", "1", "$100.00", "$10.00", "$5.00", "$0.00", "$85.00", "$0.00", "Denied line", "Denied"],
       ["07/02/2026", "07/02/2026", "80053", "", "Z00.0", "1", "$50.00", "$0.00", "$0.00", "$0.00", "$20.00", "$30.00", "", "Paid"],
     ],
   );
+});
+
+test("Astrona builds paid and denied final status narratives", () => {
+  const [row] = readAstronaInputRows(buffer([{ Group: "ALPHA", Payer: "Payer One", "Member ID": "MEM-9", "Date of Service": "06/02/2025" }]));
+  const line = { from: "06/02/2025", to: "06/02/2025", cpt: "99223", modifier: "", diagCode: "", qty: "1", billed: "$100.00", coPay: "$0.00", coInsure: "$0.00", deductible: "$0.00", adjustment: "$75.00", net: "$25.00", memoLine1: "" };
+  const paid = astronaFinalStatusText(row, { claimNumber: "CLM-9", dateReceived: "06/09/2025", datePaid: "06/10/2025", checkNumber: "EFT9", portalStatus: "Paid", netAmount: "$25.00", cptCodes: ["99223"], memoLine1: "", serviceLines: [line] }, line);
+  assert.equal(paid, "DOS 06/02/2025: Checked Astrona portal claim received on 06/09/2025 paid on 06/10/2025 paid amount $25.00 EFT/Check # EFT9. Claim # CLM-9.");
+  const deniedLine = { ...line, net: "$0.00", memoLine1: "Not covered" };
+  const denied = astronaFinalStatusText(row, { claimNumber: "CLM-10", dateReceived: "06/09/2025", datePaid: "", dateDenied: "06/11/2025", checkNumber: "", portalStatus: "Denied", netAmount: "$0.00", cptCodes: ["99223"], memoLine1: "", serviceLines: [deniedLine] }, deniedLine);
+  assert.equal(denied, "DOS 06/02/2025: Checked Astrona portal claim received on 06/09/2025 denied on 06/11/2025 denial reason Not covered. Claim# CLM-10.");
 });
 
 test("Astrona reads input DOS and keeps every portal service line on the same DOS", () => {

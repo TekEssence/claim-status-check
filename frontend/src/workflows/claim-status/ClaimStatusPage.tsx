@@ -45,10 +45,13 @@ import { AvailityInputForm } from "./portals/availity/AvailityInputForm";
 import { AvailityResultView } from "./portals/availity/AvailityResultView";
 import { AstronaInputForm } from "./portals/astrona/AstronaInputForm";
 import { AstronaResultView } from "./portals/astrona/AstronaResultView";
+import { AllCareInputForm } from "./portals/all-care/AllCareInputForm";
+import { AllCareResultView } from "./portals/all-care/AllCareResultView";
 import { OptumProInputForm } from "../../portals/optum-pro/OptumProInputForm";
 import { OptumProResultView } from "../../portals/optum-pro/OptumProResultView";
 import {
   aerialFrontendPortalConfig,
+  allCareFrontendPortalConfig,
   astronaFrontendPortalConfig,
   availityFrontendPortalConfig,
   blueShieldFrontendPortalConfig,
@@ -90,7 +93,7 @@ type IehpWorkbookBundle = {
   worksheet: ExcelJS.Worksheet;
 };
 
-export type PortalId = "iehp" | "aerial" | "astrona" | "regal" | "blue-shield" | "availity" | "optum-pro";
+export type PortalId = "iehp" | "aerial" | "all-care" | "astrona" | "regal" | "blue-shield" | "availity" | "optum-pro";
 type DownloadFile = {
   filename: string;
   bytes: Uint8Array;
@@ -111,6 +114,7 @@ const DOWNLOADED_ARTIFACTS_PREFIX = "iehp-downloaded-artifacts:";
 const PORTAL_ROUTE_MAP: Record<PortalId, string> = {
   iehp: "/iehp",
   aerial: "/aerial",
+  "all-care": "/all-care",
   astrona: "/astrona",
   regal: "/regal",
   "blue-shield": "/blue-shield",
@@ -119,7 +123,7 @@ const PORTAL_ROUTE_MAP: Record<PortalId, string> = {
 };
 
 function isPortalId(value: string): value is PortalId {
-  return value === "iehp" || value === "aerial" || value === "astrona" || value === "regal" || value === "blue-shield" || value === "availity" || value === "optum-pro";
+  return value === "iehp" || value === "aerial" || value === "all-care" || value === "astrona" || value === "regal" || value === "blue-shield" || value === "availity" || value === "optum-pro";
 }
 
 function canRestoreCurrentJob(job: CurrentScrapeJob): job is CurrentScrapeJob & { portalId: PortalId } {
@@ -204,6 +208,10 @@ const PORTAL_UI_META: Record<
   aerial: {
     shortCode: "AC",
     logoClassName: "bg-[linear-gradient(180deg,#e0ecff_0%,#c7ddff_100%)] text-blue-700",
+  },
+  "all-care": {
+    shortCode: "AC",
+    logoClassName: "bg-[linear-gradient(180deg,#e0f2fe_0%,#bae6fd_100%)] text-sky-700",
   },
   astrona: {
     shortCode: "AS",
@@ -293,6 +301,10 @@ const PORTAL_WORKSPACE_META: Record<
   aerial: {
     heroDescription: "Upload your login workbook and claim details workbook to begin automated claim status verification.",
     processingDescription: "The platform validates workbook structure, secures the upload, and starts payer automation with live status tracking.",
+  },
+  "all-care": {
+    heroDescription: "Upload All Care Group/Payer credentials and claim rows for DOS- and CPT-specific status checks.",
+    processingDescription: "All Care routes each row to the matching Group and Responsible Payer login, then reads the matching service line.",
   },
   astrona: {
     heroDescription: "Upload Astrona Group/Payer credentials and member claim rows to begin automated claim-status verification.",
@@ -671,6 +683,8 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
   const [availityInputFile, setAvailityInputFile] = useState<File | null>(null);
   const [astronaCredentialFile, setAstronaCredentialFile] = useState<File | null>(null);
   const [astronaInputFile, setAstronaInputFile] = useState<File | null>(null);
+  const [allCareCredentialFile, setAllCareCredentialFile] = useState<File | null>(null);
+  const [allCareInputFile, setAllCareInputFile] = useState<File | null>(null);
   const [optumProLoginFile, setOptumProLoginFile] = useState<File | null>(null);
   const [optumProInputFile, setOptumProInputFile] = useState<File | null>(null);
   const [optumProJobId, setOptumProJobId] = useState<string>("");
@@ -727,6 +741,8 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
       ? iehpFrontendPortalConfig
       : effectivePortalId === "aerial"
         ? aerialFrontendPortalConfig
+        : effectivePortalId === "all-care"
+          ? allCareFrontendPortalConfig
         : effectivePortalId === "astrona"
           ? astronaFrontendPortalConfig
         : effectivePortalId === "regal"
@@ -798,6 +814,10 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     () => Boolean(astronaCredentialFile && astronaInputFile && !isProcessing),
     [astronaCredentialFile, astronaInputFile, isProcessing],
   );
+  const canSubmitAllCare = useMemo(
+    () => Boolean(allCareCredentialFile && allCareInputFile && !isProcessing),
+    [allCareCredentialFile, allCareInputFile, isProcessing],
+  );
   const canSubmitOptumPro = useMemo(
     () => Boolean(optumProLoginFile && optumProInputFile && !isProcessing),
     [optumProLoginFile, optumProInputFile, isProcessing],
@@ -815,6 +835,8 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
       ? canSubmitIehp
       : effectivePortalId === "aerial"
         ? canSubmitAerial
+        : effectivePortalId === "all-care"
+          ? canSubmitAllCare
         : effectivePortalId === "astrona"
           ? canSubmitAstrona
         : effectivePortalId === "regal"
@@ -870,6 +892,15 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
         claimReady: Boolean(astronaInputFile),
         loginFileLabel: astronaCredentialFile?.name ?? "",
         loginReady: Boolean(astronaCredentialFile),
+      };
+    }
+
+    if (effectivePortalId === "all-care") {
+      return {
+        claimFileLabel: allCareInputFile?.name ?? "",
+        claimReady: Boolean(allCareInputFile),
+        loginFileLabel: allCareCredentialFile?.name ?? "",
+        loginReady: Boolean(allCareCredentialFile),
       };
     }
 
@@ -2598,16 +2629,21 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
 
   async function submitAstrona(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    if (!astronaCredentialFile || !astronaInputFile) {
-      setStatus("Please provide both the Astrona login Excel and claim Excel files.");
+    const isAllCare = effectivePortalId === "all-care";
+    const credentialFile = isAllCare ? allCareCredentialFile : astronaCredentialFile;
+    const inputFile = isAllCare ? allCareInputFile : astronaInputFile;
+    const portalId = isAllCare ? "all-care" : "astrona";
+    const portalName = isAllCare ? "All Care" : "Astrona";
+    if (!credentialFile || !inputFile) {
+      setStatus(`Please provide both the ${portalName} login Excel and claim Excel files.`);
       return;
     }
 
-    resetRunState("Starting Astrona scraper...");
+    resetRunState(`Starting ${portalName} scraper...`);
     const formData = new FormData();
-    formData.append("portalId", "astrona");
-    formData.append("credentialExcel", astronaCredentialFile);
-    formData.append("inputExcel", astronaInputFile);
+    formData.append("portalId", portalId);
+    formData.append("credentialExcel", credentialFile);
+    formData.append("inputExcel", inputFile);
     let hasError = false;
     let wasCancelled = false;
     let finalErrorMessage = "";
@@ -2650,9 +2686,9 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
           setLogs((prev) => [...prev, `STREAM ERROR: ${finalErrorMessage}`]);
         },
       });
-      setStatus(wasCancelled ? "Astrona processing cancelled." : hasError ? `Astrona processing finished with errors${finalErrorMessage ? `: ${finalErrorMessage}` : "."}` : "Astrona processing completed.");
+      setStatus(wasCancelled ? `${portalName} processing cancelled.` : hasError ? `${portalName} processing finished with errors${finalErrorMessage ? `: ${finalErrorMessage}` : "."}` : `${portalName} processing completed.`);
     } catch (error) {
-      setStatus(`Failed to process Astrona claims: ${getErrorMessage(error)}`);
+      setStatus(`Failed to process ${portalName} claims: ${getErrorMessage(error)}`);
     } finally {
       setIsProcessing(false);
       setActiveJobId("");
@@ -3944,6 +3980,16 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
                       onInputFileChange={setAstronaInputFile}
                       onSubmit={submitAstrona}
                     />
+                  ) : effectivePortalId === "all-care" ? (
+                    <AllCareInputForm
+                      canSubmit={canSubmitAllCare}
+                      credentialFileName={allCareCredentialFile?.name ?? ""}
+                      inputFileName={allCareInputFile?.name ?? ""}
+                      isProcessing={isProcessing}
+                      onCredentialFileChange={setAllCareCredentialFile}
+                      onInputFileChange={setAllCareInputFile}
+                      onSubmit={submitAstrona}
+                    />
                   ) : effectivePortalId === "optum-pro" ? (
                     <OptumProInputForm
                       canSubmit={canSubmitOptumPro}
@@ -4016,6 +4062,10 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
               ) : effectivePortalId === "astrona" ? (
                 <div className="mt-5">
                   <AstronaResultView errorScreenshots={errorScreenshots} logs={logs} progress={progress} status={status} />
+                </div>
+              ) : effectivePortalId === "all-care" ? (
+                <div className="mt-5">
+                  <AllCareResultView errorScreenshots={errorScreenshots} logs={logs} progress={progress} status={status} />
                 </div>
               ) : effectivePortalId === "optum-pro" ? (
                 <div className="mt-5">

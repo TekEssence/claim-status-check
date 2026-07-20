@@ -1,5 +1,5 @@
 import type { Page } from "playwright-core";
-import type { AstronaClaimDetails, AstronaCredentials, AstronaInputRow, AstronaServiceLine } from "./types";
+import type { AllCareClaimDetails, AllCareCredentials, AllCareInputRow, AllCareServiceLine } from "./types";
 
 function normalize(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, "");
@@ -24,8 +24,8 @@ async function typeNaturally(page: Page, selector: string, value: string): Promi
   await field.pressSequentially(value, { delay: 65 });
 }
 
-async function finishAstronaNotices(page: Page): Promise<void> {
-  // Astrona can stack payer-specific reminder dialogs over the Claims page.
+async function finishAllCareNotices(page: Page): Promise<void> {
+  // AllCare can stack payer-specific reminder dialogs over the Claims page.
   // Always operate inside the topmost open dialog so a hidden button behind an
   // overlay is never selected.
   for (let attempt = 0; attempt < 10; attempt += 1) {
@@ -55,6 +55,12 @@ async function finishAstronaNotices(page: Page): Promise<void> {
       }
     }
     if (!handled) {
+      const allCareClose = page.locator("mat-icon").filter({ hasText: /^\s*close\s*$/i }).last();
+      if (await allCareClose.isVisible().catch(() => false)) {
+        await allCareClose.click();
+        await settle(page, 500);
+        continue;
+      }
       const globalFinish = page.getByRole("button", { name: /^finish$/i }).or(page.locator("button", { hasText: /^\s*finish\s*$/i })).last();
       if (await globalFinish.isVisible().catch(() => false)) {
         await globalFinish.scrollIntoViewIfNeeded().catch(() => {});
@@ -67,7 +73,7 @@ async function finishAstronaNotices(page: Page): Promise<void> {
   }
 }
 
-export function astronaProviderPortalMatches(labelText: string, labelFor: string | null, payer: string): boolean {
+export function allCareProviderPortalMatches(labelText: string, labelFor: string | null, payer: string): boolean {
   const wanted = comparablePortalName(payer);
   if (!wanted) return false;
   const label = comparablePortalName(labelText);
@@ -85,29 +91,41 @@ function extractLabel(text: string, labels: string[]): string {
   return "";
 }
 
-export async function loginToAstrona(page: Page, credentials: AstronaCredentials): Promise<void> {
+export async function loginToAllCare(page: Page, credentials: AllCareCredentials): Promise<void> {
   await page.goto(credentials.loginUrl, { waitUntil: "domcontentloaded" });
-  await page.locator("#email").waitFor({ state: "visible", timeout: 30000 });
+  const loginLink = page.locator('a[href="/authentication/login"]').first();
+  if (await loginLink.isVisible().catch(() => false)) await loginLink.click();
+  await page.locator("#Input_UserName").waitFor({ state: "visible", timeout: 30000 });
   await settle(page, 1200);
-  await typeNaturally(page, "#email", credentials.username);
+  await typeNaturally(page, "#Input_UserName", credentials.username);
   await settle(page, 500);
-  await typeNaturally(page, "#password", credentials.password);
+  await typeNaturally(page, "#Input_Password", credentials.password);
   await settle(page, 800);
+  const loginButton = page
+    .locator('button[type="submit"].btn.btn-primary')
+    .filter({ hasText: /^\s*log\s+in\s*$/i })
+    .or(page.getByRole("button", { name: /^log\s*in$/i }))
+    .first();
+  await loginButton.waitFor({ state: "visible", timeout: 30000 });
+  await loginButton.scrollIntoViewIfNeeded();
+  if (!await loginButton.isEnabled()) {
+    throw new Error("All Care Log in button is visible but disabled.");
+  }
   await Promise.all([
     page.waitForLoadState("domcontentloaded").catch(() => {}),
-    page.getByRole("button", { name: /^login$/i }).click(),
+    loginButton.click(),
   ]);
-  await page.locator("#email").waitFor({ state: "hidden", timeout: 30000 }).catch(() => {});
-  if (await page.locator("#email").isVisible().catch(() => false)) {
-    throw new Error("Astrona login did not leave the login page. Verify the payer username and password.");
+  await page.locator("#Input_UserName").waitFor({ state: "hidden", timeout: 30000 }).catch(() => {});
+  if (await page.locator("#Input_UserName").isVisible().catch(() => false)) {
+    throw new Error("AllCare login did not leave the login page. Verify the payer username and password.");
   }
   await settle(page, 1500);
 }
 
-export async function selectAstronaProviderPortal(page: Page, payer: string): Promise<void> {
+export async function selectAllCareProviderPortal(page: Page, payer: string): Promise<void> {
   const continueButton = page.getByRole("button", { name: /^continue$/i });
   await continueButton.waitFor({ state: "visible", timeout: 30000 }).catch(() => {
-    throw new Error(`Astrona provider portal page did not finish loading for Responsible Payer ${payer}.`);
+    throw new Error(`AllCare provider portal page did not finish loading for Responsible Payer ${payer}.`);
   });
 
   const labels = page.locator("label");
@@ -119,7 +137,7 @@ export async function selectAstronaProviderPortal(page: Page, payer: string): Pr
     const text = (await label.innerText().catch(() => "")).trim();
     const forId = await label.getAttribute("for");
     if (text) availableChoices.push(text);
-    if (astronaProviderPortalMatches(text, forId, payer)) {
+    if (allCareProviderPortalMatches(text, forId, payer)) {
       await label.waitFor({ state: "visible", timeout: 10000 });
       await settle(page, 600);
       await label.click();
@@ -140,7 +158,7 @@ export async function selectAstronaProviderPortal(page: Page, payer: string): Pr
             await control.click();
             checked = await selectionState();
           }
-          if (checked === false) throw new Error(`Astrona found payer choice "${text}" but its radio control could not be selected.`);
+          if (checked === false) throw new Error(`AllCare found payer choice "${text}" but its radio control could not be selected.`);
         }
       }
       selected = true;
@@ -149,7 +167,7 @@ export async function selectAstronaProviderPortal(page: Page, payer: string): Pr
   }
   if (!selected) {
     const choices = availableChoices.length ? availableChoices.join("; ") : "none";
-    throw new Error(`Astrona provider portal/IPA was not found for Responsible Payer ${payer}. Visible choices: ${choices}.`);
+    throw new Error(`AllCare provider portal/IPA was not found for Responsible Payer ${payer}. Visible choices: ${choices}.`);
   }
   await settle(page, 900);
   await Promise.all([
@@ -159,9 +177,9 @@ export async function selectAstronaProviderPortal(page: Page, payer: string): Pr
   await settle(page, 1800);
 }
 
-export async function goToAstronaClaims(page: Page): Promise<void> {
-  await finishAstronaNotices(page);
-  const search = page.locator("#memberIdSearch");
+export async function goToAllCareClaims(page: Page): Promise<void> {
+  await finishAllCareNotices(page);
+  const search = page.locator('input[placeholder="MembID"], input[title="MembID"]');
   if (await search.isVisible().catch(() => false)) return;
 
   const candidates = [
@@ -182,7 +200,7 @@ export async function goToAstronaClaims(page: Page): Promise<void> {
         await target.click();
         await search.waitFor({ state: "visible", timeout: 30000 });
         await settle(page, 1000);
-        await finishAstronaNotices(page);
+        await finishAllCareNotices(page);
         return;
       }
     }
@@ -190,10 +208,10 @@ export async function goToAstronaClaims(page: Page): Promise<void> {
   }
 
   const title = await page.title().catch(() => "");
-  throw new Error(`Astrona Claims navigation control was not found after 45 seconds (page: ${title || "untitled"}, URL: ${page.url()}).`);
+  throw new Error(`AllCare Claims navigation control was not found after 45 seconds (page: ${title || "untitled"}, URL: ${page.url()}).`);
 }
 
-export function astronaMemberNameSearchCandidates(memberName: string): string[] {
+export function allCareMemberNameSearchCandidates(memberName: string): string[] {
   const value = memberName.trim();
   if (!value) return [];
   const candidates = [value];
@@ -212,40 +230,36 @@ export function astronaMemberNameSearchCandidates(memberName: string): string[] 
   return Array.from(new Set(candidates.map((candidate) => candidate.trim()).filter(Boolean)));
 }
 
-export async function searchAstronaClaims(page: Page, row: AstronaInputRow, strategy: "both" | "member-name" = "both", searchName = row.memberName): Promise<void> {
-  await finishAstronaNotices(page);
-  const memberId = page.locator("#memberIdSearch");
-  const memberName = page.locator("#patientNameSearch");
+export async function searchAllCareClaims(page: Page, row: AllCareInputRow): Promise<void> {
+  await finishAllCareNotices(page);
+  const memberId = page.locator('input[placeholder="MembID"], input[title="MembID"]').first();
+  await memberId.waitFor({ state: "visible", timeout: 30000 });
   await memberId.fill("");
-  await memberName.fill("");
-  if (strategy === "both" && row.memberId) await typeNaturally(page, "#memberIdSearch", row.memberId);
-  if (strategy === "both" && searchName) {
-    await settle(page, 450);
-    await typeNaturally(page, "#patientNameSearch", searchName);
-  }
-  if (strategy === "member-name") {
-    if ((await memberId.inputValue()).trim()) await memberId.fill("");
-    await typeNaturally(page, "#patientNameSearch", searchName);
-  }
+  if (!row.memberId.trim()) throw new Error("All Care input row is missing Member ID.");
+  await memberId.fill(row.memberId);
   await settle(page, 700);
-  if (strategy === "both" && row.memberId) await memberId.press("Enter");
-  else await memberName.press("Enter");
+  const searchButton = page.getByRole("button", { name: /^search$/i }).first();
+  if (await searchButton.isVisible().catch(() => false)) await searchButton.click();
+  else await memberId.press("Enter");
   await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
   await settle(page, 2500);
 }
 
-function astronaClaimLinks(page: Page) {
-  return page.locator("span.text-brand.cursor-pointer").filter({ hasText: /^\s*(?=[a-z0-9-]*\d)[a-z0-9-]{6,}\s*$/i });
+function allCareClaimLinks(page: Page) {
+  return page.locator('mat-icon').filter({ hasText: /^\s*text_snippet\s*$/i });
 }
 
-async function scrollAstronaResults(page: Page, visit: () => Promise<boolean | void>): Promise<void> {
+async function scrollAllCareResults(page: Page, visit: () => Promise<boolean | void>): Promise<void> {
   // The claims grid may be inside a modal-sized overflow container and may
   // virtualize/lazily-load its rows as you scroll — scrollHeight can grow
   // *after* scrolling starts. Do not budget a fixed number of scroll steps
   // up front; keep scrolling while position or height is still changing.
-  const search = page.locator("#memberIdSearch");
+  const search = page.locator('input[placeholder="MembID"], input[title="MembID"]').first();
   await search.scrollIntoViewIfNeeded().catch(() => {});
-  const scrollables = page.locator("body");
+  // Some All Care pages contain an invalid nested <body> under app-root.
+  // Use the one document element so Playwright strict mode always resolves a
+  // single node while the evaluation can still discover every scrollable.
+  const scrollables = page.locator("html").first();
 
   await scrollables.evaluate(() => {
     const all = [document.scrollingElement, ...Array.from(document.querySelectorAll("*"))]
@@ -260,7 +274,7 @@ async function scrollAstronaResults(page: Page, visit: () => Promise<boolean | v
   if (await visit()) return;
 
   let stableRounds = 0;
-  // Astrona currently exposes at most the selected rows-per-page (normally
+  // AllCare currently exposes at most the selected rows-per-page (normally
   // ten). A small bounded scan is enough to materialize those rows and avoids
   // spending up to 50 seconds walking unrelated page containers.
   const maxSteps = 12;
@@ -293,25 +307,25 @@ async function scrollAstronaResults(page: Page, visit: () => Promise<boolean | v
   }
 }
 
-export async function astronaShowsNoClaimResults(page: Page): Promise<boolean> {
+export async function allCareShowsNoClaimResults(page: Page): Promise<boolean> {
   const message = page.getByText(/no\s+(claims?|results?|data)\s+(found|available)|no\s+matching\s+claims?/i).first();
   return message.isVisible().catch(() => false);
 }
 
-export async function getAstronaClaimCount(page: Page): Promise<number> {
-  if (await astronaShowsNoClaimResults(page)) return 0;
+export async function getAllCareClaimCount(page: Page): Promise<number> {
+  if (await allCareShowsNoClaimResults(page)) return 0;
   // Search result presence only; the complete bounded scan happens once in
-  // getAstronaClaimNumbersForRow immediately before extraction.
-  const visibleCount = await astronaClaimLinks(page).count();
+  // getAllCareClaimNumbersForRow immediately before extraction.
+  const visibleCount = await allCareClaimLinks(page).count();
   if (visibleCount) return visibleCount;
   const claimNumbers = new Set<string>();
-  await scrollAstronaResults(page, async () => {
-    for (const value of await astronaClaimLinks(page).allInnerTexts()) claimNumbers.add(value.trim());
+  await scrollAllCareResults(page, async () => {
+    for (const value of await allCareClaimLinks(page).allInnerTexts()) claimNumbers.add(value.trim());
   });
   return claimNumbers.size;
 }
 
-export function astronaResultDosMatches(value: string, dos: string): boolean {
+export function allCareResultDosMatches(value: string, dos: string): boolean {
   const wanted = canonicalDate(dos);
   if (!wanted) return true;
   const dates = value.match(/\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4}|\d{4}-\d{1,2}-\d{1,2}/g) ?? [];
@@ -325,24 +339,24 @@ export function astronaResultDosMatches(value: string, dos: string): boolean {
   return false;
 }
 
-export async function getAstronaClaimNumbersForRow(page: Page, _inputRow: AstronaInputRow): Promise<string[]> {
+export async function getAllCareClaimNumbersForRow(page: Page, inputRow: AllCareInputRow): Promise<string[]> {
   const matches = new Set<string>();
-  await scrollAstronaResults(page, async () => {
-    const claims = astronaClaimLinks(page);
+  await scrollAllCareResults(page, async () => {
+    const claims = allCareClaimLinks(page);
     for (let index = 0; index < await claims.count(); index += 1) {
       const claim = claims.nth(index);
-      const claimNumber = (await claim.innerText().catch(() => "")).trim();
-      // Astrona's visual grid can render the claim-number and Date of Service
-      // columns in separate virtualized DOM trees. Never reject a returned
-      // claim from the summary grid; open it and use detail service lines as
-      // the authoritative DOS/CPT source.
-      if (claimNumber) matches.add(claimNumber);
+      const rowText = await claim.evaluate((element) => {
+        const resultRow = element.closest("tr,mat-row,[role=row]");
+        return (resultRow?.textContent ?? "").replace(/\s+/g, " ").trim();
+      }).catch(() => "");
+      if (inputRow.dos && !allCareResultDosMatches(rowText, inputRow.dos)) continue;
+      matches.add(`result-icon:${index}:${encodeURIComponent(rowText.slice(0, 160))}`);
     }
   });
   return [...matches];
 }
 
-export async function goToNextAstronaClaimsPage(page: Page): Promise<boolean> {
+export async function goToNextAllCareClaimsPage(page: Page): Promise<boolean> {
   const next = page
     .locator('a[aria-label="Go to next page"], button[aria-label="Go to next page"], [role=button][aria-label="Go to next page"]')
     .or(page.getByRole("button", { name: /^(next|go to next page)$/i }))
@@ -366,10 +380,10 @@ export async function goToNextAstronaClaimsPage(page: Page): Promise<boolean> {
   return true;
 }
 
-export async function getAstronaClaimIndexesForRow(page: Page, inputRow: AstronaInputRow): Promise<number[]> {
+export async function getAllCareClaimIndexesForRow(page: Page, inputRow: AllCareInputRow): Promise<number[]> {
   const wantedDos = canonicalDate(inputRow.dos);
 
-  const claims = astronaClaimLinks(page);
+  const claims = allCareClaimLinks(page);
   const indexes: number[] = [];
   for (let index = 0; index < await claims.count(); index += 1) {
     const claim = claims.nth(index);
@@ -391,8 +405,8 @@ export async function getAstronaClaimIndexesForRow(page: Page, inputRow: Astrona
   return indexes;
 }
 
-export async function openAstronaClaim(page: Page, index: number): Promise<{ claimNumber: string; originalUrl: string }> {
-  const claims = astronaClaimLinks(page);
+export async function openAllCareClaim(page: Page, index: number): Promise<{ claimNumber: string; originalUrl: string }> {
+  const claims = allCareClaimLinks(page);
   const claim = claims.nth(index);
   const claimNumber = (await claim.innerText()).trim();
   const originalUrl = page.url();
@@ -403,19 +417,32 @@ export async function openAstronaClaim(page: Page, index: number): Promise<{ cla
   return { claimNumber, originalUrl };
 }
 
-export async function openAstronaClaimByNumber(page: Page, claimNumber: string): Promise<{ claimNumber: string; originalUrl: string }> {
-  let target = astronaClaimLinks(page).filter({ hasText: new RegExp(`^\\s*${claimNumber.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*$`, "i") }).first();
-  if (!await target.isVisible().catch(() => false)) {
-    await scrollAstronaResults(page, async () => target.isVisible().catch(() => false));
-    target = astronaClaimLinks(page).filter({ hasText: new RegExp(`^\\s*${claimNumber.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*$`, "i") }).first();
+export async function openAllCareClaimByNumber(page: Page, claimNumber: string): Promise<{ claimNumber: string; originalUrl: string }> {
+  if (claimNumber.startsWith("result-icon:")) {
+    const index = Number(claimNumber.split(":", 2)[1]);
+    const target = allCareClaimLinks(page).nth(index);
+    if (!Number.isInteger(index) || !await target.isVisible().catch(() => false)) {
+      throw new Error(`All Care DOS-matched file icon ${index} is no longer visible.`);
+    }
+    const resultRowText = await target.evaluate((element) => {
+      const row = element.closest("tr,mat-row,[role=row]");
+      return (row?.textContent ?? "").replace(/\s+/g, " ").trim();
+    }).catch(() => "");
+    const visibleClaimNumber = extractLabel(resultRowText, ["Claim", "Claim Number", "Claim #"])
+      || resultRowText.match(/\b(?=[A-Z0-9-]*\d)[A-Z0-9-]{6,}\b/i)?.[0]
+      || `result-row-${index + 1}`;
+    await target.scrollIntoViewIfNeeded();
+    const originalUrl = page.url();
+    await target.click();
+    await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
+    await page.waitForFunction(() => {
+      const text = document.body?.innerText ?? "";
+      return /\bProc\b/i.test(text) && /\b(NetPay|Net Paid|Billed)\b/i.test(text);
+    }, { timeout: 15000 }).catch(() => {});
+    await settle(page, 1200);
+    return { claimNumber: visibleClaimNumber, originalUrl };
   }
-  if (!await target.isVisible().catch(() => false)) throw new Error(`Astrona claim ${claimNumber} disappeared from the results while scrolling.`);
-  await target.scrollIntoViewIfNeeded();
-  const originalUrl = page.url();
-  await target.click();
-  await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
-  await settle(page, 300);
-  return { claimNumber, originalUrl };
+  throw new Error("All Care refused to open a claim without a DOS-matched text_snippet file icon.");
 }
 
 function canonicalDate(value: string): string {
@@ -429,9 +456,13 @@ function canonicalDate(value: string): string {
   return iso ? `${iso[1]}-${iso[2].padStart(2, "0")}-${iso[3].padStart(2, "0")}` : normalize(text);
 }
 
-export function astronaServiceLinesForDos(serviceLines: AstronaServiceLine[], dos: string): AstronaServiceLine[] {
+export function allCareServiceLinesForDos(serviceLines: AllCareServiceLine[], dos: string): AllCareServiceLine[] {
   const wanted = canonicalDate(dos);
   if (!wanted) return serviceLines;
+  // The All Care result grid carries Date of Service, while its opened detail
+  // grid may start at Proc and omit DOS entirely. The file icon was already
+  // selected from the matching DOS result row, so retain those detail lines.
+  if (serviceLines.length && serviceLines.every((line) => !line.from && !line.to)) return serviceLines;
   return serviceLines.filter((line) => {
     if (canonicalDate(line.from) === wanted || canonicalDate(line.to) === wanted) return true;
     const target = Date.parse(`${wanted}T00:00:00Z`);
@@ -450,8 +481,8 @@ function canonicalProcedureCode(value: string): string {
   return code ?? normalize(text);
 }
 
-export function astronaServiceLinesForDosAndCpt(serviceLines: AstronaServiceLine[], dos: string, cptCode: string): AstronaServiceLine[] {
-  const dosMatches = astronaServiceLinesForDos(serviceLines, dos);
+export function allCareServiceLinesForDosAndCpt(serviceLines: AllCareServiceLine[], dos: string, cptCode: string): AllCareServiceLine[] {
+  const dosMatches = allCareServiceLinesForDos(serviceLines, dos);
   const wantedCpt = canonicalProcedureCode(cptCode);
   if (!wantedCpt) return dosMatches;
   return dosMatches.filter((line) => canonicalProcedureCode(line.cpt) === wantedCpt);
@@ -463,9 +494,9 @@ function canonicalNameTokens(value: string): string[] {
     .sort();
 }
 
-export function astronaClaimNameMatches(details: AstronaClaimDetails, row: AstronaInputRow): boolean {
+export function allCareClaimNameMatches(details: AllCareClaimDetails, row: AllCareInputRow): boolean {
   const portalName = details.memberName ?? "";
-  if (!row.memberName) return true;
+  if (!row.memberName || !portalName) return true;
   if (!portalName) return false;
   const wanted = canonicalNameTokens(row.memberName);
   const actual = canonicalNameTokens(portalName);
@@ -475,14 +506,16 @@ export function astronaClaimNameMatches(details: AstronaClaimDetails, row: Astro
   return wantedInActual || actualInWanted;
 }
 
-export function astronaClaimDobMatches(details: AstronaClaimDetails, row: AstronaInputRow): boolean {
+export function allCareClaimDobMatches(details: AllCareClaimDetails, row: AllCareInputRow): boolean {
   const portalDob = details.memberDob ?? "";
-  return !row.dob || (Boolean(portalDob) && canonicalDate(portalDob) === canonicalDate(row.dob));
+  return !row.dob || !portalDob || canonicalDate(portalDob) === canonicalDate(row.dob);
 }
 
-async function scrollAstronaClaimDetails(page: Page): Promise<ReturnType<Page["locator"]>> {
+async function scrollAllCareClaimDetails(page: Page): Promise<ReturnType<Page["locator"]>> {
   const openDialogs = page.locator('[role="dialog"][data-state="open"]');
-  let root = page.locator("body");
+  // All Care can render both the real document body and an app-root body.
+  // The document element is unique and safely contains either version.
+  let root = page.locator("html").first();
   for (let index = (await openDialogs.count()) - 1; index >= 0; index -= 1) {
     const candidate = openDialogs.nth(index);
     if (await candidate.isVisible().catch(() => false)) {
@@ -511,34 +544,76 @@ async function scrollAstronaClaimDetails(page: Page): Promise<ReturnType<Page["l
   return root;
 }
 
-export async function extractAstronaClaimDetails(page: Page, fallbackClaimNumber: string): Promise<AstronaClaimDetails> {
-  const root = await scrollAstronaClaimDetails(page);
+async function extractAllCarePatientInfo(root: ReturnType<Page["locator"]>): Promise<{ name: string; dob: string } | null> {
+  // The "Patient Name, ID and DOB" header sits in one table row, with the
+  // actual name/ID/DOB (joined by <br>) in the very next row, same column.
+  // A plain body-text label search misfires here because "Patient Name" only
+  // ever appears as part of that combined header — never as its own label
+  // directly followed by the value — so it has to be read structurally.
+  return root.evaluate((container) => {
+    const tables = Array.from(container.querySelectorAll("table"));
+    for (const table of tables) {
+      const headerRow = table.querySelector("tr");
+      if (!headerRow) continue;
+      const headers = Array.from(headerRow.querySelectorAll("th"));
+      const index = headers.findIndex((header) => /patient\s*name|member\s*name/i.test(header.textContent || ""));
+      if (index < 0) continue;
+      const dataRow = headerRow.nextElementSibling;
+      const cell = dataRow?.querySelectorAll("td")[index];
+      if (!cell) continue;
+      const parts = (cell.innerHTML || "")
+        .split(/<br\s*\/?>/i)
+        .map((part) => part.replace(/<[^>]+>/g, "").replace(/&nbsp;/gi, " ").trim())
+        .filter(Boolean);
+      if (!parts.length) continue;
+      const dobPart = parts.find((part) => /^\d{1,2}\/\d{1,2}\/\d{2,4}$/.test(part));
+      return { name: parts[0] || "", dob: dobPart || "" };
+    }
+    return null;
+  }).catch(() => null);
+}
+
+export async function extractAllCareClaimDetails(page: Page, fallbackClaimNumber: string): Promise<AllCareClaimDetails> {
+  const root = await scrollAllCareClaimDetails(page);
+  const patientInfo = await extractAllCarePatientInfo(root);
   const bodyText = await root.innerText();
-  const serviceLines = await root.locator("table,[role=table],[role=grid]").evaluateAll((tables) => {
+  let serviceLines = await root.locator("table,mat-table,.mat-table,.cdk-table,[role=table],[role=grid]").evaluateAll((tables) => {
     const normalizeHeader = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, "");
     const aliases: Record<string, string[]> = {
+      claim: ["claim", "claimnumber", "claimno"],
+      vendorName: ["vendorname", "vendor", "providername"],
+      dateReceived: ["datercvd", "datereceived", "receiveddate"],
+      dateFinalized: ["datefinalized", "finalizeddate", "datepaid", "datedenied"],
+      check: ["check", "checknumber", "checkno", "eftcheck"],
+      checkAmount: ["checkamount", "checkamt"],
       from: ["from", "servicefrom", "fromdate"],
       to: ["to", "serviceto", "todate"],
-      fromTo: ["fromto", "servicefromto", "fromtodate", "servicedates", "dateofservice", "dos"],
-      cpt: ["cpt", "cptcode", "procedure", "procedurecode", "servicecode", "servicescpt", "servicecpt"],
+      fromTo: ["fromto", "servicefromto", "fromtodate", "servicedates", "dateofservice", "dos", "svcdate", "servicedate"],
+      cpt: ["proc", "cpt", "cptcode", "procedure", "procedurecode", "servicecode", "servicescpt", "servicecpt"],
       modifier: ["modifier", "mod"],
       diagCode: ["diagcode", "diagnosiscode", "diagnosis", "dxcode"],
       qty: ["qty", "quantity", "units"],
       billed: ["billed", "billedamount", "charge"],
+      allowed: ["allowed", "allowedamount"],
       coPay: ["copay", "copayamount"],
       coInsure: ["coinsure", "coinsurance", "coinsuranceamount"],
       coPayCoInsure: ["copaycoinsure", "copaycoinsurance", "copaycoinsureamount"],
       deductible: ["deductible", "deduct"],
-      adjustment: ["adjustment", "adjusted", "adjustmentamount"],
-      net: ["net", "netamount", "netpaid"],
+      seq: ["seq", "sequence"],
+      adjustment: ["adjust", "adjustment", "adjusted", "adjustmentamount"],
+      withhold: ["withhold", "withheld"],
+      interest: ["interest"],
+      net: ["netpay", "net", "netamount", "netpaid"],
+      carc: ["carc"],
+      rarc: ["rarc"],
       memoLine1: ["memoline1", "memo1", "memo"],
     };
     const output: Record<string, string>[] = [];
     for (const table of tables) {
-      const rows = Array.from(table.querySelectorAll("tr,[role=row]"));
+      const rows = Array.from(table.querySelectorAll("tr,mat-header-row,mat-row,.mat-header-row,.cdk-header-row,.mat-row,.cdk-row,[role=row]"));
       const knownHeaders = new Set(Object.values(aliases).flat());
       const headerCandidates = rows.map((row, rowIndex) => {
-        const headers = Array.from(row.querySelectorAll("th,td,[role=columnheader],[role=cell],[role=gridcell]"))
+        const headers = Array.from(row.querySelectorAll("th,mat-header-cell,.mat-header-cell,.cdk-header-cell,td,mat-cell,.mat-cell,.cdk-cell,[role=columnheader],[role=cell],[role=gridcell]"))
           .map((cell) => normalizeHeader((cell.textContent || "").trim()));
         return { rowIndex, headers, score: headers.filter((header) => knownHeaders.has(header)).length };
       });
@@ -548,7 +623,7 @@ export async function extractAstronaClaimDetails(page: Page, fallbackClaimNumber
       const indexes = Object.fromEntries(Object.entries(aliases).map(([field, names]) => [field, headers.findIndex((header) => names.includes(header))]));
       if (indexes.cpt < 0 && indexes.net < 0) continue;
       for (const row of rows.slice(selectedHeader.rowIndex + 1)) {
-        const cells = Array.from(row.querySelectorAll("td,[role=cell],[role=gridcell]"));
+        const cells = Array.from(row.querySelectorAll("td,mat-cell,.mat-cell,.cdk-cell,[role=cell],[role=gridcell]"));
         const line = Object.fromEntries(Object.entries(indexes).map(([field, index]) => [field, index >= 0 ? (cells[index]?.textContent || "").trim() : ""]));
         if (!line.from && !line.to && line.fromTo) {
           const dates = line.fromTo.match(/\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4}|\d{4}-\d{1,2}-\d{1,2}/g) || [];
@@ -566,20 +641,111 @@ export async function extractAstronaClaimDetails(page: Page, fallbackClaimNumber
       }
     }
     return output;
-  }) as AstronaServiceLine[];
+  }) as AllCareServiceLine[];
+  if (!serviceLines.length) {
+    // Older Angular Material builds can render div-based rows without table
+    // roles or header cells. Their cdk-column-* / mat-column-* classes still
+    // provide stable column names, so parse those directly as a fallback.
+    serviceLines = await root.locator("mat-row,.mat-row,.cdk-row,[role=row]").evaluateAll((rows) => {
+      const normalize = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, "");
+      const fieldForColumn = (column: string): string => {
+        const aliases: Record<string, string[]> = {
+          claim: ["claim", "claimnumber", "claimno"], vendorName: ["vendorname", "vendor"],
+          dateReceived: ["datercvd", "datereceived"], dateFinalized: ["datefinalized", "finalizeddate"],
+          check: ["check", "checknumber"], checkAmount: ["checkamount"],
+          from: ["from", "servicefrom"], to: ["to", "serviceto"], cpt: ["proc", "cpt", "procedure"],
+          modifier: ["mod", "modifier"], billed: ["billed"], allowed: ["allowed"], coPay: ["copay"],
+          coInsure: ["coins", "coinsure", "coinsurance"], deductible: ["deductible", "deduct"],
+          seq: ["seq", "sequence"], adjustment: ["adjust", "adjustment"], withhold: ["withhold"],
+          interest: ["interest"], net: ["netpay", "net", "netpaid"], carc: ["carc"], rarc: ["rarc"],
+        };
+        const wanted = normalize(column);
+        return Object.entries(aliases).find(([, names]) => names.includes(wanted))?.[0] ?? "";
+      };
+      const output: Record<string, string>[] = [];
+      for (const row of rows) {
+        const line: Record<string, string> = {};
+        const cells = Array.from(row.querySelectorAll('[class*="mat-column-"],[class*="cdk-column-"]'));
+        for (const cell of cells) {
+          const className = typeof cell.className === "string" ? cell.className : "";
+          const column = className.match(/(?:mat|cdk)-column-([^\s]+)/)?.[1] ?? "";
+          const field = fieldForColumn(column);
+          if (field) line[field] = (cell.textContent ?? "").replace(/\s+/g, " ").trim();
+        }
+        if (line.cpt || line.net || line.billed || line.carc || line.rarc) output.push(line);
+      }
+      return output;
+    }) as AllCareServiceLine[];
+  }
+  if (!serviceLines.length) {
+    // Claim Details is sometimes a print-style CSS layout with no table, row,
+    // cell, role, or Angular column semantics. Read its visible leaf text by
+    // screen coordinates, identify the Svc Date header row, and assign each
+    // value to the nearest column heading.
+    serviceLines = await root.evaluate((container) => {
+      const normalize = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, "");
+      const headerFields: Record<string, string> = {
+        svcdate: "from", servicedate: "from", qty: "qty", proc: "cpt", mod: "modifier",
+        billed: "billed", allowed: "allowed", copay: "coPay", coins: "coInsure",
+        deductible: "deductible", seq: "seq", adjust: "adjustment", withhold: "withhold",
+        interest: "interest", netpay: "net", carc: "carc", rarc: "rarc",
+      };
+      const items = Array.from(container.querySelectorAll("*"))
+        .map((element) => {
+          const html = element as HTMLElement;
+          const text = (html.innerText || "").replace(/\s+/g, " ").trim();
+          const rect = html.getBoundingClientRect();
+          const visibleChildren = Array.from(html.children).some((child) => {
+            const childText = ((child as HTMLElement).innerText || "").replace(/\s+/g, " ").trim();
+            const childRect = (child as HTMLElement).getBoundingClientRect();
+            return childText === text && childRect.width > 0 && childRect.height > 0;
+          });
+          return { text, x: rect.left, y: rect.top, width: rect.width, height: rect.height, visibleChildren };
+        })
+        .filter((item) => item.text && item.width > 0 && item.height > 0 && !item.visibleChildren && item.text.length < 160);
+      const headers = items
+        .map((item) => ({ ...item, field: headerFields[normalize(item.text)] || "" }))
+        .filter((item) => item.field);
+      const serviceDateHeader = headers.find((item) => item.field === "from");
+      if (!serviceDateHeader) return [];
+      const headerRow = headers.filter((item) => Math.abs(item.y - serviceDateHeader.y) <= Math.max(10, serviceDateHeader.height));
+      const lowerBoundary = items
+        .filter((item) => item.y > serviceDateHeader.y && /^(claim totals|carc code)$/i.test(item.text))
+        .sort((left, right) => left.y - right.y)[0]?.y ?? Number.POSITIVE_INFINITY;
+      const values = items.filter((item) => item.y > serviceDateHeader.y + serviceDateHeader.height / 2 && item.y < lowerBoundary);
+      const dateValues = values.filter((item) => /^\d{1,2}\/\d{1,2}\/\d{2,4}$/.test(item.text));
+      const output: Record<string, string>[] = [];
+      for (const dateValue of dateValues) {
+        const sameRow = values.filter((item) => Math.abs(item.y - dateValue.y) <= Math.max(7, dateValue.height * 0.65));
+        const line: Record<string, string> = { from: dateValue.text, to: dateValue.text };
+        for (const item of sameRow) {
+          const center = item.x + item.width / 2;
+          const header = [...headerRow].sort((left, right) =>
+            Math.abs(center - (left.x + left.width / 2)) - Math.abs(center - (right.x + right.width / 2)))[0];
+          if (!header || header.field === "from") continue;
+          line[header.field] = line[header.field] ? `${line[header.field]} ${item.text}` : item.text;
+        }
+        if (line.cpt || line.net || line.billed) output.push(line);
+      }
+      return output;
+    }) as AllCareServiceLine[];
+  }
   const cptCodes = Array.from(new Set(serviceLines.map((line) => line.cpt).filter(Boolean)));
   const labelledServices = extractLabel(bodyText, ["Services (CPT)", "CPT", "Procedure Code"]);
   if (!cptCodes.length && labelledServices) cptCodes.push(...labelledServices.split(/[,;]+/).map((value) => value.trim()).filter(Boolean));
   const claimMemo = extractLabel(bodyText, ["Memo Line 1", "Memo 1"]);
-  const claimNet = extractLabel(bodyText, ["Net Amount", "Net Paid", "Paid Amount"]);
+  const firstLine = serviceLines[0];
+  const claimNet = firstLine?.net || extractLabel(bodyText, ["NetPay", "Net Amount", "Net Paid", "Paid Amount"]);
   return {
-    memberName: extractLabel(bodyText, ["Member Name", "Patient Name", "Member"]),
-    memberDob: extractLabel(bodyText, ["Date of Birth", "Member DOB", "Patient DOB", "DOB"]),
-    claimNumber: extractLabel(bodyText, ["Claim Number", "Claim #", "Claim No"]) || fallbackClaimNumber,
-    dateReceived: extractLabel(bodyText, ["Date Received", "Received Date", "Claim Received Date"]),
-    datePaid: extractLabel(bodyText, ["Date Paid", "Paid Date"]),
+    vendorName: firstLine?.vendorName || extractLabel(bodyText, ["Vendor Name", "Vendor"]),
+    checkAmount: firstLine?.checkAmount || extractLabel(bodyText, ["Check Amount"]),
+    memberName: patientInfo?.name || extractLabel(bodyText, ["Member Name", "Patient Name", "Member"]),
+    memberDob: patientInfo?.dob || extractLabel(bodyText, ["Date of Birth", "Member DOB", "Patient DOB", "DOB"]),
+    claimNumber: firstLine?.claim || extractLabel(bodyText, ["Claim Number", "Claim #", "Claim No", "Claim"]) || fallbackClaimNumber,
+    dateReceived: firstLine?.dateReceived || extractLabel(bodyText, ["Date Rcvd", "Date Received", "Received Date", "Claim Received Date"]),
+    datePaid: firstLine?.dateFinalized || extractLabel(bodyText, ["Date Finalized", "Date Paid", "Paid Date"]),
     dateDenied: extractLabel(bodyText, ["Date Denied", "Denied Date", "Reject Date", "Rejection Date"]),
-    checkNumber: extractLabel(bodyText, ["Check Number", "Check No", "Check #"]),
+    checkNumber: firstLine?.check || extractLabel(bodyText, ["Check", "Check Number", "Check No", "Check #"]),
     portalStatus: extractLabel(bodyText, ["Claim Status", "Status"]),
     netAmount: claimNet,
     cptCodes,
@@ -588,8 +754,8 @@ export async function extractAstronaClaimDetails(page: Page, fallbackClaimNumber
   };
 }
 
-export async function returnToAstronaResults(page: Page, originalUrl: string): Promise<void> {
-  await finishAstronaNotices(page);
+export async function returnToAllCareResults(page: Page, originalUrl: string): Promise<void> {
+  await finishAllCareNotices(page);
   const dialogs = page.locator('[role="dialog"][data-state="open"]');
   let closedDialog = false;
   for (let index = (await dialogs.count()) - 1; index >= 0; index -= 1) {
@@ -612,7 +778,7 @@ export async function returnToAstronaResults(page: Page, originalUrl: string): P
   await settle(page, 250);
 }
 
-export async function signOutAstrona(page: Page): Promise<void> {
+export async function signOutAllCare(page: Page): Promise<void> {
   const signOut = page
     .getByRole("button", { name: /sign\s*out|log\s*out/i })
     .or(page.getByRole("link", { name: /sign\s*out|log\s*out/i }))

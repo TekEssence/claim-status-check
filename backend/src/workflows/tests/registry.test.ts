@@ -18,6 +18,14 @@ test("claim status resolves Astrona as an independent portal", () => {
   assert.equal(runner.name, "Astrona Claim Status");
 });
 
+test("claim status resolves All Care as an independent portal", () => {
+  const runner = getAutomationRunner("claim-status", "all-care");
+
+  assert.equal(runner.workflowId, "claim-status");
+  assert.equal(runner.portalId, "all-care");
+  assert.equal(runner.name, "All Care Claim Status");
+});
+
 test("eligibility resolves Waystar without requiring a payer selection", () => {
   const runner = getAutomationRunner("eligibility-verification", "waystar");
 

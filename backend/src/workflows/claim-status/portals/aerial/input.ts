@@ -4,12 +4,14 @@ import { loadAerialEnvironment } from "./env";
 import { loadCredentialsForAerialSubportal } from "./common/credential-workbook";
 import type { AerialCredentials, AerialSubportal } from "./common/subportal";
 import { getAerialSubportal, resolveAerialSubportal } from "./subportals/registry";
+import { readAerialInputWorkbookFromBuffer } from "./workbook";
 
 export type { AerialCredentials, AerialSubportal } from "./common/subportal";
 
 export type AerialInput = {
   subportal: AerialSubportal;
   credentials: AerialCredentials;
+  credentialGroups: Array<{ group: string; credentials: AerialCredentials }>;
   inputWorkbookBuffer: ArrayBuffer;
   inputFileName: string;
 };
@@ -46,8 +48,8 @@ function loadAerialCredentialsFromEnv(): AerialCredentials | null {
   };
 }
 
-export function loadAerialCredentialsFromWorkbook(buffer: ArrayBuffer, subportal: AerialSubportal): AerialCredentials | null {
-  return loadCredentialsForAerialSubportal(buffer, getAerialSubportal(subportal));
+export function loadAerialCredentialsFromWorkbook(buffer: ArrayBuffer, subportal: AerialSubportal, group = ""): AerialCredentials | null {
+  return loadCredentialsForAerialSubportal(buffer, getAerialSubportal(subportal), group);
 }
 
 async function loadOptionalWorkbookBuffer(file: FormDataEntryValue | null): Promise<ArrayBuffer | null> {
@@ -111,10 +113,30 @@ export async function parseAerialInput(formData: FormData): Promise<AerialInput>
   const inputExcel = formData.get("inputExcel");
   const credentialWorkbookBuffer = await loadOptionalWorkbookBuffer(credentialExcel);
   const inputWorkbook = await loadInputWorkbookBuffer(inputExcel);
+  const groups = Array.from(new Set(readAerialInputWorkbookFromBuffer(inputWorkbook.buffer).map((row) => row.Group.trim()).filter(Boolean)));
+  if (credentialWorkbookBuffer && groups.length) {
+    const credentialGroups = groups.map((group) => {
+      const credentials = loadAerialCredentialsFromWorkbook(credentialWorkbookBuffer, subportal, group);
+      if (!credentials) throw new Error(`No ${AERIAL_SUBPORTAL_LABELS[subportal]} credentials matched input Group ${group}. Credential matching requires both Sub portal and Group.`);
+      return { group, credentials };
+    });
+    return {
+      subportal,
+      credentials: credentialGroups[0]!.credentials,
+      credentialGroups,
+      inputWorkbookBuffer: inputWorkbook.buffer,
+      inputFileName: inputWorkbook.fileName,
+    };
+  }
+  if (subportal === "citrus-valley") {
+    if (!credentialWorkbookBuffer) throw new Error("Citrus Valley requires a credentials Excel with Sub portal and Group columns.");
+    throw new Error("Citrus Valley input claims must contain a Group column.");
+  }
 
   return {
     subportal,
     credentials: resolveAerialCredentials(subportal, inputWorkbook.buffer, credentialWorkbookBuffer),
+    credentialGroups: [],
     inputWorkbookBuffer: inputWorkbook.buffer,
     inputFileName: inputWorkbook.fileName,
   };

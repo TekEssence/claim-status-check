@@ -152,6 +152,7 @@ test("Aerial output workbook includes total_paid and final_status columns", () =
 test("Aerial final_status uses paid wording only when claim status is APPROVED", () => {
   const inputRow = {
     input_row_id: 2,
+    Group: "",
     "Claim No": "CLM-5005",
     "Subscriber No": "123456789",
     "Service Date": "10/09/2025",
