@@ -149,7 +149,7 @@ export async function parseAvailityInput(formData: FormData): Promise<AvailityIn
   };
 }
 
-export async function readAvailityPayerMapping(): Promise<Map<string, string>> {
+export async function readAvailityPayerMapping(projectId = "minimax"): Promise<Map<string, string>> {
   const mappingPath = path.join(
     process.cwd(),
     "backend",
@@ -163,7 +163,8 @@ export async function readAvailityPayerMapping(): Promise<Map<string, string>> {
   );
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.readFile(mappingPath);
-  const worksheet = workbook.worksheets[0];
+  const normalizedProjectId = normalizeAlias(projectId);
+  const worksheet = workbook.worksheets.find((sheet) => normalizeAlias(sheet.name) === normalizedProjectId) ?? workbook.worksheets[0];
   if (!worksheet) {
     throw new Error("Availity payer mapping workbook does not contain any worksheets.");
   }
