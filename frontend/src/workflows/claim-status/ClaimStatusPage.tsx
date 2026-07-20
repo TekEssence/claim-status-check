@@ -53,6 +53,8 @@ import { MyFamilyInputForm } from "./portals/my_family/MyFamilyInputForm";
 import { MyFamilyResultView } from "./portals/my_family/MyFamilyResultView";
 import { OptumProInputForm } from "./portals/optum-pro/OptumProInputForm";
 import { OptumProResultView } from "./portals/optum-pro/OptumProResultView";
+import { PhysiciansInputForm } from "./portals/physicians/PhysiciansInputForm";
+import { PhysiciansResultView } from "./portals/physicians/PhysiciansResultView";
 import {
   aerialFrontendPortalConfig,
   availityFrontendPortalConfig,
@@ -63,6 +65,7 @@ import {
   kaiserFrontendPortalConfig,
   myFamilyFrontendPortalConfig,
   optumProFrontendPortalConfig,
+  physiciansFrontendPortalConfig,
   regalFrontendPortalConfig,
 } from "./registry";
 
@@ -98,7 +101,7 @@ type IehpWorkbookBundle = {
   worksheet: ExcelJS.Worksheet;
 };
 
-export type PortalId = "iehp" | "aerial" | "regal" | "blue-shield" | "availity" | "cigna" | "kaiser" | "my-family" | "optum-pro";
+export type PortalId = "iehp" | "aerial" | "regal" | "blue-shield" | "availity" | "cigna" | "kaiser" | "my-family" | "optum-pro" | "physicians";
 type DownloadFile = {
   filename: string;
   bytes: Uint8Array;
@@ -126,10 +129,11 @@ const PORTAL_ROUTE_MAP: Record<PortalId, string> = {
   kaiser: "/kaiser",
   "my-family": "/my-family",
   "optum-pro": "/optum-pro",
+  physicians: "/physicians",
 };
 
 function isPortalId(value: string): value is PortalId {
-  return value === "iehp" || value === "aerial" || value === "regal" || value === "blue-shield" || value === "availity" || value === "cigna" || value === "kaiser" || value === "my-family" || value === "optum-pro";
+  return value === "iehp" || value === "aerial" || value === "regal" || value === "blue-shield" || value === "availity" || value === "cigna" || value === "kaiser" || value === "my-family" || value === "optum-pro" || value === "physicians";
 }
 
 function canRestoreCurrentJob(job: CurrentScrapeJob): job is CurrentScrapeJob & { portalId: PortalId } {
@@ -334,6 +338,12 @@ const PORTAL_UI_META: Record<
       height: 32,
     },
   },
+  physicians: {
+    shortCode: "PHN",
+    logoClassName: "bg-white text-red-700",
+    cardLogoFrameClassName: "h-10 w-14 rounded-[1rem]",
+    heroLogoFrameClassName: "h-14 w-20 rounded-[1.15rem]",
+  },
 };
 
 const PORTAL_WORKSPACE_META: Record<
@@ -378,6 +388,10 @@ const PORTAL_WORKSPACE_META: Record<
   "optum-pro": {
     heroDescription: "Upload the One Healthcare ID login workbook and Optum Pro claim workbook, then enter OTP when prompted.",
     processingDescription: "Optum Pro streams progress, supports manual OTP entry, and downloads full or partial output workbooks.",
+  },
+  physicians: {
+    heroDescription: "Upload the PHN QuickCap login workbook and claim workbook to search claims by Member ID and service date.",
+    processingDescription: "Physicians rows stream live progress and download an output workbook with claim, payment, service-line, and authorization details.",
   },
 };
 
@@ -744,6 +758,8 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
   const [myFamilyInputFile, setMyFamilyInputFile] = useState<File | null>(null);
   const [optumProLoginFile, setOptumProLoginFile] = useState<File | null>(null);
   const [optumProInputFile, setOptumProInputFile] = useState<File | null>(null);
+  const [physiciansCredentialFile, setPhysiciansCredentialFile] = useState<File | null>(null);
+  const [physiciansInputFile, setPhysiciansInputFile] = useState<File | null>(null);
   const [optumProJobId, setOptumProJobId] = useState<string>("");
   const [optumProOtpRequest, setOptumProOtpRequest] = useState<{ inputName: string; label: string; message: string } | null>(null);
   const [optumProOtpValue, setOptumProOtpValue] = useState<string>("");
@@ -812,6 +828,8 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
                 ? myFamilyFrontendPortalConfig
               : effectivePortalId === "optum-pro"
                 ? optumProFrontendPortalConfig
+              : effectivePortalId === "physicians"
+                ? physiciansFrontendPortalConfig
             : null;
   const selectedPortalUiMeta = effectivePortalId ? PORTAL_UI_META[effectivePortalId] : null;
   const filteredPortals = useMemo(() => {
@@ -879,6 +897,10 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     () => Boolean(optumProLoginFile && optumProInputFile && !isProcessing),
     [optumProLoginFile, optumProInputFile, isProcessing],
   );
+  const canSubmitPhysicians = useMemo(
+    () => Boolean(physiciansCredentialFile && physiciansInputFile && !isProcessing),
+    [physiciansCredentialFile, physiciansInputFile, isProcessing],
+  );
   const canSubmitRegal = useMemo(
     () => Boolean(regalClaimFile && !isProcessing),
     [regalClaimFile, isProcessing],
@@ -906,6 +928,8 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
                 ? canSubmitMyFamily
               : effectivePortalId === "optum-pro"
                 ? canSubmitOptumPro
+              : effectivePortalId === "physicians"
+                ? canSubmitPhysicians
             : false;
   const portalWorkflowMeta = effectivePortalId ? PORTAL_WORKSPACE_META[effectivePortalId] : null;
   const portalFileState = useMemo(() => {
@@ -981,6 +1005,15 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
       };
     }
 
+    if (effectivePortalId === "physicians") {
+      return {
+        claimFileLabel: physiciansInputFile?.name ?? "",
+        claimReady: Boolean(physiciansInputFile),
+        loginFileLabel: physiciansCredentialFile?.name ?? "",
+        loginReady: Boolean(physiciansCredentialFile),
+      };
+    }
+
     if (effectivePortalId === "optum-pro") {
       return {
         claimFileLabel: optumProInputFile?.name ?? "",
@@ -1014,6 +1047,8 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     myFamilyInputFile,
     optumProInputFile,
     optumProLoginFile,
+    physiciansCredentialFile,
+    physiciansInputFile,
     regalClaimFile,
     regalLoginFile,
   ]);
@@ -1192,6 +1227,8 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
           await reconnectDownloadOnlyRun(currentJob, "kaiser", "Kaiser");
         } else if (currentJob.portalId === "my-family") {
           await reconnectDownloadOnlyRun(currentJob, "my-family", "My family");
+        } else if (currentJob.portalId === "physicians") {
+          await reconnectDownloadOnlyRun(currentJob, "physicians", "Physicians");
         } else if (currentJob.portalId === "regal") {
           await reconnectRegalRun(currentJob);
         } else if (currentJob.portalId === "optum-pro") {
@@ -1396,6 +1433,8 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     setKaiserInputFile(null);
     setMyFamilyCredentialFile(null);
     setMyFamilyInputFile(null);
+    setPhysiciansCredentialFile(null);
+    setPhysiciansInputFile(null);
     setOptumProJobId("");
     setOptumProOtpRequest(null);
     setOptumProOtpValue("");
@@ -1547,6 +1586,8 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     setKaiserInputFile(null);
     setMyFamilyCredentialFile(null);
     setMyFamilyInputFile(null);
+    setPhysiciansCredentialFile(null);
+    setPhysiciansInputFile(null);
     setOptumProLoginFile(null);
     setOptumProInputFile(null);
     setOptumProJobId("");
@@ -2985,6 +3026,89 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     }
   }
 
+  async function submitPhysicians(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+
+    if (!physiciansCredentialFile || !physiciansInputFile) {
+      setStatus("Please provide both the Physicians login Excel and claim Excel files.");
+      return;
+    }
+
+    resetRunState("Starting Physicians scraper...");
+
+    const formData = new FormData();
+    formData.append("portalId", "physicians");
+    formData.append("credentialExcel", physiciansCredentialFile);
+    formData.append("inputExcel", physiciansInputFile);
+    formData.append("loginFileName", physiciansCredentialFile.name);
+    formData.append("claimFileName", physiciansInputFile.name);
+
+    let hasError = false;
+    let wasCancelled = false;
+    let finalErrorMessage = "";
+    let subscribedJobId = "";
+    const streamAbortController = new AbortController();
+
+    const handleJobEvent = async (eventData: ScrapeJobEvent) => {
+      if (eventData.type === "log" && eventData.message) {
+        setLogs((prev) => [...prev, eventData.message ?? ""]);
+      } else if (eventData.type === "progress" && typeof eventData.completed === "number" && typeof eventData.total === "number") {
+        setProgress({ completed: eventData.completed, total: eventData.total });
+      } else if (eventData.type === "error_screenshot" && typeof eventData.index === "number" && eventData.image) {
+        setErrorScreenshots((prev) => [...prev, { index: eventData.index ?? -1, image: eventData.image ?? "" }]);
+      } else if (eventData.type === "file_download" && eventData.filename && eventData.base64) {
+        const artifactKey = buildDownloadArtifactKey(eventData);
+        if (!hasDownloadedArtifact(subscribedJobId, artifactKey)) {
+          downloadBase64File(eventData.filename, eventData.base64, eventData.mimeType || "application/octet-stream");
+          rememberDownloadedArtifact(subscribedJobId, artifactKey);
+          setStatus(`Downloaded ${eventData.filename}`);
+        }
+      } else if (eventData.type === "warning" && eventData.message) {
+        setLogs((prev) => [...prev, eventData.message ?? ""]);
+        setStatus(eventData.message);
+      } else if (eventData.type === "error" && eventData.message) {
+        finalErrorMessage = eventData.message;
+        setLogs((prev) => [...prev, `ERROR: ${eventData.message}`]);
+        setStatus(`Error: ${eventData.message}`);
+        hasError = true;
+      } else if (eventData.type === "cancelled") {
+        wasCancelled = true;
+        setLogs((prev) => [...prev, eventData.message || "Processing cancelled."]);
+        setStatus(eventData.message || "Processing cancelled.");
+      }
+    };
+
+    try {
+      const jobId = await startScrapeJob(formData);
+      subscribedJobId = jobId;
+      setActiveJobId(jobId);
+      await subscribeToScrapeJobEvents({
+        jobId,
+        signal: streamAbortController.signal,
+        onEvent: handleJobEvent,
+        onStreamError(error) {
+          console.error("Physicians stream error:", error);
+          finalErrorMessage = getErrorMessage(error);
+          setLogs((prev) => [...prev, `STREAM ERROR: ${finalErrorMessage}`]);
+          setStatus(`Stream error: ${finalErrorMessage}`);
+          hasError = true;
+        },
+      });
+      setStatus(
+        wasCancelled
+          ? "Physicians processing cancelled."
+          : hasError
+            ? `Physicians processing finished with errors${finalErrorMessage ? `: ${finalErrorMessage}` : "."}`
+            : "Physicians processing completed.",
+      );
+    } catch (error) {
+      setStatus(`Failed to process Physicians claims: ${getErrorMessage(error)}`);
+    } finally {
+      setIsProcessing(false);
+      setActiveJobId("");
+    }
+  }
+
 
 
   async function submitBlueShield(e: FormEvent<HTMLFormElement>) {
@@ -4290,6 +4414,16 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
                       onInputFileChange={setMyFamilyInputFile}
                       onSubmit={submitMyFamily}
                     />
+                  ) : effectivePortalId === "physicians" ? (
+                    <PhysiciansInputForm
+                      canSubmit={canSubmitPhysicians}
+                      credentialFileName={physiciansCredentialFile?.name ?? ""}
+                      inputFileName={physiciansInputFile?.name ?? ""}
+                      isProcessing={isProcessing}
+                      onCredentialFileChange={setPhysiciansCredentialFile}
+                      onInputFileChange={setPhysiciansInputFile}
+                      onSubmit={submitPhysicians}
+                    />
                   ) : effectivePortalId === "optum-pro" ? (
                     <OptumProInputForm
                       canSubmit={canSubmitOptumPro}
@@ -4379,6 +4513,10 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
               ) : effectivePortalId === "my-family" ? (
                 <div className="mt-5">
                   <MyFamilyResultView errorScreenshots={errorScreenshots} logs={logs} progress={progress} status={status} />
+                </div>
+              ) : effectivePortalId === "physicians" ? (
+                <div className="mt-5">
+                  <PhysiciansResultView errorScreenshots={errorScreenshots} logs={logs} progress={progress} status={status} />
                 </div>
               ) : effectivePortalId === "optum-pro" ? (
                 <div className="mt-5">

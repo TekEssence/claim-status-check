@@ -1,0 +1,665 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+import type { Browser, Locator, Page } from "playwright-core";
+import { closeAutomationResources } from "@/backend/src/core/runtime-config";
+import type { ScraperContext } from "../../types";
+import { launchPhysiciansBrowser } from "./browser";
+import { physiciansConfig } from "./config";
+import {
+  normalizeCptCode,
+  parsePhysiciansInput,
+  readPhysiciansInputWorkbook,
+  type PhysiciansInputRow,
+} from "./input";
+import {
+  createPhysiciansOutputWorkbookBuffer,
+  type PhysiciansAuditRow,
+  type PhysiciansOutputRow,
+  type PhysiciansWorkbookState,
+} from "./workbook";
+
+type PhysiciansClaimRow = {
+  claimNumber: string;
+  receivedDate: string;
+  serviceDate: string;
+  authNumber: string;
+  placeOfService: string;
+  member: string;
+  provider: string;
+  organization: string;
+  renderingProvider: string;
+  payee: string;
+  billedAmount: string;
+  contractAmount: string;
+  netAmount: string;
+  company: string;
+  outcome: string;
+  checkTotalAmount: string;
+  authorizationDetails: string;
+  serviceLines: string;
+  rowText: string;
+};
+
+const OUTPUT_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+
+function nowIso(): string {
+  return new Date().toISOString();
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function cleanText(value: string): string {
+  return value.replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function maskValue(value: string): string {
+  const text = value.trim();
+  if (text.length <= 4) return "****";
+  return `${"*".repeat(text.length - 4)}${text.slice(-4)}`;
+}
+
+function normalizeComparableDate(value: string): string {
+  const match = value.trim().match(/^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{2,4})$/);
+  if (!match) return value.trim();
+  const year = Number(match[3]) < 100 ? 2000 + Number(match[3]) : Number(match[3]);
+  return `${year}-${String(Number(match[1])).padStart(2, "0")}-${String(Number(match[2])).padStart(2, "0")}`;
+}
+
+function baseOutputRow(inputRow: PhysiciansInputRow, botStatus: string, botMessage: string): PhysiciansOutputRow {
+  return {
+    inputData: inputRow,
+    inputRowId: inputRow.inputRowId,
+    botStatus,
+    botMessage,
+    memberId: inputRow.memberId,
+    dos: inputRow.dos,
+    dosTo: inputRow.dosTo,
+    cptCode: inputRow.cptCode,
+    providerClaimId: inputRow.providerClaimId,
+    authorizationNumber: inputRow.authorizationNumber,
+    claimNumber: "",
+    receivedDate: "",
+    serviceDate: "",
+    authNumber: "",
+    placeOfService: "",
+    member: "",
+    provider: "",
+    organization: "",
+    renderingProvider: "",
+    payee: "",
+    billedAmount: "",
+    contractAmount: "",
+    netAmount: "",
+    company: "",
+    outcome: "",
+    checkTotalAmount: "",
+    authorizationDetails: "",
+    serviceLines: "",
+    finalStatus: botMessage,
+  };
+}
+
+function outputRowFromClaim(inputRow: PhysiciansInputRow, result: PhysiciansClaimRow): PhysiciansOutputRow {
+  const finalStatus = cleanText(
+    `DOS ${inputRow.dos}: Physicians claim ${result.claimNumber} found` +
+      `${result.outcome ? ` with outcome ${result.outcome}` : ""}` +
+      `${result.netAmount ? ` and net amount ${result.netAmount}` : ""}.`,
+  );
+  return {
+    ...baseOutputRow(inputRow, "Success", "Claim found."),
+    claimNumber: result.claimNumber,
+    receivedDate: result.receivedDate,
+    serviceDate: result.serviceDate,
+    authNumber: result.authNumber,
+    placeOfService: result.placeOfService,
+    member: result.member,
+    provider: result.provider,
+    organization: result.organization,
+    renderingProvider: result.renderingProvider,
+    payee: result.payee,
+    billedAmount: result.billedAmount,
+    contractAmount: result.contractAmount,
+    netAmount: result.netAmount,
+    company: result.company,
+    outcome: result.outcome,
+    checkTotalAmount: result.checkTotalAmount,
+    authorizationDetails: result.authorizationDetails,
+    serviceLines: result.serviceLines,
+    finalStatus,
+  };
+}
+
+function addAudit(state: PhysiciansWorkbookState, inputRow: PhysiciansInputRow | null, step: string, status: string, message: string): void {
+  state.auditRows.push({
+    timestamp: nowIso(),
+    inputRowId: inputRow?.inputRowId ?? "",
+    memberId: inputRow?.memberId ?? "",
+    step,
+    status,
+    message,
+  } satisfies PhysiciansAuditRow);
+}
+
+async function findVisibleLocator(page: Page, selector: string, timeout = 2500): Promise<Locator | null> {
+  const locator = page.locator(selector).first();
+  try {
+    await locator.waitFor({ state: "visible", timeout });
+    return locator;
+  } catch {
+    return null;
+  }
+}
+
+async function clickIfVisible(page: Page, selector: string, timeout = 2500): Promise<boolean> {
+  const locator = await findVisibleLocator(page, selector, timeout);
+  if (!locator) return false;
+  await locator.click({ timeout: 5000 }).catch(async () => locator.evaluate((element) => (element as HTMLElement).click()));
+  await page.waitForTimeout(500);
+  return true;
+}
+
+async function fillField(page: Page, selector: string, value: string, label: string): Promise<void> {
+  const locator = await findVisibleLocator(page, selector, 8000);
+  if (!locator) throw new Error(`Could not find Physicians field: ${label} (${selector})`);
+  await locator.click({ timeout: 5000 });
+  await locator.fill("");
+  if (value) await locator.fill(value);
+}
+
+async function visibleBodyText(page: Page): Promise<string> {
+  return page.locator("body").innerText({ timeout: 1500 }).catch(() => "");
+}
+
+async function captureDiagnostics(context: ScraperContext, page: Page, inputRow: PhysiciansInputRow | null, reason: string): Promise<void> {
+  const safeReason = reason.replace(/[^a-z0-9_-]+/gi, "-").slice(0, 60) || "error";
+  const dir = path.join(process.cwd(), ".tmp", "physicians", context.jobId);
+  await fs.mkdir(dir, { recursive: true }).catch(() => {});
+  const rowLabel = inputRow ? `row-${inputRow.inputRowId}` : "job";
+  const screenshotPath = path.join(dir, `${rowLabel}-${safeReason}.jpg`);
+  const htmlPath = path.join(dir, `${rowLabel}-${safeReason}.html`);
+
+  const screenshot = await page.screenshot({ path: screenshotPath, type: "jpeg", quality: 80, fullPage: true }).catch(() => null);
+  const html = await page.content().catch(() => "");
+  if (html) {
+    await fs.writeFile(htmlPath, html, "utf8").catch(() => {});
+    await context.emit({ type: "debug_html", index: inputRow?.inputRowId, html, path: htmlPath, filename: `physicians_${rowLabel}_${safeReason}.html` });
+  }
+  if (screenshot) {
+    await context.emit({ type: "error_screenshot", index: inputRow?.inputRowId, image: screenshot.toString("base64"), path: screenshotPath });
+  }
+}
+
+async function closeAnnouncementOnce(page: Page): Promise<number> {
+  // Do the visibility check AND the click entirely inside page.evaluate(). This sidesteps two
+  // Playwright timing issues we were hitting with locator-based clicks: (1) actionability checks
+  // failing while the popup is still animating/fading in, and (2) a stale Locator handle pointing
+  // at an element that gets replaced/re-added by the time the click actually fires. A raw
+  // element.click() from inside the page always reaches the real onclick handler.
+  return page
+    .evaluate(() => {
+      function isVisible(element: Element): boolean {
+        const style = window.getComputedStyle(element as HTMLElement);
+        const rect = (element as HTMLElement).getBoundingClientRect();
+        return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
+      }
+      const blocks = Array.from(document.querySelectorAll<HTMLElement>("#block"));
+      let closed = 0;
+      for (const block of blocks) {
+        if (!isVisible(block)) continue;
+        const closeLink = block.querySelector<HTMLElement>("a.lnk-Close, a.close, a[onclick*='closeAnnouncement']");
+        try {
+          closeLink?.click();
+        } catch {
+          // ignore - we force-hide below regardless of whether the site's own handler worked
+        }
+        // Don't rely on the portal's own closeAnnouncement() JS actually hiding the element -
+        // force it closed ourselves so the automation is never blocked by it either way.
+        block.style.setProperty("display", "none", "important");
+        closed += 1;
+      }
+      return closed;
+    })
+    .catch(() => 0);
+}
+
+async function anyAnnouncementVisible(page: Page): Promise<boolean> {
+  return page
+    .evaluate(() => {
+      const blocks = Array.from(document.querySelectorAll<HTMLElement>("#block"));
+      return blocks.some((block) => {
+        const style = window.getComputedStyle(block);
+        const rect = block.getBoundingClientRect();
+        return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
+      });
+    })
+    .catch(() => false);
+}
+
+async function closeAnnouncement(page: Page, context: ScraperContext, timeoutMs = 12000): Promise<void> {
+  // QuickCap re-shows an announcement popup on essentially every page/section it loads (not just
+  // once at login), and can inject it into the DOM slightly after the page otherwise looks ready.
+  // Poll for the whole budget rather than a fixed number of attempts so late-arriving popups are
+  // still caught.
+  const deadline = Date.now() + timeoutMs;
+  let totalClosed = 0;
+  while (Date.now() < deadline) {
+    const closedThisPass = await closeAnnouncementOnce(page);
+    totalClosed += closedThisPass;
+    await page.waitForTimeout(400);
+    if (!(await anyAnnouncementVisible(page))) break;
+  }
+  if (totalClosed > 0) {
+    await context.log({ level: "info", message: `Closed ${totalClosed} Physicians announcement popup(s).` });
+  }
+}
+
+async function installAnnouncementAutoCloser(page: Page): Promise<void> {
+  // Reactive Node-side polling (closeAnnouncement/closeAnnouncementOnce above) still has an
+  // inherent gap: the portal can inject the #block popup at any moment, including between our
+  // checks. addInitScript runs this INSIDE the browser, before the portal's own scripts on every
+  // navigation/AJAX load on this page, and keeps watching continuously - so the popup gets killed
+  // within ~150ms of appearing no matter which action of ours triggered it, without depending on
+  // any timing from our side at all.
+  await page.addInitScript(() => {
+    const killAnnouncements = () => {
+      document.querySelectorAll<HTMLElement>("#block").forEach((block) => {
+        const style = window.getComputedStyle(block);
+        const rect = block.getBoundingClientRect();
+        const isVisible = style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
+        if (!isVisible) return;
+        const closeLink = block.querySelector<HTMLElement>("a.lnk-Close, a.close, a[onclick*='closeAnnouncement']");
+        try {
+          closeLink?.click();
+        } catch {
+          // ignore - force-hide below regardless
+        }
+        block.style.setProperty("display", "none", "important");
+      });
+    };
+    killAnnouncements();
+    setInterval(killAnnouncements, 150);
+    document.addEventListener("DOMContentLoaded", killAnnouncements);
+    window.addEventListener("load", () => {
+      killAnnouncements();
+      new MutationObserver(killAnnouncements).observe(document.documentElement, { childList: true, subtree: true });
+    });
+  });
+}
+
+async function login(page: Page, input: Awaited<ReturnType<typeof parsePhysiciansInput>>, context: ScraperContext): Promise<void> {
+  await context.log({ level: "info", message: "Opening Physicians QuickCap login page." });
+  await page.goto(input.credentials.loginUrl || physiciansConfig.defaultLoginUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
+  await fillField(page, physiciansConfig.selectors.username, input.credentials.username, "Username");
+  await fillField(page, physiciansConfig.selectors.password, input.credentials.password, "Password");
+  await context.log({ level: "info", message: "Submitting Physicians credentials." });
+  await Promise.all([
+    page.waitForLoadState("domcontentloaded", { timeout: 30000 }).catch(() => {}),
+    clickIfVisible(page, physiciansConfig.selectors.submit, 5000),
+  ]);
+  await page.waitForTimeout(physiciansConfig.timing.postLoginMs);
+  if (await findVisibleLocator(page, physiciansConfig.selectors.password, 1000)) {
+    throw new Error("Physicians login failed or did not leave the login form.");
+  }
+  await closeAnnouncement(page, context);
+  await context.log({ level: "info", message: "Physicians login completed." });
+}
+
+async function openClaimSearch(page: Page, context: ScraperContext): Promise<void> {
+  await context.log({ level: "info", message: "Opening Physicians Claims Search/Status page." });
+  await closeAnnouncement(page, context);
+
+  const openedByMenu = await page.evaluate(() => {
+    // The "Claims" accordion section is expanded by default on this portal, so only click the
+    // header when it's actually collapsed - clicking it while already active toggles it CLOSED
+    // and hides the "Claims Search/Status" link before we can click it.
+    const claimsHeader = Array.from(document.querySelectorAll<HTMLElement>("h3.accordion_header")).find(
+      (element) => (element.textContent || "").trim().toLowerCase() === "claims",
+    );
+    if (claimsHeader && !claimsHeader.classList.contains("active")) {
+      claimsHeader.click();
+    }
+    const link = Array.from(document.querySelectorAll<HTMLAnchorElement>("a")).find((element) =>
+      /claims search\/status/i.test(element.textContent || ""),
+    );
+    if (!link) return false;
+    link.click();
+    return true;
+  }).catch(() => false);
+
+  if (!openedByMenu) {
+    await page.goto(physiciansConfig.claimSearchUrl, { waitUntil: "domcontentloaded", timeout: 60000 }).catch(() => {});
+  }
+
+  await page.waitForTimeout(physiciansConfig.timing.postNavigationMs);
+
+  // Poll for up to ~25s, closing any popup that shows up (possibly more than once, and possibly
+  // arriving after the page otherwise looks ready) and re-checking for the search form each pass,
+  // instead of doing "close once, then wait once" which loses the race if the popup is injected
+  // slightly late by the portal's own JS.
+  const deadline = Date.now() + 25000;
+  let ready = false;
+  while (Date.now() < deadline) {
+    await closeAnnouncementOnce(page);
+    ready = await page.locator(physiciansConfig.selectors.searchButton).first().isVisible().catch(() => false);
+    if (ready) break;
+    await page.waitForTimeout(500);
+  }
+  if (!ready) {
+    await captureDiagnostics(context, page, null, "claim-search-not-open");
+    throw new Error("Physicians Claim Search page did not open.");
+  }
+  await context.log({ level: "info", message: "Physicians Claim Search page is ready." });
+}
+
+async function clearSearch(page: Page, context: ScraperContext): Promise<void> {
+  const cleared = await clickIfVisible(page, physiciansConfig.selectors.clearButton, 1800);
+  if (cleared) {
+    await page.waitForTimeout(physiciansConfig.timing.postNavigationMs);
+    await closeAnnouncement(page, context).catch(() => {});
+    return;
+  }
+  await openClaimSearch(page, context);
+}
+
+async function setSearchFieldByLabel(page: Page, labelPattern: RegExp, value: string): Promise<boolean> {
+  if (!value) return false;
+  return page.evaluate(
+    ({ source, flags, text }) => {
+      const labelRegex = new RegExp(source, flags);
+      const clean = (value: string | null | undefined) => String(value ?? "").replace(/\s+/g, " ").trim();
+      const labels = Array.from(document.querySelectorAll<HTMLElement>("td, label, span, div"));
+      for (const label of labels) {
+        if (!labelRegex.test(clean(label.textContent))) continue;
+        const container = label.closest("tr") || label.parentElement;
+        const field = container?.querySelector<HTMLInputElement>("input[type='text'], input:not([type]), textarea");
+        if (!field) continue;
+        field.focus();
+        field.value = "";
+        field.dispatchEvent(new Event("input", { bubbles: true }));
+        field.value = text;
+        field.dispatchEvent(new Event("input", { bubbles: true }));
+        field.dispatchEvent(new Event("change", { bubbles: true }));
+        return true;
+      }
+      return false;
+    },
+    { source: labelPattern.source, flags: labelPattern.flags, text: value },
+  ).catch(() => false);
+}
+
+async function clearAndFocus(locator: Locator): Promise<void> {
+  await locator.click({ timeout: 5000 });
+  await locator.press("Control+A").catch(() => {});
+  await locator.press("Backspace").catch(() => {});
+  // Belt-and-braces: force the DOM value empty too, in case the field's own key handlers
+  // intercepted the select-all/backspace before the value actually cleared.
+  await locator.evaluate((element) => {
+    (element as HTMLInputElement).value = "";
+  }).catch(() => {});
+}
+
+async function typeMemberId(page: Page, value: string, context: ScraperContext): Promise<void> {
+  if (!value) return;
+  const locator = await findVisibleLocator(page, physiciansConfig.selectors.memberId, 8000);
+  if (!locator) throw new Error(`Could not find Physicians field: Member ID (${physiciansConfig.selectors.memberId})`);
+  await clearAndFocus(locator);
+  await locator.pressSequentially(value, { delay: 40 });
+  await page.keyboard.press("Tab").catch(() => {});
+  const actual = await locator.inputValue().catch(() => "");
+  if (cleanText(actual) !== cleanText(value)) {
+    throw new Error(`Member ID did not fill correctly (expected "${value}", got "${actual}").`);
+  }
+}
+
+async function typeDateField(page: Page, selector: string, value: string, label: string): Promise<void> {
+  if (!value) return;
+  const locator = await findVisibleLocator(page, selector, 8000);
+  if (!locator) throw new Error(`Could not find Physicians field: ${label} (${selector})`);
+  // These date fields have onkeydown/onkeyup handlers (onlynumber/doMask) that build the
+  // "##-##-####" mask themselves as each digit is pressed. Playwright's .fill() (and any
+  // programmatic value-set / paste) skips those key events entirely, so the field either stays
+  // blank or ends up with an unmasked value the site's onblur validator silently rejects - which
+  // is why Claim Search was being submitted with empty/invalid dates. Typing digit-by-digit lets
+  // the page's own mask logic run exactly like a real user typing would.
+  const digits = value.replace(/[^0-9]/g, "");
+  await clearAndFocus(locator);
+  await locator.pressSequentially(digits, { delay: 60 });
+  await page.keyboard.press("Tab").catch(() => {});
+  const actual = await locator.inputValue().catch(() => "");
+  if (normalizeComparableDate(actual) !== normalizeComparableDate(value)) {
+    throw new Error(`${label} did not fill correctly (expected "${value}", got "${actual}").`);
+  }
+}
+
+async function submitSearch(page: Page, inputRow: PhysiciansInputRow, context: ScraperContext): Promise<PhysiciansClaimRow[]> {
+  await clearSearch(page, context);
+
+  await typeMemberId(page, inputRow.memberId, context);
+  await typeDateField(page, physiciansConfig.selectors.serviceDateFrom, inputRow.dos, "Date of Service From");
+  await typeDateField(page, physiciansConfig.selectors.serviceDateTo, inputRow.dosTo || inputRow.dos, "Date of Service To");
+
+  if (inputRow.authorizationNumber) await setSearchFieldByLabel(page, /authorization\s*#/i, inputRow.authorizationNumber);
+  if (inputRow.providerClaimId) await setSearchFieldByLabel(page, /provider\s*claim|patient\s*account/i, inputRow.providerClaimId);
+
+  await context.log({
+    level: "info",
+    message: `Searching Physicians row ${inputRow.inputRowId}: Member ID ${maskValue(inputRow.memberId)}, DOS ${inputRow.dos}.`,
+    rowIndex: inputRow.inputRowId,
+  });
+
+  const clicked = await clickIfVisible(page, physiciansConfig.selectors.searchButton, 5000);
+  if (!clicked) throw new Error("Could not click the Physicians Claim Search button.");
+  await page.waitForTimeout(300);
+  await closeAnnouncement(page, context).catch(() => {});
+  await waitForSearchResults(page, 20000);
+  await page.waitForTimeout(physiciansConfig.timing.postSearchMs);
+  return extractClaimRows(page);
+}
+
+async function waitForSearchResults(page: Page, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const state = await page.evaluate(() => {
+      const text = document.body?.innerText || "";
+      const rows = document.querySelectorAll("#grdClaimsView tr, table[id*='grdClaimsView'] tr").length;
+      return { rows, hasNoData: /no claims found|no records found|member not found|no member/i.test(text) };
+    }).catch(() => ({ rows: 0, hasNoData: false }));
+    if (state.rows > 1 || state.hasNoData) return;
+    await page.waitForTimeout(400);
+  }
+}
+
+async function extractClaimRows(page: Page): Promise<PhysiciansClaimRow[]> {
+  return page.evaluate(() => {
+    function clean(value: string | null | undefined): string {
+      return String(value ?? "").replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
+    }
+    function childTableText(row: Element, idPart: string): string {
+      const table = row.querySelector(`table[id*='${idPart}']`);
+      if (!table) return "";
+      const headers = Array.from(table.querySelectorAll("th")).map((header) => clean(header.textContent));
+      return Array.from(table.querySelectorAll("tr"))
+        .slice(1)
+        .map((line) => {
+          const cells = Array.from(line.querySelectorAll("td")).map((cell) => clean(cell.textContent));
+          if (!cells.some(Boolean)) return "";
+          return cells.map((cell, index) => `${headers[index] || `Column ${index + 1}`}: ${cell}`).join(" | ");
+        })
+        .filter(Boolean)
+        .join("\n");
+    }
+    function authorizationText(row: Element): string {
+      const authHeader = Array.from(row.querySelectorAll("td, th, div")).find((element) => /authorization details/i.test(clean(element.textContent)));
+      const section = authHeader?.closest("tr")?.nextElementSibling || authHeader?.parentElement;
+      return clean(section?.textContent || "");
+    }
+
+    const table = document.querySelector("#grdClaimsView, table[id*='grdClaimsView']");
+    if (!table) return [];
+    const rows = Array.from(table.querySelectorAll(":scope > tbody > tr, :scope > tr"));
+    const output: PhysiciansClaimRow[] = [];
+    for (const row of rows) {
+      const directCells = Array.from(row.children).filter((child) => child.tagName.toLowerCase() === "td");
+      const cells = directCells.map((cell) => clean(cell.textContent));
+      const claimIndex = cells.findIndex((cell) => /^20\d{6,}M/i.test(cell) || /M\d{5,}/i.test(cell));
+      if (claimIndex === -1) continue;
+      const values = cells.slice(claimIndex);
+      const claimNumber = values[0] || "";
+      if (!claimNumber) continue;
+      output.push({
+        claimNumber,
+        receivedDate: values[1] || "",
+        serviceDate: values[2] || "",
+        authNumber: values[3] || "",
+        placeOfService: values[4] || "",
+        member: values[5] || "",
+        provider: values[6] || "",
+        organization: values[7] || "",
+        renderingProvider: values[8] || "",
+        payee: values[9] || "",
+        billedAmount: values[10] || "",
+        contractAmount: values[11] || "",
+        netAmount: values[12] || "",
+        company: values[13] || "",
+        outcome: values[14] || "",
+        checkTotalAmount: clean(row.textContent).match(/Check Total Amount\s*:\s*([^\n\r]+)/i)?.[1]?.trim() || "",
+        authorizationDetails: authorizationText(row),
+        serviceLines: childTableText(row, "gvChildGrid"),
+        rowText: clean(row.textContent),
+      });
+    }
+    return output;
+  });
+}
+
+function rowMatchesInput(row: PhysiciansClaimRow, inputRow: PhysiciansInputRow): boolean {
+  const dosMatches = !inputRow.dos || row.rowText.includes(inputRow.dos) || normalizeComparableDate(row.serviceDate) === normalizeComparableDate(inputRow.dos);
+  const providerClaimMatches =
+    !inputRow.providerClaimId || row.rowText.toUpperCase().includes(cleanText(inputRow.providerClaimId).toUpperCase());
+  const authMatches =
+    !inputRow.authorizationNumber || row.authNumber.toUpperCase().includes(cleanText(inputRow.authorizationNumber).toUpperCase());
+  const cptMatches =
+    !inputRow.cptCode || row.serviceLines.toUpperCase().includes(normalizeCptCode(inputRow.cptCode)) || row.rowText.toUpperCase().includes(normalizeCptCode(inputRow.cptCode));
+  return dosMatches && providerClaimMatches && authMatches && cptMatches;
+}
+
+async function processRow(page: Page, inputRow: PhysiciansInputRow, state: PhysiciansWorkbookState, context: ScraperContext): Promise<void> {
+  if (!inputRow.memberId) {
+    state.outputRows.push(baseOutputRow(inputRow, "No Member ID", "No Member ID"));
+    addAudit(state, inputRow, "validation", "failed", "No Member ID");
+    return;
+  }
+  if (inputRow.validationStatus !== "valid") {
+    const status = inputRow.validationMessage || "Invalid row";
+    state.outputRows.push(baseOutputRow(inputRow, status, status));
+    addAudit(state, inputRow, "validation", "failed", status);
+    return;
+  }
+
+  addAudit(state, inputRow, "search", "started", "Submitting Physicians claim search.");
+  const searchRows = await submitSearch(page, inputRow, context);
+  if (!searchRows.length) {
+    const pageText = await visibleBodyText(page);
+    const status = /member not found|no member/i.test(pageText) ? "Member Not Found" : "No Claims Found";
+    state.outputRows.push(baseOutputRow(inputRow, status, status));
+    addAudit(state, inputRow, "search", "completed", status);
+    return;
+  }
+
+  const matchingRows = searchRows.filter((row) => rowMatchesInput(row, inputRow));
+  const selectedRows = matchingRows.length ? matchingRows : searchRows;
+  await context.log({
+    level: "info",
+    message: `Physicians row ${inputRow.inputRowId}: found ${searchRows.length} result(s), extracting ${selectedRows.length} matching result(s).`,
+    rowIndex: inputRow.inputRowId,
+  });
+  for (const result of selectedRows) {
+    state.outputRows.push(outputRowFromClaim(inputRow, result));
+    addAudit(state, inputRow, "detail", "completed", `Extracted claim ${result.claimNumber}.`);
+  }
+}
+
+async function emitArtifacts(context: ScraperContext, state: PhysiciansWorkbookState): Promise<void> {
+  const workbookBuffer = await createPhysiciansOutputWorkbookBuffer(state);
+  await context.emit({
+    type: "file_download",
+    filename: "physicians_output.xlsx",
+    base64: workbookBuffer.toString("base64"),
+    mimeType: OUTPUT_MIME,
+  });
+  const logContent = state.auditRows.map((row) => `[${row.timestamp}] row=${row.inputRowId} ${row.step} ${row.status}: ${row.message}`).join("\n");
+  await context.emit({
+    type: "file_download",
+    filename: "physicians-run.log",
+    base64: Buffer.from(logContent, "utf8").toString("base64"),
+    mimeType: "text/plain",
+  });
+}
+
+export async function runPhysiciansClaimStatusJob(formData: FormData, context: ScraperContext): Promise<void> {
+  const input = await parsePhysiciansInput(formData);
+  const rows = readPhysiciansInputWorkbook(input.inputWorkbookBuffer);
+  const state: PhysiciansWorkbookState = { outputRows: [], auditRows: [] };
+  let browser: Browser | undefined;
+  let page: Page | undefined;
+
+  try {
+    await context.log({ level: "info", message: `Physicians input loaded: ${rows.length} row(s).` });
+    await context.emit({ type: "progress", completed: 0, total: rows.length });
+    browser = await launchPhysiciansBrowser((message) => context.log({ level: "info", message }));
+    page = await browser.newPage({ viewport: { width: 1600, height: 1000 } });
+    // If the portal ever pops a native alert/confirm dialog (e.g. "please enter search
+    // criteria" when a field didn't actually take a value), Playwright blocks all further
+    // page actions until the dialog is dismissed. Without this handler that shows up exactly
+    // as "just staring at it and closing as error" - auto-dismiss so the row can fail cleanly
+    // and the run keeps going instead of hanging.
+    page.on("dialog", (dialog) => {
+      context.log({ level: "warn", message: `Physicians page dialog appeared: ${dialog.message()}` }).catch(() => {});
+      dialog.accept().catch(() => dialog.dismiss().catch(() => {}));
+    });
+    await installAnnouncementAutoCloser(page);
+    await login(page, input, context);
+    await openClaimSearch(page, context);
+
+    let completed = 0;
+    for (const row of rows) {
+      if (context.isCancelled?.()) {
+        await context.log({ level: "warn", message: "Physicians run stopped by user. Creating partial output." });
+        await context.emit({ type: "cancelled", message: "Physicians scraping stopped. Partial workbook downloaded." });
+        break;
+      }
+      try {
+        await processRow(page, row, state, context);
+        await clearSearch(page, context);
+      } catch (error) {
+        const message = errorMessage(error);
+        state.outputRows.push(baseOutputRow(row, "Portal Error", message));
+        addAudit(state, row, "row_processing", "failed", message);
+        if (page) await captureDiagnostics(context, page, row, "row-error");
+        await openClaimSearch(page, context).catch(() => {});
+      }
+      completed += 1;
+      await context.emit({ type: "progress", completed, total: rows.length });
+      await page.waitForTimeout(physiciansConfig.timing.betweenRowsMs);
+    }
+
+    await emitArtifacts(context, state);
+    await context.emit({ type: "done" });
+  } catch (error) {
+    const message = errorMessage(error);
+    addAudit(state, null, "job", "failed", message);
+    await context.log({ level: "error", message: `Physicians run failed: ${message}` });
+    if (page) await captureDiagnostics(context, page, null, "job-error");
+    await emitArtifacts(context, state).catch(() => {});
+    await context.emit({ type: "error", message });
+    await context.emit({ type: "done" });
+  } finally {
+    await closeAutomationResources({
+      browser,
+      page,
+      log: (message: string) => context.log({ level: "info", message }),
+    });
+  }
+}

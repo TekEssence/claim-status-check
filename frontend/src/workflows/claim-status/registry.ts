@@ -6,6 +6,7 @@ import { iehpFrontendPortalConfig } from "./portals/iehp/portal-config";
 import { kaiserFrontendPortalConfig } from "./portals/kaiser/portal-config";
 import { myFamilyFrontendPortalConfig } from "./portals/my_family/portal-config";
 import { optumProFrontendPortalConfig } from "./portals/optum-pro/portal-config";
+import { physiciansFrontendPortalConfig } from "./portals/physicians/portal-config";
 import { regalFrontendPortalConfig } from "./portals/regal/portal-config";
 
 export {
@@ -17,6 +18,7 @@ export {
   kaiserFrontendPortalConfig,
   myFamilyFrontendPortalConfig,
   optumProFrontendPortalConfig,
+  physiciansFrontendPortalConfig,
   regalFrontendPortalConfig,
 };
 
@@ -29,5 +31,6 @@ export const claimStatusPortalRegistry = [
   availityFrontendPortalConfig,
   kaiserFrontendPortalConfig,
   myFamilyFrontendPortalConfig,
+  physiciansFrontendPortalConfig,
   optumProFrontendPortalConfig,
 ] as const;

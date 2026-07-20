@@ -1,0 +1,2925 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd"><html xmlns="http://www.w3.org/1999/xhtml"><head>
+<meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+<meta http-equiv="X-UA-Compatible" content="IE=edge">
+<title>Claims Search/Status</title>
+
+<!-- <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/animate.css/3.5.2/animate.min.css"> -->
+<link rel="stylesheet" href="./../base/fontawesome/css/med_animate.css">
+
+<link href="./images/med_style.css?v=032320261825" rel="stylesheet" type="text/css">
+<link href="./images/med_style_add.css?v=032320261825" rel="stylesheet" type="text/css">
+<!--<link href="./images/jquery.pnotify.css?v=032320261825" rel="stylesheet" type="text/css" />-->
+<link href="./images/jquery.ui.theme.css?v=032320261825" rel="stylesheet" type="text/css">
+<link href="./images/med_c_qlist.css?v=032320261825" rel="stylesheet" type="text/css">
+<link href="./images/sh-login-style.css?v=032320261825" rel="stylesheet" type="text/css">
+<link href="./images/slidingdoors.css?v=032320261825" rel="stylesheet" type="text/css">
+<link rel="stylesheet" href="./images/med_modal_message.css?v=032320261825" type="text/css">
+<link href="./../base/jscalendar/skins/aqua/theme.css?v=032320261825" rel="stylesheet">
+<link rel="stylesheet" href="./images/thickbox.css?v=032320261825" type="text/css" media="screen">
+
+<link href="./images/new_design/style.css?v=032320261825" rel="stylesheet" type="text/css">
+<link rel="stylesheet" type="text/css" href="./images/new_design/droplinetabs.css?v=032320261825">
+
+<!-- ER_11769 - [start] -->
+
+<link rel="stylesheet" type="text/css" href="./../base/chosen_v1.5.1/chosen.css?v=032320261825">
+
+<!-- ER_11769 - [end] -->
+
+<script src="./../base/meditab/med_dhtmlHistory.js?v=032320261825" type="text/javascript"></script><script type="text/javascript" src="./../base/javascript/jquery-1.10.2.min.js?v=1"></script></head><body style=""><form id="historyStorageForm" method="GET" style="position: absolute; top: -1000px; left: -1000px;"><textarea id="historyStorageField" style="position: absolute; top: -1000px; left: -1000px;" left:="" -1000px;'="" name="historyStorageField"></textarea></form>
+<script type="text/javascript" src="./../base/meditab/med_quicklist.js?v=032320261825"></script>
+<script type="text/javascript" src="./../base/meditab/AC_RunActiveContent.js?v=032320261825"></script>
+<script type="text/javascript" src="./../base/meditab/med_common.js?v=032320261825"></script>
+<script type="text/javascript" src="./cred/base/med_common.js?v=032320261825"></script>
+<script type="text/javascript" src="./base/med_common.js?v=032320261825"></script>
+<script type="text/javascript" src="./base/med_security.js?v=032320261825"></script>
+<script type="text/javascript" src="./base/med_modal_ajax.js?v=032320261825"></script>
+<script type="text/javascript" src="./base/med_modal_message.js?v=032320261825"></script>
+<script type="text/javascript" src="./base/med_ajax_dynamic_content.js?v=032320261825"></script>
+
+<script type="text/javascript" src="./../base/javascript/jquery.js?v=032320261825"></script>
+<!--<script type="text/javascript" src="./../base/javascript/jquery.migrate.plugin.js?v=1.2.1"></script>-->
+<script type="text/javascript" src="./../base/javascript/jquery-ui.min.js?v=032320261825"></script>
+<script type="text/javascript" src="./../base/javascript/thickbox.js?v=032320261825"></script>
+<script type="text/javascript" src="./../base/javascript/jquery.contextmenu.r2.js?v=032320261825"></script>
+<script type="text/javascript" src="./../base/javascript/jquery.maskedinput.js?v=032320261825"></script>
+<!--<script type="text/javascript" src="./../base/javascript/jquery.pnotify.js?v=032320261825"></script>-->
+<script type="text/javascript" src="./../base/jscalendar/calendar.js?v=032320261825"></script>
+<script type="text/javascript" src="./../base/jscalendar/calendar-en.js?v=032320261825"></script>
+<script type="text/javascript" src="./../base/jscalendar/calendar-setup.js?v=032320261825"></script>
+<script type="text/javascript" src="./../base/fckeditor/fckeditor.js?v=032320261825"></script>
+<script type="text/javascript" src="./../base/jsoverlib/overlibmws.js?v=032320261825"></script>
+<script type="text/javascript" src="./../base/jsoverlib/overlibmws_iframe.js?v=032320261825"></script>
+
+<!-- ER_11769 - [start] -->
+
+<script src="./../base/chosen_v1.5.1/chosen.jquery.js?v=032320261825" type="text/javascript"></script>
+
+<!-- ER_11769 - [end] -->
+
+
+<script src="./../base/meditab/med_ajax.js?v=032320261825" type="text/javascript"></script>
+<script type="text/javascript" src="./base/jquery.are-you-sure.js?v=032320261825"></script>
+<script type="text/javascript" src="./base/ays-beforeunload-shim.js?v=032320261825"></script>
+
+<script type="text/javascript" src="./base/sweetalert.min.js?v=032320261825"></script>
+<link rel="stylesheet" type="text/css" href="./base/sweetalert.min.css?v=032320261825">
+
+<script type="text/javascript" src="./base/simplebar.js?v=032320261825"></script>
+<link rel="stylesheet" type="text/css" href="./base/simplebar.css?v=032320261825">
+
+<script type="text/javascript" src="./../base/spectrum/spectrum.js?v=032320261825"></script>
+<link rel="stylesheet" href="./../base/spectrum/spectrum.css" type="text/css">
+
+<link href="./images/new_design/style_custom.css?v=032320261825" rel="stylesheet" type="text/css">
+<div id="div_dialog_content_loggin_alert" style="display:none;"></div>
+
+<script type="text/javascript" language="javascript">
+var intCurLinkModule	=	'';
+var intCurrLinkId	=	'967683';
+var intChUserId           =       '14590';
+var strTrainingReq      =       '';
+var strPopupFor         =   '';
+var strDomainUrl = 'https://phn.quickcap.net/PHNDotNet/';
+var strDotNetAppUrl ='';
+var strPHPDomainUrl = 'https://phn.quickcap.net/PHN/';
+var strMYSQLDBNAME = '';
+var strMSSQLDBNAME = 'PHN';
+var strLogInCompanyId = 'PHN';
+var intTotalAnnouncement = '1';
+var SurveyAlert = '0';
+var TaskCalednarAlert = '0';
+
+var intTOUAgreed = '1';
+var intdoNotShowTermsofUse = '';
+var intTOUID = '1';
+/* ER_11567 - [start] */
+var isNewVersion = '0';
+
+var webrtcHide = '1';
+var webrtcLicenceFlag = '1';
+var CurrentActivePhase = '';
+var bubbleHide = '';
+var donotshowzuzu = '1';
+var strPortalDotNetAppUrl = 'https://phn.quickcap.net/PHNDotNet/';
+//var strValidateToken = ''
+/* ER_11567 - [end] */
+var intQConnectAccess = '0';
+var intShowLogInNotification= '0';
+var strScrollAnnouncementBGColor = '#fdcaa1';
+var strScrollAnnouncementFontColor = '#000000';
+var blnMultipleUserLoggedIn= '0';
+var isEnableTPA = 'IsEnableTPA';
+var strSubUserType = '';
+var IsLoggedInTPAProvider = '0';
+var strRegPasswordReason = 'INITIAL';
+var strShowChangePasswordPopup = ''; 
+var isEnableSecretQuestion = '-1'; 
+</script>
+
+
+<script type="text/javascript">
+
+    
+    if(localStorage.clearDotNetSessionvar == 1)
+    {
+        localStorage.clearDotNetSessionvar = 0;
+        $('<iframe style="display:none" id="clearDotNetSession" src="'+strPortalDotNetAppUrl+'V8/ClaimsAdjudication/SessionDetail.aspx?RemoveSession=1"/>').appendTo('body').hide();
+         $.ajax({
+           url: strPortalDotNetAppUrl+"SessionDetail.aspx?RemoveSession=1",
+           contentType: "application/json; charset=utf-8",
+           dataType: "jsonp",
+           data: null,
+            crossDomain: true,          
+           success: function (data) {
+               console.log(data);
+           },
+           error: function (data) { console.log("Error:" + data.status); }
+       });
+    }
+    
+    function bublepaginationnext()
+    {                       
+        var currentID = $(".current").attr('id');
+        var qElems = document.querySelectorAll('#childsteps>div');   
+       
+
+        var fields = currentID.split('*');
+        currentID = fields[1];    
+        
+        if(currentID < (parseInt(qElems.length) - 1))
+        {
+            $("#bubleprevbutton").show();
+            $("#bubleprevbutton").css("pointer-events","");
+            $("#bubleprevbutton").css("cursor","pointer");
+            $("#bubleprevbutton").css("color","blue");
+            $("#bubleprevbutton").removeAttr("disabled");
+        }
+
+        qElems[currentID].className  = '';
+        qElems[currentID].style.display  = 'none';   
+
+        var nextID =  parseInt(currentID) + 1;   
+        if(nextID == (parseInt(qElems.length) - 1))
+        {
+            //$("#bublenextbutton").hide();
+            $("#bublenextbutton").css("pointer-events","none");
+            $("#bublenextbutton").css("cursor","default");
+            $("#bublenextbutton").css("color","grey");
+            $("#bublenextbutton").attr('disabled', 'disabled');
+           
+        }
+        qElems[nextID].style.display = 'block';
+        qElems[nextID].className = 'current';      
+    }
+    
+    function bubleclose()
+    {       
+          $("#bublemessgzuzu").hide();
+          $("#bublemessg").hide();
+    }
+    
+    function bublepaginationPrev()
+    {
+        var currentID = $(".current").attr('id');
+        var qElems = document.querySelectorAll('#childsteps>div');   
+                
+        var fields = currentID.split('*');
+        currentID = fields[1];  
+        
+        if(currentID <= (parseInt(qElems.length) - 1))
+        {
+           // $("#bublenextbutton").show();
+             $("#bublenextbutton").css("pointer-events","");
+            $("#bublenextbutton").css("cursor","pointer");
+            $("#bublenextbutton").css("color","blue");
+             $("#bublenextbutton").removeAttr("disabled");
+        }
+
+        qElems[currentID].className  = '';
+        qElems[currentID].style.display  = 'none';   
+
+        var nextID =  parseInt(currentID) - 1;    
+        if(nextID == 0)
+        {
+           // $("#bubleprevbutton").hide();
+             $("#bubleprevbutton").css("pointer-events","none");
+            $("#bubleprevbutton").css("cursor","default");
+            $("#bubleprevbutton").css("color","grey");
+             $("#bubleprevbutton").attr('disabled', 'disabled');
+        }       
+        qElems[nextID].style.display = 'block';
+        qElems[nextID].className = 'current';
+    }
+    
+   
+    if(localStorage.firsttimelogin == "2")
+    {
+        localStorage.firsttimelogin = '1';
+    }
+  
+    if(localStorage.firsttimelogin == '1')
+    {
+        
+        var sessionclearurl = strPortalDotNetAppUrl+"V8/ClaimsAdjudication/SessionDetail.aspx?RemoveSession=1";
+        $('<iframe style="display:none" id="clearDotNetSession" src="'+sessionclearurl+'"/>').appendTo('body').hide();
+        
+//        setTimeout
+//        ( function () {                              
+//                $('#clearDotNetSession').attr('src', sessionclearurl);               
+//            } , 250);
+        
+//        $.ajax({
+//            url: strPortalDotNetAppUrl+"V8/ClaimsAdjudication/SessionDetail.aspx?RemoveSession=1",
+//           contentType: "application/json; charset=utf-8",
+//           dataType: "jsonp",
+//           data: null,
+//           crossDomain: true,
+//           success: function (data) {
+//               console.log(data);
+//           },
+//           error: function (data) { console.log("Error:" + data.status); }
+//       });
+       $.ajax({
+           url: strPortalDotNetAppUrl+"SessionDetail.aspx?RemoveSession=1",
+           contentType: "application/json; charset=utf-8",
+           dataType: "jsonp",
+           data: null,
+            crossDomain: true,          
+           success: function (data) {
+               console.log(data);
+           },
+           error: function (data) { console.log("Error:" + data.status); }
+       });
+       localStorage.firsttimelogin = '3';
+    }
+    
+    
+    var CheckCurrentstrUrl =  window.location.href ;
+    if(CheckCurrentstrUrl.indexOf("file") > 0)
+    {       
+        if(CheckCurrentstrUrl.indexOf("childMessgID") > 0)
+        {
+
+             var fields = strUrl.split('childMessgID=');        
+                                $.ajax({
+                                               url: "index.php?file=med_common_ajax&action=GET_CHILDSTEPMESSG",
+                                                data: 'strparentMssgID='+fields[1],
+                                               cache: false,
+                                               type: "POST",
+                                               success: function (data)
+                                               {                                   
+                                                   $("#bublemessgdiv").html(data);
+                                                  // $("#bublemessgdiv").css("margin-left", "8%");
+                                                    $("#bublemessgdiv").css("bottom", "187px");
+                                                           $("#bubleprevbutton").css("pointer-events","none");
+                                                           $("#bubleprevbutton").css("cursor","default");
+                                                           $("#bubleprevbutton").css("color","grey");
+                                               }
+                                           });         
+       }
+    }
+    
+ function AssignWebrtcSRC(){
+    if ($("#webrtciframe").length) {
+        if($('#webrtciframe').attr('src').trim() == '')
+            $('#webrtciframe').attr('src', $("#chatviewurl").val())
+    }
+ }   
+$(document).ready(function(){
+    
+//       $('#bublemessg').css('margin-left',(window.innerWidth*0.86 - 470).toString()+'px');
+//       $('#bublemessgzuzu').css('margin-left',(window.innerWidth*0.86 - 230).toString()+'px');
+       
+        $('#bublemessg').css('right','130px');
+        $('#bublemessgzuzu').css('right','5px');
+                                 
+        if ($('#bublemessg').length > 0)
+        {
+             $('#webrtc').css('right','450px');
+        }
+        else
+        {            
+              $('#webrtc').css('right','5px');              
+        }
+   
+     $('#bublemessg').hide();
+     $('#bublemessgzuzu').hide();
+      $('#webrtc').hide();
+            
+    $.fn.extend({
+    animateCss: function (animationName) {
+        var animationEnd = 'webkitAnimationEnd mozAnimationEnd MSAnimationEnd oanimationend animationend';
+        this.addClass('animated ' + animationName).one(animationEnd, function() {
+            $(this).removeClass('animated ' + animationName);
+        });
+    }
+});
+       
+      
+  setTimeout(function () {
+      
+       if((bubbleHide != 1) && (donotshowzuzu == 0))
+       {
+         $('#bublemessg').show().addClass('animated zoomInRight');
+         $('#bublemessgzuzu').show().addClass('animated zoomInRight');
+         document.getElementById("dvNotificationMaster").style.setProperty("right", "400px");
+       }    
+       var webrtcgeturl = $("#chatviewurl").val();
+       //$('#webrtcContent').html('<iframe src="'+webrtcgeturl+'" frameborder="0" width="330" height="350" ></iframe>'); 
+       if(webrtcLicenceFlag == 1 && intQConnectAccess ==1)
+       {
+           $("#webrtc").show();
+           //$('#webrtciframe').attr('src', webrtcgeturl);      
+           document.getElementById("dvNotificationMaster").style.setProperty("right", "400px");
+       }      
+       if(webrtcHide == 1 && intQConnectAccess ==1)
+       {
+           $('#webrtc').show().addClass('animated zoomInRight');
+           document.getElementById("dvNotificationMaster").style.setProperty("right", "400px");
+           AssignWebrtcSRC();
+       }
+       else
+       {
+            $('#webrtc').hide();
+       }
+    }, 3000          
+  );
+  
+  if(webrtcHide == 0)
+  {
+    //$("#blinkingWebrtc").addClass("blink_me");     
+     // $("#webrtc").remove();
+  }
+  else
+  {
+      $("#blinkingWebrtc").removeClass("blink_me");
+  }
+  
+  if(webrtcLicenceFlag == 0 || intQConnectAccess ==0)
+  {
+      $("#webRTCIcon").remove();
+      $("#webrtc").remove();
+  }else
+  {
+  }
+
+  if(bubbleHide == 1)
+  {
+    $("#blinkingMarketing").addClass("blink_me");
+    $('#webrtc').css('right','5px');
+  }
+  if(donotshowzuzu == 1)
+  {
+       $('#webrtc').css('right','5px');
+       $("#zoozooIcon").hide();  
+       $("#bublemessg").hide();  
+       $("#bublemessgzuzu").hide();  
+   }
+ // $('#bublemessgzuzu').show().addClass('animated zoomInUp');}, 5000
+    
+   // update back link on Ajax call implementation 
+//   var strUrl =  window.location.href ;
+//   
+//   if(strUrl.indexOf("file=meds_dashboard&isAjax=no") > 0)
+//   {
+//        alert(2);
+//      window.history.pushState({url: "" + '#Dashboard' + ""}, '', '#Dashboard');
+//   }
+//   {
+//     //targetUrl = strUrl+'&isAjax=no';
+//   }
+//   else
+//   {
+//      targetUrl = strUrl+'?file=meds_dashboard&isAjax=no'; 
+//       window.history.pushState({url: "" + targetUrl + ""}, '', targetUrl);
+//   }
+   
+    
+    /* ER_11769 - [start] */
+    
+    // global config variable for chosen (Chosen is third party library used to provide select box with search option)
+    var config = {
+      '.chosen-select'           : {},
+      '.chosen-select-deselect'  : {allow_single_deselect:true},
+      '.chosen-select-no-single' : {disable_search_threshold:10},
+      '.chosen-select-no-results': {no_results_text:'Oops, nothing found!'},
+      '.chosen-select-width'     : {width:"95%"}
+    }
+    
+    // for all configs
+    for (var selector in config) {
+       
+      // enable chosen feature for configured object (Here, it is class)
+      $(selector).chosen(config[selector]);
+    }
+    
+    /* ER_11769 - [end] */
+    
+    /* ER_11567 - [end] */
+    
+    // if new version of quickcap has been released
+    if(isNewVersion == 1)
+    {
+        // url to display message to remove cache from browser
+        strHref	= "index.php?file=meds_clear_browser_cache";
+        
+        // open popup
+        openIframePopup(strHref,230,300);
+    }
+
+    /* ER_11567 - [end] */
+    
+    if(intdoNotShowTermsofUse == 1)
+    {
+        localStorage.showtermsofuse = 0;
+    }
+    else{
+       localStorage.showtermsofuse = 1; 
+    }
+    
+    if(intTOUAgreed <=0 && intTOUID!='')
+    {
+        if(localStorage.showtermsofuse != 0)
+        {
+            strHref  =   'index.php?file=meds_tou_preview&strPopupFor='+strPopupFor+'&CompanyID='+strLogInCompanyId
+                        +'&popup=1&Id='+intTOUID+'&show_page='+strPopupFor
+                        +'&announcements='+intTotalAnnouncement
+                        +'&TB_iframe=true&height=490&width=864&modal=true';
+            eval("tb_show(null,strHref,null)");
+            localStorage.showtermsofuse = 0;
+        }
+        else
+        {
+             localStorage.showtermsofuse = 1;
+        }        
+    }
+    else if(strPopupFor != "")
+    {
+       if(strPopupFor == "chgpass&isSecurityQuestion=1"){
+            if(isEnableSecretQuestion == "Y")
+            {
+                strHref  =   'index.php?file=meds_user_change_pass&popup=1&show_page='+strPopupFor+'&announcements='+intTotalAnnouncement+'&TB_iframe=true&height=360&width=1200&modal=true';
+            } else{
+                strHref  =   'index.php?file=meds_user_change_pass&popup=1&show_page='+strPopupFor+'&announcements='+intTotalAnnouncement+'&TB_iframe=true&height=360&width=660&modal=true';
+            }
+
+            if(isEnableTPA == "1")
+            {
+                strHref  =   'index.php?file=meds_user_change_pass&popup=1&show_page='+strPopupFor+'&announcements='+intTotalAnnouncement+'&TB_iframe=true&height=360&width=660&modal=true';
+            }
+            // stop redirection if password not change before provider selection with strShowChangePasswordPopup
+            if(strSubUserType == "Provider" && isEnableTPA == "1" && IsLoggedInTPAProvider == "0" && strRegPasswordReason != "RESET" && strShowChangePasswordPopup == "No")
+            {
+                let strExtraParamCache = Date.now() / 1000 | 0;
+                strHref  =   'index.php?file=meds_user_change_pass&popup=1&show_page=chgpass&isSecurityQuestion=1&usertype=P&announcements='+intTotalAnnouncement+'&__='+strExtraParamCache+'&TB_iframe=true&height=400&width=864&modal=true';
+            }
+		}
+		else{
+			strHref  =   'index.php?file=meds_user_change_pass&popup=1&show_page='+strPopupFor+'&announcements='+intTotalAnnouncement+'&TB_iframe=true&height=280&width=750&modal=true';
+		}
+         eval("tb_show(null,strHref,null)");
+         showWebrtc();
+    }
+    else
+    {
+        if(strSubUserType == "Provider" && isEnableTPA == "1" && IsLoggedInTPAProvider == "0")
+        {
+            strHref  =   'index.php?file=meds_user_change_pass&popup=1&show_page=chgpass&isSecurityQuestion=1&usertype=P&announcements='+intTotalAnnouncement;
+            let strExtraParamCache = Date.now() / 1000 | 0;
+            strHref += '&__='+strExtraParamCache;
+            openIframePopup(strHref,400,864);
+        }
+        else
+        {
+            if(intTotalAnnouncement > 0)
+            {
+                strHref	= "index.php?file=meds_announcement_show";
+                let strExtraParamCache = Date.now() / 1000 | 0;
+                strHref += '&__='+strExtraParamCache;
+                openIframePopup(strHref,490,864);
+            } else if(SurveyAlert> 0)
+            {
+                strHref	= "index.php?file=meds_survey_question&uid="+ intChUserId;
+                openIframePopup(strHref,800,1000);
+            }
+            else if(TaskCalednarAlert> 0)
+            {
+                strHref	= "index.php?file=meds_task_calendar_list&uid="+ intChUserId;
+                openIframePopup(strHref,457,864);
+            }
+        }
+    }
+     //setCookieByName("IPAddress");   
+   /* $.ajax({
+		url: "http://172.16.6.163/QuickCap7/Authorizations/Session.aspx",		
+                data:{'token':strValidateToken,'Type':'ADD'},		
+                dataType : 'jsonp',   //you may use jsonp for cross origin request
+                crossDomain:true,
+		success: function(data)
+		{
+                    //alert(data);
+		}
+	}); */ 
+        
+    keepSessionActive();
+
+     
+     
+    // if notification is not shown first time log in --check using cookie
+    // and having content then show
+    showNotification = 0;
+    try{
+        showNotification = getCookieByName('ShowNotification');
+        if(!showNotification){
+                showNotification =1;
+                document.cookie = "ShowNotification=0; secure; path=/"; 
+        }
+    }
+    catch (e) {
+                    showNotification = 0;
+    }
+    if(showNotification ==1 && intShowLogInNotification == 1) {
+       //Make the DIV element draggagle:
+       dragElement(document.getElementById("dvNotificationMaster"));
+       
+       //add content in  notification
+       //$("#dvNotificationMaster").html(strNotification_Content);
+       //make display yes of notification
+       document.getElementById("dvNotificationMaster").style.display = "block";
+       //set cookiee off
+       document.cookie = "ShowNotification=0; secure; path=/"; 
+    }
+    
+    if(getCookieByName('multipleLoginWithSameUser') == 1 && blnMultipleUserLoggedIn == 1)
+    {
+        var strMessage = 'You are already logged in, would you like to close the other session?';
+        $("#div_dialog_content_loggin_alert").html(strMessage);
+        
+        $("#div_dialog_content_loggin_alert").dialog({
+        resizable: false,
+        modal: true,
+        buttons:
+                {
+                    "Yes": function ()
+                    {
+                        $(this).dialog("close");
+                        closeOtherSession();
+                        document.cookie = "multipleLoginWithSameUser=0; secure; path=/";
+                    },
+                    "No": function ()
+                    {
+                        $(this).dialog("close");
+                        document.cookie = "multipleLoginWithSameUser=0; secure; path=/";
+                    }
+                },
+        open: function (event, ui) {
+            // find all the buttons - note that the 'ui' argument is an empty object
+            var buttons = $(event.target).parent().find('.ui-dialog-buttonpane').children();
+            // add class to buttons
+            buttons.addClass('btn');
+            $(".ui-dialog-titlebar").hide();
+            $("#div_dialog_content_loggin_alert").css('min-height','38px');
+            $(window).resize(function() {
+                if($('#div_dialog_content_loggin_alert').is(":visible")){
+                    $('#div_dialog_content_loggin_alert').parent('div').css({top:'50%',left:'50%',margin:'-'+($('#div_dialog_content_loggin_alert').height() / 2)+'px 0 0 -'+($('#div_dialog_content_loggin_alert').width() / 2)+'px'});
+                }
+              });
+        }
+    });
+        
+    }
+    
+    function closeOtherSession(){
+        $.ajax({
+                url: "index.php?file=med_common_ajax&action=LogoutOtherSession",
+                cache: false,
+                type: "POST",
+                success: function ()
+                {
+                     
+                }
+            }); 
+    }
+    function dragElement(elmnt) {
+      var pos1 = 0, pos2 = 0, pos3 = 0, pos4 = 0;
+      if (document.getElementById(elmnt.id + "header")) {
+        /* if present, the header is where you move the DIV from:*/
+        document.getElementById(elmnt.id + "header").onmousedown = dragMouseDown;
+      } else {
+        /* otherwise, move the DIV from anywhere inside the DIV:*/
+        elmnt.onmousedown = dragMouseDown;
+      }
+    
+      function dragMouseDown(e) {
+        e = e || window.event;
+        e.preventDefault();
+        // get the mouse cursor position at startup:
+        pos3 = e.clientX;
+        pos4 = e.clientY;
+        document.onmouseup = closeDragElement;
+        // call a function whenever the cursor moves:
+        document.onmousemove = elementDrag;
+      }
+    
+      function elementDrag(e) {
+        e = e || window.event;
+        e.preventDefault();
+        var winW = document.documentElement.clientWidth || document.body.clientWidth,
+            winH = document.documentElement.clientHeight || document.body.clientHeight;
+            maxX = winW - elmnt.offsetWidth - 1,
+            maxY = winH - elmnt.offsetHeight - 1;
+        // calculate the new cursor position:
+        pos1 = pos3 - e.clientX;
+        pos2 = pos4 - e.clientY;
+        pos3 = e.clientX;
+        pos4 = e.clientY;
+        // set the element's new position:
+        //console.log((elmnt.offsetLeft - pos1), maxY, (elmnt.offsetLeft - pos1), maxX);
+        if((elmnt.offsetTop - pos2) <= maxY && (elmnt.offsetTop - pos2) >= 0){
+          elmnt.style.top = (elmnt.offsetTop - pos2) + "px";
+        }
+        if((elmnt.offsetLeft - pos1) <= maxX && (elmnt.offsetLeft - pos1) >= 0){
+          elmnt.style.left = (elmnt.offsetLeft - pos1) + "px";
+        }
+        elmnt.style.right = '10px';
+        elmnt.style.bottom = 'unset';
+      }
+    
+      function closeDragElement() {
+        /* stop moving when mouse button is released:*/
+        document.onmouseup = null;
+        document.onmousemove = null;
+      }
+    }
+    
+    /*ER_16345[START]*/
+    if (localStorage.getItem("showHideScrollAnnouncement") === null) {
+        localStorage.setItem("showHideScrollAnnouncement", 1);
+    }
+
+    var scrollAnnouncementData;
+    $.ajax({
+        type: "GET",
+        url: "index.php?file=med_common_ajax&action=getScrollingAnnouncement",
+        cache: false,
+        async: false,
+        success: function (data){
+            scrollAnnouncementData = jQuery.parseJSON(data);   
+        }
+    });
+    if(scrollAnnouncementData.length == 0)
+    {
+        $(".scroll-annoucment-icon").hide();
+    }
+    if (scrollAnnouncementData.length > 0)
+    {
+        $('.main-scrollAnnouncement').css('background',strScrollAnnouncementBGColor);
+        $('.main-scrollAnnouncement').css('color',strScrollAnnouncementFontColor);
+        $('.main-scrollAnnouncement').show();
+        var strAnnouncement = '';
+        var strAnnouncementDescr = '';
+        for (i = 0; i < scrollAnnouncementData.length; i++)
+        {
+            strAnnouncementDescr = (scrollAnnouncementData[i]['Description'] == null) ? ' ' : ' - ' + scrollAnnouncementData[i]['Description'];
+            strAnnouncement += (i+1) + '. '+scrollAnnouncementData[i]['Title'] + strAnnouncementDescr + '\xa0\xa0\xa0\xa0\xa0\xa0\xa0';
+        }
+        $('.scroll-announcement-span').text(strAnnouncement);
+        var intWidth = $('.scroll-announcement-span').width();
+        if(intWidth < $('#main-scrollAnnouncement-2').width())
+        {
+            intWidth = $('#main-scrollAnnouncement-2').width();
+        }
+        var intSpeed = 20;
+        var intTime = intWidth/intSpeed;
+        $('.scroll-announcement-span').css('animation','marquee '+intTime+'s linear infinite');
+        $('.scroll-announcement-span').css('-moz-animation','marquee '+intTime+'s linear infinite');
+        $('.scroll-announcement-span').css('-webkit-animation','marquee '+intTime+'s linear infinite');
+
+        var intWidth = $('#scroll-announcement-span').width();
+        var actualwidth = $('#main-scrollAnnouncement-2').width();
+
+        var startPosition = actualwidth + 10;
+        kf = document.getElementById("kf");
+        kf.innerText = '@keyframes marquee{0% { -moz-transform: translateX('+startPosition+'px); /* Browser bug fix */-webkit-transform: translateX('+startPosition+'px); /* Browser bug fix */transform: translateX('+startPosition+'px); }100% { -moz-transform: translateX(-100%); /* Browser bug fix */-webkit-transform: translateX(-100%); /* Browser bug fix */transform: translateX(-100%); }}';
+    }
+    else{
+        localStorage.setItem("showHideScrollAnnouncement", 0);
+    }
+    if(localStorage.getItem("showHideScrollAnnouncement") == 1 && scrollAnnouncementData.length > 0)
+    {
+        $('.main-scrollAnnouncement').show();
+        $(".scroll-annoucment-icon > i").css('color','#f3720a');
+        if($("#main-navigation2").length > 0)
+            $(".middle-p-height").css("height", "calc((100vh) - (140px + "+($("#main-navigation2").height()+ $(".main-scrollAnnouncement").height() + 8) +"px))");
+        else
+            $(".middle-p-height").css("height", "calc((100vh) - (140px + "+($(".main-scrollAnnouncement").height() + 8) +"px))");
+    }
+    else{
+        $('.main-scrollAnnouncement').hide();
+        $(".scroll-annoucment-icon > i").css('color','red');
+        if($("#main-navigation2").length > 0)
+            $(".middle-p-height").css("height", "calc((100vh) - (140px + "+($("#main-navigation2").height()+  8) +"px))");
+    }
+    /*ER_16345[END]*/
+});
+
+//Notification Div Hide complete div
+function HideNotificationMasterDiv(){
+    $('#dvNotificationMaster').remove();
+    return false;
+}
+//Notification Div hide single notification
+function HideNotificationDiv(ctrl, type){
+    if($(ctrl).closest('.dvNotificationContent').next('.dvNotificationContent-hr').length > 0){
+        $(ctrl).closest('.dvNotificationContent').next('.dvNotificationContent-hr')[0].remove();
+    } 
+    else if($(ctrl).closest('.dvNotificationContent').prev('.dvNotificationContent-hr').length > 0){
+        $(ctrl).closest('.dvNotificationContent').prev('.dvNotificationContent-hr')[0].remove();
+    }
+    if($('#dvNotificationMaster').find('.dvNotificationContent').length ==1)
+        HideNotificationMasterDiv();
+    else
+        $(ctrl).closest('.dvNotificationContent').remove();
+    return false;
+}
+//Notification Div Dont show again logic
+function DontShowAgainNotificationDiv(ctrl, type){
+    HideNotificationDiv(ctrl);
+    //logic to dont show again
+    $.ajax({
+        url: "index.php?file=med_common_ajax&action=DontShowAgainNotification",
+        cache: false,
+        data: 'TypeCode='+ type,
+        type: "POST",
+        success: function (data)
+        {                                   
+        }
+    }); 
+}
+//Notification Div Redirect page to
+function NotificationRedirectPage(e, type, RedirectionType){
+    var url = '';
+    if(type == 'PEN'){
+      url = document.getElementById("lnkMyProfile").href + '&IsOpenPassword=1';
+      $(e).parent().parent().find('.lnkHideNotification').click();
+    }
+    window.open(url, RedirectionType);
+}
+function clearDotNetSessionDetails()
+{   
+    $('<iframe style="display:none" id="clearDotNetSession" src="'+strPortalDotNetAppUrl+'V8/ClaimsAdjudication/SessionDetail.aspx?RemoveSession=1"/>').appendTo('body').hide();
+}
+
+
+	function setlinksShowHide(strDivId,strImageId)
+	{
+		if($("#"+strImageId).attr("src") == './images/shutter-open.gif')
+		{
+			document.getElementById('lnks').style.display = 'block';
+			document.getElementById('lnks').style.visibility = 'visible';
+			$("#lnks").width("181");
+                        
+			$("#lnkRight").width("calc(100vw - 225px)");
+                        $(".simplebar-scrollbar").show();
+                        if($(".simplebar-track.vertical"))
+                            $(".simplebar-track.vertical").show();
+
+                        $("#linkDevide").css("padding-left","15px");
+			document.getElementById(strImageId).src 		= 	"./images/shutter-close.gif";
+		}
+		else
+		{
+			document.getElementById('lnks').style.visibility = 'hidden';
+			$("#lnks").width("1");
+                       
+			//$("#lnkRight").width("100%");
+                        $("#lnkRight").width("calc(100vw - 35px)");
+                        $(".simplebar-scrollbar").hide();
+                        if($(".simplebar-track.vertical"))
+                            $(".simplebar-track.vertical").hide();
+                        
+                        $("#linkDevide").css("padding-left","0px");
+			document.getElementById(strImageId).src 		= 	"./images/shutter-open.gif";
+		}
+	}
+
+/*
+Function to call index.php only for making the session active 
+on every 15 mins so the session will be active till the user logs out or close the window
+*/
+function keepSessionActive()
+{
+	$.ajax({
+		url: "index.php",
+		data: 'keepSessionActive=Yes',
+		cache: false,
+		type: "POST",
+		success: function(data)
+		{
+		}
+	});
+	
+	var intDuration	=	900000;	// check avtivity log every 15 minutes (15*60*1000 in miliseconds)
+	
+	timerUserActivity	=	setTimeout("keepSessionActive();", intDuration);
+}
+
+var body = document.getElementsByTagName('body');
+var container = document.getElementById('mainWrap');
+var modal = document.getElementById('myModal');
+var btnClose = document.getElementById("closeModal");
+if(btnClose  != null){
+btnClose.onclick = function() {
+    modal.className = "Modal is-hidden is-visuallyHidden";
+    body.className = "";
+    container.className = "MainContainer";
+    container.parentElement.className = "";
+}
+}
+
+</script><iframe style="display:none" id="clearDotNetSession" src="https://phn.quickcap.net/PHNDotNet/V8/ClaimsAdjudication/SessionDetail.aspx?RemoveSession=1"></iframe>
+
+<style type="text/css">
+    
+#dvNotificationMaster {
+  position: absolute;
+  z-index: 9;
+  background-color: #dff0d8;
+  /*border-color: #3c763d;*/
+   color: #3c763d;
+  text-align: center;
+  border: 1px solid #3c763d;
+  border-radius: 4px;
+  right: 10px;
+  bottom: 10px;
+  max-width:500px;
+  opacity: 0.6;
+  display: none;
+}
+
+#dvNotificationMaster:hover {
+   opacity: 1.0;
+}
+
+#btndvNotificationMasterClose{
+    position: absolute;
+    border: 1px solid #3c763d;
+    background-color: #dff0d8;*/
+    color: #3c763d;
+    top: -10px;
+    right: -10px;
+    border-radius:20px;
+    cursor:pointer;
+}
+
+#dvNotificationMasterheader {
+    cursor: move;
+    z-index: 10;
+    padding: 10px;
+}
+.dvNotificationContent{
+    color: #3c763d;
+    font-weight: 900;
+    font-size: 11px;
+    text-align: right;
+}
+.dvNotificationContent-hr{
+    margin: 10px 0px;
+}
+img, td, input{ behavior: url("./images/iepngfix.htc") }
+
+.zoomInRight {
+  -webkit-animation: zoomInRight 2s; /* Safari 4+ */
+  -moz-animation:    zoomInRight 2s; /* Fx 5+ */
+  -o-animation:      zoomInRight 2s; /* Opera 12+ */
+  animation:         zoomInRight 2s; /* IE 10+, Fx 29+ */
+}
+
+.zuzuclick : hover {
+    background-color: grey;
+}
+</style>
+
+
+
+<div id="div_dialog_timer"></div>
+<div id="div_exportLink" style="position:absolute; z-index:2; visibility:hidden;" onmouseover="hideShowExpLink('visible');" onmouseout="hideShowExpLink('hidden');">  <div class="contextMenu" id="myMenu22" style="display: none;">
+    <ul>
+      <li id="excel"><img src="images/bullete_1.gif" class="trackAtt">Export to Excel</li>
+      <li id="csv"><img src="images/bullete_1.gif" class="trackAtt">Export to CSV</li>
+    </ul>
+  </div>
+<!--<table border="0" cellspacing="0" cellpadding="0" class="emppopmenu" width="140px">
+  <tr>
+    <td><table border="0" cellpadding="1" cellspacing="0" class="nor_text" width="100%">
+  <tr>	
+    <td width="13" height="18" align="center" valign="middle">&raquo;</td>
+    <td width="97" height="18" align="left" valign="middle" class="popup"><a onclick="return exportExcelFile(document.forms[0],'excel');" title="Export to Excel" style="cursor:pointer" class="leftbar-nav">Export to Excel</a> </td>
+  </tr>
+   <tr>
+ 	<td height="18" align="center" valign="middle">&raquo;</td>
+    <td height="18" align="left" valign="middle" class="popup"><a onclick="return exportExcelFile(document.forms[0],'csv');" title="Export to CSV" style="cursor:pointer" class="leftbar-nav">Export to CSV</a> </td>
+  </tr>
+</table>
+</td>
+  </tr>
+</table>
+--></div>
+<div id="mainWrap">
+    <table width="100%" border="0" cellspacing="0" cellpadding="0">
+        <tbody><tr>
+			<td>
+<link rel="stylesheet" href="./../base/fontawesome/css/all.min.css">
+<style>
+    .dropdown {
+  float: left;
+  overflow: hidden;
+}
+
+.dropdown .dropbtn {
+  font-size: 16px; 
+  border: none;
+  outline: none;
+  color: white;
+  background-color: inherit;
+  font-family: inherit; /* Important for vertical align on mobile phones */
+  margin: 0; /* Important for vertical align on mobile phones */
+}
+
+/* Dropdown content (hidden by default) */
+.dropdown-content {
+  display: none;
+  position: absolute;
+  background-color: #f9f9f9;
+  min-width: 160px;
+  box-shadow: 0px 8px 16px 0px rgba(0,0,0,0.2);
+  z-index: 1;
+}
+
+/* Links inside the dropdown */
+.dropdown-content a {
+  float: none;
+  color: black;
+  padding: 5px 10px;
+  text-decoration: none;
+  display: block;
+  text-align: left;
+}
+
+/* Add a grey background color to dropdown links on hover */
+.dropdown-content a:hover {
+  background-color: #ddd;
+}
+
+/* Show the dropdown menu on hover */
+.dropdown:hover .dropdown-content {
+  display: block;
+}
+    .noclose .ui-dialog-titlebar-close
+    {
+        display:none;
+    }
+	
+	.ui-dialog .ui-dialog-buttonpane .ui-dialog-buttonset {
+    float: none;
+}
+
+.ui-dialog .ui-dialog-title, .ui-dialog .ui-dialog-buttonpane, .ui-dialog .ui-dialog-titlebar {
+    text-align:center !important;
+    padding-left: 0.4em !important;
+    padding-right: 0.4em !important;
+    float: none !important;
+    margin: 0px !important;
+}
+
+div.help-doc{
+	background-color: #DDDDDD;
+    color: #666666;
+    float: right;
+    font-weight: bold;
+    padding: 5px 10px;
+	height:15px;
+	cursor:pointer;
+	border-right:1px solid #CCCCCC;
+}
+
+div.scroll-annoucment-icon{
+    background-color: #DDDDDD;
+    color: #666666;
+    float: right;
+    font-weight: bold;
+    padding: 5px 10px;
+    height:15px;
+    cursor:pointer;
+    border-right:1px solid #CCCCCC;
+}
+.main-scrollAnnouncement{
+margin: 0px;
+padding: 0px;
+height: 18px;
+float: left;
+width: 100%;
+margin: 0 auto;
+white-space: nowrap;
+overflow: hidden;
+position: relative;
+}
+
+.main-scrollAnnouncement span {
+position: absolute;
+margin: 0;
+line-height: 18px;
+text-align: center;
+font-weight: bold;
+/* Starting position */
+-moz-transform:translateX(100%);
+-webkit-transform:translateX(100%); 
+transform:translateX(100%);
+/* Apply animation to this element */ 
+}
+.main-scrollAnnouncement:hover span{
+  -webkit-animation-play-state:paused;
+  -moz-animation-play-state:paused;
+  -o-animation-play-state:paused;
+  animation-play-state:paused !important;
+  cursor: pointer;
+}
+
+    </style>
+    
+	<div class="loading hidden loadingTop" id="divloading">               
+    </div>
+<div id="header">   
+   <style id="kf">
+        </style>
+    
+    <div id="topheader">
+
+
+        <div class="network">
+            <table border="0" cellpadding="0" cellspacing="0">
+                <tbody><tr valign="middle">
+                    <td width="16%"><a onclick="getAjaxPageData(event, 'index.php?file=med_dashboard_frame&amp;link_module=76&amp;link_id=967683')"><img src="images/new_design/logo.gif" style="max-width: 200px; max-height: 61px;" height="61" border="0" align="top" alt="PHN" class="trackAtt"></a></td>
+                    <td width="2"><div class="separator_top"></div></td>
+                    <td width="7%"><img id="company_lo" src="../general/images/fancy/PHN.gif" border="0" alt="PHN" style="max-width: 180px; max-height: 55px;" align="top" hspace="5" class="trackAtt"></td>
+                    <td id="company_name" width="73%">
+                        <h2>PHYSICIANS HEALTH NETWORK</h2>
+                        <span style="display:none" id="company_db">PHN</span>
+                        
+                    <!--     <blockquote class="oval-speech">
+                        <p>This is a blockquote that is styled to look like a speech bubble</p>
+                        </blockquote> -->
+
+                    </td>
+                    <!--<td width="2"><div class="separator_top"></div></td>-->
+                </tr>
+            </tbody></table>
+                       
+                       
+        </div>
+                                             
+        <div class="top-r">
+            <table border="0" cellpadding="0" cellspacing="0" align="right">
+                <tbody><tr valign="middle">
+<!--                    <td width="2%"><div class="separator_top"></div></td>-->
+                    <td width="36%" align="right">
+                        <a href="https://www.medvision-solutions.com/" target="_blank">
+                            <img src="images/quickcap/quickcap-logo.png" border="0" alt="QuickCap v7.0" align="top" style="max-width: 180px;max-height: 55px;" class="trackAtt">
+                        </a>
+                    </td>
+                    <td width="2%"><div class="separator_top"></div></td>
+                    <td width="16%" align="right">
+                        <p class="black">Welcome  <span id="camelCaseUserName" class="camelCaseUserName" title="Basim Z. Abdelkarim MD | Phil Mcguire">Basim Z. Abdelkarim MD | Phil Mcguire</span></p><a id="lnkMyProfile" name="lnkMyProfile" href="index.php?file=meds_user_change_pass&amp;isShowQueAns=1&amp;isSecurityQuestion=1&amp;isOpenFromMyProfile=1&amp;user_id=14590&amp;isAjax=no" onclick="getAjaxPageData(event, 'index.php?file=meds_user_change_pass&amp;isShowQueAns=1&amp;isSecurityQuestion=1&amp;isOpenFromMyProfile=1&amp;user_id=14590');" class="password trackAtt">My Profile</a>
+                    </td>
+                    <td width="2%"><div class="separator_top"></div></td>
+                    <td width="19%">
+                        <table border="0" cellpadding="0" cellspacing="0" class="menu">
+                            <tbody><tr>
+                                <td>
+                                    <a href="index.php?file=meds_announcement&amp;isAjax=no" onclick="getAjaxPageData(event, 'index.php?file=meds_announcement');">
+                                        <img border="0" title="Announcements" alt="Announcements" src="images/announcement.png" class="top_short_link trackAtt">
+                                    </a>
+                                </td>
+                                <td>
+                                    <a href="#" onclick="return showContactsList();">
+                                        <img border="0" title="Contacts" alt="Contacts" src="images/contacts.png" class="top_short_link trackAtt">
+                                    </a>
+                                </td>
+                                                                
+                                
+                                
+                                                                <!--2 added in coutns because we have 3 static links above , Announcements and Contacts, library icon -->
+                                                                                                <!--Set Initial count pointer to 2, because we have 2 static links above , Announcements and Contacts -->
+                                                                				                                                                <td>
+                                    <a href="#" onclick="return openJsWindow('https://phn.quickcap.net/PHNDotNet/Translator.aspx?dbnm=PHN&amp;uid=14590&amp;sess_id=9dvvceb6ff8nbaoj6duqm4h0do','Tranlator','width=766px, height=392px, center=1, help=0, status=0, resizable=1, scrollbars=1');">
+                                        <img border="0" title="Translator" alt="Translator" src="images/languagetranslater.png" class="top-shortlink-img trackAtt">
+                                    </a>
+                                </td>
+                                <td>
+                                    <a href="#" onclick="return openJsWindow('https://phn.quickcap.net/PHNDotNet/SpeechToText.aspx?dbnm=PHN&amp;uid=14590&amp;sess_id=9dvvceb6ff8nbaoj6duqm4h0do','SpeechToText','width=766px, height=330px, center=1, help=0, status=0, resizable=1, scrollbars=1');">
+                                        <img border="0" title="Speech To Text" alt="Speech To Text" src="images/speech.png" class="top-shortlink-img trackAtt">
+                                    </a>
+                                </td>
+                                
+                                                                
+                                 <td class="tdVonage" style="display:none">
+                                    <a href="#" onclick="return openVonage();">
+                                        <img border="0" title="Call using Vonage" alt="Call using Vonage" src="images/Phone.png" class="top-shortlink-img trackAtt">
+                                    </a>
+                                </td>
+                                
+								
+                            </tr>
+                        </tbody></table>
+                    </td>
+                    <td width="2%"><div class="separator_top"></div></td>
+                    <td width="17%" style="text-align: -webkit-center;">
+                        <table border="0" cellpadding="0" cellspacing="0">
+                            <tbody><tr valign="middle">
+                                <td align="right" valign="middle" style="white-space:nowrap">
+                                                                                                                                                <a href="mailto:portalsupport@mvmedical.com" target="_blank">
+                                        <img src="./images/email-new.png" style="cursor:pointer;" title="Contact Us" align="absmiddle" class="trackAtt">
+                                    </a>
+                                                                                                                                                <!--a href="index.php?file=meds_logout" class="logout" style="font-weight:bold;">Logout</a-->
+                                    <a onclick="logout()" class="logout logout-btn" style="font-weight:bold;cursor:pointer;">Logout</a>
+                                </td>
+                                <td>&nbsp;</td>
+                            </tr>
+                        </tbody></table>
+                    </td>
+                </tr>
+            </tbody></table>
+        </div>
+        <div class="clear"></div>
+
+    </div>
+
+    <div id="main-navigation">
+
+        <div class="date updatedDate">July 20, 2026 5:04 AM</div>
+        <div class="date">
+                     <input placeholder="Type Member ID To Search" title="Type more than 2 characters to search." id="TaRtxt_ContactNamemember" class="pull-left f11 w110 groupsearch form-control ui-autocomplete-input" name="TaRtxt_ContactNamemember" value="" size="25" maxlength="100" onkeydown="showSearchPopup(event,'contact');" onchange="callerAutoCompleteforMember(this.value);" autocomplete="off" role="textbox" aria-autocomplete="list" aria-haspopup="true" type="hidden" style="">                                                                                                            
+                    </div>
+                         
+                <div id="app-version">Version  7.26.1.0</div>
+                <div class="help-doc" style="padding: 0px 0px;height: 25px;">
+                                    <a href="" onclick="return openHelpDocument('https://phn.quickcap.net/PHNDotNet/V8/Master/HelpDocumentView.aspx?dbnm=PHN&amp;uid=14590');">
+                                        <img border="0" title="Help me with!" alt="Help me with!" src="images/help_icon.png" class="top-shortlink-img trackAtt" style="height: 25px;">
+                                    </a>
+        </div>
+                <div id="app-version-details" style="display:none;">
+            <table cellspacing="0" cellpadding="3">
+                <tbody><tr>
+                    <td><b>Release Date:</b></td>
+                    <td>05-24-2026</td>
+                </tr>
+                <tr>
+                    <!--<td align="center" colspan="2"><a href="release_notes/7.26.1.0.pdf" target="_blank">Release Note</a></td>-->
+                    <td align="center" colspan="2"><a href="index.php?file=med_dashboard_frame&amp;link_module=31&amp;link_id=99999&amp;isAjax=no&amp;ClientVersion=true" class="trackAtt">Release Note</a></td>
+                    <input type="hidden" name="releaseNotesID" id="releaseNotesID" value="99999" style="">
+                </tr>
+                <tr>
+                    <td align="center" colspan="2">Please contact us at</td>
+                </tr>
+                <tr>
+                    <td align="left" colspan="2"><a href="mailto:portalsupport@mvmedical.com" class="trackAtt">portalsupport@mvmedical.com</a> </td>
+                </tr>
+                <tr>
+                    <td align="center" colspan="2"><span><b>Or</b>&nbsp;&nbsp;(800) 371-7547</span>  </td>
+                </tr>
+            </tbody></table>
+        </div>
+                <div class="scroll-annoucment-icon" onclick="return showHideAnnouncement();" style="padding: 5px 0px 5px 5px; height: 15px; width: 25px; display: none;"><i class="fas fa-bullhorn" title="Hide announcement" style="font-size: 16px; color: red;"></i></div>
+        <!-- Block to show Inbox counts on top header section
+                This link will communication module screen     -->
+                <div id="divInbox">
+            <a id="inboxCount" onclick="getAjaxPageData(event, 'index.php?file=med_dashboard_frame&amp;link_module=52&amp;link_id=684'  )" class="trackAtt"></a>
+        </div>
+        
+    </div>
+
+        </div>
+    
+    <div class="clear"></div>
+
+
+<div class="main-scrollAnnouncement" id="main-scrollAnnouncement-1" style="width:10%;display:none;"></div>
+<div class="main-scrollAnnouncement" id="main-scrollAnnouncement-2" style="width:80%;display:none;"><nobr><span class="scroll-announcement-span" id="scroll-announcement-span"></span></nobr></div>
+<div class="main-scrollAnnouncement" id="main-scrollAnnouncement-3" style="width:10%;display:none;"></div>
+<!--TOP MENU-->
+<script>
+    var blnLogoutInactiveUserEnabled = 'Y';
+    var userid = '14590';
+    var getStoreLastVisitedMember = '';
+    //var strFullName = 'Basim Z. Abdelkarim MD | Phil Mcguire'; /* Added this variable for B_98395 */
+</script>
+
+
+
+<script>
+
+$(document).ready(function () {
+    
+        callerAutoCompleteforMember();
+        $("#TaRtxt_ContactNamememberName").text(getStoreLastVisitedMember);
+        /* B_98395[START] */
+        // Minute UX details in the portal.
+        //capitalizeUserName(strFullName); 
+        /* B_98395[END] */
+});
+
+function clearcallerAutoCompleteforMember()
+{
+	$.ajax({
+		 url: "index.php?file=med_common_ajax&action=CLEAR_MEMBER",
+                    data: 'srtSelMember=1',
+                    async: true,
+                    cache: false,
+                    type: "POST",    
+		beforeSend: function(){			
+		},
+		success: function(data){
+			$("#TaRtxt_ContactNamememberName").text('');		
+		}
+	});
+}
+
+function callerAutoCompleteforMember()
+{
+    // auto complete Client name
+    $("#TaRtxt_ContactNamemember").autocomplete({
+        source: function (request, response) {
+            $.ajax({
+                url: "index.php?file=med_common_ajax&action=SELECT_MEMBERS",
+                dataType: "json",
+                cache: false,
+                type: "POST",
+                beforeSend: function () {
+                    $("#TaRtxt_ContactNamemember").addClass("ui-autocomplete-loading");
+					
+                },
+                data: {
+                    featureClass: "P",
+                    style: "full",
+                    maxRows: 15,
+                    starts_with: request.term,
+                    userid : userid
+                },
+                success: function (data) {  
+                    
+                    $("#TaRtxt_ContactNamemember").removeClass("ui-autocomplete-loading");
+                    if (data.length > 0)
+                    {
+                        response($.map(data, function (item) {
+                            return {
+                                MemberID: item.MemberID,
+                                FirstName: item.FirstName,
+                                LastName: item.LastName,
+                                MemberUID: item.MemberUID                                                               
+                            }
+                        }))
+                    }
+                }
+            })
+        },
+        delay: 500,
+        selectFirst: false, /* Added this line for B_57357, B_63625 */
+        minLength: 3,
+        focus: function (event, ui) {
+            $("#TaRtxt_ContactNamemember").val(ui.item.ContactName);
+            return false;
+        },
+        select: function (event, ui) {
+            $("#TaRtxt_ContactNamemember").removeClass("ui-autocomplete-loading");
+            //selectAutoCompleteValue(ui);
+            $("#TaRtxt_ContactNamememberName").text(ui.item.FirstName + ' ' +ui.item.LastName + ' ['+ ui.item.MemberID +']');
+            
+            var srtSelMember	=	ui.item.MemberUID;
+
+           
+	$.ajax({
+		 url: "index.php?file=med_common_ajax&action=INSERT_MEMBER",
+                    data: 'srtSelMember='+srtSelMember,
+                    async: true,
+                    cache: false,
+                    type: "POST",    
+		beforeSend: function(){			
+		},
+		success: function(data){			
+		}
+	});
+               
+        
+            return false;
+        }
+    })
+            .data("autocomplete")._renderItem = function (ul, item) {
+
+        DisplayItem = '<div><span style="color:#0070A3;">' + item.MemberID + '</span></div>';
+//        if (item.ContactType == 'E' || item.ContactType == 'O')
+//            DisplayItem += '<div>' + item.ContactTypeText + ' (' + item.ContactRefName + ')' + '</div>';
+//        else
+            DisplayItem += '<div>' + item.FirstName + ' ' + item.LastName  + '</div>';
+        return $("<li></li>")
+                .data("item.autocomplete", item)
+                .append('<a style="display:block;">' + DisplayItem + '</a>')
+                .appendTo(ul);
+    };
+}
+
+/**
+ * TO open window of library icon
+ */
+function openLibraryIcon(url)
+{
+        options = 'width=1200px; height=800px;center=1; help=0; status=0; resizable=1; scrollbars=1;';  
+	OpenPopupWindow(url, '', options)
+	return false;
+}
+
+function openJsWindow(url, name, options ){
+	OpenPopupWindow(url, name, options)
+	return false;
+}
+
+function openSurvey(){
+    var strHref	= "index.php?file=meds_survey_question&uid="+ uid + "&SourceFrom=LOGINTOP";
+    openIframePopup(strHref,800,1000);
+    return false;
+}
+
+function openLMC(URL){
+    window.open(URL, "_blank");
+    return false;
+}
+
+function openHelpDocument(url){
+        var w = screen.width * 0.80;
+        var h =screen.height * 0.65;
+  var left = (screen.width/2)-(w/2);
+  var top = (screen.height/2)-(h/2);
+	options = 'width='+w+', height='+h+', center=1, help=0, status=0, resizable=1, scrollbars=1, left='+left+', top='+top+'';  
+	OpenPopupWindow(url + "&site_link="+intCurrLinkId, 'Help me with!', options)
+	return false;
+}
+
+/* B_98395[START] */
+/** 
+ * Purpose: This function is used to make the user name in camel case letters.
+ * @arg str represent user name
+ */
+function capitalizeUserName(str) {
+    var strUserName = str.replace(/\w\S*/g, function(txt) {
+        return txt.charAt(0).toUpperCase() + txt.substr(1).toLowerCase();
+    });
+    $('.camelCaseUserName').text(strUserName);
+}
+/* B_98395[END] */
+
+function showFeedbackPopup() {
+    $.ajax({
+                url: "index.php?file=med_common_ajax&action=CHECK_FEEDBACKPOPUP_CONFIG",
+                data: {'userId' : userid} ,
+                cache: false,
+                async: false,
+                success: function (data) {
+                    if (data?.trim() == '0')
+                    {
+                        window.location='index.php?file=meds_logout&__=' + new Date().getTime();
+                    }
+                    else if (data?.trim() == '1')
+                    {	
+                        openIframePopup('index.php?file=meds_feedback_rating&__=' + new Date().getTime()+'&TB_iframe=true',400,400);
+                    }
+                }
+            });
+}
+
+function logout()
+{   
+    isLogoutClick = true;
+    $(".loadingTop").removeClass("hidden");
+    try {
+        if(!shouldDisableAnalytics)
+        {
+            localStorage.removeItem("showHideScrollAnnouncement");
+            setTimeout(function () { 
+                showFeedbackPopup();
+            }, 500);
+            logClickEvents();
+        }
+        else{
+            localStorage.removeItem("showHideScrollAnnouncement");
+            showFeedbackPopup();
+        }
+    } catch (e) {
+        console.log(e);
+    }
+}
+
+</script>
+
+<script>
+    //document.title = strSelectedTitle;
+ //   var blnLogoutInactiveUserEnabled = '{$blnLogoutInactiveUserEnabled}';
+    var blnSessionExpired = '{$blnSessionExpired}';
+    var intCheckActivityTime = 60000;    // check avtivity log every 1 minutes (1*60*1000 in miliseconds)
+    var timerUserActivity = "";
+    var dotnetBaseUrl = '{$strDotNetWebUrl}';
+    var strGetUrl =  window.location.href ;
+  
+//  var matches = strGetUrl.match(/\d+/g);
+//if (matches == null)
+//{  
+//     /* Changes by DhavalS [START] */
+//    var strHistoryUrl   =   'med_dashboard_frame&link_module=18&link_id=442';
+//   
+//    var strUrlResource  =   '{$strUrlResource}';
+//   
+//    if(strUrlResource!= strHistoryUrl )
+//    {
+//            dhtmlHistory.add(strUrlResource,strUrlResource);
+//    }
+//    else
+//    {
+//         dhtmlHistory.add(strHistoryUrl,strHistoryUrl);
+//    }
+//   
+//    //dhtmlHistory.add('med_dashboard_frame&link_module=18&link_id=442','index.php?file=med_dashboard_frame&link_module=18&link_id=442');
+//   
+//     /* Changes by DhavalS [END] */
+//}
+//    if(strGetUrl.indexOf("file")  == -1)
+//{
+//   
+//   //  dhtmlHistory.add('Dashboard',strGetUrl);
+//}
+</script>
+
+<script type="text/javascript" src="./base/moment.js?v=011420260248"></script>
+<script type="text/javascript" src="./base/moment-timezone-with-data.min.js?v=011420260248"></script>
+<script type="text/javascript" src="./base/med_top.js?v=011420260248"></script>
+
+
+
+<script>
+        var dotnetBaseUrl = 'https://phn.quickcap.net/PHNDotNet/';
+        var strGetUrl =  window.location.href ;
+	var  dbnm='PHN';
+	var uid='14590';
+        var matches = strGetUrl.match(/\d+/g);
+        var strUrlResource  =   'med_dashboard_frame&link_module=76&link_id=967683';  
+if (matches == null)
+{  
+     var strHistoryUrl   =   'med_dashboard_frame&link_module=18&link_id=442';
+          
+    if(strUrlResource!= strHistoryUrl )
+    {
+            dhtmlHistory.add(strUrlResource,'index.php?file='+strUrlResource);
+    }
+    else
+    {
+         dhtmlHistory.add(strHistoryUrl,'index.php?file='+strHistoryUrl);
+    }       
+}
+
+SetVonageSetup();
+
+//log click details 
+function logClickEvents() {
+    try {
+        DotNetSendData();
+        StorePages('CLICK', 'Logout', 'BUTTON', 'Logout', 'Logout');
+        SendData(true);
+    } catch (e) {
+        console.log(e);
+    }
+}
+
+//clear dot net session
+function DotNetSendData() {
+    var src = dotnetBaseUrl + 'SessionDetail.aspx?TrackingDetails=1&dbnm=' + dbnm + '&uid=' + uid;
+    $('<iframe style="display:none" id="DotNetSendData" src="' + src + '"/>').appendTo('body').hide();
+}
+
+//attach click event of top heaer
+function attachClickEventTop() {
+    $(' #topheader input[type=submit],  #topheader input[type=button],   #topheader a:not(:has(img)), #topheader img, #topheader button, input[type=checkbox]').not('.logout-btn').not('a input').each(function() {
+            if ($(this).hasClass("trackAtt")) { } else {
+                $(this).addClass('trackAtt');
+                $(this).click(function () {
+                    btnAnchorClickEvent($(this));
+                });
+            }
+    });
+}
+
+try {
+    if(!shouldDisableAnalytics)
+    {
+        attachClickEventTop();
+        //set time interval for php to send data
+        var intervalSendDataLogOut = 2; //in minute
+        setInterval(function() {
+            SendData();
+        }, intervalSendDataLogOut * 60 * 1000);
+    }
+} catch (e) {
+    console.log(e);
+}
+
+/*ER_16345[START]*/
+function showHideAnnouncement(){
+    if(localStorage.getItem("showHideScrollAnnouncement") == 1)
+    {
+        $('.main-scrollAnnouncement').hide();
+        $(".scroll-annoucment-icon > i").css('color','red');
+        $(".scroll-annoucment-icon > i").attr('title','Show announcement');
+        localStorage.setItem("showHideScrollAnnouncement", 0);
+        if($("#main-navigation2").length > 0)
+        {
+            $(".middle-p-height").css("height", "calc((100vh) - (140px + "+($("#main-navigation2").height() + 8) +"px))");
+            $(".left-p-height").css("height", "calc((100vh) - (160px + "+($("#main-navigation2").height()+  8) +"px))");
+            $(".frame-dot-net-height").css("height", "calc((100vh) - (152px + "+($("#main-navigation2").height()-2) +"px))");
+        }
+    }
+    else{
+        $('.main-scrollAnnouncement').show();
+        $(".scroll-annoucment-icon > i").css('color','#f3720a');
+        $(".scroll-annoucment-icon > i").attr('title','Hide announcement');
+        localStorage.setItem("showHideScrollAnnouncement", 1);
+        if($("#main-navigation2").length > 0)
+        {
+            $(".middle-p-height").css("height", "calc((100vh) - (140px + "+($("#main-navigation2").height()+ $(".main-scrollAnnouncement").height() + 8) +"px))");
+            $(".left-p-height").css("height", "calc((100vh) - (160px + "+($("#main-navigation2").height()+ $(".main-scrollAnnouncement").height() + 8) +"px))");
+            $(".frame-dot-net-height").css("height", "calc((100vh) - (152px + "+($("#main-navigation2").height()+ $(".main-scrollAnnouncement").height() + 8) +"px))");
+        }
+        else{
+            $(".middle-p-height").css("height", "calc((100vh) - (140px + "+($(".main-scrollAnnouncement").height() + 8) +"px))");
+            $(".left-p-height").css("height", "calc((100vh) - (160px + "+($(".main-scrollAnnouncement").height() + 8) +"px))");
+            $(".frame-dot-net-height").css("height", "calc((100vh) - (152px + "+($(".main-scrollAnnouncement").height() + 8) +"px))");
+        }
+    }
+    return;
+}
+/*ER_16345[END]*/
+
+/*ER_16342[START] Phone Vonage System*/
+function SetVonageSetup(){
+    if(store("IsVonageUser")== "1"){              
+        var i = document.createElement('iframe');
+        i.style.display = 'none';
+		//IStart Yogesh Patel   22 Mar 2022 ER ID# 17875 Vonage Phone System
+		i.id = "iframevonage";
+		i.className = "vonagephoneiframe";
+		//IEnd Yogesh Patel   22 Mar 2022 ER ID# 17875 Vonage Phone System
+        i.src = strPortalDotNetAppUrl + "V8/PhoneSystem/Vonage.aspx?uid="+uid+"&dbnm="+dbnm;
+        document.body.appendChild(i);
+        $(".tdVonage").show();
+    }
+}
+
+var popupVonagePHP;
+function openVonage(){   
+    //Logic top open URL
+    let URL = strPortalDotNetAppUrl + "V8/PhoneSystem/ConnectV2.aspx?uid="+uid+"&dbnm="+dbnm;
+    if (popupVonagePHP && !popupVonagePHP.closed) {            
+        if (window.confirm("Another communication has already been initiated. Changes made to data in that window will be lost. \nAre you sure to continue?")) {
+            popupVonagePHP.close();
+            popupVonagePHP = window.open(URL, "_blank", "width=350px,height=500px,left=3000px,top="+screen.height);
+        }
+    }
+    else {
+        popupVonagePHP = window.open(URL, "_blank", "width=350px,height=500px,left=3000px,top="+screen.height);  
+    }
+    popupVonagePHP.focus();
+	return false;
+}
+/*ER_16342[END] Phone Vonage System*/
+
+    
+    </script>
+</td>
+        </tr>
+        <tr>
+            <td valign="top">
+				<table width="100%" border="0" align="center" cellpadding="0" cellspacing="0">
+                    <tbody><tr>
+                        <td align="left" valign="top">
+							<table width="100%" border="0" cellspacing="0" cellpadding="0">
+                                <tbody><tr>
+                                    <td width="5" align="left" valign="top" class="wrap-left"><!--img src="images/wrap-left.png" width="5" height="1" /--></td>
+                                    <td align="left" valign="top" class="h-container">
+					<table width="99%" border="0" cellspacing="0" cellpadding="0" align="center">
+                                            <tbody><tr>
+                                                <td width="181" align="left" id="lnks" valign="top" style="float:left;">
+                                                   
+                                                            
+                                                        
+                                                    
+							
+<style type="text/css">
+
+
+.simplebar-scrollbar {
+    right: 19px;        
+}
+
+.showChildSiteLink{
+    display: block !important;
+}
+
+
+</style>
+
+
+<input type="hidden" name="hdnsiteLinkParentID" id="hdnsiteLinkParentID" value="" style="">
+<table width="181" border="0" align="center" cellpadding="0" cellspacing="0" style="float:left;">
+    <tbody><tr id="gen_menu_search_tr" style="">
+        <td align="left">
+            <input type="text" name="gen_menu_search" id="gen_menu_search" class="comn-input" autocomplete="off" value="" placeholder="" style="width: 179px; text-indent: 15px;" oninput="searchLinks(this.value)">
+			<input type="button" class="comn-input menuorder" title="Customize Menu Order" style="padding-left: 13px; margin-left: -18px; background: url(&quot;images/reorder.png&quot;) 0px 0px / 13px no-repeat scroll; margin-bottom: -4px; height: 17px; cursor: pointer;"></td>
+    </tr>
+    <tr id="subMenubar" data-simplebar="init" class="left-p-height"><div class="simplebar-track vertical" style="visibility: hidden;"><div class="simplebar-scrollbar" style="visibility: visible; top: 0px; height: 632px;"></div></div><div class="simplebar-track horizontal" style="visibility: hidden;"><div class="simplebar-scrollbar"></div></div><div class="simplebar-scroll-content" style="padding-right: 15px; margin-bottom: -30px;"><div class="simplebar-content" style="padding-bottom: 15px; margin-right: -15px;">
+        <td class="lb-content">		
+			<div class="accordion" tabindex="0">
+
+									                                            <h3 id="section_title_76" class="thread-title accordion_header">Provider Bulletin</h3>
+                                        					<div id="section_content_76" class="thread-content" style="display: none;">
+						<ul class="lb-nav">
+															
+																																	
+																																	
+																		
+																
+								<li id="li_967683">
+																			<!-- <a class="a_76" href="index.php?file=med_dashboard_frame&amp;link_module=76&amp;link_id=967683" >
+											UNITED THERAPY NETWORK(UTN)  - CAP
+										</a> -->
+                                                                                
+                                                                          
+                                                                            
+																																			<a class="a_76 site-link" title="UNITED THERAPY NETWORK(UTN)  - CAP" onclick="getAjaxPageData(event, 'index.php?file=med_dashboard_frame&amp;link_module=76&amp;link_id=967683')" href="index.php?file=med_dashboard_frame&amp;link_module=76&amp;link_id=967683&amp;isAjax=no&amp;__=1784549012">
+													UNITED THERAPY NETWORK(UTN)  - CAP
+												</a>
+											                                                                            
+											<!-- <a class="a_76 site-link" title="UNITED THERAPY NETWORK(UTN)  - CAP" onclick="getAjaxPageData(event, 'index.php?file=med_dashboard_frame&amp;link_module=76&amp;link_id=967683')" href="index.php?file=med_dashboard_frame&amp;link_module=76&amp;link_id=967683&isAjax=no"> -->
+												<!-- UNITED THERAPY NETWORK(UTN)  - CAP -->
+											<!-- </a> -->
+                                                                                
+                                                                             
+																		
+									 
+									
+								</li>
+															
+																																	
+																																	
+																		
+																
+								<li id="li_966440">
+																			<!-- <a class="a_76" href="index.php?file=med_dashboard_frame&amp;link_module=76&amp;link_id=966440" >
+											FAQs on Proposition 56
+										</a> -->
+                                                                                
+                                                                          
+                                                                            
+																																			<a class="a_76 site-link" title="FAQs on Proposition 56" onclick="getAjaxPageData(event, 'index.php?file=med_dashboard_frame&amp;link_module=76&amp;link_id=966440')" href="index.php?file=med_dashboard_frame&amp;link_module=76&amp;link_id=966440&amp;isAjax=no&amp;__=1784549012">
+													FAQs on Proposition 56
+												</a>
+											                                                                            
+											<!-- <a class="a_76 site-link" title="FAQs on Proposition 56" onclick="getAjaxPageData(event, 'index.php?file=med_dashboard_frame&amp;link_module=76&amp;link_id=966440')" href="index.php?file=med_dashboard_frame&amp;link_module=76&amp;link_id=966440&isAjax=no"> -->
+												<!-- FAQs on Proposition 56 -->
+											<!-- </a> -->
+                                                                                
+                                                                             
+																		
+									 
+									
+								</li>
+															
+																																	
+																																	
+																		
+																
+								<li id="li_967682">
+																			<!-- <a class="a_76" href="index.php?file=med_dashboard_frame&amp;link_module=76&amp;link_id=967682" >
+											Mandatory Biennial PCP Training
+										</a> -->
+                                                                                
+                                                                          
+                                                                            
+																																			<a class="a_76 site-link" title="Mandatory Biennial PCP Training" onclick="getAjaxPageData(event, 'index.php?file=med_dashboard_frame&amp;link_module=76&amp;link_id=967682')" href="index.php?file=med_dashboard_frame&amp;link_module=76&amp;link_id=967682&amp;isAjax=no&amp;__=1784549012">
+													Mandatory Biennial PCP Training
+												</a>
+											                                                                            
+											<!-- <a class="a_76 site-link" title="Mandatory Biennial PCP Training" onclick="getAjaxPageData(event, 'index.php?file=med_dashboard_frame&amp;link_module=76&amp;link_id=967682')" href="index.php?file=med_dashboard_frame&amp;link_module=76&amp;link_id=967682&isAjax=no"> -->
+												<!-- Mandatory Biennial PCP Training -->
+											<!-- </a> -->
+                                                                                
+                                                                             
+																		
+									 
+									
+								</li>
+															
+																																	
+																																	
+																		
+																
+								<li id="li_966441">
+																			<!-- <a class="a_76" href="index.php?file=med_dashboard_frame&amp;link_module=76&amp;link_id=966441" >
+											Flue Vaccine Access to Pharmacy
+										</a> -->
+                                                                                
+                                                                          
+                                                                            
+																																			<a class="a_76 site-link" title="Flue Vaccine Access to Pharmacy" onclick="getAjaxPageData(event, 'index.php?file=med_dashboard_frame&amp;link_module=76&amp;link_id=966441')" href="index.php?file=med_dashboard_frame&amp;link_module=76&amp;link_id=966441&amp;isAjax=no&amp;__=1784549012">
+													Flue Vaccine Access to Pharmacy
+												</a>
+											                                                                            
+											<!-- <a class="a_76 site-link" title="Flue Vaccine Access to Pharmacy" onclick="getAjaxPageData(event, 'index.php?file=med_dashboard_frame&amp;link_module=76&amp;link_id=966441')" href="index.php?file=med_dashboard_frame&amp;link_module=76&amp;link_id=966441&isAjax=no"> -->
+												<!-- Flue Vaccine Access to Pharmacy -->
+											<!-- </a> -->
+                                                                                
+                                                                             
+																		
+									 
+									
+								</li>
+															
+																																	
+																																	
+																		
+																
+								<li id="li_967665">
+																			<!-- <a class="a_76" href="index.php?file=med_dashboard_frame&amp;link_module=76&amp;link_id=967665" >
+											Access Standards Appointment Availability Behavioral Health Providers
+										</a> -->
+                                                                                
+                                                                          
+                                                                            
+																																			<a class="a_76 site-link" title="Access Standards Appointment Availability Behavioral Health Providers" onclick="getAjaxPageData(event, 'index.php?file=med_dashboard_frame&amp;link_module=76&amp;link_id=967665')" href="index.php?file=med_dashboard_frame&amp;link_module=76&amp;link_id=967665&amp;isAjax=no&amp;__=1784549012">
+													Access Standards Appointment Availability Behavioral Health Providers
+												</a>
+											                                                                            
+											<!-- <a class="a_76 site-link" title="Access Standards Appointment Availability Behavioral Health Providers" onclick="getAjaxPageData(event, 'index.php?file=med_dashboard_frame&amp;link_module=76&amp;link_id=967665')" href="index.php?file=med_dashboard_frame&amp;link_module=76&amp;link_id=967665&isAjax=no"> -->
+												<!-- Access Standards Appointment Availability Behavioral Health Providers -->
+											<!-- </a> -->
+                                                                                
+                                                                             
+																		
+									 
+									
+								</li>
+															
+																																	
+																																	
+																		
+																
+								<li id="li_967666">
+																			<!-- <a class="a_76" href="index.php?file=med_dashboard_frame&amp;link_module=76&amp;link_id=967666" >
+											Access Standards Appointment Availability for PCPs OBGYN
+										</a> -->
+                                                                                
+                                                                          
+                                                                            
+																																			<a class="a_76 site-link" title="Access Standards Appointment Availability for PCPs OBGYN" onclick="getAjaxPageData(event, 'index.php?file=med_dashboard_frame&amp;link_module=76&amp;link_id=967666')" href="index.php?file=med_dashboard_frame&amp;link_module=76&amp;link_id=967666&amp;isAjax=no&amp;__=1784549012">
+													Access Standards Appointment Availability for PCPs OBGYN
+												</a>
+											                                                                            
+											<!-- <a class="a_76 site-link" title="Access Standards Appointment Availability for PCPs OBGYN" onclick="getAjaxPageData(event, 'index.php?file=med_dashboard_frame&amp;link_module=76&amp;link_id=967666')" href="index.php?file=med_dashboard_frame&amp;link_module=76&amp;link_id=967666&isAjax=no"> -->
+												<!-- Access Standards Appointment Availability for PCPs OBGYN -->
+											<!-- </a> -->
+                                                                                
+                                                                             
+																		
+									 
+									
+								</li>
+															
+																																	
+																																	
+																		
+																
+								<li id="li_967667">
+																			<!-- <a class="a_76" href="index.php?file=med_dashboard_frame&amp;link_module=76&amp;link_id=967667" >
+											Access Standards Appointment Availability for Specialists Care
+										</a> -->
+                                                                                
+                                                                          
+                                                                            
+																																			<a class="a_76 site-link" title="Access Standards Appointment Availability for Specialists Care" onclick="getAjaxPageData(event, 'index.php?file=med_dashboard_frame&amp;link_module=76&amp;link_id=967667')" href="index.php?file=med_dashboard_frame&amp;link_module=76&amp;link_id=967667&amp;isAjax=no&amp;__=1784549012">
+													Access Standards Appointment Availability for Specialists Care
+												</a>
+											                                                                            
+											<!-- <a class="a_76 site-link" title="Access Standards Appointment Availability for Specialists Care" onclick="getAjaxPageData(event, 'index.php?file=med_dashboard_frame&amp;link_module=76&amp;link_id=967667')" href="index.php?file=med_dashboard_frame&amp;link_module=76&amp;link_id=967667&isAjax=no"> -->
+												<!-- Access Standards Appointment Availability for Specialists Care -->
+											<!-- </a> -->
+                                                                                
+                                                                             
+																		
+									 
+									
+								</li>
+													</ul>
+					</div>
+
+									                                            <h3 id="section_title_23" class="thread-title accordion_header">Authorization/Referral</h3>
+                                        					<div id="section_content_23" class="thread-content" style="display: none;">
+						<ul class="lb-nav">
+															
+																																	
+																																	
+																		
+																
+								<li id="li_966435">
+																			<!-- <a class="a_23" href="index.php?file=med_dashboard_frame&amp;link_module=23&amp;link_id=966435" >
+											Auth/Referral Submission
+										</a> -->
+                                                                                
+                                                                          
+                                                                            
+																																			<a class="a_23 site-link" title="Auth/Referral Submission" onclick="getAjaxPageData(event, 'index.php?file=med_dashboard_frame&amp;link_module=23&amp;link_id=966435')" href="index.php?file=med_dashboard_frame&amp;link_module=23&amp;link_id=966435&amp;isAjax=no&amp;__=1784549012">
+													Auth/Referral Submission
+												</a>
+											                                                                            
+											<!-- <a class="a_23 site-link" title="Auth/Referral Submission" onclick="getAjaxPageData(event, 'index.php?file=med_dashboard_frame&amp;link_module=23&amp;link_id=966435')" href="index.php?file=med_dashboard_frame&amp;link_module=23&amp;link_id=966435&isAjax=no"> -->
+												<!-- Auth/Referral Submission -->
+											<!-- </a> -->
+                                                                                
+                                                                             
+																		
+									 
+									
+								</li>
+															
+																																	
+																																	
+																		
+																
+								<li id="li_135">
+																			<!-- <a class="a_23" href="index.php?file=med_dashboard_frame&amp;link_module=23&amp;link_id=135" >
+											View/Search Authorization
+										</a> -->
+                                                                                
+                                                                          
+                                                                            
+																																			<a class="a_23 site-link" title="View/Search Authorization" onclick="getAjaxPageData(event, 'index.php?file=med_dashboard_frame&amp;link_module=23&amp;link_id=135')" href="index.php?file=med_dashboard_frame&amp;link_module=23&amp;link_id=135&amp;isAjax=no&amp;__=1784549012">
+													View/Search Authorization
+												</a>
+											                                                                            
+											<!-- <a class="a_23 site-link" title="View/Search Authorization" onclick="getAjaxPageData(event, 'index.php?file=med_dashboard_frame&amp;link_module=23&amp;link_id=135')" href="index.php?file=med_dashboard_frame&amp;link_module=23&amp;link_id=135&isAjax=no"> -->
+												<!-- View/Search Authorization -->
+											<!-- </a> -->
+                                                                                
+                                                                             
+																		
+									 
+									
+								</li>
+													</ul>
+					</div>
+
+									                                            <h3 id="section_title_35" class="thread-title accordion_header">Capitation</h3>
+                                        					<div id="section_content_35" class="thread-content" style="display: none;">
+						<ul class="lb-nav">
+															
+																																	
+																																	
+																		
+																
+								<li id="li_407">
+																			<!-- <a class="a_35" href="index.php?file=med_dashboard_frame&amp;link_module=35&amp;link_id=407" >
+											Explanation of Benefits
+										</a> -->
+                                                                                
+                                                                          
+                                                                            
+																																			<a class="a_35 site-link" title="Explanation of Benefits" onclick="getAjaxPageData(event, 'index.php?file=med_dashboard_frame&amp;link_module=35&amp;link_id=407')" href="index.php?file=med_dashboard_frame&amp;link_module=35&amp;link_id=407&amp;isAjax=no&amp;__=1784549012">
+													Explanation of Benefits
+												</a>
+											                                                                            
+											<!-- <a class="a_35 site-link" title="Explanation of Benefits" onclick="getAjaxPageData(event, 'index.php?file=med_dashboard_frame&amp;link_module=35&amp;link_id=407')" href="index.php?file=med_dashboard_frame&amp;link_module=35&amp;link_id=407&isAjax=no"> -->
+												<!-- Explanation of Benefits -->
+											<!-- </a> -->
+                                                                                
+                                                                             
+																		
+									 
+									
+								</li>
+													</ul>
+					</div>
+
+									                                            <h3 id="section_title_25" class="thread-title accordion_header  active">Claims</h3>
+                                        					<div id="section_content_25" class="thread-content" style="display: block;">
+						<ul class="lb-nav">
+															
+																																	
+																																	
+																		
+																
+								<li id="li_521">
+																			<!-- <a class="a_25" href="index.php?file=med_dashboard_frame&amp;link_module=25&amp;link_id=521" >
+											Provider - Claim Submission
+										</a> -->
+                                                                                
+                                                                          
+                                                                            
+																																			<a class="a_25 site-link" title="Provider - Claim Submission" onclick="getAjaxPageData(event, 'index.php?file=med_dashboard_frame&amp;link_module=25&amp;link_id=521')" href="index.php?file=med_dashboard_frame&amp;link_module=25&amp;link_id=521&amp;isAjax=no&amp;__=1784549012">
+													Provider - Claim Submission
+												</a>
+											                                                                            
+											<!-- <a class="a_25 site-link" title="Provider - Claim Submission" onclick="getAjaxPageData(event, 'index.php?file=med_dashboard_frame&amp;link_module=25&amp;link_id=521')" href="index.php?file=med_dashboard_frame&amp;link_module=25&amp;link_id=521&isAjax=no"> -->
+												<!-- Provider - Claim Submission -->
+											<!-- </a> -->
+                                                                                
+                                                                             
+																		
+									 
+									
+								</li>
+															
+																																	
+																																	
+																		
+																
+								<li id="li_144">
+																			<!-- <a class="a_25" href="index.php?file=med_dashboard_frame&amp;link_module=25&amp;link_id=144" >
+											Claims Search/Status
+										</a> -->
+                                                                                
+                                                                          
+                                                                            
+																																			<a class="a_25 site-link selected-sitelink" title="Claims Search/Status" onclick="getAjaxPageData(event, 'index.php?file=med_dashboard_frame&amp;link_module=25&amp;link_id=144')" href="index.php?file=med_dashboard_frame&amp;link_module=25&amp;link_id=144&amp;isAjax=no&amp;__=1784549012">
+													Claims Search/Status
+												</a>
+											                                                                            
+											<!-- <a class="a_25 site-link" title="Claims Search/Status" onclick="getAjaxPageData(event, 'index.php?file=med_dashboard_frame&amp;link_module=25&amp;link_id=144')" href="index.php?file=med_dashboard_frame&amp;link_module=25&amp;link_id=144&isAjax=no"> -->
+												<!-- Claims Search/Status -->
+											<!-- </a> -->
+                                                                                
+                                                                             
+																		
+									 
+									
+								</li>
+													</ul>
+					</div>
+
+									                                            <h3 id="section_title_52" class="thread-title accordion_header">Communication</h3>
+                                        					<div id="section_content_52" class="thread-content" style="display: none;">
+						<ul class="lb-nav">
+															
+																																	
+																																	
+																		
+																
+								<li id="li_684">
+																			<!-- <a class="a_52" href="index.php?file=med_dashboard_frame&amp;link_module=52&amp;link_id=684" >
+											Communication
+										</a> -->
+                                                                                
+                                                                          
+                                                                            
+																																			<a class="a_52 site-link" title="Communication" onclick="getAjaxPageData(event, 'index.php?file=med_dashboard_frame&amp;link_module=52&amp;link_id=684')" href="index.php?file=med_dashboard_frame&amp;link_module=52&amp;link_id=684&amp;isAjax=no&amp;__=1784549012">
+													Communication
+												</a>
+											                                                                            
+											<!-- <a class="a_52 site-link" title="Communication" onclick="getAjaxPageData(event, 'index.php?file=med_dashboard_frame&amp;link_module=52&amp;link_id=684')" href="index.php?file=med_dashboard_frame&amp;link_module=52&amp;link_id=684&isAjax=no"> -->
+												<!-- Communication -->
+											<!-- </a> -->
+                                                                                
+                                                                             
+																		
+									 
+									
+								</li>
+													</ul>
+					</div>
+
+									                                            <h3 id="section_title_26" class="thread-title accordion_header">Eligibility</h3>
+                                        					<div id="section_content_26" class="thread-content" style="display: none;">
+						<ul class="lb-nav">
+															
+																																	
+																																	
+																		
+																
+								<li id="li_148">
+																			<!-- <a class="a_26" href="index.php?file=med_dashboard_frame&amp;link_module=26&amp;link_id=148" >
+											Report Eligibility Discrepancy
+										</a> -->
+                                                                                
+                                                                          
+                                                                            
+																																			<a class="a_26 site-link" title="Report Eligibility Discrepancy" onclick="getAjaxPageData(event, 'index.php?file=med_dashboard_frame&amp;link_module=26&amp;link_id=148')" href="index.php?file=med_dashboard_frame&amp;link_module=26&amp;link_id=148&amp;isAjax=no&amp;__=1784549012">
+													Report Eligibility Discrepancy
+												</a>
+											                                                                            
+											<!-- <a class="a_26 site-link" title="Report Eligibility Discrepancy" onclick="getAjaxPageData(event, 'index.php?file=med_dashboard_frame&amp;link_module=26&amp;link_id=148')" href="index.php?file=med_dashboard_frame&amp;link_module=26&amp;link_id=148&isAjax=no"> -->
+												<!-- Report Eligibility Discrepancy -->
+											<!-- </a> -->
+                                                                                
+                                                                             
+																		
+									 
+									
+								</li>
+															
+																																	
+																																	
+																		
+																
+								<li id="li_106">
+																			<!-- <a class="a_26" href="index.php?file=med_dashboard_frame&amp;link_module=26&amp;link_id=106" >
+											Member Verification
+										</a> -->
+                                                                                
+                                                                          
+                                                                            
+																																			<a class="a_26 site-link" title="Member Verification" onclick="getAjaxPageData(event, 'index.php?file=med_dashboard_frame&amp;link_module=26&amp;link_id=106')" href="index.php?file=med_dashboard_frame&amp;link_module=26&amp;link_id=106&amp;isAjax=no&amp;__=1784549012">
+													Member Verification
+												</a>
+											                                                                            
+											<!-- <a class="a_26 site-link" title="Member Verification" onclick="getAjaxPageData(event, 'index.php?file=med_dashboard_frame&amp;link_module=26&amp;link_id=106')" href="index.php?file=med_dashboard_frame&amp;link_module=26&amp;link_id=106&isAjax=no"> -->
+												<!-- Member Verification -->
+											<!-- </a> -->
+                                                                                
+                                                                             
+																		
+									 
+									
+								</li>
+													</ul>
+					</div>
+
+									                                            <h3 id="section_title_91" class="thread-title accordion_header">Documents</h3>
+                                        					<div id="section_content_91" class="thread-content" style="display: none;">
+						<ul class="lb-nav">
+															
+																																	
+																																	
+																		
+																
+								<li id="li_967681">
+																			<!-- <a class="a_91" href="index.php?file=med_dashboard_frame&amp;link_module=91&amp;link_id=967681" >
+											Carve Out
+										</a> -->
+                                                                                
+                                                                          
+                                                                            
+																																			<a class="a_91 site-link" title="Carve Out" onclick="getAjaxPageData(event, 'index.php?file=med_dashboard_frame&amp;link_module=91&amp;link_id=967681')" href="index.php?file=med_dashboard_frame&amp;link_module=91&amp;link_id=967681&amp;isAjax=no&amp;__=1784549012">
+													Carve Out
+												</a>
+											                                                                            
+											<!-- <a class="a_91 site-link" title="Carve Out" onclick="getAjaxPageData(event, 'index.php?file=med_dashboard_frame&amp;link_module=91&amp;link_id=967681')" href="index.php?file=med_dashboard_frame&amp;link_module=91&amp;link_id=967681&isAjax=no"> -->
+												<!-- Carve Out -->
+											<!-- </a> -->
+                                                                                
+                                                                             
+																		
+									 
+									
+								</li>
+															
+																																	
+																																	
+																		
+																
+								<li id="li_967684">
+																			<!-- <a class="a_91" href="index.php?file=med_dashboard_frame&amp;link_module=91&amp;link_id=967684" >
+											PHN MATRIX 2026
+										</a> -->
+                                                                                
+                                                                          
+                                                                            
+																																			<a class="a_91 site-link" title="PHN MATRIX 2026" onclick="getAjaxPageData(event, 'index.php?file=med_dashboard_frame&amp;link_module=91&amp;link_id=967684')" href="index.php?file=med_dashboard_frame&amp;link_module=91&amp;link_id=967684&amp;isAjax=no&amp;__=1784549012">
+													PHN MATRIX 2026
+												</a>
+											                                                                            
+											<!-- <a class="a_91 site-link" title="PHN MATRIX 2026" onclick="getAjaxPageData(event, 'index.php?file=med_dashboard_frame&amp;link_module=91&amp;link_id=967684')" href="index.php?file=med_dashboard_frame&amp;link_module=91&amp;link_id=967684&isAjax=no"> -->
+												<!-- PHN MATRIX 2026 -->
+											<!-- </a> -->
+                                                                                
+                                                                             
+																		
+									 
+									
+								</li>
+															
+																																	
+																																	
+																		
+																
+								<li id="li_967685">
+																			<!-- <a class="a_91" href="index.php?file=med_dashboard_frame&amp;link_module=91&amp;link_id=967685" >
+											S&G Common Item Guide
+										</a> -->
+                                                                                
+                                                                          
+                                                                            
+																																			<a class="a_91 site-link" title="S&amp;G Common Item Guide" onclick="getAjaxPageData(event, 'index.php?file=med_dashboard_frame&amp;link_module=91&amp;link_id=967685')" href="index.php?file=med_dashboard_frame&amp;link_module=91&amp;link_id=967685&amp;isAjax=no&amp;__=1784549012">
+													S&amp;G Common Item Guide
+												</a>
+											                                                                            
+											<!-- <a class="a_91 site-link" title="S&G Common Item Guide" onclick="getAjaxPageData(event, 'index.php?file=med_dashboard_frame&amp;link_module=91&amp;link_id=967685')" href="index.php?file=med_dashboard_frame&amp;link_module=91&amp;link_id=967685&isAjax=no"> -->
+												<!-- S&G Common Item Guide -->
+											<!-- </a> -->
+                                                                                
+                                                                             
+																		
+									 
+									
+								</li>
+													</ul>
+					</div>
+
+									                                            <h3 id="section_title_31" class="thread-title accordion_header">Information</h3>
+                                        					<div id="section_content_31" class="thread-content" style="display: none;">
+						<ul class="lb-nav">
+															
+																																	
+																																	
+																		
+																
+								<li id="li_209">
+																			<!-- <a class="a_31" href="index.php?file=med_dashboard_frame&amp;link_module=31&amp;link_id=209" >
+											Code Reference - CPT<sup>®</sup>
+										</a> -->
+                                                                                
+                                                                          
+                                                                            
+																																			<a class="a_31 site-link" title="Code Reference - CPT&lt;sup&gt;®&lt;/sup&gt;" onclick="getAjaxPageData(event, 'index.php?file=med_dashboard_frame&amp;link_module=31&amp;link_id=209')" href="index.php?file=med_dashboard_frame&amp;link_module=31&amp;link_id=209&amp;isAjax=no&amp;__=1784549012">
+													Code Reference - CPT<sup>®</sup>
+												</a>
+											                                                                            
+											<!-- <a class="a_31 site-link" title="Code Reference - CPT<sup>®</sup>" onclick="getAjaxPageData(event, 'index.php?file=med_dashboard_frame&amp;link_module=31&amp;link_id=209')" href="index.php?file=med_dashboard_frame&amp;link_module=31&amp;link_id=209&isAjax=no"> -->
+												<!-- Code Reference - CPT<sup>®</sup> -->
+											<!-- </a> -->
+                                                                                
+                                                                             
+																		
+									 
+									
+								</li>
+															
+																																	
+																																	
+																		
+																
+								<li id="li_211">
+																			<!-- <a class="a_31" href="index.php?file=med_dashboard_frame&amp;link_module=31&amp;link_id=211" >
+											Code Reference - ICD
+										</a> -->
+                                                                                
+                                                                          
+                                                                            
+																																			<a class="a_31 site-link" title="Code Reference - ICD" onclick="getAjaxPageData(event, 'index.php?file=med_dashboard_frame&amp;link_module=31&amp;link_id=211')" href="index.php?file=med_dashboard_frame&amp;link_module=31&amp;link_id=211&amp;isAjax=no&amp;__=1784549012">
+													Code Reference - ICD
+												</a>
+											                                                                            
+											<!-- <a class="a_31 site-link" title="Code Reference - ICD" onclick="getAjaxPageData(event, 'index.php?file=med_dashboard_frame&amp;link_module=31&amp;link_id=211')" href="index.php?file=med_dashboard_frame&amp;link_module=31&amp;link_id=211&isAjax=no"> -->
+												<!-- Code Reference - ICD -->
+											<!-- </a> -->
+                                                                                
+                                                                             
+																		
+									 
+									
+								</li>
+															
+																																	
+																																	
+																		
+																
+								<li id="li_210">
+																			<!-- <a class="a_31" href="index.php?file=med_dashboard_frame&amp;link_module=31&amp;link_id=210" >
+											Code Reference - Modifier
+										</a> -->
+                                                                                
+                                                                          
+                                                                            
+																																			<a class="a_31 site-link" title="Code Reference - Modifier" onclick="getAjaxPageData(event, 'index.php?file=med_dashboard_frame&amp;link_module=31&amp;link_id=210')" href="index.php?file=med_dashboard_frame&amp;link_module=31&amp;link_id=210&amp;isAjax=no&amp;__=1784549012">
+													Code Reference - Modifier
+												</a>
+											                                                                            
+											<!-- <a class="a_31 site-link" title="Code Reference - Modifier" onclick="getAjaxPageData(event, 'index.php?file=med_dashboard_frame&amp;link_module=31&amp;link_id=210')" href="index.php?file=med_dashboard_frame&amp;link_module=31&amp;link_id=210&isAjax=no"> -->
+												<!-- Code Reference - Modifier -->
+											<!-- </a> -->
+                                                                                
+                                                                             
+																		
+									 
+									
+								</li>
+															
+																																	
+																																	
+																		
+																
+								<li id="li_11010">
+																			<!-- <a class="a_31" href="index.php?file=med_dashboard_frame&amp;link_module=31&amp;link_id=11010" >
+											Provider Search - External
+										</a> -->
+                                                                                
+                                                                          
+                                                                            
+																																			<a class="a_31 site-link" title="Provider Search - External" onclick="getAjaxPageData(event, 'index.php?file=med_dashboard_frame&amp;link_module=31&amp;link_id=11010')" href="index.php?file=med_dashboard_frame&amp;link_module=31&amp;link_id=11010&amp;isAjax=no&amp;__=1784549012">
+													Provider Search - External
+												</a>
+											                                                                            
+											<!-- <a class="a_31 site-link" title="Provider Search - External" onclick="getAjaxPageData(event, 'index.php?file=med_dashboard_frame&amp;link_module=31&amp;link_id=11010')" href="index.php?file=med_dashboard_frame&amp;link_module=31&amp;link_id=11010&isAjax=no"> -->
+												<!-- Provider Search - External -->
+											<!-- </a> -->
+                                                                                
+                                                                             
+																		
+									 
+									
+								</li>
+													</ul>
+					</div>
+
+									                                            <h3 id="section_title_77" class="thread-title accordion_header">Radnet(Radiology)</h3>
+                                        					<div id="section_content_77" class="thread-content" style="display: none;">
+						<ul class="lb-nav">
+															
+																																	
+																																	
+																		
+																
+								<li id="li_966861">
+																			<!-- <a class="a_77" href="index.php?file=med_dashboard_frame&amp;link_module=77&amp;link_id=966861" >
+											RADNET AUTH FORM - Updated 2021
+										</a> -->
+                                                                                
+                                                                          
+                                                                            
+																																			<a class="a_77 site-link" title="RADNET AUTH FORM - Updated 2021" onclick="getAjaxPageData(event, 'index.php?file=med_dashboard_frame&amp;link_module=77&amp;link_id=966861')" href="index.php?file=med_dashboard_frame&amp;link_module=77&amp;link_id=966861&amp;isAjax=no&amp;__=1784549012">
+													RADNET AUTH FORM - Updated 2021
+												</a>
+											                                                                            
+											<!-- <a class="a_77 site-link" title="RADNET AUTH FORM - Updated 2021" onclick="getAjaxPageData(event, 'index.php?file=med_dashboard_frame&amp;link_module=77&amp;link_id=966861')" href="index.php?file=med_dashboard_frame&amp;link_module=77&amp;link_id=966861&isAjax=no"> -->
+												<!-- RADNET AUTH FORM - Updated 2021 -->
+											<!-- </a> -->
+                                                                                
+                                                                             
+																		
+									 
+									
+								</li>
+													</ul>
+					</div>
+
+									                                            <h3 id="section_title_47" class="thread-title accordion_header">Payment Processing</h3>
+                                        					<div id="section_content_47" class="thread-content" style="display: none;">
+						<ul class="lb-nav">
+															
+																																	
+																																	
+																		
+																
+								<li id="li_502">
+																			<!-- <a class="a_47" href="index.php?file=med_dashboard_frame&amp;link_module=47&amp;link_id=502" >
+											Claims EOB
+										</a> -->
+                                                                                
+                                                                          
+                                                                            
+																																			<a class="a_47 site-link" title="Claims EOB" onclick="getAjaxPageData(event, 'index.php?file=med_dashboard_frame&amp;link_module=47&amp;link_id=502')" href="index.php?file=med_dashboard_frame&amp;link_module=47&amp;link_id=502&amp;isAjax=no&amp;__=1784549012">
+													Claims EOB
+												</a>
+											                                                                            
+											<!-- <a class="a_47 site-link" title="Claims EOB" onclick="getAjaxPageData(event, 'index.php?file=med_dashboard_frame&amp;link_module=47&amp;link_id=502')" href="index.php?file=med_dashboard_frame&amp;link_module=47&amp;link_id=502&isAjax=no"> -->
+												<!-- Claims EOB -->
+											<!-- </a> -->
+                                                                                
+                                                                             
+																		
+									 
+									
+								</li>
+													</ul>
+					</div>
+
+									                                            <h3 id="section_title_14" class="thread-title accordion_header">Reports</h3>
+                                        					<div id="section_content_14" class="thread-content" style="display: none;">
+						<ul class="lb-nav">
+															
+																																	
+																																	
+																		
+																
+								<li id="li_633">
+																			<!-- <a class="a_14" href="index.php?file=med_dashboard_frame&amp;link_module=14&amp;link_id=633" >
+											PCP Reports
+										</a> -->
+                                                                                
+                                                                          
+                                                                            
+																																			<a class="a_14 site-link" title="PCP Reports" onclick="getAjaxPageData(event, 'index.php?file=med_dashboard_frame&amp;link_module=14&amp;link_id=633')" href="index.php?file=med_dashboard_frame&amp;link_module=14&amp;link_id=633&amp;isAjax=no&amp;__=1784549012">
+													PCP Reports
+												</a>
+											                                                                            
+											<!-- <a class="a_14 site-link" title="PCP Reports" onclick="getAjaxPageData(event, 'index.php?file=med_dashboard_frame&amp;link_module=14&amp;link_id=633')" href="index.php?file=med_dashboard_frame&amp;link_module=14&amp;link_id=633&isAjax=no"> -->
+												<!-- PCP Reports -->
+											<!-- </a> -->
+                                                                                
+                                                                             
+																		
+									 
+									
+								</li>
+													</ul>
+					</div>
+
+									                                            <h3 id="section_title_50" class="thread-title accordion_header">Training Videos</h3>
+                                        					<div id="section_content_50" class="thread-content" style="display: none;">
+						<ul class="lb-nav">
+															
+																																	
+																																	
+																		
+																
+								<li id="li_966537">
+																			<!-- <a class="a_50" href="index.php?file=med_dashboard_frame&amp;link_module=50&amp;link_id=966537" >
+											How to submit an authorization
+										</a> -->
+                                                                                
+                                                                          
+                                                                            
+																																			<a class="a_50 site-link" title="How to submit an authorization" onclick="getAjaxPageData(event, 'index.php?file=med_dashboard_frame&amp;link_module=50&amp;link_id=966537')" href="index.php?file=med_dashboard_frame&amp;link_module=50&amp;link_id=966537&amp;isAjax=no&amp;__=1784549012">
+													How to submit an authorization
+												</a>
+											                                                                            
+											<!-- <a class="a_50 site-link" title="How to submit an authorization" onclick="getAjaxPageData(event, 'index.php?file=med_dashboard_frame&amp;link_module=50&amp;link_id=966537')" href="index.php?file=med_dashboard_frame&amp;link_module=50&amp;link_id=966537&isAjax=no"> -->
+												<!-- How to submit an authorization -->
+											<!-- </a> -->
+                                                                                
+                                                                             
+																		
+									 
+									
+								</li>
+															
+																																	
+																																	
+																		
+																
+								<li id="li_966538">
+																			<!-- <a class="a_50" href="index.php?file=med_dashboard_frame&amp;link_module=50&amp;link_id=966538" >
+											How to check the status of an authorization
+										</a> -->
+                                                                                
+                                                                          
+                                                                            
+																																			<a class="a_50 site-link" title="How to check the status of an authorization" onclick="getAjaxPageData(event, 'index.php?file=med_dashboard_frame&amp;link_module=50&amp;link_id=966538')" href="index.php?file=med_dashboard_frame&amp;link_module=50&amp;link_id=966538&amp;isAjax=no&amp;__=1784549012">
+													How to check the status of an authorization
+												</a>
+											                                                                            
+											<!-- <a class="a_50 site-link" title="How to check the status of an authorization" onclick="getAjaxPageData(event, 'index.php?file=med_dashboard_frame&amp;link_module=50&amp;link_id=966538')" href="index.php?file=med_dashboard_frame&amp;link_module=50&amp;link_id=966538&isAjax=no"> -->
+												<!-- How to check the status of an authorization -->
+											<!-- </a> -->
+                                                                                
+                                                                             
+																		
+									 
+									
+								</li>
+															
+																																	
+																																	
+																		
+																
+								<li id="li_966539">
+																			<!-- <a class="a_50" href="index.php?file=med_dashboard_frame&amp;link_module=50&amp;link_id=966539" >
+											How to review the status of a claim
+										</a> -->
+                                                                                
+                                                                          
+                                                                            
+																																			<a class="a_50 site-link" title="How to review the status of a claim" onclick="getAjaxPageData(event, 'index.php?file=med_dashboard_frame&amp;link_module=50&amp;link_id=966539')" href="index.php?file=med_dashboard_frame&amp;link_module=50&amp;link_id=966539&amp;isAjax=no&amp;__=1784549012">
+													How to review the status of a claim
+												</a>
+											                                                                            
+											<!-- <a class="a_50 site-link" title="How to review the status of a claim" onclick="getAjaxPageData(event, 'index.php?file=med_dashboard_frame&amp;link_module=50&amp;link_id=966539')" href="index.php?file=med_dashboard_frame&amp;link_module=50&amp;link_id=966539&isAjax=no"> -->
+												<!-- How to review the status of a claim -->
+											<!-- </a> -->
+                                                                                
+                                                                             
+																		
+									 
+									
+								</li>
+															
+																																	
+																																	
+																		
+																
+								<li id="li_966540">
+																			<!-- <a class="a_50" href="index.php?file=med_dashboard_frame&amp;link_module=50&amp;link_id=966540" >
+											Pull up EOB using check number and paid date
+										</a> -->
+                                                                                
+                                                                          
+                                                                            
+																																			<a class="a_50 site-link" title="Pull up EOB using check number and paid date" onclick="getAjaxPageData(event, 'index.php?file=med_dashboard_frame&amp;link_module=50&amp;link_id=966540')" href="index.php?file=med_dashboard_frame&amp;link_module=50&amp;link_id=966540&amp;isAjax=no&amp;__=1784549012">
+													Pull up EOB using check number and paid date
+												</a>
+											                                                                            
+											<!-- <a class="a_50 site-link" title="Pull up EOB using check number and paid date" onclick="getAjaxPageData(event, 'index.php?file=med_dashboard_frame&amp;link_module=50&amp;link_id=966540')" href="index.php?file=med_dashboard_frame&amp;link_module=50&amp;link_id=966540&isAjax=no"> -->
+												<!-- Pull up EOB using check number and paid date -->
+											<!-- </a> -->
+                                                                                
+                                                                             
+																		
+									 
+									
+								</li>
+															
+																																	
+																																	
+																		
+																
+								<li id="li_966541">
+																			<!-- <a class="a_50" href="index.php?file=med_dashboard_frame&amp;link_module=50&amp;link_id=966541" >
+											How to verify a member's eligibility
+										</a> -->
+                                                                                
+                                                                          
+                                                                            
+																																			<a class="a_50 site-link" title="How to verify a member's eligibility" onclick="getAjaxPageData(event, 'index.php?file=med_dashboard_frame&amp;link_module=50&amp;link_id=966541')" href="index.php?file=med_dashboard_frame&amp;link_module=50&amp;link_id=966541&amp;isAjax=no&amp;__=1784549012">
+													How to verify a member's eligibility
+												</a>
+											                                                                            
+											<!-- <a class="a_50 site-link" title="How to verify a member's eligibility" onclick="getAjaxPageData(event, 'index.php?file=med_dashboard_frame&amp;link_module=50&amp;link_id=966541')" href="index.php?file=med_dashboard_frame&amp;link_module=50&amp;link_id=966541&isAjax=no"> -->
+												<!-- How to verify a member's eligibility -->
+											<!-- </a> -->
+                                                                                
+                                                                             
+																		
+									 
+									
+								</li>
+													</ul>
+					</div>
+
+							</div>			
+		</td>
+    </div></div></tr>   
+</tbody></table>
+
+
+<style type="text/css">
+    #gen_menu_search{
+         background: url("images/Search.png") no-repeat scroll 0 0 / 13px auto;
+    }
+    </style>
+<script type="text/javascript">
+                
+// function to check html5 storage support
+function supports_html5_storage()
+{
+    try 
+    {
+        return 'localStorage' in window && window['localStorage'] !== null;
+    } 
+    catch(e) 
+    {
+        return false;
+    }
+}
+
+$(document).ready(function() {
+
+    /* ER_11439 - [start] */
+    
+//    // check if local storage is supported by browser
+//    if(supports_html5_storage())
+//    {
+//        // get value if menu info is sync with latest changes
+//        var blnIsSync   =   '';
+//
+//        // get id of logged in user
+//        var intUserId   =   '14590';
+//
+//        // if data is not sync between local storage and database
+//        if(blnIsSync    ==  0)
+//        {
+//            // get latest left link data from db and encode it
+//            var strMenuData = '';
+//
+//            // set data into localstorage
+//            localStorage.setItem('menuData', strMenuData);
+//        }
+//        else
+//        {
+//            // get menu data from local storage
+//            var strMenuData =   localStorage.getItem('menuData');
+//        }
+//
+//        // if menu data not exists in local storage
+//        if(strMenuData === null || strMenuData == 'null')
+//        {
+//            // assign empty string to variable (this parameter will be sent with ajax call)
+//            strMenuData =   '';
+//        }
+//    }
+//    else
+//    {
+//        // assign empty string to variable (this parameter will be sent with ajax call)
+//        var strMenuData =   '';
+//    }
+//    
+//    /* Ajax call to get html of left links */
+//    $.ajax({        
+//		async: false,
+//		cache: false,
+//		url: "index.php?file=meds_sidebar_menu",
+//		data: {strMenuData: strMenuData},
+//        type: "POST",
+//		success: function(data) 
+//        {   
+//            // assign html to sidebar
+//			$("#sidebarMenu").html(data);
+//		}
+//	});
+    	
+    /* ER_11439 - [end] */
+    
+	if(intCurLinkModule != "")
+	{
+		$("#section_title_"+intCurLinkModule).addClass("active").show();
+		$("[id^='section_content_']").hide();
+		$("#section_content_"+intCurLinkModule).show();
+	}
+    else
+	{
+		$(".accordion .thread-content").hide();
+		//$(".accordion .thread-title:first").addClass("active");
+		//$(".accordion .thread-content:not(:first)").hide();
+	}
+
+	$(".accordion .thread-title").click(function()
+	{   var id =$(this).attr("id");
+            $(".thread-title.accordion_header").each(function() {
+                if (id != $(this).attr("id")){
+                   // $(this).next(".thread-content").slideToggle("slow");
+                   // $(this).toggleClass("active");
+                    $(this).next(".thread-content").slideUp("slow");
+		    $(this).removeClass("active");
+                }
+            });
+            
+
+		//$(this).next(".thread-content").slideToggle("slow").siblings(".thread-content:visible").slideUp("slow");
+		$(this).next(".thread-content").slideToggle("slow");
+		$(this).toggleClass("active");
+		//$(this).siblings(".thread-title").removeClass("active");
+	});
+	
+
+	$("a.a_0").parent().parent().parent().css("display","inline");	
+        
+        $('.site-link').mousedown(openSiteLink($(this))); 
+        
+        if(localStorage.getItem("showHideScrollAnnouncement") == 1)
+    {
+        if($("#main-navigation2").length > 0)
+            $(".left-p-height").css("height", "calc((100vh) - (160px + "+($("#main-navigation2").height()+ $(".main-scrollAnnouncement").height() + 8) +"px))");
+        else
+            $(".left-p-height").css("height", "calc((100vh) - (160px + "+($(".main-scrollAnnouncement").height() + 8) +"px))");
+    }
+    else{
+        if($("#main-navigation2").length > 0)
+            $(".left-p-height").css("height", "calc((100vh) - (160px + "+($("#main-navigation2").height()+  8) +"px))");
+    }
+        //if($("#main-navigation2").length > 0)
+         //$(".left-p-height").css("height", "calc((100vh) - (160px + "+($("#main-navigation2").height()+$(".main-scrollAnnouncement").height()+8)+"px))");
+	
+});
+
+function validateCode(string)
+{
+	var regexLetter = /^[a-zA-Z0-9\_]+$/g;    
+	return regexLetter.test(string);    
+}
+
+/* B_66141 - [start] */
+
+// function to search in left links
+function searchLinks(searchText)
+{
+		
+    $("div.thread-content").show();
+
+    // loop through all the anchor elements immediately under "ul.lb-nav > li"
+    $("ul.lb-nav > li > a").each(function(){
+
+        $(this).parents('li:first').show();
+
+        if($(this).text().toLowerCase().indexOf(searchText.toLowerCase()) >= 0)
+        {
+            $(this).parents('li:first').show();
+        }
+        else
+        {
+            $(this).parents('li:first').hide();
+        }
+
+    });
+
+    // loop through all the anchor elements under "li.lb-nav > ul "
+    $("li.fly ul a").each(function(){
+
+        if($(this).text().toLowerCase().indexOf(searchText.toLowerCase()) >= 0)
+        {
+            $(this).parent().parent().attr('style', '');
+            $(this).parent().parent().parent().show();
+        }
+        else
+        {
+            // remove the ul border
+            $(this).parent().parent().attr('style', 'border:none;');
+        }
+    });
+
+
+    //$("a_0").show();
+    // loop through all the div elements with classname "thread-content" under "div.accordion"
+    $("div.accordion div.thread-content").each(function(){
+
+        var clsname = $(this).children().children().children().attr('class');
+	
+        // Remove css class for Ajax implementation to work
+	clsname = clsname.replace(" dashboard_frame", ""); 
+        clsname = clsname.replace(" site-link", ""); 
+
+        var arrclsname = clsname.split('_');
+
+        // if the menus are there under section headers then show section header else hide it
+        if($(this).children().find(":visible").length <= 0 )
+        {
+            //$("#section_title_"+arrclsname[1]).hide();
+            /*BUG_119974[START]*/
+            var id = arrclsname[1].replace("selected-sitelink","");
+            $("#section_title_"+id).hide();
+            /*BUG_119974[END]*/
+        }
+        else
+        {
+            var id = arrclsname[1].replace("selected-sitelink","");
+            $("#section_title_"+id).show();
+        }
+
+    });		
+
+    // if the search text is empty trigger the even of mouseleave on the menu container div
+    if(searchText.length==0)
+    {
+        //$("div.accordion").trigger('mouseleave');
+        if($.trim($("#gen_menu_search").val())=='')
+        {
+            //$("#gen_menu_search_tr").hide();
+            $("div.thread-content").hide();
+        }
+    }
+		
+}
+
+/**
+ * entry site link detail
+ * @param {type} e
+ * @returns {undefined}
+ */
+function openSiteLink(e){
+    setSiteLinkClickDetails(e[0].URL);
+    //set attach click event on the page to capture details
+
+    try {
+        if(!shouldDisableAnalytics)
+        {
+            attachClickEvent();
+        }
+        //Added for Vonage Phone number feature direct Call
+        attachVonagePhoneNumber();
+    } catch (e) {
+        console.log(e);
+    }
+}
+
+function toggleChildLinks(pId) {
+    $('ul').not("ul#p_"+pId).removeClass('showChildSiteLink');
+    $("ul#p_"+pId).toggleClass('showChildSiteLink');
+}
+
+
+// If the menu element is clicked
+$(".menuorder").click(function(){         
+			var w = 700;
+			var h =screen.height * 0.80;
+			var left = (screen.width/2)-(w/2);
+			var top = (screen.height/2)-(h/2);
+                        var strExtraParamCache = Date.now() / 1000 | 0;
+			var url = "index.php?file=meds_site_links_sort&__="+strExtraParamCache;
+			var options = 'width='+w+', height='+h+', center=1, help=0, status=0, resizable=1, scrollbars=1, left='+left+', top='+top+'';  
+			OpenPopupWindow(url, 'Customize Menu Order', options);
+	return false;
+ });
+/* B_66141 - [end] */
+</script>
+                                                    </td>
+						
+                                                <td width="1%" align="right" valign="top">
+													<table width="99%" cellpadding="1" cellspacing="1" border="0" align="center">
+                                                        <tbody><tr>
+                                                            <td height="16px" align="right" id="mbg" valign="middle"><span id="linkDevide" style="cursor:pointer; background-repeat: repeat-y;padding-left: 15px;"><img src="./images/shutter-close.gif" name="links_handler" border="0" id="links_handler" onclick="setlinksShowHide('lnks','links_handler');"></span></td>
+                                                        </tr>
+                                                    </tbody></table>
+												</td>
+                                                <td id="lnkRight" align="left" valign="top" style="margin-left:4px;overflow: auto;float: left;width: calc(100vw - 225px); box-shadow: 0 0 2px #888;border-radius: 5px;" class="middle-p-height">
+                                                    <div id="data_cage"><table width="100%" border="0" cellspacing="0" cellpadding="0">
+  <tbody><tr>
+    <td><table width="100%" border="0" align="center" cellpadding="0" cellspacing="0" class="tab-bor">
+            
+  <tbody><tr>
+    <td colspan="2"><table width="100%" border="0" cellpadding="0" cellspacing="0">
+
+	  <tbody><tr>
+	  		<td height="10" align="center" valign="middle"><iframe src="https://phn.quickcap.net/PHNDotNet/ExternalClaimSearch.aspx?dotnet=true&amp;link_module=25&amp;link_id=144&amp;_=1784549017796&amp;sess_id=9dvvceb6ff8nbaoj6duqm4h0do&amp;uid=14590&amp;dbnm=PHN" width="100%" style=" padding: 0; margin: 0;border: 0;" scroll="auto" allowfullscreen="" allow="geolocation; microphone; camera" id="viewFrame" border="0" name="viewFrame" frameborder="0" align="center" class="frame-dot-net-height"> </iframe></td>
+	 	 </tr>
+    </tbody></table></td>
+  </tr>
+    </tbody></table></td>
+  </tr>
+    <tr>
+    <td></td>
+  </tr>
+</tbody></table>
+<script language="javascript">
+var strHideLeftMenu = 'no';
+</script>
+
+<script language="javascript">
+    
+    
+    
+$(document).ready(function(){
+	
+	
+        
+       
+        var _theframe = document.getElementById("viewFrame");
+_theframe.contentWindow.location.href = _theframe.src;
+                
+                if(localStorage.getItem("showHideScrollAnnouncement") == 1)
+    {
+        if($("#main-navigation2").length > 0)
+            $(".frame-dot-net-height").css("height", "calc((100vh) - (152px + "+($("#main-navigation2").height()+ $(".main-scrollAnnouncement").height() + 8) +"px))");
+        else
+            $(".frame-dot-net-height").css("height", "calc((100vh) - (152px + "+($(".main-scrollAnnouncement").height() + 8) +"px))");
+    }
+    else{
+        if($("#main-navigation2").length > 0)
+            $(".frame-dot-net-height").css("height", "calc((100vh) - (152px + "+($("#main-navigation2").height()-2) +"px))");
+    }
+             //if($("#main-navigation2").length > 0)
+     //$(".frame-dot-net-height").css("height", "calc((100vh) - (152px + "+($("#main-navigation2").height()-2) +"px))");
+}); 
+    
+if(strHideLeftMenu == "yes")
+{
+    document.getElementById('lnks').style.visibility = 'hidden';
+    $("#lnks").width("1");
+    $("#lnkRight").width($(document).width());
+    document.getElementById('links_handler').src 		= 	"./images/shutter-open.gif";
+    $("#lnkRight").width("100%");
+    $(".simplebar-scrollbar").hide();
+    if($(".simplebar-track.vertical"))
+      $(".simplebar-track.vertical").hide();
+    
+    $("#linkDevide").css("padding-left","0px");    
+}
+function closeWindow()
+{
+    self.parent.tb_remove();
+    window.close();
+}
+</script>
+</div>                                                                                                         
+                                                    <input type="hidden" name="CurrentActivePhase" id="CurrentActivePhase" value="" style="">
+                                                    <input type="hidden" name="bublemessgParent" id="bublemessgParent" value="" style="">
+                                                   
+                                                                <div class="thought" id="bublemessg" name="bublemessg" style="display: none; position: fixed; z-index: 100; width: 240px; bottom: 0px; padding: 13px 20px 6px 15px; right: 130px;">
+                                                                <div id="bublemessgdiv" name="bublemessgdiv">
+                                                                    
+                                                                    
+                                                                                                                       
+                                                                </div>                                                              
+                                                            </div>
+                                                             <div id="bublemessgzuzu" name="bublemessgzuzu" style="display: none; position: fixed; z-index: 100; width: 160px; bottom: 19px; right: 5px;">                                                      
+                                                                <img src="./images/bubbleMarketing/zuzzu.gif" name="links_handler" border="0" style="width: 100%">
+                                                            </div>
+                                                    
+                                                 
+												</td>
+                                            </tr>
+                                        </tbody></table>
+									</td>
+                                    <td width="5" align="right" valign="top" class="wrap-right">
+										<!--img src="images/wrap-right.png" width="5" height="1" /-->
+									</td>
+                                </tr>
+                            </tbody></table>
+						</td>
+                    </tr>
+                    <tr>
+                        <td>               
+
+<table width="100%" border="0" cellspacing="0" cellpadding="0">
+	<tbody><tr><td>&nbsp;</td></tr>
+	<tr>
+		<td align="left" valign="top" class="foot-mid-inr-bg">
+			<table width="100%" border="0" align="center" cellpadding="0" cellspacing="0">
+				<tbody><tr>            
+					<td height="30" align="center">
+						©2026 
+						<a href="http://www.medvision-solutions.com/" target="_blank" tabindex="-1" class="trackAtt">QuickCap v7.0 by MedVision</a>
+						All rights reserved.                    
+												&nbsp;<a class="thicbox trackAtt" tabindex="-1" onclick="openIframePopup('index.php?file=meds_tou_preview&amp;CompanyID=PHN&amp;showfrom=&amp;show_current=1&amp;blnPopup=true&amp;TB_iframe=true',490,864);" href="javascript:void(0);">Terms Of Use</a>.
+                                                &nbsp;<span>CPT<sup>®</sup> 2026 American Medical Association.</span>&nbsp;<span>Click <a onclick="return openIEMOPOPup();" style="cursor:pointer;" class="trackAtt">here</a> to get DrCatalyst EHR account.</span>											</td>
+				</tr>
+        	</tbody></table>
+		</td>
+	</tr>
+</tbody></table>
+<!--<input type="hidden" id="strUserExtention" value="" />-->
+
+<style type="text/css">
+.mn-lbl {
+text-align: right;
+color:#777;
+}
+.mn-info {
+}
+.mn-action a {
+color: #0000FF;
+}
+.mn-note {
+color: #FF0084;
+width:100%;
+text-align:right;
+}
+</style>
+<script type="text/javascript">
+    
+// Below code is added to set vertical alignment of cells having buttons in all summary apges
+// .qlist .data1 .btn, .qlist .data2 .btn, .qlist .dataH .btn, .qlist .dataS .btn
+$(document).ready(function(){
+    
+    $(".qlist .data1 .btn, .qlist .data2 .btn").each(function(index) {
+        $(this).parents('td').filter(':first').attr('valign', 'middle');
+    });
+	
+	// Hide Report Feedback/Enhancement link from all pages.
+	$("a:contains('Report Feedback/Enhancement')").remove();
+        
+});
+
+function openIEMOPOPup()
+{
+	var d = new Date();
+	var timestamp = d.getTime();
+    strHref  =   'index.php?file=meds_iemo_form&__='+timestamp+'&TB_iframe=true&height=350&width=800&modal=true';
+    eval("tb_show(null,strHref,null)");
+    return false;
+}
+</script>
+</td>
+                    </tr>
+                </tbody></table>
+			</td>
+        </tr>
+    </tbody></table>
+   
+    <input type="hidden" name="chatviewurl" id="chatviewurl" value="https://phn.quickcap.net/PHNDotNet//qconnect/internalcommunicationv2.aspx?uid=14590&amp;dbnm=PHN&amp;sess_id=OWR2dmNlYjZmZjhuYmFvajZkdXFtNGgwZG8=" style="">
+</div>
+
+
+
+ <div id="myModal" class="Modal is-hidden is-visuallyHidden">
+            <!-- Modal content -->
+            <div class="Modal-content" id="closeModalPhase2">
+               <!--  <span id="closeModal" class="Close"><b>&times;</b></span>      -->         
+<!--               <p><marquee behavior='alternate'><b><h1 style='color: purple;'>QuickCap [Unstoppable Express !!!]</h1> </b></marquee></p> 
+                <img  style='height: 96%;width: 102%;' src="./images/bubbleMarketing/Needforspeed.jpg" name="links_handler" border="0">-->
+            </div>
+ </div>
+
+<div id="dvNotificationMaster">  
+    
+</div>
+<ul class="ui-autocomplete ui-menu ui-widget ui-widget-content ui-corner-all" role="listbox" aria-activedescendant="ui-active-menuitem" style="z-index: 1; top: 0px; left: 0px; display: none;"></ul></body></html>
