@@ -88,6 +88,7 @@ const SEL = {
 
 const CLAIMS_URL = 'https://secure.uhcprovider.com/#/claims';
 const OPERATION_SETTLE_MS = 2_000;
+const CLAIM_RESULT_SECTION_SEPARATOR = '\n\n\n\n';
 
 async function waitAfterOperation(page: Page, log: (msg: string) => Promise<void>, label: string) {
   await log(`  Waiting 2s after ${label}...`);
@@ -477,6 +478,89 @@ function uniqueJoin(values: Array<string | undefined>, fallback = 'N/A'): string
 
 function firstNonEmpty(...values: Array<string | undefined>): string {
   return values.map(value => (value || '').trim()).find(Boolean) || '';
+}
+
+function uniqueSortedProcessedDates(dates: Array<string | undefined>): string[] {
+  return Array.from(new Set(dates.map(value => (value || '').trim()).filter(Boolean)))
+    .sort((left, right) => parseDateTimestamp(right) - parseDateTimestamp(left));
+}
+
+function groupLineItemsByProcessedDate(
+  lineItems: any[],
+  fallbackProcessedDate: string,
+): Array<{ processedDate: string; lineItems: any[] }> {
+  if (lineItems.length === 0) {
+    return [{ processedDate: fallbackProcessedDate || 'N/A', lineItems: [] }];
+  }
+
+  const groups = new Map<string, any[]>();
+  for (const item of lineItems) {
+    const processedDate = String(item?.processedDate || fallbackProcessedDate || 'N/A').trim();
+    groups.set(processedDate, [...(groups.get(processedDate) ?? []), item]);
+  }
+
+  return Array.from(groups.entries())
+    .sort(([left], [right]) => parseDateTimestamp(right) - parseDateTimestamp(left))
+    .map(([processedDate, groupedLineItems]) => ({ processedDate, lineItems: groupedLineItems }));
+}
+
+function checkDateForProcessedDate(
+  processedDate: string,
+  availableProcessedDates: string[],
+  paymentRows: Array<{ issueDate: string }>,
+  fallback: string,
+): string {
+  const sortedProcessedDates = uniqueSortedProcessedDates(availableProcessedDates);
+  const sortedCheckDates = uniqueSortedProcessedDates(paymentRows.map(row => row.issueDate));
+  if (sortedProcessedDates.length > 1 && sortedCheckDates.length > 1) {
+    const processedTimestamp = parseDateTimestamp(processedDate);
+    const processedIndex = sortedProcessedDates.findIndex(date => parseDateTimestamp(date) === processedTimestamp);
+    if (processedIndex >= 0 && sortedCheckDates[processedIndex]) {
+      return sortedCheckDates[processedIndex];
+    }
+  }
+  return fallback;
+}
+
+function paymentRowsForProcessedDate<T extends { issueDate: string }>(
+  processedDate: string,
+  availableProcessedDates: string[],
+  paymentRows: T[],
+): T[] {
+  const sortedProcessedDates = uniqueSortedProcessedDates(availableProcessedDates);
+  const sortedPaymentRows = [...paymentRows]
+    .filter(row => (row.issueDate || '').trim())
+    .sort((left, right) => parseDateTimestamp(right.issueDate) - parseDateTimestamp(left.issueDate));
+  if (sortedProcessedDates.length > 1 && sortedPaymentRows.length > 1) {
+    const processedTimestamp = parseDateTimestamp(processedDate);
+    const processedIndex = sortedProcessedDates.findIndex(date => parseDateTimestamp(date) === processedTimestamp);
+    if (processedIndex >= 0 && sortedPaymentRows[processedIndex]) {
+      return [sortedPaymentRows[processedIndex]];
+    }
+  }
+  return paymentRows;
+}
+
+function paymentDetailsSignature(paymentRows: Array<{ number: string; amount: string }>): string {
+  return paymentRows
+    .map(row => {
+      const number = (row.number || '').replace(/\s+/g, '').toUpperCase();
+      const amount = formatMoney(row.amount || '$0.00');
+      return number && amount ? `${number}|${amount}` : '';
+    })
+    .filter(Boolean)
+    .sort()
+    .join('||');
+}
+
+function paymentDetailsMatch(leftData: Record<string, string>, rightData: Record<string, string>): boolean {
+  const leftSignature = paymentDetailsSignature(parsePaymentRows(leftData['payment-rows-json']));
+  const rightSignature = paymentDetailsSignature(parsePaymentRows(rightData['payment-rows-json']));
+  return Boolean(leftSignature && rightSignature && leftSignature === rightSignature);
+}
+
+function joinClaimResultSections(sections: string[]): string {
+  return sections.map(section => section.trim()).filter(Boolean).join(CLAIM_RESULT_SECTION_SEPARATOR);
 }
 
 function formatCheckAmounts(paymentRows: Array<{ amount: string }>, fallbackAmount: string, linePaidTotal: number): string {
@@ -1779,8 +1863,8 @@ async function expandAllClaimLineRows(page: Page, log: (msg: string) => Promise<
   }
 }
 
-async function scrapeClaimSummaryPage(page: Page): Promise<Record<string, string>> {
-  return await page.evaluate(() => {
+async function scrapeClaimSummaryPage(page: Page, options: { targetProcessedDate?: string } = {}): Promise<Record<string, string>> {
+  return await page.evaluate((targetProcessedDate) => {
     const data: Record<string, string> = {};
     const isServiceCodeInPage = (value: string): boolean => {
       const cleaned = value.trim().toUpperCase();
@@ -1846,6 +1930,7 @@ async function scrapeClaimSummaryPage(page: Page): Promise<Record<string, string
       if (!match) return 0;
       return Date.UTC(Number(match[3]), Number(match[1]) - 1, Number(match[2]));
     };
+    const targetProcessedTimestamp = parseDateValue(targetProcessedDate || '');
 
     testIds.forEach(id => {
       const el = document.querySelector(`[data-testid="${id}"]`) as HTMLElement | null;
@@ -1945,10 +2030,19 @@ async function scrapeClaimSummaryPage(page: Page): Promise<Record<string, string
         return match?.[1] || '';
       })
       .filter(Boolean);
-    const latestLineProcessedDate = processedGroupDates
-      .sort((left, right) => parseDateValue(right) - parseDateValue(left))[0] || '';
-    if (latestLineProcessedDate) {
-      data['processed-date'] = latestLineProcessedDate;
+    const sortedLineProcessedDates = Array.from(new Set(processedGroupDates))
+      .sort((left, right) => parseDateValue(right) - parseDateValue(left));
+    const selectedLineProcessedDate = targetProcessedTimestamp
+      ? sortedLineProcessedDates.find(date => parseDateValue(date) === targetProcessedTimestamp)
+        || sortedLineProcessedDates.find(date => parseDateValue(date) < targetProcessedTimestamp)
+        || sortedLineProcessedDates[sortedLineProcessedDates.length - 1]
+        || targetProcessedDate
+      : sortedLineProcessedDates[0] || '';
+    if (selectedLineProcessedDate) {
+      data['processed-date'] = selectedLineProcessedDate;
+    }
+    if (sortedLineProcessedDates.length > 0) {
+      data['all-processed-dates'] = sortedLineProcessedDates.join(', ');
     }
 
     const findNearestProcessedGroupDate = (row: Element): string => {
@@ -1965,7 +2059,7 @@ async function scrapeClaimSummaryPage(page: Page): Promise<Record<string, string
 
     lineRows.forEach((row, idx) => {
       const rowProcessedDate = findNearestProcessedGroupDate(row);
-      if (latestLineProcessedDate && rowProcessedDate && rowProcessedDate !== latestLineProcessedDate) {
+      if (selectedLineProcessedDate && rowProcessedDate && parseDateValue(rowProcessedDate) !== parseDateValue(selectedLineProcessedDate)) {
         return;
       }
 
@@ -2008,7 +2102,7 @@ async function scrapeClaimSummaryPage(page: Page): Promise<Record<string, string
             .filter(Boolean)
         : [];
       
-      let lineStr = `Line ${lines.length + 1}: ${cellTexts.join(' | ')}`;
+      let lineStr = `${rowProcessedDate ? `Processed Date ${rowProcessedDate} - ` : ''}Line ${lines.length + 1}: ${cellTexts.join(' | ')}`;
       const extra: string[] = [];
       if (carcs.length > 0) {
         extra.push(`CARC: ${carcs.join('; ')}`);
@@ -2068,6 +2162,7 @@ async function scrapeClaimSummaryPage(page: Page): Promise<Record<string, string
       }
 
       lineItemsData.push({
+        processedDate: rowProcessedDate || selectedLineProcessedDate || data['processed-date'] || '',
         cptCode,
         billedAmount,
         paidAmount,
@@ -2090,7 +2185,7 @@ async function scrapeClaimSummaryPage(page: Page): Promise<Record<string, string
     data['line-items-json'] = JSON.stringify(lineItemsData);
 
     return data;
-  });
+  }, options.targetProcessedDate || '');
 }
 
 // ── Format the scraped details into a clean text blob ──────────────────────────
@@ -2134,6 +2229,118 @@ function formatScrapedDataBlob(data: Record<string, string>): string {
 }
 
 // ── Extract label-value pair values safely ──────────────────────────────────────
+function buildUhcBotFieldsFromScrapedData(
+  scrapedData: Record<string, string>,
+  payload: Record<string, string>,
+  claim: ClaimRow,
+  clientType: string,
+  options: { splitPaymentRowsByProcessedDate?: boolean } = {},
+): Partial<BotFields> {
+  const fields: Partial<BotFields> = {};
+  fields.BotClaimDetails = formatScrapedDataBlob(scrapedData);
+  fields.BotClaimNumber = extractValueFromContent(scrapedData['overview-claim-number'] || scrapedData['cs-claim-number'] || payload.claimNumber);
+  fields.BotClaimStatus = extractValueFromContent(scrapedData['overview-status'] || scrapedData['overview-adjudication-status'] || payload.claimStatus);
+  fields.BotPaidAmount = extractValueFromContent(scrapedData['bs-total-paid-content'] || payload.totalPaidAmount);
+  fields.BotBilledAmount = extractValueFromContent(scrapedData['bs-billed-content'] || payload.totalBilledAmount);
+  const receivedDate = extractValueFromContent(scrapedData['recieved-date']);
+  fields.BotProcessedDate = extractValueFromContent(scrapedData['processed-date'] || payload.processedDate);
+
+  let lineItems: any[] = [];
+  try {
+    if (scrapedData['line-items-json']) lineItems = JSON.parse(scrapedData['line-items-json']);
+  } catch { /* ignore */ }
+
+  const paymentRows = parsePaymentRows(scrapedData['payment-rows-json']);
+  if (paymentRows.length > 0) fields.BotCheckEFTNumber = uniqueJoin(paymentRows.map(row => row.number), fields.BotCheckEFTNumber || 'N/A');
+
+  const lineProcessedDates = uniqueSortedProcessedDates(lineItems.map(item => item?.processedDate));
+  if (lineProcessedDates.length > 0) fields.BotProcessedDate = lineProcessedDates.join(', ');
+  const allProcessedDates = uniqueSortedProcessedDates(String(scrapedData['all-processed-dates'] || fields.BotProcessedDate || '').split(','));
+  const paymentMappingProcessedDates = options.splitPaymentRowsByProcessedDate ? allProcessedDates : lineProcessedDates;
+
+  const paidCptCodes = new Set(lineItems.filter(item => parseMoney(item.paidAmount) > 0).map(item => item.cptCode).filter(Boolean));
+  const deniedLineItems = lineItems.filter(item => !paidCptCodes.has(item.cptCode));
+  const lineItemCarcs = formatCodesByCpt(deniedLineItems, 'carcs');
+  const lineItemRemarks = formatCodesByCpt(deniedLineItems, 'remarks');
+  if (lineItemCarcs) {
+    fields.BotDenialReasonCode = lineItemCarcs;
+    fields.BotDenialDescription = undefined;
+  }
+  if (lineItemRemarks) fields.BotRemarkCodes = lineItemRemarks;
+
+  const numericTotalPaid = parseMoney(fields.BotPaidAmount || '0.00');
+  const checkNumber = fields.BotCheckEFTNumber || uniqueJoin(paymentRows.map(row => row.number), scrapedData['payment-number'] || 'N/A');
+  const checkDateFallback = uniqueJoin(paymentRows.map(row => row.issueDate), scrapedData['payment-issue-date'] || fields.BotProcessedDate || 'N/A');
+  const paymentAmount = scrapedData['payment-amount'] || fields.BotPaidAmount || '$0.00';
+  const payerName = cleanPayerName(scrapedData['payer-name']);
+  const processedDate = fields.BotProcessedDate || 'N/A';
+  const claimReceivedDate = firstNonEmpty(receivedDate, scrapedData['recieved-date'], 'N/A');
+  const claimNumber = fields.BotClaimNumber || 'N/A';
+  const serviceDate = claim.serviceDate;
+  const isMedRevenu = normalizeOptionText(clientType) === 'medrevenu';
+  const claimServiceCode = getClaimServiceCode(claim);
+  const medRevenuLineItems = isMedRevenu ? filterLineItemsByServiceCode(lineItems, claimServiceCode) : lineItems;
+  const medRevenuLinePaidTotal = medRevenuLineItems.reduce((sum, item) => sum + parseMoney(item.paidAmount), 0);
+  const adjudicationLineItems = isMedRevenu ? medRevenuLineItems : lineItems;
+
+  if (scrapedData['claim-in-process'] === 'true' && paymentRows.length === 0 && !hasLineAdjudicationDetails(adjudicationLineItems)) {
+    fields.BotClaimResult = `DOS ${serviceDate} Claim received on ${claimReceivedDate} is in process by ${payerName} on Claim # ${claimNumber}.`;
+    return fields;
+  }
+
+  if (isMedRevenu) {
+    fields.BotPaidAmount = formatMoney(String(medRevenuLinePaidTotal));
+    const medRevenuHasPaidLine = medRevenuLinePaidTotal > 0;
+    const medRevenuDeniedLineItems = medRevenuHasPaidLine ? [] : medRevenuLineItems;
+    fields.BotDenialReasonCode = formatCodesByCpt(medRevenuDeniedLineItems, 'carcs') || undefined;
+    fields.BotRemarkCodes = formatCodesByCpt(medRevenuDeniedLineItems, 'remarks') || undefined;
+
+    fields.BotClaimResult = joinClaimResultSections(groupLineItemsByProcessedDate(medRevenuLineItems, processedDate).map(group => {
+      const groupLinePaidTotal = group.lineItems.reduce((sum, item) => sum + parseMoney(item.paidAmount), 0);
+      const groupPaidAmountText = formatMoney(String(groupLinePaidTotal));
+      const groupDeniedLineItems = groupLinePaidTotal > 0 ? [] : group.lineItems;
+      const groupDenialReasonText = formatMedRevenuDenialReason(groupDeniedLineItems, fields.BotDenialReasonCode || fields.BotDenialDescription);
+      const groupProcessedDate = group.processedDate || processedDate;
+      const groupPaymentRows = paymentRowsForProcessedDate(groupProcessedDate, paymentMappingProcessedDates, paymentRows);
+      const groupCheckAmountText = formatCheckAmounts(groupPaymentRows, paymentAmount, groupLinePaidTotal);
+      const groupCheckNumber = uniqueJoin(groupPaymentRows.map(row => row.number), checkNumber);
+      const groupCheckDate = checkDateForProcessedDate(groupProcessedDate, paymentMappingProcessedDates, paymentRows, checkDateFallback);
+      if (groupLinePaidTotal > 0) {
+        return `DOS ${serviceDate}: Checked IEHP portal Claim Received on ${claimReceivedDate} and Processed on ${groupProcessedDate}. Paid on ${groupCheckDate} paid amount ${groupPaidAmountText} EFT/Check # ${groupCheckNumber}. Check Amount: ${groupCheckAmountText}. Claim #: ${claimNumber}`;
+      }
+      return `DOS ${serviceDate}: Checked IEHP portal Claim Received on ${claimReceivedDate} and Processed on ${groupProcessedDate}. Denied on ${groupCheckDate} denial reason ${groupDenialReasonText} EFT/Check # ${groupCheckNumber}. Check Amount: ${groupCheckAmountText}. Claim #: ${claimNumber}`;
+    }));
+    return fields;
+  }
+
+  fields.BotClaimResult = joinClaimResultSections(groupLineItemsByProcessedDate(lineItems, processedDate).map(group => {
+    const claimResultParts: string[] = [];
+    const groupLinePaidTotal = group.lineItems.reduce((sum, item) => sum + parseMoney(item.paidAmount), 0);
+    const effectivePaidTotal = group.lineItems.length > 0 ? groupLinePaidTotal : numericTotalPaid;
+    const groupResponsibility = formatClaimLevelPatientResponsibility(group.lineItems, scrapedData['patient-responsibility']);
+    const groupResponsibilityText = groupResponsibility ? ` ${groupResponsibility}.` : '';
+    const groupProcessedDate = group.processedDate || processedDate;
+    const groupPaymentRows = paymentRowsForProcessedDate(groupProcessedDate, paymentMappingProcessedDates, paymentRows);
+    const groupCheckAmountText = formatCheckAmounts(groupPaymentRows, paymentAmount, effectivePaidTotal);
+    const groupCheckNumber = uniqueJoin(groupPaymentRows.map(row => row.number), checkNumber);
+    const groupCheckDate = checkDateForProcessedDate(groupProcessedDate, paymentMappingProcessedDates, paymentRows, checkDateFallback);
+    if (effectivePaidTotal > 0) {
+      claimResultParts.push(`DOS ${serviceDate} Claim processed by ${payerName} on ${groupProcessedDate} under Claim # ${claimNumber}. Payment issued via Check/EFT # ${groupCheckNumber} dated ${groupCheckDate}. Check Amount: ${groupCheckAmountText}.${groupResponsibilityText}`);
+    } else {
+      claimResultParts.push(`DOS ${serviceDate} Claim processed by ${payerName} on ${groupProcessedDate} under Claim # ${claimNumber}. Claim is Denied under Check #: ${groupCheckNumber} dated ${groupCheckDate}.`);
+    }
+    const serviceLineNotes = buildServiceLineNotes(group.lineItems, [groupCheckNumber, scrapedData['payment-number'] || '', fields.BotCheckEFTNumber || ''], false);
+    if (serviceLineNotes.length > 0) {
+      claimResultParts.push(...serviceLineNotes);
+    } else if (effectivePaidTotal <= 0) {
+      claimResultParts.push(`Service line: Denied for ${fields.BotDenialDescription || 'Service denied'}.`);
+    }
+    return claimResultParts.join('\n');
+  }));
+
+  return fields;
+}
+
 function extractValueFromContent(content: string | undefined): string {
   if (!content) return '';
   const lines = content.split('\n').map(l => l.trim()).filter(Boolean);
@@ -2173,6 +2380,65 @@ async function goBackToResults(page: Page, claim: ClaimRow, searchMode: 'memberI
 }
 
 // ── Find matching claims in results ─────────────────────────────────────────────
+async function openDualPlanClaimIfPresent(page: Page, log: (msg: string) => Promise<void>): Promise<boolean> {
+  const dualPlanSection = page.locator('[data-testid="drg-subtitle"]', { hasText: /Dual Plan Claim Number/i }).first();
+  if (!(await dualPlanSection.isVisible({ timeout: 2_000 }).catch(() => false))) {
+    return false;
+  }
+
+  const dualPlanButton = dualPlanSection.locator('[data-testid="overview-claim-number-button"], button[role="link"]').first();
+  if (!(await dualPlanButton.isVisible({ timeout: 2_000 }).catch(() => false))) {
+    await log('  Dual Plan Claim Number section was present, but the claim link/button was not visible.');
+    return false;
+  }
+
+  const label = (await dualPlanButton.innerText({ timeout: 1_000 }).catch(() => '')).replace(/\s+/g, ' ').trim();
+  await log(`  Dual Plan Claim Number found${label ? `: ${label}` : ''}. Opening linked claim...`);
+  await dualPlanButton.click({ force: true });
+  await waitAfterOperation(page, log, 'dual plan claim number click');
+  await page.waitForLoadState('networkidle', { timeout: 15_000 }).catch(async () => {
+    await log('  Dual Plan linked claim did not go fully network-idle within 15s. Continuing with readiness checks...');
+  });
+  await waitForClaimDetailLoaders(page, log);
+  await waitAfterOperation(page, log, 'dual plan claim detail display');
+  await expandAllAccordions(page, log);
+  await expandAllClaimLineRows(page, log);
+  return true;
+}
+
+async function appendDualPlanClaimFieldsIfPresent(options: {
+  page: Page;
+  claim: ClaimRow;
+  payload: Record<string, string>;
+  clientType: string;
+  targetProcessedDate: string;
+  allScrapedFields: Partial<BotFields>[];
+  log: (msg: string) => Promise<void>;
+}): Promise<void> {
+  const { page, claim, payload, clientType, targetProcessedDate, allScrapedFields, log } = options;
+  if (!(await openDualPlanClaimIfPresent(page, log))) {
+    return;
+  }
+
+  const dualScrapedData = await scrapeClaimSummaryPage(page, { targetProcessedDate });
+  const dualFields = buildUhcBotFieldsFromScrapedData(dualScrapedData, payload, claim, clientType);
+  allScrapedFields.push(dualFields);
+  await log(`  Dual Plan linked claim scraped${dualFields.BotProcessedDate ? ` for processed date ${dualFields.BotProcessedDate}` : ''}.`);
+}
+
+async function scrapeDualPlanClaimDataIfPresent(options: {
+  page: Page;
+  targetProcessedDate: string;
+  log: (msg: string) => Promise<void>;
+}): Promise<Record<string, string> | null> {
+  const { page, targetProcessedDate, log } = options;
+  if (!(await openDualPlanClaimIfPresent(page, log))) {
+    return null;
+  }
+
+  return scrapeClaimSummaryPage(page, { targetProcessedDate });
+}
+
 async function findMatchingClaim(
   page: Page,
   claim: ClaimRow,
@@ -2329,6 +2595,9 @@ async function findMatchingClaim(
       return null;
     }
 
+    const sortedMatchingProcessedDates = uniqueSortedProcessedDates(processedDates);
+    let dualPlanTargetProcessedDate = '';
+
     if (matchingClaimIndexes.length > 1) {
       let latestIndex = 0;
       let latestTimestamp = parseDateTimestamp(processedDates[0]);
@@ -2341,7 +2610,11 @@ async function findMatchingClaim(
         }
       }
 
+      dualPlanTargetProcessedDate = sortedMatchingProcessedDates.find(date => parseDateTimestamp(date) !== latestTimestamp) || '';
       await log(`  🎯  ${matchingClaimIndexes.length} matching claims found. Using latest processed date ${processedDates[latestIndex] || 'Unknown'} from claim ${payloads[latestIndex].claimNumber || 'Unknown'}.`);
+      if (dualPlanTargetProcessedDate) {
+        await log(`  Dual Plan secondary processed date candidate: ${dualPlanTargetProcessedDate}.`);
+      }
       matchingClaimIndexes.splice(0, matchingClaimIndexes.length, matchingClaimIndexes[latestIndex]);
       payloads.splice(0, payloads.length, payloads[latestIndex]);
       hrefs.splice(0, hrefs.length, hrefs[latestIndex]);
@@ -2415,7 +2688,30 @@ async function findMatchingClaim(
       }
 
       // Scrape Summary Page details
-      const scrapedData = await scrapeClaimSummaryPage(page);
+      const scrapedData = await scrapeClaimSummaryPage(page, { targetProcessedDate: processedDates[m] });
+
+      if (dualPlanTargetProcessedDate) {
+        const dualScrapedData = await scrapeDualPlanClaimDataIfPresent({
+          page,
+          targetProcessedDate: dualPlanTargetProcessedDate,
+          log,
+        });
+        if (dualScrapedData) {
+          const splitPaymentRows = paymentDetailsMatch(scrapedData, dualScrapedData);
+          await log(
+            splitPaymentRows
+              ? '  Dual Plan check details match by check number and amount. Pairing check rows by processed-date order.'
+              : '  Dual Plan check details do not match by check number and amount. Keeping each claim page payment details as-is.'
+          );
+          allScrapedFields.push(buildUhcBotFieldsFromScrapedData(scrapedData, p, claim, clientType, {
+            splitPaymentRowsByProcessedDate: splitPaymentRows,
+          }));
+          allScrapedFields.push(buildUhcBotFieldsFromScrapedData(dualScrapedData, p, claim, clientType, {
+            splitPaymentRowsByProcessedDate: splitPaymentRows,
+          }));
+          continue;
+        }
+      }
 
       const fields: Partial<BotFields> = {};
       fields.BotClaimDetails = formatScrapedDataBlob(scrapedData);
@@ -2467,6 +2763,10 @@ async function findMatchingClaim(
       if (paymentRows.length > 0) {
         fields.BotCheckEFTNumber = uniqueJoin(paymentRows.map(row => row.number), fields.BotCheckEFTNumber || 'N/A');
       }
+      const lineProcessedDates = uniqueSortedProcessedDates(lineItems.map(item => item?.processedDate));
+      if (lineProcessedDates.length > 0) {
+        fields.BotProcessedDate = lineProcessedDates.join(', ');
+      }
 
       const paidCptCodes = new Set(
         lineItems
@@ -2483,17 +2783,12 @@ async function findMatchingClaim(
       }
       if (lineItemRemarks) fields.BotRemarkCodes = lineItemRemarks;
 
-      const claimResultParts: string[] = [];
       const totalPaidStr = fields.BotPaidAmount || '0.00';
       const numericTotalPaid = parseMoney(totalPaidStr);
       
       const checkNumber = fields.BotCheckEFTNumber || uniqueJoin(paymentRows.map(row => row.number), scrapedData['payment-number'] || 'N/A');
-      const checkDate = uniqueJoin(paymentRows.map(row => row.issueDate), scrapedData['payment-issue-date'] || fields.BotProcessedDate || 'N/A');
+      const checkDateFallback = uniqueJoin(paymentRows.map(row => row.issueDate), scrapedData['payment-issue-date'] || fields.BotProcessedDate || 'N/A');
       const paymentAmount = scrapedData['payment-amount'] || fields.BotPaidAmount || '$0.00';
-      const linePaidTotal = lineItems.reduce((sum, item) => sum + parseMoney(item.paidAmount), 0);
-      const checkAmountText = formatCheckAmounts(paymentRows, paymentAmount, linePaidTotal);
-      const claimResponsibility = formatClaimLevelPatientResponsibility(lineItems, scrapedData['patient-responsibility']);
-      const claimResponsibilityText = claimResponsibility ? ` ${claimResponsibility}.` : '';
       const payerName = cleanPayerName(scrapedData['payer-name']);
       const processedDate = fields.BotProcessedDate || 'N/A';
       const claimReceivedDate = firstNonEmpty(receivedDate, scrapedData['recieved-date'], 'N/A');
@@ -2504,16 +2799,22 @@ async function findMatchingClaim(
       const medRevenuLineItems = isMedRevenu ? filterLineItemsByServiceCode(lineItems, claimServiceCode) : lineItems;
       const medRevenuLinePaidTotal = medRevenuLineItems.reduce((sum, item) => sum + parseMoney(item.paidAmount), 0);
       const medRevenuPaidAmountText = formatMoney(String(medRevenuLinePaidTotal));
-      const medRevenuCheckAmountText = formatCheckAmounts(paymentRows, paymentAmount, medRevenuLinePaidTotal);
-      const denialReasonText = formatMedRevenuDenialReason(medRevenuLineItems, fields.BotDenialReasonCode || fields.BotDenialDescription);
       const adjudicationLineItems = isMedRevenu ? medRevenuLineItems : lineItems;
       const isInProcess = scrapedData['claim-in-process'] === 'true' && paymentRows.length === 0 && !hasLineAdjudicationDetails(adjudicationLineItems);
 
       if (isInProcess) {
-        claimResultParts.push(`DOS ${serviceDate} Claim received on ${claimReceivedDate} is in process by ${payerName} on Claim # ${claimNumber}.`);
-        fields.BotClaimResult = claimResultParts.join('\n');
+        fields.BotClaimResult = `DOS ${serviceDate} Claim received on ${claimReceivedDate} is in process by ${payerName} on Claim # ${claimNumber}.`;
         allScrapedFields.push(fields);
         await log(`  ℹ️  Scraped details for claim #${m + 1} (${fields.BotClaimNumber}): length ${fields.BotClaimDetails.length}`);
+        await appendDualPlanClaimFieldsIfPresent({
+          page,
+          claim,
+          payload: p,
+          clientType,
+          targetProcessedDate: dualPlanTargetProcessedDate,
+          allScrapedFields,
+          log,
+        });
         continue;
       }
 
@@ -2526,33 +2827,78 @@ async function findMatchingClaim(
         fields.BotDenialReasonCode = medRevenuCarcs || undefined;
         fields.BotRemarkCodes = medRevenuRemarks || undefined;
 
-        if (medRevenuLinePaidTotal > 0) {
-          claimResultParts.push(`DOS ${serviceDate}: Checked IEHP portal Claim Received on ${claimReceivedDate} and Processed on ${processedDate}. Paid on ${checkDate} paid amount ${medRevenuPaidAmountText} EFT/Check # ${checkNumber}. Check Amount: ${medRevenuCheckAmountText}. Claim #: ${claimNumber}`);
-        } else {
-          claimResultParts.push(`DOS ${serviceDate}: Checked IEHP portal Claim Received on ${claimReceivedDate} and Processed on ${processedDate}. Denied on ${checkDate} denial reason ${denialReasonText} EFT/Check # ${checkNumber}. Check Amount: ${medRevenuCheckAmountText}. Claim #: ${claimNumber}`);
-        }
-        fields.BotClaimResult = claimResultParts.join('\n');
+        const medRevenuGroups = groupLineItemsByProcessedDate(medRevenuLineItems, processedDate);
+        fields.BotClaimResult = joinClaimResultSections(medRevenuGroups.map(group => {
+          const groupLinePaidTotal = group.lineItems.reduce((sum, item) => sum + parseMoney(item.paidAmount), 0);
+          const groupPaidAmountText = formatMoney(String(groupLinePaidTotal));
+          const groupHasPaidLine = groupLinePaidTotal > 0;
+          const groupDeniedLineItems = groupHasPaidLine ? [] : group.lineItems;
+          const groupDenialReasonText = formatMedRevenuDenialReason(groupDeniedLineItems, fields.BotDenialReasonCode || fields.BotDenialDescription);
+          const groupProcessedDate = group.processedDate || processedDate;
+          const groupPaymentRows = paymentRowsForProcessedDate(groupProcessedDate, lineProcessedDates, paymentRows);
+          const groupCheckAmountText = formatCheckAmounts(groupPaymentRows, paymentAmount, groupLinePaidTotal);
+          const groupCheckNumber = uniqueJoin(groupPaymentRows.map(row => row.number), checkNumber);
+          const groupCheckDate = checkDateForProcessedDate(groupProcessedDate, lineProcessedDates, paymentRows, checkDateFallback);
+
+          if (groupLinePaidTotal > 0) {
+            return `DOS ${serviceDate}: Checked IEHP portal Claim Received on ${claimReceivedDate} and Processed on ${groupProcessedDate}. Paid on ${groupCheckDate} paid amount ${groupPaidAmountText} EFT/Check # ${groupCheckNumber}. Check Amount: ${groupCheckAmountText}. Claim #: ${claimNumber}`;
+          }
+
+          return `DOS ${serviceDate}: Checked IEHP portal Claim Received on ${claimReceivedDate} and Processed on ${groupProcessedDate}. Denied on ${groupCheckDate} denial reason ${groupDenialReasonText} EFT/Check # ${groupCheckNumber}. Check Amount: ${groupCheckAmountText}. Claim #: ${claimNumber}`;
+        }));
         allScrapedFields.push(fields);
         await log(`  ℹ️  Scraped details for claim #${m + 1} (${fields.BotClaimNumber}): length ${fields.BotClaimDetails.length}`);
+        await appendDualPlanClaimFieldsIfPresent({
+          page,
+          claim,
+          payload: p,
+          clientType,
+          targetProcessedDate: dualPlanTargetProcessedDate,
+          allScrapedFields,
+          log,
+        });
         continue;
       }
 
-      if (numericTotalPaid > 0) {
-        claimResultParts.push(`DOS ${serviceDate} Claim processed by ${payerName} on ${processedDate} under Claim # ${claimNumber}. Payment issued via Check/EFT # ${checkNumber} dated ${checkDate}. Check Amount: ${checkAmountText}.${claimResponsibilityText}`);
-      } else {
-        claimResultParts.push(`DOS ${serviceDate} Claim processed by ${payerName} on ${processedDate} under Claim # ${claimNumber}. Claim is Denied under Check #: ${checkNumber} dated ${checkDate}.`);
-      }
+      const genericGroups = groupLineItemsByProcessedDate(lineItems, processedDate);
+      fields.BotClaimResult = joinClaimResultSections(genericGroups.map(group => {
+        const groupClaimResultParts: string[] = [];
+        const groupLinePaidTotal = group.lineItems.reduce((sum, item) => sum + parseMoney(item.paidAmount), 0);
+        const effectivePaidTotal = group.lineItems.length > 0 ? groupLinePaidTotal : numericTotalPaid;
+        const groupResponsibility = formatClaimLevelPatientResponsibility(group.lineItems, scrapedData['patient-responsibility']);
+        const groupResponsibilityText = groupResponsibility ? ` ${groupResponsibility}.` : '';
+        const groupProcessedDate = group.processedDate || processedDate;
+        const groupPaymentRows = paymentRowsForProcessedDate(groupProcessedDate, lineProcessedDates, paymentRows);
+        const groupCheckAmountText = formatCheckAmounts(groupPaymentRows, paymentAmount, effectivePaidTotal);
+        const groupCheckNumber = uniqueJoin(groupPaymentRows.map(row => row.number), checkNumber);
+        const groupCheckDate = checkDateForProcessedDate(groupProcessedDate, lineProcessedDates, paymentRows, checkDateFallback);
 
-      const serviceLineNotes = buildServiceLineNotes(lineItems, [checkNumber, scrapedData['payment-number'] || '', fields.BotCheckEFTNumber || ''], false);
-      if (serviceLineNotes.length > 0) {
-        claimResultParts.push(...serviceLineNotes);
-      } else {
-        claimResultParts.push(`Service line: Denied for ${fields.BotDenialDescription || 'Service denied'}.`);
-      }
+        if (effectivePaidTotal > 0) {
+          groupClaimResultParts.push(`DOS ${serviceDate} Claim processed by ${payerName} on ${groupProcessedDate} under Claim # ${claimNumber}. Payment issued via Check/EFT # ${groupCheckNumber} dated ${groupCheckDate}. Check Amount: ${groupCheckAmountText}.${groupResponsibilityText}`);
+        } else {
+          groupClaimResultParts.push(`DOS ${serviceDate} Claim processed by ${payerName} on ${groupProcessedDate} under Claim # ${claimNumber}. Claim is Denied under Check #: ${groupCheckNumber} dated ${groupCheckDate}.`);
+        }
 
-      fields.BotClaimResult = claimResultParts.join('\n');
+        const serviceLineNotes = buildServiceLineNotes(group.lineItems, [groupCheckNumber, scrapedData['payment-number'] || '', fields.BotCheckEFTNumber || ''], false);
+        if (serviceLineNotes.length > 0) {
+          groupClaimResultParts.push(...serviceLineNotes);
+        } else if (effectivePaidTotal <= 0) {
+          groupClaimResultParts.push(`Service line: Denied for ${fields.BotDenialDescription || 'Service denied'}.`);
+        }
+
+        return groupClaimResultParts.join('\n');
+      }));
       allScrapedFields.push(fields);
       await log(`  ℹ️  Scraped details for claim #${m + 1} (${fields.BotClaimNumber}): length ${fields.BotClaimDetails.length}`);
+      await appendDualPlanClaimFieldsIfPresent({
+        page,
+        claim,
+        payload: p,
+        clientType,
+        targetProcessedDate: dualPlanTargetProcessedDate,
+        allScrapedFields,
+        log,
+      });
     }
 
     // Combine results
@@ -2567,14 +2913,16 @@ async function findMatchingClaim(
       combinedFields.BotCheckEFTNumber = allScrapedFields.map(f => f.BotCheckEFTNumber).filter(Boolean).join(', ');
       combinedFields.BotDenialReasonCode = allScrapedFields.map(f => f.BotDenialReasonCode).filter(Boolean).join(', ');
       combinedFields.BotRemarkCodes = allScrapedFields.map(f => f.BotRemarkCodes).filter(Boolean).join(', ');
-      combinedFields.BotProcessedDate = allScrapedFields.map(f => f.BotProcessedDate).filter(Boolean).join(', ');
+      combinedFields.BotProcessedDate = uniqueSortedProcessedDates(
+        allScrapedFields.flatMap(f => String(f.BotProcessedDate || '').split(','))
+      ).join(', ');
 
       combinedFields.BotClaimDetails = allScrapedFields.map((f, i) => {
         const claimNum = f.BotClaimNumber || 'Unknown';
         return `=== Claim #${i + 1} (${claimNum}) ===\n${f.BotClaimDetails}`;
-      }).join('\n\n');
+      }).join(CLAIM_RESULT_SECTION_SEPARATOR);
 
-      combinedFields.BotClaimResult = allScrapedFields.map(f => f.BotClaimResult).filter(Boolean).join('\n\n');
+      combinedFields.BotClaimResult = joinClaimResultSections(allScrapedFields.map(f => f.BotClaimResult || ''));
       
       await log(`  ℹ️  Combined BotClaimDetails for ${allScrapedFields.length} claims: length ${combinedFields.BotClaimDetails.length}`);
     }
