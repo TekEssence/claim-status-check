@@ -154,6 +154,16 @@ function isSystemUnableToRespondText(value: string): boolean {
     (text.includes('please try refreshing the page') && text.includes('try again at a later time'));
 }
 
+function isMemberLookupNotFoundMessage(value: string): boolean {
+  const text = value.toLowerCase().replace(/\s+/g, ' ');
+  return text.includes('member not found') ||
+    text.includes('member id not found') ||
+    text.includes('member id cannot be found') ||
+    text.includes('member cannot be found') ||
+    text.includes('check the data entered') ||
+    text.includes('check your entries');
+}
+
 async function getSystemUnableToRespondMessage(page: Page): Promise<string | null> {
   const bodyText = await page.locator('body').innerText({ timeout: 2_000 }).catch(() => '');
   if (!isSystemUnableToRespondText(bodyText)) return null;
@@ -952,7 +962,12 @@ async function dismissPopupIfPresent(
   // Read message before closing (DOM is gone after close)
   let message = '';
   try {
-    message = (await page.locator(SEL.POPUP_MESSAGE).innerText({ timeout: 2_000 })).trim();
+    const messageLocator = page.locator(SEL.POPUP_MESSAGE).first();
+    const fullDialogText = await messageLocator
+      .locator('xpath=ancestor::*[@role="dialog" or contains(@class, "modal") or contains(@class, "loading")][1]')
+      .innerText({ timeout: 1_000 })
+      .catch(() => '');
+    message = (fullDialogText || await messageLocator.innerText({ timeout: 2_000 })).replace(/\s+/g, ' ').trim();
   } catch {
     message = 'An error popup appeared but its message could not be read.';
   }
@@ -1749,7 +1764,7 @@ async function waitForOverlayLoader(page: Page, log: (msg: string) => Promise<vo
         return Array.from(document.querySelectorAll(currentOverlaySelector)).some(isVisible) ? false : 'hidden';
       },
       { overlaySelector, readySelector },
-      { timeout: readySelector ? 6_000 : 9_000, polling: 500 },
+      { timeout: readySelector ? 2_000 : 4_000, polling: 250 },
     ).catch(() => null);
 
     const result = resultHandle ? await resultHandle.jsonValue() : null;
@@ -1772,7 +1787,7 @@ async function waitForOverlayLoader(page: Page, log: (msg: string) => Promise<vo
 // ── Wait for sub-loaders on detail page to complete ──────────────────────────
 async function waitForClaimDetailLoaders(page: Page, log: (msg: string) => Promise<void>) {
   await log('  ⏳  Waiting for UHC claim details to load and render...');
-  const coreDetailSelector = '[data-testid="overview-claim-number"], [data-testid="cs-claim-number"], [data-testid="pi-patient-name-content"]';
+  const coreDetailSelector = '[data-testid="overview-claim-number"], [data-testid="overview-claim-number-button"], [data-testid="cs-claim-number"], [data-testid="pi-patient-name-content"], [data-testid="line-items-container"]';
   await waitForOverlayLoader(page, log, coreDetailSelector);
 
   const hasCoreDetailContent = await page.locator(coreDetailSelector).first().isVisible().catch(() => false);
@@ -2492,12 +2507,11 @@ async function findMatchingClaim(
 
       const lowerMsg = popupMessage.toLowerCase();
       const isPermanent = 
-        lowerMsg.includes('member not found') || 
+        isMemberLookupNotFoundMessage(popupMessage) ||
         lowerMsg.includes('no claim found') || 
         lowerMsg.includes('please check') || 
         lowerMsg.includes('cannot be found') || 
-        lowerMsg.includes('check your entries') ||
-        lowerMsg.includes('check the data entered');
+        lowerMsg.includes('check your entries');
 
       if (isPermanent) {
         await log(`  ❌  Permanent search error popup: "${popupMessage}". Skipping retries.`);
@@ -2969,13 +2983,15 @@ async function processRow(
     }
 
     // Check if we should retry using patient name & DOB
-    const isMemberNotFoundPopup = match && 'popupError' in match && 
-      (match.popupError.toLowerCase().includes('member not found') || 
-       match.popupError.toLowerCase().includes('check the data entered'));
+    const memberNotFoundPopupMessage = match && 'popupError' in match && isMemberLookupNotFoundMessage(match.popupError)
+      ? match.popupError
+      : '';
     
     const noClaimMatched = !match;
 
-    if (isMemberNotFoundPopup || noClaimMatched) {
+    if (memberNotFoundPopupMessage) {
+      await log(`  ❌  Row ${rowNum}: Member lookup failed — ${memberNotFoundPopupMessage}`);
+    } else if (noClaimMatched) {
       const nameParts = getPatientNameParts(claim);
       const hasName = !!(nameParts.firstName || nameParts.lastName);
 
@@ -3010,6 +3026,8 @@ async function processRow(
     // Popup appeared twice — surface its message as a row error
     if (match && 'popupError' in match) {
       const botFields: BotFields = {
+        BotClaimStatus: 'Failed',
+        BotClaimResult: match.popupError,
         BotStatus:      'Error',
         BotStatusError: match.popupError,
         BotUpdateTime:  new Date().toISOString(),

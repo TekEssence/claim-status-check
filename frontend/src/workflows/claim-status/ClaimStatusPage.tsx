@@ -464,6 +464,35 @@ function downloadBase64File(filename: string, base64: string, type: string): voi
   downloadBlob(filename, new Blob([arrayBuffer], { type }));
 }
 
+function getEventRowIndex(eventData: ScrapeJobEvent): number {
+  if (typeof eventData.index === "number") return eventData.index;
+  if (typeof eventData.rowIndex === "number") return Math.max(0, eventData.rowIndex - 1);
+  return -1;
+}
+
+function screenshotsFromArtifacts(currentJob: CurrentScrapeJob): ErrorScreenshot[] {
+  return (currentJob.artifacts ?? [])
+    .filter((artifact) => artifact.artifactType === "error_screenshot" && artifact.contentBase64)
+    .map((artifact) => ({
+      index: artifact.rowIndex === null || artifact.rowIndex === undefined ? -1 : artifact.rowIndex,
+      image: artifact.contentBase64 ?? "",
+    }));
+}
+
+function downloadDebugHtmlArtifacts(currentJob: CurrentScrapeJob): void {
+  for (const artifact of currentJob.artifacts ?? []) {
+    if (artifact.artifactType !== "debug_html" || !artifact.contentText) continue;
+    const artifactKey = `${artifact.artifactType}:${artifact.id}:${artifact.filename || artifact.createdAt}`;
+    if (hasDownloadedArtifact(currentJob.jobId, artifactKey)) continue;
+    downloadTextFile(
+      artifact.filename || `debug_dom_line_${artifact.rowIndex === null || artifact.rowIndex === undefined ? "unknown" : artifact.rowIndex + 1}.html`,
+      artifact.contentText,
+      artifact.mimeType || "text/html",
+    );
+    rememberDownloadedArtifact(currentJob.jobId, artifactKey);
+  }
+}
+
 function getDownloadedArtifactsKey(jobId: string): string {
   return `${DOWNLOADED_ARTIFACTS_PREFIX}${jobId}`;
 }
@@ -498,7 +527,7 @@ function hasDownloadedArtifact(jobId: string, artifactKey: string): boolean {
 function buildDownloadArtifactKey(eventData: ScrapeJobEvent): string {
   return [
     eventData.type ?? "",
-    typeof eventData.index === "number" ? String(eventData.index) : "",
+    String(getEventRowIndex(eventData)),
     eventData.filename ?? "",
     eventData.path ?? "",
   ].join("|");
@@ -654,6 +683,26 @@ async function writeWorkbookToClaimFile(claimFileHandle: FileSystemFileHandle, e
   const writable = await claimFileHandle.createWritable();
   await writable.write(updatedBuffer);
   await writable.close();
+}
+
+async function cloneWorkbook(excelWb: ExcelJS.Workbook): Promise<ExcelJS.Workbook> {
+  const buffer = await excelWb.xlsx.writeBuffer();
+  const clonedWb = new ExcelJS.Workbook();
+  await clonedWb.xlsx.load(buffer);
+  return clonedWb;
+}
+
+async function writeIehpPostProcessedCheckpoint(
+  claimFileHandle: FileSystemFileHandle,
+  excelWb: ExcelJS.Workbook,
+): Promise<void> {
+  const checkpointWb = await cloneWorkbook(excelWb);
+  const checkpointWorksheet = checkpointWb.getWorksheet(1);
+  if (!checkpointWorksheet) {
+    throw new Error("Claim Excel file does not contain a worksheet.");
+  }
+  postProcessWorksheet(checkpointWorksheet);
+  await writeWorkbookToClaimFile(claimFileHandle, checkpointWb);
 }
 
 export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: PortalId | null }) {
@@ -1047,14 +1096,10 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
         if (cancelled || !currentJob) return;
         if (!canRestoreCurrentJob(currentJob)) return;
 
-        setErrorScreenshots(
-          (currentJob.artifacts ?? [])
-            .filter((artifact) => artifact.artifactType === "error_screenshot" && artifact.contentBase64)
-            .map((artifact) => ({
-              index: artifact.rowIndex ?? -1,
-              image: artifact.contentBase64 ?? "",
-            })),
-        );
+        setErrorScreenshots(screenshotsFromArtifacts(currentJob));
+        if (currentJob.portalId === "iehp") {
+          downloadDebugHtmlArtifacts(currentJob);
+        }
         setProgress(
           currentJob.totalRows > 0
             ? { completed: currentJob.currentCompleted, total: currentJob.totalRows }
@@ -1763,12 +1808,13 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
               handleWriteFailure(writeErr);
             }
           });
-          } else if (eventData.type === "error_screenshot" && typeof eventData.index === "number" && eventData.image) {
-            setErrorScreenshots((prev) => [...prev, { index: eventData.index ?? -1, image: eventData.image ?? "" }]);
-          } else if (eventData.type === "debug_html" && typeof eventData.index === "number" && eventData.html) {
+          } else if (eventData.type === "error_screenshot" && eventData.image) {
+            setErrorScreenshots((prev) => [...prev, { index: getEventRowIndex(eventData), image: eventData.image ?? "" }]);
+          } else if (eventData.type === "debug_html" && eventData.html) {
             const artifactKey = buildDownloadArtifactKey(eventData);
             if (!hasDownloadedArtifact(subscribedJobId, artifactKey)) {
-              downloadTextFile(`debug_dom_row_${eventData.index + 1}.html`, eventData.html, "text/html");
+              const rowIndex = getEventRowIndex(eventData);
+              downloadTextFile(eventData.filename || `debug_dom_line_${rowIndex >= 0 ? rowIndex + 1 : "unknown"}.html`, eventData.html, "text/html");
               rememberDownloadedArtifact(subscribedJobId, artifactKey);
             }
           } else if (eventData.type === "pdf_download" && eventData.filename && eventData.base64) {
@@ -1815,6 +1861,15 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
         });
 
         await writeQueue;
+        if (!chunkHasError) {
+          try {
+            setStatus(`Saving IEHP checkpoint after row ${currentCompleted}...`);
+            await writeIehpPostProcessedCheckpoint(options.claimFileHandle, excelWb);
+          } catch (checkpointError) {
+            console.error("Failed to write IEHP checkpoint:", checkpointError);
+            handleWriteFailure(checkpointError);
+          }
+        }
       } catch (error) {
         if (writeFailure) {
           console.error("Processing stopped because Excel write failed", writeFailure);
@@ -2652,6 +2707,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     let finalErrorMessage = "";
     let subscribedJobId = "";
     let writeQueue = Promise.resolve();
+    let uhcRowsSinceCheckpoint = 0;
     const streamAbortController = new AbortController();
 
     const failForWriteError = (error: unknown) => {
@@ -2674,8 +2730,16 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
         setProgress({ completed: eventData.completed, total: eventData.total });
       } else if (eventData.type === "row_update") {
         applyUhcRowUpdateToWorksheet(workbookBundle.worksheet, eventData);
+        uhcRowsSinceCheckpoint += 1;
+        const shouldWriteFullUhcCheckpoint = uhcRowsSinceCheckpoint >= 10;
+        if (shouldWriteFullUhcCheckpoint) {
+          uhcRowsSinceCheckpoint = 0;
+        }
         writeQueue = writeQueue.then(async () => {
           try {
+            if (shouldWriteFullUhcCheckpoint) {
+              postProcessUhcWorksheet(workbookBundle.worksheet);
+            }
             await writeWorkbookToClaimFile(uhcClaimFileHandle, workbookBundle.excelWb);
           } catch (writeError) {
             failForWriteError(writeError);
@@ -2686,7 +2750,8 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
       } else if (eventData.type === "debug_html" && typeof eventData.index === "number" && eventData.html) {
         const artifactKey = buildDownloadArtifactKey(eventData);
         if (!hasDownloadedArtifact(subscribedJobId, artifactKey)) {
-          downloadTextFile(`uhc_debug_row_${eventData.rowIndex ?? eventData.index + 1}.html`, eventData.html, "text/html");
+          const rowIndex = getEventRowIndex(eventData);
+          downloadTextFile(eventData.filename || `uhc_debug_line_${rowIndex >= 0 ? rowIndex + 1 : "unknown"}.html`, eventData.html, "text/html");
           rememberDownloadedArtifact(subscribedJobId, artifactKey);
         }
       } else if (eventData.type === "otp_request" && eventData.inputName) {
@@ -2744,6 +2809,10 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
       if (!hasError && !wasCancelled) {
         postProcessUhcWorksheet(workbookBundle.worksheet);
         await writeWorkbookToClaimFile(uhcClaimFileHandle, workbookBundle.excelWb);
+      } else if (uhcRowsSinceCheckpoint > 0) {
+        postProcessUhcWorksheet(workbookBundle.worksheet);
+        await writeWorkbookToClaimFile(uhcClaimFileHandle, workbookBundle.excelWb);
+        uhcRowsSinceCheckpoint = 0;
       }
 
       setStatus(

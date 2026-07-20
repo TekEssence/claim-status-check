@@ -34,6 +34,7 @@ export type PersistentScrapeJobArtifact = {
   pathOrKey: string;
   createdAt: string;
   contentBase64?: string;
+  contentText?: string;
 };
 
 export type UserDashboardStats = {

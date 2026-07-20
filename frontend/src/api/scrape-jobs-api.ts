@@ -19,6 +19,7 @@ export type CurrentScrapeJob = {
     pathOrKey: string;
     createdAt: string;
     contentBase64?: string;
+    contentText?: string;
   }>;
 };
 
