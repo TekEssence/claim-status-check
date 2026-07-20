@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { applyProjectColumnMapping, applyProjectPreprocessing } from "./project-config";
+import {
+  applyProjectColumnMapping,
+  applyProjectPreprocessing,
+  getOrganizationForRow,
+  getProviderOrderForRow,
+  normalizeProjectId,
+} from "./project-config";
 import type { AvailityInputRow } from "./types";
 
 function createRow(input_row_id: number, data: Record<string, string>): AvailityInputRow {
@@ -79,5 +85,89 @@ describe("applyProjectPreprocessing", () => {
     }];
 
     assert.equal(applyProjectPreprocessing("minimax", rows), rows);
+  });
+});
+
+describe("Charm project config", () => {
+  it("normalizes Charm project id", () => {
+    assert.equal(normalizeProjectId("Charm"), "charm");
+  });
+
+  it("maps Charm input columns to Availity common fields", () => {
+    const mapped = applyProjectColumnMapping("charm", {
+      "Invoice #": "INV-100",
+      "Payer Name": "Payer [ 99726 ] - Tricare | West Region",
+      "Patient Name": "DOE, JANE",
+      "Date Of Birth": "01/02/1980",
+      "Insured's ID": "SUB-123",
+      "Date Of Service": "06/16/2026",
+      Charges: "$150.00",
+      "Provider Name": "TEST PROVIDER",
+      Group: "open mind",
+    });
+
+    assert.equal(mapped["Claim No"], "INV-100");
+    assert.equal(mapped["Payer Name"], "Payer [ 99726 ] - Tricare | West Region");
+    assert.equal(mapped["Patient Name"], "DOE, JANE");
+    assert.equal(mapped["Patient DOB"], "01/02/1980");
+    assert.equal(mapped["Subscriber No"], "SUB-123");
+    assert.equal(mapped["Service Date"], "06/16/2026");
+    assert.equal(mapped.Charges, "$150.00");
+    assert.equal(mapped["Provider Name"], "TEST PROVIDER");
+    assert.equal(mapped.Group, "open mind");
+  });
+
+  it("maps Charm group to Availity organization", () => {
+    const row: AvailityInputRow = {
+      input_row_id: 1,
+      source_row_number: 2,
+      data: applyProjectColumnMapping("charm", {
+        Group: "Open Mind",
+      }),
+    };
+
+    assert.equal(getOrganizationForRow("charm", row), "Open Mind Health");
+  });
+
+  it("keeps Minimax and Medrevenu organization blank", () => {
+    const row: AvailityInputRow = {
+      input_row_id: 1,
+      source_row_number: 2,
+      data: { Group: "open mind" },
+    };
+
+    assert.equal(getOrganizationForRow("minimax", row), undefined);
+    assert.equal(getOrganizationForRow("medrevenu", row), undefined);
+  });
+
+  it("uses Charm provider mapping first and input provider as fallback", () => {
+    const row: AvailityInputRow = {
+      input_row_id: 1,
+      source_row_number: 2,
+      data: applyProjectColumnMapping("charm", {
+        Group: "open mind",
+        "Provider Name": "INPUT PROVIDER",
+      }),
+    };
+
+    assert.deepEqual(getProviderOrderForRow("charm", row, [{
+      active: true,
+      project: "charm",
+      group: "open mind",
+      providerName: "MAPPED PROVIDER",
+    }]), ["MAPPED PROVIDER", "INPUT PROVIDER"]);
+  });
+
+  it("falls back to Charm input provider when provider mapping is missing", () => {
+    const row: AvailityInputRow = {
+      input_row_id: 1,
+      source_row_number: 2,
+      data: applyProjectColumnMapping("charm", {
+        Group: "open mind",
+        "Provider Name": "INPUT PROVIDER",
+      }),
+    };
+
+    assert.deepEqual(getProviderOrderForRow("charm", row, []), ["INPUT PROVIDER"]);
   });
 });

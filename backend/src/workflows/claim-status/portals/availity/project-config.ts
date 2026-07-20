@@ -1,6 +1,7 @@
 import path from "node:path";
 import ExcelJS from "exceljs";
 import type { AvailityInputRow, AvailityProviderMapping } from "./types";
+import projectOrganizationMapping from "./config/project-organization-mapping.json";
 
 function asText(value: unknown): string {
   if (value == null) return "";
@@ -62,10 +63,29 @@ export function normalizeProjectId(value: unknown): string {
   const normalized = normalizeAlias(value || "minimax");
   if (!normalized || normalized === "minimax") return "minimax";
   if (normalized === "medrevenu" || normalized === "medrevenue") return "medrevenu";
-  throw new Error(`Unsupported Availity project "${asText(value)}". Supported projects: Minimax, Medrevenu.`);
+  if (normalized === "charm") return "charm";
+  throw new Error(`Unsupported Availity project "${asText(value)}". Supported projects: Minimax, Medrevenu, Charm.`);
 }
 
 export function applyProjectColumnMapping(projectId: string, data: Record<string, string>): Record<string, string> {
+  if (projectId === "charm") {
+    const patientName = findDataValue(data, ["Patient Name"]) ||
+      [findDataValue(data, ["Patient first name"]), findDataValue(data, ["Patient last name"])].filter(Boolean).join(" ");
+
+    return {
+      ...data,
+      "Claim No": findDataValue(data, ["Invoice #", "Invoice Number", "Invoice"]) || data["Claim No"] || "",
+      "Payer Name": findDataValue(data, ["Payer Name"]) || data["Payer Name"] || "",
+      "Patient Name": patientName,
+      "Patient DOB": findDataValue(data, ["Date Of Birth", "Date of Birth", "DOB"]) || data["Patient DOB"] || "",
+      "Subscriber No": findDataValue(data, ["Insured's ID", "Insured ID", "Member ID", "Subscriber No"]) || data["Subscriber No"] || "",
+      "Service Date": findDataValue(data, ["Date Of Service", "Date of Service", "DOS", "Service Date"]) || data["Service Date"] || "",
+      Charges: findDataValue(data, ["Charges", "Billed Amount"]) || data.Charges || "",
+      "Provider Name": findDataValue(data, ["Provider Name"]) || data["Provider Name"] || "",
+      Group: findDataValue(data, ["Group", "Practice", "Organization Group"]) || data.Group || "",
+    };
+  }
+
   if (projectId !== "medrevenu") {
     return data;
   }
@@ -123,6 +143,25 @@ export function applyProjectPreprocessing(projectId: string, rows: AvailityInput
   });
 }
 
+export function getOrganizationForRow(projectId: string, row: AvailityInputRow): string | undefined {
+  const projectMap = (projectOrganizationMapping as Record<string, Record<string, string | null>>)[projectId];
+  if (!projectMap || Object.keys(projectMap).length === 0) {
+    return undefined;
+  }
+
+  const group = findRowValue(row, ["Group", "Group Name", "Group Code", "Practice", "Organization Group"]);
+  if (!group) {
+    throw new Error(`${projectId} Availity rows require a Group column value to select the organization.`);
+  }
+
+  const organization = Object.entries(projectMap).find(([mappedGroup]) => normalizeLookup(mappedGroup) === normalizeLookup(group))?.[1];
+  if (!organization) {
+    throw new Error(`No Availity organization mapping found for ${projectId} group "${group}". Update project-organization-mapping.json.`);
+  }
+
+  return organization;
+}
+
 export async function readAvailityProviderMapping(): Promise<AvailityProviderMapping[]> {
   const mappingPath = path.join(
     process.cwd(),
@@ -172,24 +211,32 @@ export async function readAvailityProviderMapping(): Promise<AvailityProviderMap
 }
 
 export function getProviderOrderForRow(projectId: string, row: AvailityInputRow, providerMappings: AvailityProviderMapping[]): string[] | undefined {
-  if (projectId !== "medrevenu") {
+  if (projectId !== "medrevenu" && projectId !== "charm") {
     return undefined;
   }
 
-  const group = findRowValue(row, ["Group", "Group Name", "Group Code", "Medical Group", "Medical Group Name"]);
+  const group = findRowValue(row, ["Group", "Group Name", "Group Code", "Medical Group", "Medical Group Name", "Practice", "Organization Group"]);
+  const inputProviderName = findRowValue(row, ["Provider Name", "Provider", "Rendering Provider"]);
+  if (!group && projectId === "charm") {
+    return inputProviderName ? [inputProviderName] : undefined;
+  }
   if (!group) {
-    throw new Error("Medrevenu Availity rows require a Group column value to select the provider.");
+    throw new Error(`${projectId} Availity rows require a Group column value to select the provider.`);
   }
 
   const match = providerMappings.find((mapping) => {
     return mapping.active
-      && mapping.project === "medrevenu"
+      && mapping.project === projectId
       && normalizeLookup(mapping.group) === normalizeLookup(group);
   });
 
-  if (!match) {
-    throw new Error(`No Availity provider mapping found for Medrevenu group "${group}". Update Provider_mapping_ava.xlsx.`);
+  if (!match && projectId === "charm") {
+    return inputProviderName ? [inputProviderName] : undefined;
   }
 
-  return [match.providerName];
+  if (!match) {
+    throw new Error(`No Availity provider mapping found for ${projectId} group "${group}". Update Provider_mapping_ava.xlsx.`);
+  }
+
+  return Array.from(new Set([match.providerName, inputProviderName].filter(Boolean)));
 }

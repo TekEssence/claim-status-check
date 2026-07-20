@@ -34,6 +34,11 @@ export function AvailityInputForm({
       name: "Medrevenu",
       description: "Uses Group from the claim file to select one mapped provider.",
     },
+    {
+      id: "charm",
+      name: "Charm",
+      description: "Uses Group to select Organization, then uses mapped provider or Provider Name fallback.",
+    },
   ];
 
   return (
@@ -44,7 +49,7 @@ export function AvailityInputForm({
 
       <div className="rounded-[1.2rem] border border-sky-100 bg-white/90 p-4">
         <p className="text-sm font-semibold text-slate-900">Select Project</p>
-        <div className="mt-3 grid gap-3 md:grid-cols-2">
+        <div className="mt-3 grid gap-3 md:grid-cols-3">
           {projects.map((project) => {
             const isSelected = selectedProjectId === project.id;
             return (

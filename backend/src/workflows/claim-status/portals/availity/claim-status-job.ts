@@ -4,14 +4,14 @@ import type { ScraperContext } from "../../types";
 import { launchAvailityBrowser } from "./browser";
 import { parseAvailityInput, readAvailityPayerMapping } from "./input";
 import { createAvailityOutputWorkbookBuffer } from "./output-writer";
-import { getProviderOrderForRow, readAvailityProviderMapping } from "./project-config";
+import { getOrganizationForRow, getProviderOrderForRow, readAvailityProviderMapping } from "./project-config";
 import { applyProjectOutputStrategy } from "./project-output";
 import type { AvailityAuditRow, AvailityErrorRow, AvailityInputRow, AvailityOutputRow, AvailityProviderMapping } from "./types";
 
 const require = createRequire(import.meta.url);
 const { submitLogin } = require("./legacy/pages/login.page.js");
 const { handleMfa } = require("./legacy/pages/mfa.page.js");
-const { acceptCookiesIfPresent, logoutIfPresent, openClaimStatus } = require("./legacy/pages/navigation.page.js");
+const { acceptCookiesIfPresent, getClaimStatusFrame, logoutIfPresent, openClaimStatus } = require("./legacy/pages/navigation.page.js");
 const { selectPayer } = require("./legacy/pages/claim-status-member.page.js");
 const { validateRow } = require("./legacy/services/row-validator.js");
 const { renderFailedSummary } = require("./legacy/services/summary-renderer.js");
@@ -146,6 +146,36 @@ function legacyLevelToContextLevel(level: string): "debug" | "info" | "warn" | "
   return "info";
 }
 
+async function selectAutocompleteValue(scope: any, inputLocator: any, value: string): Promise<void> {
+  await inputLocator.waitFor({ state: "visible", timeout: 30000 });
+  await inputLocator.scrollIntoViewIfNeeded().catch(() => {});
+  await inputLocator.click({ force: true });
+  await inputLocator.press(process.platform === "darwin" ? "Meta+A" : "Control+A").catch(() => {});
+  await inputLocator.press("Backspace").catch(() => {});
+  await inputLocator.fill(value);
+  await scope.page().waitForTimeout(600).catch(() => {});
+
+  const option = scope.getByText(value, { exact: true }).last();
+  if (await option.isVisible({ timeout: 5000 }).catch(() => false)) {
+    await option.click();
+  } else {
+    await inputLocator.press("Enter").catch(() => {});
+  }
+
+  await scope.page().waitForTimeout(500).catch(() => {});
+}
+
+async function selectOrganization(page: Page, organization: string): Promise<void> {
+  const frame = await getClaimStatusFrame(page);
+  const organizationInput = frame.locator("input#orgSelect[role='combobox'], input#orgSelect").first();
+  await selectAutocompleteValue(frame, organizationInput, organization);
+
+  const selectedValue = await organizationInput.inputValue({ timeout: 5000 }).catch(() => "");
+  if (selectedValue.trim() !== organization) {
+    throw new Error(`Availity organization "${organization}" was not selected. Current value: "${selectedValue || "(blank)"}".`);
+  }
+}
+
 async function loginToAvaility(page: Page, input: Awaited<ReturnType<typeof parseAvailityInput>>, context: ScraperContext, log: (message: string) => Promise<void>): Promise<void> {
   await log("Opening Availity login page.");
   await page.goto(input.credentials.loginUrl, { waitUntil: "domcontentloaded" });
@@ -176,11 +206,18 @@ async function processValidRow(
   page: Page,
   row: AvailityInputRow,
   mappedPayerName: string,
-  automationState: { selectedPayer: string },
+  automationState: { selectedOrganization: string; selectedPayer: string },
   options: { projectId: string; providerMappings: AvailityProviderMapping[] },
 ) {
   if (!mappedPayerName?.trim()) {
     throw new Error(`Payer mapping is blank for "${row.data["Payer Name"] || "unknown payer"}". Update backend/src/workflows/claim-status/portals/availity/config/Payer_mapping_ava.xlsx.`);
+  }
+
+  const organization = getOrganizationForRow(options.projectId, row);
+  if (organization && automationState.selectedOrganization !== organization) {
+    await selectOrganization(page, organization);
+    automationState.selectedOrganization = organization;
+    automationState.selectedPayer = "";
   }
 
   if (automationState.selectedPayer !== mappedPayerName) {
@@ -206,8 +243,8 @@ export async function runAvailityClaimStatusJob(formData: FormData, context: Scr
   const outputRows: AvailityOutputRow[] = [];
   const errorRows: AvailityErrorRow[] = [];
   const auditRows: AvailityAuditRow[] = [];
-  const automationState = { selectedPayer: "" };
-  const payerMapping = await readAvailityPayerMapping();
+  const automationState = { selectedOrganization: "", selectedPayer: "" };
+  const payerMapping = await readAvailityPayerMapping(input.projectId);
   const providerMappings = await readAvailityProviderMapping();
   let session: Awaited<ReturnType<typeof initializeSession>> | null = null;
 
@@ -234,6 +271,7 @@ export async function runAvailityClaimStatusJob(formData: FormData, context: Scr
         await log("Availity page closed before next row. Restarting browser session.");
         await session.browser.close().catch(() => {});
         session = await initializeSession(input, context, log);
+        automationState.selectedOrganization = "";
         automationState.selectedPayer = "";
       }
 
@@ -311,8 +349,12 @@ export async function runAvailityClaimStatusJob(formData: FormData, context: Scr
             if (isClosedPageError(message) || rowAttempt >= 2) {
               await session.browser.close().catch(() => {});
               session = await initializeSession(input, context, log);
+              automationState.selectedOrganization = "";
+              automationState.selectedPayer = "";
             } else {
               await openClaimStatus(session.page, { forceOpen: true });
+              automationState.selectedOrganization = "";
+              automationState.selectedPayer = "";
             }
             addAudit(auditRows, runId, row, "row_recovery", "recovered", message, startedAt, rowAttempt);
             continue;
