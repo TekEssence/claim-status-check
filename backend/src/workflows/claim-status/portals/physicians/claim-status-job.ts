@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { Browser, Locator, Page } from "playwright-core";
+import type { Browser, Frame, Locator, Page } from "playwright-core";
 import { closeAutomationResources } from "@/backend/src/core/runtime-config";
 import type { ScraperContext } from "../../types";
 import { launchPhysiciansBrowser } from "./browser";
@@ -41,6 +41,7 @@ type PhysiciansClaimRow = {
 };
 
 const OUTPUT_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+type SearchSurface = Page | Frame;
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -142,8 +143,8 @@ function addAudit(state: PhysiciansWorkbookState, inputRow: PhysiciansInputRow |
   } satisfies PhysiciansAuditRow);
 }
 
-async function findVisibleLocator(page: Page, selector: string, timeout = 2500): Promise<Locator | null> {
-  const locator = page.locator(selector).first();
+async function findVisibleLocator(surface: SearchSurface, selector: string, timeout = 2500): Promise<Locator | null> {
+  const locator = surface.locator(selector).first();
   try {
     await locator.waitFor({ state: "visible", timeout });
     return locator;
@@ -152,24 +153,24 @@ async function findVisibleLocator(page: Page, selector: string, timeout = 2500):
   }
 }
 
-async function clickIfVisible(page: Page, selector: string, timeout = 2500): Promise<boolean> {
-  const locator = await findVisibleLocator(page, selector, timeout);
+async function clickIfVisible(surface: SearchSurface, selector: string, timeout = 2500): Promise<boolean> {
+  const locator = await findVisibleLocator(surface, selector, timeout);
   if (!locator) return false;
   await locator.click({ timeout: 5000 }).catch(async () => locator.evaluate((element) => (element as HTMLElement).click()));
-  await page.waitForTimeout(500);
+  await surface.waitForTimeout(500);
   return true;
 }
 
-async function fillField(page: Page, selector: string, value: string, label: string): Promise<void> {
-  const locator = await findVisibleLocator(page, selector, 8000);
+async function fillField(surface: SearchSurface, selector: string, value: string, label: string): Promise<void> {
+  const locator = await findVisibleLocator(surface, selector, 8000);
   if (!locator) throw new Error(`Could not find Physicians field: ${label} (${selector})`);
   await locator.click({ timeout: 5000 });
   await locator.fill("");
   if (value) await locator.fill(value);
 }
 
-async function visibleBodyText(page: Page): Promise<string> {
-  return page.locator("body").innerText({ timeout: 1500 }).catch(() => "");
+async function visibleBodyText(surface: SearchSurface): Promise<string> {
+  return surface.locator("body").innerText({ timeout: 1500 }).catch(() => "");
 }
 
 async function captureDiagnostics(context: ScraperContext, page: Page, inputRow: PhysiciansInputRow | null, reason: string): Promise<void> {
@@ -334,27 +335,47 @@ async function openClaimSearch(page: Page, context: ScraperContext): Promise<voi
 
   await page.waitForTimeout(physiciansConfig.timing.postNavigationMs);
 
-  // Poll for up to ~25s, closing any popup that shows up (possibly more than once, and possibly
-  // arriving after the page otherwise looks ready) and re-checking for the search form each pass,
-  // instead of doing "close once, then wait once" which loses the race if the popup is injected
-  // slightly late by the portal's own JS.
-  const deadline = Date.now() + 25000;
-  let ready = false;
-  while (Date.now() < deadline) {
-    await closeAnnouncementOnce(page);
-    ready = await page.locator(physiciansConfig.selectors.searchButton).first().isVisible().catch(() => false);
-    if (ready) break;
-    await page.waitForTimeout(500);
-  }
-  if (!ready) {
+  const frame = await getClaimSearchFrame(page, context, 25000);
+  if (!frame) {
     await captureDiagnostics(context, page, null, "claim-search-not-open");
     throw new Error("Physicians Claim Search page did not open.");
   }
   await context.log({ level: "info", message: "Physicians Claim Search page is ready." });
 }
 
+async function getClaimSearchFrame(page: Page, context: ScraperContext, timeoutMs = 15000): Promise<Frame | null> {
+  // The PHN shell page only contains navigation and an iframe. The actual claim search form
+  // (#txtMemberID, #txtSvcDateFrom_txtDate, #btnSearch, results grid, etc.) is loaded inside
+  // iframe#viewFrame from PHNDotNet/ExternalClaimSearch.aspx. Filling the top-level page will
+  // always no-op because those controls do not exist there.
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    await closeAnnouncementOnce(page);
+
+    const directVisible = await page.locator(physiciansConfig.selectors.searchButton).first().isVisible().catch(() => false);
+    if (directVisible) {
+      await context.log({ level: "warn", message: "Physicians claim search controls were found on the top page instead of viewFrame." }).catch(() => {});
+      return page.mainFrame();
+    }
+
+    const viewFrame = page.frame({ name: "viewFrame" }) || page.frames().find((frame) => /ExternalClaimSearch\.aspx/i.test(frame.url()));
+    if (viewFrame) {
+      const ready = await viewFrame.locator(physiciansConfig.selectors.searchButton).first().isVisible().catch(() => false);
+      if (ready) return viewFrame;
+    }
+
+    await page.waitForTimeout(500);
+  }
+  return null;
+}
+
 async function clearSearch(page: Page, context: ScraperContext): Promise<void> {
-  const cleared = await clickIfVisible(page, physiciansConfig.selectors.clearButton, 1800);
+  const frame = await getClaimSearchFrame(page, context);
+  if (!frame) {
+    await openClaimSearch(page, context);
+    return;
+  }
+  const cleared = await clickIfVisible(frame, physiciansConfig.selectors.clearButton, 1800);
   if (cleared) {
     await page.waitForTimeout(physiciansConfig.timing.postNavigationMs);
     await closeAnnouncement(page, context).catch(() => {});
@@ -363,9 +384,9 @@ async function clearSearch(page: Page, context: ScraperContext): Promise<void> {
   await openClaimSearch(page, context);
 }
 
-async function setSearchFieldByLabel(page: Page, labelPattern: RegExp, value: string): Promise<boolean> {
+async function setSearchFieldByLabel(surface: SearchSurface, labelPattern: RegExp, value: string): Promise<boolean> {
   if (!value) return false;
-  return page.evaluate(
+  return surface.evaluate(
     ({ source, flags, text }) => {
       const labelRegex = new RegExp(source, flags);
       const clean = (value: string | null | undefined) => String(value ?? "").replace(/\s+/g, " ").trim();
@@ -400,22 +421,22 @@ async function clearAndFocus(locator: Locator): Promise<void> {
   }).catch(() => {});
 }
 
-async function typeMemberId(page: Page, value: string, context: ScraperContext): Promise<void> {
+async function typeMemberId(surface: SearchSurface, value: string): Promise<void> {
   if (!value) return;
-  const locator = await findVisibleLocator(page, physiciansConfig.selectors.memberId, 8000);
+  const locator = await findVisibleLocator(surface, physiciansConfig.selectors.memberId, 8000);
   if (!locator) throw new Error(`Could not find Physicians field: Member ID (${physiciansConfig.selectors.memberId})`);
   await clearAndFocus(locator);
   await locator.pressSequentially(value, { delay: 40 });
-  await page.keyboard.press("Tab").catch(() => {});
+  await locator.press("Tab").catch(() => {});
   const actual = await locator.inputValue().catch(() => "");
   if (cleanText(actual) !== cleanText(value)) {
     throw new Error(`Member ID did not fill correctly (expected "${value}", got "${actual}").`);
   }
 }
 
-async function typeDateField(page: Page, selector: string, value: string, label: string): Promise<void> {
+async function typeDateField(surface: SearchSurface, selector: string, value: string, label: string): Promise<void> {
   if (!value) return;
-  const locator = await findVisibleLocator(page, selector, 8000);
+  const locator = await findVisibleLocator(surface, selector, 8000);
   if (!locator) throw new Error(`Could not find Physicians field: ${label} (${selector})`);
   // These date fields have onkeydown/onkeyup handlers (onlynumber/doMask) that build the
   // "##-##-####" mask themselves as each digit is pressed. Playwright's .fill() (and any
@@ -426,7 +447,7 @@ async function typeDateField(page: Page, selector: string, value: string, label:
   const digits = value.replace(/[^0-9]/g, "");
   await clearAndFocus(locator);
   await locator.pressSequentially(digits, { delay: 60 });
-  await page.keyboard.press("Tab").catch(() => {});
+  await locator.press("Tab").catch(() => {});
   const actual = await locator.inputValue().catch(() => "");
   if (normalizeComparableDate(actual) !== normalizeComparableDate(value)) {
     throw new Error(`${label} did not fill correctly (expected "${value}", got "${actual}").`);
@@ -435,13 +456,15 @@ async function typeDateField(page: Page, selector: string, value: string, label:
 
 async function submitSearch(page: Page, inputRow: PhysiciansInputRow, context: ScraperContext): Promise<PhysiciansClaimRow[]> {
   await clearSearch(page, context);
+  const frame = await getClaimSearchFrame(page, context);
+  if (!frame) throw new Error("Physicians Claim Search frame is not available for data entry.");
 
-  await typeMemberId(page, inputRow.memberId, context);
-  await typeDateField(page, physiciansConfig.selectors.serviceDateFrom, inputRow.dos, "Date of Service From");
-  await typeDateField(page, physiciansConfig.selectors.serviceDateTo, inputRow.dosTo || inputRow.dos, "Date of Service To");
+  await typeMemberId(frame, inputRow.memberId);
+  await typeDateField(frame, physiciansConfig.selectors.serviceDateFrom, inputRow.dos, "Date of Service From");
+  await typeDateField(frame, physiciansConfig.selectors.serviceDateTo, inputRow.dosTo || inputRow.dos, "Date of Service To");
 
-  if (inputRow.authorizationNumber) await setSearchFieldByLabel(page, /authorization\s*#/i, inputRow.authorizationNumber);
-  if (inputRow.providerClaimId) await setSearchFieldByLabel(page, /provider\s*claim|patient\s*account/i, inputRow.providerClaimId);
+  if (inputRow.authorizationNumber) await setSearchFieldByLabel(frame, /authorization\s*#/i, inputRow.authorizationNumber);
+  if (inputRow.providerClaimId) await setSearchFieldByLabel(frame, /provider\s*claim|patient\s*account/i, inputRow.providerClaimId);
 
   await context.log({
     level: "info",
@@ -449,30 +472,30 @@ async function submitSearch(page: Page, inputRow: PhysiciansInputRow, context: S
     rowIndex: inputRow.inputRowId,
   });
 
-  const clicked = await clickIfVisible(page, physiciansConfig.selectors.searchButton, 5000);
+  const clicked = await clickIfVisible(frame, physiciansConfig.selectors.searchButton, 5000);
   if (!clicked) throw new Error("Could not click the Physicians Claim Search button.");
   await page.waitForTimeout(300);
   await closeAnnouncement(page, context).catch(() => {});
-  await waitForSearchResults(page, 20000);
+  await waitForSearchResults(frame, 20000);
   await page.waitForTimeout(physiciansConfig.timing.postSearchMs);
-  return extractClaimRows(page);
+  return extractClaimRows(frame);
 }
 
-async function waitForSearchResults(page: Page, timeoutMs: number): Promise<void> {
+async function waitForSearchResults(surface: SearchSurface, timeoutMs: number): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const state = await page.evaluate(() => {
+    const state = await surface.evaluate(() => {
       const text = document.body?.innerText || "";
       const rows = document.querySelectorAll("#grdClaimsView tr, table[id*='grdClaimsView'] tr").length;
       return { rows, hasNoData: /no claims found|no records found|member not found|no member/i.test(text) };
     }).catch(() => ({ rows: 0, hasNoData: false }));
     if (state.rows > 1 || state.hasNoData) return;
-    await page.waitForTimeout(400);
+    await surface.waitForTimeout(400);
   }
 }
 
-async function extractClaimRows(page: Page): Promise<PhysiciansClaimRow[]> {
-  return page.evaluate(() => {
+async function extractClaimRows(surface: SearchSurface): Promise<PhysiciansClaimRow[]> {
+  return surface.evaluate(() => {
     function clean(value: string | null | undefined): string {
       return String(value ?? "").replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
     }
@@ -561,7 +584,8 @@ async function processRow(page: Page, inputRow: PhysiciansInputRow, state: Physi
   addAudit(state, inputRow, "search", "started", "Submitting Physicians claim search.");
   const searchRows = await submitSearch(page, inputRow, context);
   if (!searchRows.length) {
-    const pageText = await visibleBodyText(page);
+    const frame = await getClaimSearchFrame(page, context, 3000);
+    const pageText = await visibleBodyText(frame ?? page.mainFrame());
     const status = /member not found|no member/i.test(pageText) ? "Member Not Found" : "No Claims Found";
     state.outputRows.push(baseOutputRow(inputRow, status, status));
     addAudit(state, inputRow, "search", "completed", status);
