@@ -5,6 +5,7 @@ import type { WaystarClaimInputRow, WaystarInvalidInputRow, WaystarParsedInput }
 const PATIENT_NAME_ALIASES = ["Patient Name", "Patient", "Member Name", "Patient Full Name"];
 const RESPONSIBLE_PAYER_ALIASES = ["Responsible Payer", "Payer", "Insurance", "Insurance Name"];
 const CLAIM_NUMBER_ALIASES = ["Claim Number", "Claim No", "Claim #", "ICN"];
+const GROUP_ALIASES = ["Group", "Medical Group", "Group Name"];
 const DOS_ALIASES = ["DOS", "Date Of Service", "Service Date", "Date of Service"];
 
 function asText(value: unknown): string {
@@ -83,6 +84,7 @@ export async function parseWaystarClaimWorkbook(file: File): Promise<{
     const patientName = findValue(row, PATIENT_NAME_ALIASES);
     const claimNumber = findValue(row, CLAIM_NUMBER_ALIASES);
     const responsiblePayer = findValue(row, RESPONSIBLE_PAYER_ALIASES);
+    const group = findValue(row, GROUP_ALIASES);
     const dos = normalizeDos(findValue(row, DOS_ALIASES));
     const missingFields = [
       !patientName ? "Patient Name" : "",
@@ -96,6 +98,7 @@ export async function parseWaystarClaimWorkbook(file: File): Promise<{
       patientName,
       claimNumber,
       responsiblePayer,
+      group,
       dos,
       raw: row,
     };

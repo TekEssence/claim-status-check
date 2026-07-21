@@ -21,9 +21,6 @@ export function WaystarInputForm({
 }) {
   return (
     <form className="space-y-5" onSubmit={onSubmit}>
-      <div className="rounded-[1.2rem] border border-blue-100 bg-blue-50/70 px-4 py-3 text-sm text-blue-900">
-        <span className="font-semibold">Required Columns:</span> Username or Email Address, Password, Patient, DOS, CPT, Member Id
-      </div>
 
       <div className="grid gap-5 xl:grid-cols-2">
         <PortalUploadCard
@@ -60,7 +57,10 @@ export function WaystarInputForm({
         <Play className="h-4 w-4" strokeWidth={2.2} />
         {isProcessing ? "Processing..." : "Start processing"}
       </button>
-      <p className="text-center text-sm text-slate-500">Waystar workflow UI is ready. Processing integration will be connected in a later task.</p>
+      <p className="text-center text-sm text-slate-500">Live processing, progress updates, and output download will appear below after the run starts.</p>
     </form>
   );
 }
+
+
+

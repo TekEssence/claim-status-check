@@ -38,6 +38,49 @@ function createOutputFilename(): string {
   return `waystar_claimstatus_${new Date().toISOString().replace(/[-:.TZ]/g, "").slice(0, 14)}.xlsx`;
 }
 
+function formatWaystarDisplayDate(value: string): string {
+  const text = value.trim();
+  const iso = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (iso) {
+    return `${iso[2]}/${iso[3]}/${iso[1]}`;
+  }
+  return text;
+}
+
+function formatWaystarShortDate(value: string): string {
+  const display = formatWaystarDisplayDate(value);
+  const parts = display.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (!parts) return display;
+  return `${parts[1]}/${parts[2]}/${parts[3].slice(-2)}`;
+}
+
+function buildWaystarFinalStatus(
+  row: WaystarClaimInputRow,
+  extraction: WaystarClaimExtraction,
+  line: WaystarClaimExtraction["procedureLines"][number],
+): string {
+  const dos = formatWaystarDisplayDate(line.serviceDate || row.dos);
+  const checkDate = formatWaystarShortDate(extraction.checkDate || "");
+  const account = extraction.account || "";
+
+  if (line.denialCodes.length > 0) {
+    const denialReason = line.denialReasons.find((reason) => reason.trim()) || "";
+    return `DOS ${dos}: Checked waystar portal denied on ${checkDate} denial reason ${denialReason}. Acnt# ${account}.`.trim();
+  }
+
+  const provPd = line.provPd || "0.00";
+  const deduct = line.deduct || "0.00";
+  const coins = line.coins || "0.00";
+  const eft = extraction.eft || "";
+  const checkAmount = extraction.checkAmount || "";
+  return `DOS ${dos}: Checked waystar portal paid on ${checkDate} PROV PD $${provPd} with COINS/deduct of $${coins}/$${deduct} EFT/Check # ${eft}. ACNT # ${account}. Check Amount: $${checkAmount}`.trim();
+}
+
+function normalizeWaystarOutputValue(value: string, fallback = "NA"): string {
+  const text = value.trim();
+  return text ? text : fallback;
+}
+
 function splitDenialSlots(line: WaystarClaimExtraction["procedureLines"][number]): {
   denialCode1: string;
   denialReason1: string;
@@ -62,26 +105,28 @@ function buildWaystarMissingEobOutputRow(row: WaystarClaimInputRow): WaystarOutp
   return {
     sno: `${row.inputRowId}.`,
     name: row.patientName,
-    servDate: row.dos,
-    icn: "",
-    acnt: "",
-    eft: "",
-    productionDate: "",
-    checkDate: "",
-    proc: "",
-    checkAmt: "",
-    billed: "",
-    allowed: "",
-    deduct: "",
-    coins: "",
-    provPd: "",
-    denialCode1: "",
-    denialReason1: "",
-    denialCode2: "",
-    denialReason2: "",
-    denialCode3: "",
-    denialReason3: "",
-    status: "",
+    group: normalizeWaystarOutputValue(row.group),
+    servDate: normalizeWaystarOutputValue(row.dos),
+    icn: "NA",
+    acnt: "NA",
+    eft: "NA",
+    productionDate: "NA",
+    checkDate: "NA",
+    proc: "NA",
+    checkAmt: "NA",
+    billed: "NA",
+    allowed: "NA",
+    deduct: "NA",
+    coins: "NA",
+    provPd: "NA",
+    denialCode1: "NA",
+    denialReason1: "NA",
+    denialCode2: "NA",
+    denialReason2: "NA",
+    denialCode3: "NA",
+    denialReason3: "NA",
+    status: "NA",
+    finalStatus: "NA",
     remarks: "eob was not in the waystar portal ",
   };
 }
@@ -93,23 +138,25 @@ function buildOutputRows(row: WaystarClaimInputRow, extraction: WaystarClaimExtr
 
   return procedureLines.map((line, index) => ({
     sno: index === 0 ? `${row.inputRowId}.` : "",
-    name: extraction.name || row.patientName,
-    servDate: line.serviceDate || row.dos,
-    icn: extraction.icn,
-    acnt: extraction.account,
-    eft: extraction.eft,
-    productionDate: extraction.productionDate,
-    checkDate: extraction.checkDate,
-    proc: line.proc,
-    checkAmt: extraction.checkAmount,
-    billed: line.billed,
-    allowed: line.allowed,
-    deduct: line.deduct,
-    coins: line.coins,
-    provPd: line.provPd,
-    ...splitDenialSlots(line),
-    status: line.denialCodes.length > 0 ? "denial" : "paid",
-    remarks: extraction.remarks || "",
+    name: normalizeWaystarOutputValue(row.patientName),
+    group: normalizeWaystarOutputValue(row.group),
+    servDate: normalizeWaystarOutputValue(line.serviceDate || row.dos),
+    icn: normalizeWaystarOutputValue(extraction.icn),
+    acnt: normalizeWaystarOutputValue(extraction.account),
+    eft: normalizeWaystarOutputValue(extraction.eft),
+    productionDate: normalizeWaystarOutputValue(extraction.productionDate),
+    checkDate: normalizeWaystarOutputValue(extraction.checkDate),
+    proc: normalizeWaystarOutputValue(line.proc),
+    checkAmt: normalizeWaystarOutputValue(extraction.checkAmount),
+    billed: normalizeWaystarOutputValue(line.billed),
+    allowed: normalizeWaystarOutputValue(line.allowed),
+    deduct: normalizeWaystarOutputValue(line.deduct),
+    coins: normalizeWaystarOutputValue(line.coins),
+    provPd: normalizeWaystarOutputValue(line.provPd),
+    ...Object.fromEntries(Object.entries(splitDenialSlots(line)).map(([key, value]) => [key, normalizeWaystarOutputValue(value)])),
+    status: normalizeWaystarOutputValue(line.denialCodes.length > 0 ? "denial" : "paid"),
+    finalStatus: normalizeWaystarOutputValue(buildWaystarFinalStatus(row, extraction, line)),
+    remarks: normalizeWaystarOutputValue(extraction.remarks || ""),
   }));
 }
 

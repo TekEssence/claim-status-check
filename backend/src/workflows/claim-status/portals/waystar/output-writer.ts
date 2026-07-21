@@ -4,6 +4,7 @@ import type { WaystarAuditRow, WaystarErrorRow, WaystarOutputRow } from "./types
 const OUTPUT_COLUMNS: Array<{ key: keyof WaystarOutputRow; header: string; width: number }> = [
   { key: "sno", header: "sno", width: 8 },
   { key: "name", header: "NAME", width: 24 },
+  { key: "group", header: "GROUP", width: 20 },
   { key: "servDate", header: "SERV DATE", width: 14 },
   { key: "icn", header: "ICN", width: 16 },
   { key: "acnt", header: "ACNT", width: 14 },
@@ -24,6 +25,7 @@ const OUTPUT_COLUMNS: Array<{ key: keyof WaystarOutputRow; header: string; width
   { key: "denialCode3", header: "Denial Code 3", width: 14 },
   { key: "denialReason3", header: "denial reason 3", width: 24 },
   { key: "status", header: "status", width: 12 },
+  { key: "finalStatus", header: "Final Status", width: 72 },
   { key: "remarks", header: "Remarks", width: 34 },
 ];
 
@@ -70,6 +72,26 @@ function styleBody(worksheet: ExcelJS.Worksheet) {
   });
 }
 
+function normalizeOutputCellValue(key: keyof WaystarOutputRow, value: unknown): string {
+  const text = String(value ?? "").trim();
+  if (key === "sno") {
+    return text;
+  }
+  return text || "NA";
+}
+
+function formatOutputDate(value: unknown): string {
+  const text = String(value ?? "").trim();
+  if (!text) return "";
+
+  const isoMatch = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (isoMatch) {
+    return `${isoMatch[2]}/${isoMatch[3]}/${isoMatch[1]}`;
+  }
+
+  return text;
+}
+
 function addSimpleSheet<T extends Record<string, unknown>>(
   workbook: ExcelJS.Workbook,
   name: string,
@@ -100,7 +122,12 @@ function addOutputSheet(workbook: ExcelJS.Workbook, rows: WaystarOutputRow[]) {
   }));
   styleHeader(worksheet.getRow(1));
   for (const row of rows) {
-    worksheet.addRow(Object.fromEntries(OUTPUT_COLUMNS.map((column) => [String(column.key), row[column.key] ?? ""])));
+    worksheet.addRow(Object.fromEntries(OUTPUT_COLUMNS.map((column) => {
+      const rawValue = column.key === "servDate"
+        ? formatOutputDate(row[column.key])
+        : (row[column.key] ?? "");
+      return [String(column.key), normalizeOutputCellValue(column.key, rawValue)];
+    })));
   }
   styleBody(worksheet);
 }

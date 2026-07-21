@@ -1,7 +1,7 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { useEffect, useState, type FormEvent } from "react";
+import { useState, type FormEvent } from "react";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import {
@@ -37,31 +37,6 @@ export function LoginPage() {
   const [submitting, setSubmitting] = useState(false);
   const [authError, setAuthError] = useState("");
 
-  useEffect(() => {
-    let cancelled = false;
-
-    const loadAuthUser = async () => {
-      try {
-        const response = await fetch("/api/auth/me", { cache: "no-store" });
-        if (!response.ok) {
-          return;
-        }
-
-        const data = await response.json().catch(() => ({}));
-        if (!cancelled && data.user) {
-          router.replace("/portal");
-        }
-      } catch {
-        // Ignore auth preload failures on the login page.
-      }
-    };
-
-    void loadAuthUser();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [router]);
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -493,6 +468,11 @@ function MedicalCross({ className }: { className: string }) {
     </svg>
   );
 }
+
+
+
+
+
 
 
 

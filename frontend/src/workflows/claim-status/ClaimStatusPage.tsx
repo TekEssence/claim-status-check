@@ -45,6 +45,7 @@ import { AvailityInputForm } from "./portals/availity/AvailityInputForm";
 import { AvailityResultView } from "./portals/availity/AvailityResultView";
 import { OptumProInputForm } from "../../portals/optum-pro/OptumProInputForm";
 import { WaystarInputForm } from "./portals/waystar/WaystarInputForm";
+import { WaystarResultView } from "./portals/waystar/WaystarResultView";
 import { OptumProResultView } from "../../portals/optum-pro/OptumProResultView";
 import {
   aerialFrontendPortalConfig,
@@ -137,18 +138,6 @@ function isAuthUser(value: unknown): value is AuthUser {
     (candidate.role === "ADMIN" || candidate.role === "USER") &&
     typeof candidate.mustResetPassword === "boolean"
   );
-}
-
-function readCachedAuthUser(): AuthUser | null {
-  if (typeof window === "undefined") return null;
-  try {
-    const raw = window.sessionStorage.getItem(AUTH_USER_STORAGE_KEY);
-    if (!raw) return null;
-    const parsed: unknown = JSON.parse(raw);
-    return isAuthUser(parsed) ? parsed : null;
-  } catch {
-    return null;
-  }
 }
 
 function persistCachedAuthUser(user: AuthUser | null) {
@@ -320,7 +309,7 @@ const PORTAL_WORKSPACE_META: Record<
   },
   waystar: {
     heroDescription: "Upload the Waystar login workbook and claim details workbook. Launch the Waystar claim status verification workspace.",
-    processingDescription: "Waystar uses the same shared upload workflow layout while backend processing is connected in a later task.",
+    processingDescription: "Waystar validates the upload, opens the live automation run, streams progress updates, and downloads the completed workbook.",
   },
   "optum-pro": {
     heroDescription: "Upload the One Healthcare ID login workbook and Optum Pro claim workbook, then enter OTP when prompted.",
@@ -965,11 +954,6 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
   }
 
   useEffect(() => {
-    const cachedUser = readCachedAuthUser();
-    if (cachedUser) {
-      setAuthUser(cachedUser);
-      setAuthLoading(false);
-    }
 
     let mounted = true;
 
@@ -1136,9 +1120,6 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
       return;
     }
 
-    if (activeView === "reset-password") {
-      setActiveView("portal-selection");
-    }
   }, [authUser, activeView]);
 
   useEffect(() => {
@@ -1232,7 +1213,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
       return;
     }
 
-    resetRunState("Starting Waystar scraper...");
+    resetRunState("Starting Waystar processing...");
 
     const formData = new FormData();
     formData.append("portalId", "waystar");
@@ -1250,8 +1231,10 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     const handleJobEvent = async (eventData: ScrapeJobEvent) => {
       if (eventData.type === "log" && eventData.message) {
         setLogs((prev) => [...prev, eventData.message ?? ""]);
+        setStatus(eventData.message);
       } else if (eventData.type === "progress" && typeof eventData.completed === "number" && typeof eventData.total === "number") {
         setProgress({ completed: eventData.completed, total: eventData.total });
+        setStatus(`Waystar processing ${eventData.completed} of ${eventData.total} row(s)...`);
       } else if (eventData.type === "error_screenshot" && typeof eventData.index === "number" && eventData.image) {
         setErrorScreenshots((prev) => [...prev, { index: eventData.index ?? -1, image: eventData.image ?? "" }]);
       } else if (eventData.type === "file_download" && eventData.filename && eventData.base64) {
@@ -3167,20 +3150,6 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
                   <span className="select-none">Remember me</span>
                 </label>
 
-                <button
-                  type="button"
-                  onClick={() => {
-                    setForgotPasswordMode(true);
-                    setAuthError("");
-                    setAuthStatus("");
-                    setAuthPassword("");
-                    setAuthConfirmPassword("");
-                  }}
-                  className="absolute right-[9.55%] top-[68.7%] h-[3.8%] w-[13.4%] text-transparent"
-                >
-                  Forgot password?
-                </button>
-
                 {authError && (
                   <div className="absolute right-[9.65%] top-[74.7%] w-[34.3%] rounded-2xl border border-red-200 bg-red-50/95 px-4 py-3 text-sm font-medium text-red-700 shadow-sm">
                     {authError}
@@ -3242,19 +3211,6 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
                       <input className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500" type="checkbox" defaultChecked />
                       <span>Remember me</span>
                     </label>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setForgotPasswordMode(true);
-                        setAuthError("");
-                        setAuthStatus("");
-                        setAuthPassword("");
-                        setAuthConfirmPassword("");
-                      }}
-                      className="font-medium text-blue-600 hover:text-blue-700"
-                    >
-                      Forgot password?
-                    </button>
                   </div>
 
                   {authError && (
@@ -4026,8 +3982,13 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
                   <AvailityResultView errorScreenshots={errorScreenshots} logs={logs} progress={progress} status={status} />
                 </div>
               ) : effectivePortalId === "waystar" ? (
-                <div className="mt-5 rounded-[1.2rem] border border-sky-100 bg-white/92 p-5 text-sm text-slate-600 shadow-[0_12px_26px_rgba(148,163,184,0.1)]">
-                  {status || "Waystar frontend upload placeholders are ready. Workflow processing will be connected in a later task."}
+                <div className="mt-5">
+                  <WaystarResultView
+                    errorScreenshots={errorScreenshots}
+                    logs={logs}
+                    progress={progress}
+                    status={status}
+                  />
                 </div>
               ) : effectivePortalId === "optum-pro" ? (
                 <div className="mt-5">
@@ -4068,6 +4029,9 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     </main>
   );
 }
+
+
+
 
 
 

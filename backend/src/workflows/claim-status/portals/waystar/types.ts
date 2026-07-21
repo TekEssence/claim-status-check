@@ -6,6 +6,7 @@ export type WaystarClaimInputRow = {
   patientName: string;
   claimNumber: string;
   responsiblePayer: string;
+  group: string;
   dos: string;
   raw: Record<string, unknown>;
 };
@@ -16,6 +17,7 @@ export type WaystarInvalidInputRow = {
   patientName: string;
   claimNumber: string;
   responsiblePayer: string;
+  group: string;
   dos: string;
   raw: Record<string, unknown>;
   missingFields: string[];
@@ -62,6 +64,7 @@ export type WaystarClaimExtraction = {
 export type WaystarOutputRow = {
   sno: string;
   name: string;
+  group: string;
   servDate: string;
   icn: string;
   acnt: string;
@@ -82,6 +85,7 @@ export type WaystarOutputRow = {
   denialCode3: string;
   denialReason3: string;
   status: string;
+  finalStatus: string;
   remarks: string;
 };
 

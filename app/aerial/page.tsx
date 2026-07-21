@@ -1,5 +1,7 @@
 import { ClaimStatusPage } from "@/frontend/src/workflows/claim-status/ClaimStatusPage";
+import { requirePageAuth } from "@/lib/auth/require-page-auth";
 
-export default function AerialPage() {
+export default async function AerialPage() {
+  await requirePageAuth();
   return <ClaimStatusPage forcedPortalId="aerial" />;
 }

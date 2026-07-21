@@ -58,7 +58,7 @@ export function IehpInputForm({
         <Play className="h-4 w-4" strokeWidth={2.2} />
         {isProcessing ? "Processing..." : isResumePending ? "Allow And Continue" : "Start processing"}
       </button>
-      <p className="text-center text-sm text-slate-500">Estimated processing time: 2-5 minutes</p>
     </form>
   );
 }
+
