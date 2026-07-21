@@ -28,7 +28,24 @@ export type PhysiciansOutputRow = {
   outcome: string;
   checkTotalAmount: string;
   authorizationDetails: string;
-  serviceLines: string;
+  serviceLineServiceDate: string;
+  serviceCode: string;
+  serviceModifier: string;
+  diagnosisCode: string;
+  financialResponsibility: string;
+  adjustmentDescription: string;
+  paidDate: string;
+  checkNumber: string;
+  quantity: string;
+  billed: string;
+  contract: string;
+  copay: string;
+  coinsurance: string;
+  deductible: string;
+  adjust: string;
+  net: string;
+  adminFeeWithhold: string;
+  status: string;
   finalStatus: string;
 };
 
@@ -66,20 +83,31 @@ const outputColumns: Array<ColumnDef<Omit<PhysiciansOutputRow, "inputData">>> = 
   { key: "receivedDate", header: "Received Date", width: 16 },
   { key: "serviceDate", header: "Service Date", width: 16 },
   { key: "authNumber", header: "Auth #", width: 24 },
-  { key: "placeOfService", header: "Place Of Service", width: 28 },
-  { key: "member", header: "Member", width: 34 },
-  { key: "provider", header: "Provider", width: 28 },
-  { key: "organization", header: "Organization", width: 30 },
-  { key: "renderingProvider", header: "Rendering Provider", width: 28 },
   { key: "payee", header: "Payee", width: 18 },
   { key: "billedAmount", header: "Billed Amount", width: 16 },
   { key: "contractAmount", header: "Contract Amount", width: 18 },
   { key: "netAmount", header: "Net Amount", width: 16 },
   { key: "company", header: "Company", width: 12 },
   { key: "outcome", header: "Outcome", width: 18 },
+  { key: "paidDate", header: "Paid Date", width: 16 },
+  { key: "checkNumber", header: "Check #", width: 16 },
+  { key: "serviceLineServiceDate", header: "Service Line Date", width: 22 },
+  { key: "serviceCode", header: "ServiceCode", width: 18 },
+  { key: "serviceModifier", header: "Modifier(s)", width: 14 },
+  { key: "diagnosisCode", header: "Diag. Code", width: 14 },
+  { key: "financialResponsibility", header: "Financial Resp.", width: 18 },
+  { key: "adjustmentDescription", header: "Adjust Descr.", width: 34 },
+  { key: "quantity", header: "Qty", width: 10 },
+  { key: "billed", header: "Billed", width: 14 },
+  { key: "contract", header: "Contract", width: 14 },
+  { key: "copay", header: "CoPay", width: 14 },
+  { key: "coinsurance", header: "Coinsurance", width: 14 },
+  { key: "deductible", header: "Deductible", width: 14 },
+  { key: "adjust", header: "Adjust", width: 14 },
+  { key: "net", header: "Net", width: 14 },
+  { key: "adminFeeWithhold", header: "Admin. Fee/Withhold", width: 20 },
+  { key: "status", header: "Status", width: 14 },
   { key: "checkTotalAmount", header: "Check Total Amount", width: 20 },
-  { key: "authorizationDetails", header: "Authorization Details", width: 90 },
-  { key: "serviceLines", header: "Service Lines", width: 120 },
   { key: "finalStatus", header: "Final Status", width: 90 },
 ];
 
@@ -102,10 +130,16 @@ function styleHeader(worksheet: ExcelJS.Worksheet): void {
   });
 }
 
+// providerClaimId and authorizationNumber are already surfaced as their own output columns
+// ("Provider Claim ID" / "Input Authorization #"), so they're skipped here to avoid showing the
+// same value twice under their raw input-file key names.
+const INPUT_ECHO_EXCLUDED_KEYS = new Set(["providerClaimId", "authorizationNumber"]);
+
 function inputColumnHeaders(rows: PhysiciansOutputRow[]): string[] {
   const headers: string[] = [];
   for (const row of rows) {
     for (const key of Object.keys(row.inputData)) {
+      if (INPUT_ECHO_EXCLUDED_KEYS.has(key)) continue;
       if (!headers.includes(key)) headers.push(key);
     }
   }

@@ -36,7 +36,29 @@ type PhysiciansClaimRow = {
   outcome: string;
   checkTotalAmount: string;
   authorizationDetails: string;
-  serviceLines: string;
+  serviceLines: PhysiciansServiceLine[];
+  rowText: string;
+};
+
+type PhysiciansServiceLine = {
+  serviceDate: string;
+  serviceCode: string;
+  modifier: string;
+  diagnosisCode: string;
+  financialResponsibility: string;
+  adjustmentDescription: string;
+  paidDate: string;
+  checkNumber: string;
+  quantity: string;
+  billed: string;
+  contract: string;
+  copay: string;
+  coinsurance: string;
+  deductible: string;
+  adjust: string;
+  net: string;
+  adminFeeWithhold: string;
+  status: string;
   rowText: string;
 };
 
@@ -97,16 +119,35 @@ function baseOutputRow(inputRow: PhysiciansInputRow, botStatus: string, botMessa
     outcome: "",
     checkTotalAmount: "",
     authorizationDetails: "",
-    serviceLines: "",
+    serviceLineServiceDate: "",
+    serviceCode: "",
+    serviceModifier: "",
+    diagnosisCode: "",
+    financialResponsibility: "",
+    adjustmentDescription: "",
+    paidDate: "",
+    checkNumber: "",
+    quantity: "",
+    billed: "",
+    contract: "",
+    copay: "",
+    coinsurance: "",
+    deductible: "",
+    adjust: "",
+    net: "",
+    adminFeeWithhold: "",
+    status: "",
     finalStatus: botMessage,
   };
 }
 
-function outputRowFromClaim(inputRow: PhysiciansInputRow, result: PhysiciansClaimRow): PhysiciansOutputRow {
+function outputRowFromClaim(inputRow: PhysiciansInputRow, result: PhysiciansClaimRow, serviceLine?: PhysiciansServiceLine): PhysiciansOutputRow {
+  const status = serviceLine?.status || result.outcome;
+  const netAmount = serviceLine?.net || result.netAmount;
   const finalStatus = cleanText(
     `DOS ${inputRow.dos}: Physicians claim ${result.claimNumber} found` +
-      `${result.outcome ? ` with outcome ${result.outcome}` : ""}` +
-      `${result.netAmount ? ` and net amount ${result.netAmount}` : ""}.`,
+      `${status ? ` with status ${status}` : ""}` +
+      `${netAmount ? ` and net amount ${netAmount}` : ""}.`,
   );
   return {
     ...baseOutputRow(inputRow, "Success", "Claim found."),
@@ -127,7 +168,24 @@ function outputRowFromClaim(inputRow: PhysiciansInputRow, result: PhysiciansClai
     outcome: result.outcome,
     checkTotalAmount: result.checkTotalAmount,
     authorizationDetails: result.authorizationDetails,
-    serviceLines: result.serviceLines,
+    serviceLineServiceDate: serviceLine?.serviceDate || "",
+    serviceCode: serviceLine?.serviceCode || "",
+    serviceModifier: serviceLine?.modifier || "",
+    diagnosisCode: serviceLine?.diagnosisCode || "",
+    financialResponsibility: serviceLine?.financialResponsibility || "",
+    adjustmentDescription: serviceLine?.adjustmentDescription || "",
+    paidDate: serviceLine?.paidDate || "",
+    checkNumber: serviceLine?.checkNumber || "",
+    quantity: serviceLine?.quantity || "",
+    billed: serviceLine?.billed || "",
+    contract: serviceLine?.contract || "",
+    copay: serviceLine?.copay || "",
+    coinsurance: serviceLine?.coinsurance || "",
+    deductible: serviceLine?.deductible || "",
+    adjust: serviceLine?.adjust || "",
+    net: serviceLine?.net || "",
+    adminFeeWithhold: serviceLine?.adminFeeWithhold || "",
+    status: serviceLine?.status || "",
     finalStatus,
   };
 }
@@ -499,22 +557,62 @@ async function extractClaimRows(surface: SearchSurface): Promise<PhysiciansClaim
     function clean(value: string | null | undefined): string {
       return String(value ?? "").replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
     }
-    function childTableText(row: Element, idPart: string): string {
-      const table = row.querySelector(`table[id*='${idPart}']`);
-      if (!table) return "";
+    function valueByHeader(cells: string[], headers: string[], headerName: string): string {
+      const wanted = headerName.toLowerCase();
+      const index = headers.findIndex((header) => header.toLowerCase() === wanted);
+      return index >= 0 ? cells[index] || "" : "";
+    }
+    // The service-line grid, the "Check Total Amount" text, and any per-claim Authorization
+    // Details block do NOT live inside the claim's own summary <tr>. QuickCap renders each claim
+    // as TWO sibling rows: the summary row (claim #, dates, amounts...) followed immediately by a
+    // second <tr><td colspan="100%">...</td></tr> that holds the expandable detail content. All
+    // three of these must be read from that *next* sibling row, not from the summary row itself.
+    function childServiceLines(detailRow: Element | null, idPart: string): PhysiciansServiceLine[] {
+      if (!detailRow) return [];
+      const table = detailRow.querySelector(`table[id*='${idPart}']`);
+      if (!table) return [];
       const headers = Array.from(table.querySelectorAll("th")).map((header) => clean(header.textContent));
       return Array.from(table.querySelectorAll("tr"))
         .slice(1)
         .map((line) => {
-          const cells = Array.from(line.querySelectorAll("td")).map((cell) => clean(cell.textContent));
-          if (!cells.some(Boolean)) return "";
-          return cells.map((cell, index) => `${headers[index] || `Column ${index + 1}`}: ${cell}`).join(" | ");
+          const cellEls = Array.from(line.querySelectorAll("td"));
+          if (!cellEls.length) return null;
+          const cells = cellEls.map((cell) => clean(cell.textContent));
+          if (!cells.some(Boolean)) return null;
+          return {
+            serviceDate: valueByHeader(cells, headers, "Service Date"),
+            serviceCode: valueByHeader(cells, headers, "ServiceCode"),
+            modifier: valueByHeader(cells, headers, "Modifier(s)"),
+            diagnosisCode: valueByHeader(cells, headers, "Diag. Code"),
+            financialResponsibility: valueByHeader(cells, headers, "Financial Resp."),
+            adjustmentDescription: valueByHeader(cells, headers, "Adjust Descr."),
+            paidDate: valueByHeader(cells, headers, "Paid Date"),
+            checkNumber: valueByHeader(cells, headers, "Check #"),
+            quantity: valueByHeader(cells, headers, "Qty"),
+            billed: valueByHeader(cells, headers, "Billed"),
+            contract: valueByHeader(cells, headers, "Contract"),
+            copay: valueByHeader(cells, headers, "CoPay"),
+            coinsurance: valueByHeader(cells, headers, "Coinsurance"),
+            deductible: valueByHeader(cells, headers, "Deductible"),
+            adjust: valueByHeader(cells, headers, "Adjust"),
+            net: valueByHeader(cells, headers, "Net"),
+            adminFeeWithhold: valueByHeader(cells, headers, "Admin. Fee/Withhold"),
+            status: valueByHeader(cells, headers, "Status"),
+            rowText: cells.join(" "),
+          } satisfies PhysiciansServiceLine;
         })
-        .filter(Boolean)
-        .join("\n");
+        .filter((line): line is PhysiciansServiceLine => Boolean(line));
     }
-    function authorizationText(row: Element): string {
-      const authHeader = Array.from(row.querySelectorAll("td, th, div")).find((element) => /authorization details/i.test(clean(element.textContent)));
+    function checkTotalFromDetail(detailRow: Element | null): string {
+      if (!detailRow) return "";
+      const text = clean(detailRow.textContent);
+      return text.match(/Check Total Amount\s*:\s*(\$[\d,.]+)/i)?.[1]?.trim() || "";
+    }
+    function authorizationText(detailRow: Element | null): string {
+      if (!detailRow) return "";
+      const authHeader = Array.from(detailRow.querySelectorAll("td, th, div")).find((element) =>
+        /authorization details/i.test(clean(element.textContent)),
+      );
       const section = authHeader?.closest("tr")?.nextElementSibling || authHeader?.parentElement;
       return clean(section?.textContent || "");
     }
@@ -531,6 +629,7 @@ async function extractClaimRows(surface: SearchSurface): Promise<PhysiciansClaim
       const values = cells.slice(claimIndex);
       const claimNumber = values[0] || "";
       if (!claimNumber) continue;
+      const detailRow = row.nextElementSibling;
       output.push({
         claimNumber,
         receivedDate: values[1] || "",
@@ -547,14 +646,24 @@ async function extractClaimRows(surface: SearchSurface): Promise<PhysiciansClaim
         netAmount: values[12] || "",
         company: values[13] || "",
         outcome: values[14] || "",
-        checkTotalAmount: clean(row.textContent).match(/Check Total Amount\s*:\s*([^\n\r]+)/i)?.[1]?.trim() || "",
-        authorizationDetails: authorizationText(row),
-        serviceLines: childTableText(row, "gvChildGrid"),
-        rowText: clean(row.textContent),
+        checkTotalAmount: checkTotalFromDetail(detailRow),
+        authorizationDetails: authorizationText(detailRow),
+        serviceLines: childServiceLines(detailRow, "gvChildGrid"),
+        rowText: `${clean(row.textContent)} ${clean(detailRow?.textContent || "")}`,
       });
     }
     return output;
   });
+}
+
+// The ServiceCode cell renders as two stacked lines: the CPT code, then its description
+// (e.g. "99214" / "OFFICE O/P EST MOD 30 MIN"). After cleanText() collapses that to one string
+// ("99214 OFFICE O/P EST MOD 30 MIN"), the CPT is always the leading token. Matching on that
+// leading token (rather than an "includes" substring search over the whole combined string)
+// avoids both false positives and accidentally matching the wrong service line.
+function primaryServiceCode(value: string): string {
+  const match = value.trim().match(/^([A-Za-z0-9]{4,7})\b/);
+  return (match ? match[1] : cleanText(value)).toUpperCase();
 }
 
 function rowMatchesInput(row: PhysiciansClaimRow, inputRow: PhysiciansInputRow): boolean {
@@ -563,9 +672,22 @@ function rowMatchesInput(row: PhysiciansClaimRow, inputRow: PhysiciansInputRow):
     !inputRow.providerClaimId || row.rowText.toUpperCase().includes(cleanText(inputRow.providerClaimId).toUpperCase());
   const authMatches =
     !inputRow.authorizationNumber || row.authNumber.toUpperCase().includes(cleanText(inputRow.authorizationNumber).toUpperCase());
-  const cptMatches =
-    !inputRow.cptCode || row.serviceLines.toUpperCase().includes(normalizeCptCode(inputRow.cptCode)) || row.rowText.toUpperCase().includes(normalizeCptCode(inputRow.cptCode));
+  const wantedCpt = inputRow.cptCode ? normalizeCptCode(inputRow.cptCode).toUpperCase() : "";
+  const cptMatches = !wantedCpt || row.serviceLines.some((line) => primaryServiceCode(line.serviceCode) === wantedCpt);
   return dosMatches && providerClaimMatches && authMatches && cptMatches;
+}
+
+function serviceLineMatchesInput(serviceLine: PhysiciansServiceLine, inputRow: PhysiciansInputRow): boolean {
+  const dosMatches = !inputRow.dos || serviceLine.rowText.includes(inputRow.dos) || normalizeComparableDate(serviceLine.serviceDate) === normalizeComparableDate(inputRow.dos);
+  const wantedCpt = inputRow.cptCode ? normalizeCptCode(inputRow.cptCode).toUpperCase() : "";
+  const cptMatches = !wantedCpt || primaryServiceCode(serviceLine.serviceCode) === wantedCpt;
+  return dosMatches && cptMatches;
+}
+
+function parseReceivedDateForSort(value: string): number {
+  const iso = normalizeComparableDate(value);
+  const time = Date.parse(iso);
+  return Number.isNaN(time) ? 0 : time;
 }
 
 async function processRow(page: Page, inputRow: PhysiciansInputRow, state: PhysiciansWorkbookState, context: ScraperContext): Promise<void> {
@@ -593,14 +715,29 @@ async function processRow(page: Page, inputRow: PhysiciansInputRow, state: Physi
   }
 
   const matchingRows = searchRows.filter((row) => rowMatchesInput(row, inputRow));
-  const selectedRows = matchingRows.length ? matchingRows : searchRows;
+  let selectedRows = matchingRows.length ? matchingRows : searchRows;
+  if (matchingRows.length > 1) {
+    // Same CPT/DOS can appear on more than one claim when a claim was voided and resubmitted
+    // (e.g. an original claim plus a later duplicate/adjustment). Only the most recently received
+    // claim reflects the current status, so collapse down to that one.
+    const latestReceived = Math.max(...matchingRows.map((row) => parseReceivedDateForSort(row.receivedDate)));
+    selectedRows = matchingRows.filter((row) => parseReceivedDateForSort(row.receivedDate) === latestReceived);
+  }
   await context.log({
     level: "info",
     message: `Physicians row ${inputRow.inputRowId}: found ${searchRows.length} result(s), extracting ${selectedRows.length} matching result(s).`,
     rowIndex: inputRow.inputRowId,
   });
   for (const result of selectedRows) {
-    state.outputRows.push(outputRowFromClaim(inputRow, result));
+    const matchingServiceLines = result.serviceLines.filter((line) => serviceLineMatchesInput(line, inputRow));
+    const selectedServiceLines = matchingServiceLines.length ? matchingServiceLines : result.serviceLines;
+    if (selectedServiceLines.length) {
+      for (const serviceLine of selectedServiceLines) {
+        state.outputRows.push(outputRowFromClaim(inputRow, result, serviceLine));
+      }
+    } else {
+      state.outputRows.push(outputRowFromClaim(inputRow, result));
+    }
     addAudit(state, inputRow, "detail", "completed", `Extracted claim ${result.claimNumber}.`);
   }
 }
