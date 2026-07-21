@@ -76,17 +76,11 @@ export function routeAllCareRows(rows: AllCareInputRow[], credentials: AllCareCr
   unmappedRows: AllCareInputRow[];
 } {
   const credentialMap = new Map(credentials.map((credential) => [`${key(credential.group)}::${key(credential.payer)}`, credential]));
-  const credentialsByPayer = new Map<string, AllCareCredentials[]>();
-  for (const credential of credentials) {
-    const payerKey = key(credential.payer);
-    credentialsByPayer.set(payerKey, [...(credentialsByPayer.get(payerKey) ?? []), credential]);
-  }
   const batches = new Map<string, AllCareCredentialBatch>();
   const unmappedRows: AllCareInputRow[] = [];
   for (const row of rows.filter((candidate) => candidate.validationStatus === "valid")) {
     const routingKey = `${key(row.group)}::${key(row.payer)}`;
-    const payerCredentials = credentialsByPayer.get(key(row.payer)) ?? [];
-    const credential = credentialMap.get(routingKey) ?? (payerCredentials.length === 1 ? payerCredentials[0] : undefined);
+    const credential = credentialMap.get(routingKey);
     if (!credential) {
       unmappedRows.push(row);
       continue;

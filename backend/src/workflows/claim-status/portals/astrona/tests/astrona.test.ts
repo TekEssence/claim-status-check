@@ -60,14 +60,29 @@ test("Astrona completes mixed Responsible Payer rows in first-seen payer batches
   assert.equal(routing.batches[1].credentials.username, "two");
 });
 
-test("Astrona can use a unique Responsible Payer login without leaking across ambiguous payer rows", () => {
+test("Astrona creates separate login batches for different Groups sharing a Responsible Payer", () => {
+  const credentials = readAstronaCredentials(buffer([
+    { Group: "GROUP A", Payer: "Shared Payer", URL: "https://a.example", Username: "login-a", Password: "secret-a" },
+    { Group: "GROUP B", Payer: "Shared Payer", URL: "https://b.example", Username: "login-b", Password: "secret-b" },
+  ]));
+  const rows = readAstronaInputRows(buffer([
+    { Group: "GROUP A", "Responsible Payer": "Shared Payer", "Member ID": "MEM-A" },
+    { Group: "GROUP B", "Responsible Payer": "Shared Payer", "Member ID": "MEM-B" },
+  ]));
+  const routing = routeAstronaRows(rows, credentials);
+
+  assert.deepEqual(routing.batches.map((batch) => batch.credentials.username), ["login-a", "login-b"]);
+  assert.deepEqual(routing.batches.map((batch) => batch.rows[0].memberId), ["MEM-A", "MEM-B"]);
+});
+
+test("Astrona requires the input Group even when Responsible Payer has only one login", () => {
   const uniqueCredentials = readAstronaCredentials(buffer([
     { Group: "ALPHA", Payer: "Unique Payer", URL: "https://unique.example", Username: "unique", Password: "secret" },
   ]));
   const [row] = readAstronaInputRows(buffer([
     { Group: "Alpha Care Medical Group", "Responsible Payer": "Unique Payer", "Member ID": "MEM-4" },
   ]));
-  assert.equal(routeAstronaRows([row], uniqueCredentials).batches[0].credentials.username, "unique");
+  assert.equal(routeAstronaRows([row], uniqueCredentials).unmappedRows.length, 1);
 
   const ambiguousCredentials = readAstronaCredentials(buffer([
     { Group: "ALPHA", Payer: "Shared Payer", URL: "https://one.example", Username: "one", Password: "secret" },

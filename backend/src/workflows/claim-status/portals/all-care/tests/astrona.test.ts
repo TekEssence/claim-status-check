@@ -82,14 +82,29 @@ test("AllCare completes mixed Responsible Payer rows in first-seen payer batches
   assert.equal(routing.batches[1].credentials.username, "two");
 });
 
-test("AllCare can use a unique Responsible Payer login without leaking across ambiguous payer rows", () => {
+test("AllCare creates separate login batches for different Groups sharing a Responsible Payer", () => {
+  const credentials = readAllCareCredentials(buffer([
+    { Group: "GROUP A", Payer: "Shared Payer", URL: "https://a.example", Username: "login-a", Password: "secret-a" },
+    { Group: "GROUP B", Payer: "Shared Payer", URL: "https://b.example", Username: "login-b", Password: "secret-b" },
+  ]));
+  const rows = readAllCareInputRows(buffer([
+    { Group: "GROUP A", "Responsible Party": "Shared Payer", ID: "MEM-A" },
+    { Group: "GROUP B", "Responsible Party": "Shared Payer", ID: "MEM-B" },
+  ]));
+  const routing = routeAllCareRows(rows, credentials);
+
+  assert.deepEqual(routing.batches.map((batch) => batch.credentials.username), ["login-a", "login-b"]);
+  assert.deepEqual(routing.batches.map((batch) => batch.rows[0].memberId), ["MEM-A", "MEM-B"]);
+});
+
+test("AllCare requires the input Group even when Responsible Payer has only one login", () => {
   const uniqueCredentials = readAllCareCredentials(buffer([
     { Group: "ALPHA", Payer: "Unique Payer", URL: "https://unique.example", Username: "unique", Password: "secret" },
   ]));
   const [row] = readAllCareInputRows(buffer([
     { Group: "Alpha Care Medical Group", "Responsible Payer": "Unique Payer", "Member ID": "MEM-4" },
   ]));
-  assert.equal(routeAllCareRows([row], uniqueCredentials).batches[0].credentials.username, "unique");
+  assert.equal(routeAllCareRows([row], uniqueCredentials).unmappedRows.length, 1);
 
   const ambiguousCredentials = readAllCareCredentials(buffer([
     { Group: "ALPHA", Payer: "Shared Payer", URL: "https://one.example", Username: "one", Password: "secret" },

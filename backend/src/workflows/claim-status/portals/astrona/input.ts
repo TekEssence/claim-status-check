@@ -76,17 +76,11 @@ export function routeAstronaRows(rows: AstronaInputRow[], credentials: AstronaCr
   unmappedRows: AstronaInputRow[];
 } {
   const credentialMap = new Map(credentials.map((credential) => [`${key(credential.group)}::${key(credential.payer)}`, credential]));
-  const credentialsByPayer = new Map<string, AstronaCredentials[]>();
-  for (const credential of credentials) {
-    const payerKey = key(credential.payer);
-    credentialsByPayer.set(payerKey, [...(credentialsByPayer.get(payerKey) ?? []), credential]);
-  }
   const batches = new Map<string, AstronaCredentialBatch>();
   const unmappedRows: AstronaInputRow[] = [];
   for (const row of rows.filter((candidate) => candidate.validationStatus === "valid")) {
     const routingKey = `${key(row.group)}::${key(row.payer)}`;
-    const payerCredentials = credentialsByPayer.get(key(row.payer)) ?? [];
-    const credential = credentialMap.get(routingKey) ?? (payerCredentials.length === 1 ? payerCredentials[0] : undefined);
+    const credential = credentialMap.get(routingKey);
     if (!credential) {
       unmappedRows.push(row);
       continue;
