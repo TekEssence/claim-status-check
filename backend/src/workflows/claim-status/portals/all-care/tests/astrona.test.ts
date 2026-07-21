@@ -108,16 +108,20 @@ test("AllCare derives Paid and Denied from net amount", () => {
   assert.equal(allCareFinalStatus(""), "Unknown");
 });
 
-test("AllCare output keeps member data, all CPTs, and denial memo", () => {
+test("AllCare output keeps member data without legacy duplicate columns", () => {
   const row = readAllCareInputRows(buffer([{ Group: "ALPHA", Payer: "Payer One", "Member ID": "MEM-3", "Member Name": "John Doe" }]))[0];
   const output = allCareOutputRow(row, {
     claimNumber: "CLM-1", datePaid: "", checkNumber: "", portalStatus: "Denied", netAmount: "$0.00", cptCodes: ["99213", "80053"], memoLine1: "Not medically necessary", serviceLines: [],
   });
   assert.equal(output.member_id, "MEM-3");
-  assert.equal(output.services_cpt, "99213; 80053");
-  assert.equal(output.memo_line_1, "Not medically necessary");
+  assert.equal(output.Proc, "");
+  assert.equal(output.NetPay, "$0.00");
   assert.equal(output.claim_outcome, "Denied");
   assert.match(String(output.final_status), /Checked All Care portal/);
+  assert.equal("cpt" in output, false);
+  assert.equal("billed" in output, false);
+  assert.equal("net" in output, false);
+  assert.equal("net_amount" in output, false);
 });
 
 test("AllCare expands every aligned service line into its own output row", () => {
@@ -132,10 +136,10 @@ test("AllCare expands every aligned service line into its own output row", () =>
 
   assert.equal(output.length, 2);
   assert.deepEqual(
-    output.map((line) => [line.from, line.to, line.cpt, line.modifier, line.diag_code, line.qty, line.billed, line.co_pay, line.co_insure, line.deductible, line.adjustment, line.net, line.memo_line_1, line.claim_outcome]),
+    output.map((line) => [line["Svc Date"], line.Proc, line.Mod, line.Qty, line.Billed, line.Copay, line.Coins, line.Deductible, line.Adjust, line.NetPay, line.claim_outcome]),
     [
-      ["07/01/2026", "07/01/2026", "99213", "25", "R10.9", "1", "$100.00", "$10.00", "$5.00", "$0.00", "$85.00", "$0.00", "Denied line", "Denied"],
-      ["07/02/2026", "07/02/2026", "80053", "", "Z00.0", "1", "$50.00", "$0.00", "$0.00", "$0.00", "$20.00", "$30.00", "", "Paid"],
+      ["07/01/2026", "99213", "25", "1", "$100.00", "$10.00", "$5.00", "$0.00", "$85.00", "$0.00", "Denied"],
+      ["07/02/2026", "80053", "", "1", "$50.00", "$0.00", "$0.00", "$0.00", "$20.00", "$30.00", "Paid"],
     ],
   );
 });
@@ -148,6 +152,17 @@ test("AllCare builds paid and denied final status narratives", () => {
   const deniedLine = { ...line, net: "$0.00", memoLine1: "Not covered" };
   const denied = allCareFinalStatusText(row, { claimNumber: "CLM-10", dateReceived: "06/09/2025", datePaid: "", dateDenied: "06/11/2025", checkNumber: "", portalStatus: "Denied", netAmount: "$0.00", cptCodes: ["99223"], memoLine1: "", serviceLines: [deniedLine] }, deniedLine);
   assert.equal(denied, "DOS 06/02/2025: Checked All Care portal claim received on 06/09/2025 denied on 06/11/2025 denial reason Not covered. Claim# CLM-10.");
+});
+
+test("AllCare outputs matched CARC and RARC descriptions and uses them as the denial reason", () => {
+  const [row] = readAllCareInputRows(buffer([{ Group: "ALPHA", Payer: "Payer One", ID: "MEM-10", DOS: "01/28/2026", CPT: "99152" }]));
+  const line = { from: "01/28/2026", to: "01/28/2026", cpt: "P- 99152", modifier: "", diagCode: "", qty: "1", billed: "$50.00", coPay: "$0.00", coInsure: "$0.00", deductible: "$0.00", adjustment: "$50.00", net: "$0.00", carc: "231-CO", rarc: "N19", carcDescription: "Mutually exclusive procedures", rarcDescription: "Procedure code incidental to primary procedure.", memoLine1: "" };
+  const details = { claimNumber: "CLM-10", dateReceived: "02/12/2026", datePaid: "04/10/2026", checkNumber: "81011102", portalStatus: "Finalized", netAmount: "$0.00", cptCodes: ["P- 99152"], memoLine1: "", serviceLines: [line] };
+  const [output] = allCareOutputRows(row, details);
+
+  assert.equal(output["CARC Description"], "Mutually exclusive procedures");
+  assert.equal(output["RARC Description"], "Procedure code incidental to primary procedure.");
+  assert.match(String(output.final_status), /denial reason Mutually exclusive procedures \/ Procedure code incidental to primary procedure\./);
 });
 
 test("AllCare reads input DOS and keeps every portal service line on the same DOS", () => {

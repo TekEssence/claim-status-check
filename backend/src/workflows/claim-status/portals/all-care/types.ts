@@ -71,5 +71,7 @@ export type AllCareServiceLine = {
   net: string;
   carc?: string;
   rarc?: string;
+  carcDescription?: string;
+  rarcDescription?: string;
   memoLine1: string;
 };

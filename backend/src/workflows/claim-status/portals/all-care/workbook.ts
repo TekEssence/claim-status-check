@@ -25,7 +25,8 @@ export function allCareFinalStatusText(row: AllCareInputRow, details: AllCareCla
     return `DOS ${dos}: Checked All Care portal claim received on ${received} paid on ${details.datePaid || ""} paid amount ${net} EFT/Check # ${details.checkNumber || ""}. Claim # ${claimNumber}.`;
   }
   if (outcome === "Denied") {
-    const denialReason = [serviceLine.carc, serviceLine.rarc].filter(Boolean).join(" / ")
+    const denialReason = [serviceLine.carcDescription, serviceLine.rarcDescription].filter(Boolean).join(" / ")
+      || [serviceLine.carc, serviceLine.rarc].filter(Boolean).join(" / ")
       || serviceLine.memoLine1 || details.memoLine1 || details.portalStatus || "";
     return `DOS ${dos}: Checked All Care portal claim received on ${received} denied on ${details.dateDenied || details.datePaid || ""} denial reason ${denialReason}. Claim# ${claimNumber}.`;
   }
@@ -38,9 +39,8 @@ function emptyServiceLine(): AllCareServiceLine {
 
 export function allCareOutputRows(row: AllCareInputRow, details: AllCareClaimDetails, result = "success", notes = "") {
   const serviceLines = details.serviceLines.length ? details.serviceLines : [emptyServiceLine()];
-  return serviceLines.map((serviceLine, index) => {
+  return serviceLines.map((serviceLine) => {
     const net = serviceLine.net || details.netAmount;
-    const memoLine1 = serviceLine.memoLine1 || details.memoLine1;
     return {
     input_row_id: row.inputRowId,
     group: row.group,
@@ -52,11 +52,14 @@ export function allCareOutputRows(row: AllCareInputRow, details: AllCareClaimDet
     input_dos: row.dos,
     input_cpt: row.cptCode,
     Claim: serviceLine.claim || details.claimNumber,
+    Status: details.portalStatus,
     "Vendor Name": serviceLine.vendorName || details.vendorName || "",
     "Date Rcvd": serviceLine.dateReceived || details.dateReceived || "",
     "Date Finalized": serviceLine.dateFinalized || details.datePaid || details.dateDenied || "",
     Check: serviceLine.check || details.checkNumber,
     "Check Amount": serviceLine.checkAmount || details.checkAmount || "",
+    "Svc Date": serviceLine.from || serviceLine.to || row.dos,
+    Qty: serviceLine.qty,
     Proc: serviceLine.cpt,
     Mod: serviceLine.modifier,
     Billed: serviceLine.billed,
@@ -71,26 +74,8 @@ export function allCareOutputRows(row: AllCareInputRow, details: AllCareClaimDet
     NetPay: net,
     CARC: serviceLine.carc,
     RARC: serviceLine.rarc,
-    claim_number: details.claimNumber,
-    date_paid: details.datePaid,
-    check_number: details.checkNumber,
-    portal_status: details.portalStatus,
-    service_line_number: details.serviceLines.length ? index + 1 : "",
-    from: serviceLine.from,
-    to: serviceLine.to,
-    cpt: serviceLine.cpt,
-    modifier: serviceLine.modifier,
-    diag_code: serviceLine.diagCode,
-    qty: serviceLine.qty,
-    billed: serviceLine.billed,
-    co_pay: serviceLine.coPay,
-    co_insure: serviceLine.coInsure,
-    deductible: serviceLine.deductible,
-    adjustment: serviceLine.adjustment,
-    net,
-    net_amount: net,
-    services_cpt: details.cptCodes.join("; "),
-    memo_line_1: memoLine1,
+    "CARC Description": serviceLine.carcDescription || "",
+    "RARC Description": serviceLine.rarcDescription || "",
     claim_outcome: allCareFinalStatus(net),
     final_status: result === "success" ? allCareFinalStatusText(row, details, serviceLine) : (notes || "No data found in portal."),
     result,

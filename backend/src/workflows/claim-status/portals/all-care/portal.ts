@@ -577,7 +577,66 @@ export async function extractAllCareClaimDetails(page: Page, fallbackClaimNumber
   const root = await scrollAllCareClaimDetails(page);
   const patientInfo = await extractAllCarePatientInfo(root);
   const bodyText = await root.innerText();
-  let serviceLines = await root.locator("table,mat-table,.mat-table,.cdk-table,[role=table],[role=grid]").evaluateAll((tables) => {
+  const eob = await root.evaluate((container) => {
+    const clean = (value: string | null | undefined) => (value ?? "").replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
+    const tables = Array.from(container.querySelectorAll("table.eobdetail")) as HTMLTableElement[];
+    const serviceTable = tables.find((table) => Array.from(table.querySelectorAll("th")).some((header) => clean(header.textContent).toLowerCase() === "svc date"));
+    const claimTable = tables.find((table) => table !== serviceTable && Array.from(table.querySelectorAll("th")).some((header) => clean(header.textContent).toLowerCase() === "claim"));
+    const meta: Record<string, string> = {};
+    if (claimTable) {
+      const wantedHeaders = new Set(["claim", "status", "datercvd", "vendorname", "datefinalized", "check", "checkamount"]);
+      for (const header of Array.from(claimTable.querySelectorAll(":scope > tbody > tr > th, :scope > tr > th"))) {
+        const key = clean(header.textContent).toLowerCase().replace(/[^a-z0-9]+/g, "");
+        if (!wantedHeaders.has(key)) continue;
+        const headerRow = header.parentElement as HTMLTableRowElement | null;
+        const valueRow = headerRow?.nextElementSibling as HTMLTableRowElement | null;
+        const headerIndex = header instanceof HTMLTableCellElement ? header.cellIndex : Array.from(headerRow?.children ?? []).indexOf(header);
+        meta[key] = clean(valueRow?.cells[headerIndex]?.textContent);
+      }
+    }
+    const serviceLines: Record<string, string>[] = [];
+    if (serviceTable) {
+      const rows = Array.from(serviceTable.rows);
+      const headers = Array.from(rows[0]?.cells ?? []).map((cell) => clean(cell.textContent).toLowerCase().replace(/[^a-z0-9]+/g, ""));
+      const fields: Record<string, string> = {
+        svcdate: "from", qty: "qty", proc: "cpt", mod: "modifier", billed: "billed", allowed: "allowed",
+        copay: "coPay", coins: "coInsure", deductible: "deductible", seq: "seq", adjust: "adjustment",
+        withhold: "withhold", interest: "interest", netpay: "net", carc: "carc", rarc: "rarc",
+      };
+      for (const row of rows.slice(1)) {
+        if (/claim totals/i.test(clean(row.textContent))) continue;
+        const cells = Array.from(row.cells);
+        const line: Record<string, string> = {};
+        headers.forEach((header, index) => {
+          const field = fields[header];
+          if (field) line[field] = clean(cells[index]?.textContent);
+        });
+        if (line.from) line.to = line.from;
+        if (line.cpt || line.net || line.billed) serviceLines.push(line);
+      }
+    }
+    const carcDescriptions: Record<string, string> = {};
+    const rarcDescriptions: Record<string, string> = {};
+    let section: "carc" | "rarc" | "" = "";
+    for (const row of Array.from(container.querySelectorAll(".box80 .row"))) {
+      const cells = Array.from(row.children);
+      const code = clean(cells[0]?.textContent);
+      const description = clean(cells[1]?.textContent);
+      if (/^carc code$/i.test(code)) { section = "carc"; continue; }
+      if (/^rarc code$/i.test(code)) { section = "rarc"; continue; }
+      if (!code || !description) continue;
+      if (section === "carc") carcDescriptions[code.toUpperCase().replace(/\s+/g, "")] = description;
+      if (section === "rarc") rarcDescriptions[code.toUpperCase().replace(/\s+/g, "")] = description;
+    }
+    return { meta, serviceLines, carcDescriptions, rarcDescriptions };
+  }) as {
+    meta: Record<string, string>;
+    serviceLines: AllCareServiceLine[];
+    carcDescriptions: Record<string, string>;
+    rarcDescriptions: Record<string, string>;
+  };
+  let serviceLines = eob.serviceLines;
+  if (!serviceLines.length) serviceLines = await root.locator("table,mat-table,.mat-table,.cdk-table,[role=table],[role=grid]").evaluateAll((tables) => {
     const normalizeHeader = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, "");
     const aliases: Record<string, string[]> = {
       claim: ["claim", "claimnumber", "claimno"],
@@ -677,6 +736,15 @@ export async function extractAllCareClaimDetails(page: Page, fallbackClaimNumber
       return output;
     }) as AllCareServiceLine[];
   }
+  serviceLines = serviceLines.map((line) => {
+    const carcKey = (line.carc || "").toUpperCase().replace(/\s+/g, "");
+    const rarcKey = (line.rarc || "").toUpperCase().replace(/\s+/g, "");
+    return {
+      ...line,
+      carcDescription: carcKey ? eob.carcDescriptions[carcKey] || "" : "",
+      rarcDescription: rarcKey ? eob.rarcDescriptions[rarcKey] || "" : "",
+    };
+  });
   if (!serviceLines.length) {
     // Claim Details is sometimes a print-style CSS layout with no table, row,
     // cell, role, or Angular column semantics. Read its visible leaf text by
@@ -737,16 +805,16 @@ export async function extractAllCareClaimDetails(page: Page, fallbackClaimNumber
   const firstLine = serviceLines[0];
   const claimNet = firstLine?.net || extractLabel(bodyText, ["NetPay", "Net Amount", "Net Paid", "Paid Amount"]);
   return {
-    vendorName: firstLine?.vendorName || extractLabel(bodyText, ["Vendor Name", "Vendor"]),
-    checkAmount: firstLine?.checkAmount || extractLabel(bodyText, ["Check Amount"]),
+    vendorName: eob.meta.vendorname || firstLine?.vendorName || "",
+    checkAmount: eob.meta.checkamount || firstLine?.checkAmount || "",
     memberName: patientInfo?.name || extractLabel(bodyText, ["Member Name", "Patient Name", "Member"]),
     memberDob: patientInfo?.dob || extractLabel(bodyText, ["Date of Birth", "Member DOB", "Patient DOB", "DOB"]),
-    claimNumber: firstLine?.claim || extractLabel(bodyText, ["Claim Number", "Claim #", "Claim No", "Claim"]) || fallbackClaimNumber,
-    dateReceived: firstLine?.dateReceived || extractLabel(bodyText, ["Date Rcvd", "Date Received", "Received Date", "Claim Received Date"]),
-    datePaid: firstLine?.dateFinalized || extractLabel(bodyText, ["Date Finalized", "Date Paid", "Paid Date"]),
+    claimNumber: eob.meta.claim || firstLine?.claim || fallbackClaimNumber,
+    dateReceived: eob.meta.datercvd || firstLine?.dateReceived || "",
+    datePaid: eob.meta.datefinalized || firstLine?.dateFinalized || "",
     dateDenied: extractLabel(bodyText, ["Date Denied", "Denied Date", "Reject Date", "Rejection Date"]),
-    checkNumber: firstLine?.check || extractLabel(bodyText, ["Check", "Check Number", "Check No", "Check #"]),
-    portalStatus: extractLabel(bodyText, ["Claim Status", "Status"]),
+    checkNumber: eob.meta.check || firstLine?.check || "",
+    portalStatus: eob.meta.status || "",
     netAmount: claimNet,
     cptCodes,
     memoLine1: claimMemo,
