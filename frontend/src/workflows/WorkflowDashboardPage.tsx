@@ -10,6 +10,7 @@ import {
   LayoutDashboard,
   LoaderCircle,
   LogOut,
+  ReceiptText,
   ShieldEllipsis,
   Stethoscope,
   Users,
@@ -38,6 +39,14 @@ const workflows = [
     route: "/eligibility",
     icon: HeartPulse,
     iconClassName: "bg-emerald-100 text-emerald-700",
+  },
+  {
+    id: "payment-eob-download",
+    name: "Payment EOB Download",
+    description: "Prepare remittance comparison and EOB download automation for payment portals.",
+    route: "/payment-eob-download",
+    icon: ReceiptText,
+    iconClassName: "bg-amber-100 text-amber-700",
   },
 ] as const;
 

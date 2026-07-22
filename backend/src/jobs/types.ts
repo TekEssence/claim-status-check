@@ -9,7 +9,7 @@ export type ScrapeJobEvent = {
 
 export type ScrapeJob = {
   id: string;
-  workflowId: "claim-status" | "eligibility-verification";
+  workflowId: "claim-status" | "eligibility-verification" | "payment-eob-download";
   status: ScrapeJobStatus;
   currentCompleted: number;
   totalRows: number;
