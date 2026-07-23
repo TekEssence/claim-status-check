@@ -11,6 +11,20 @@ export type WaystarInquiryPayload = {
   }>;
 };
 
+export type WaystarInquiryDiagnostics = {
+  pageUrl: string;
+  pageTitle: string;
+  payerInputVisible: boolean;
+  payerSelectVisible: boolean;
+  providerVisible: boolean;
+  providerDisabled: boolean;
+  serviceTypeVisible: boolean;
+  submitVisible: boolean;
+  activeCoverageVisible: boolean;
+  popupPageCount: number;
+  popupUrls: string[];
+};
+
 type WaystarSelectOption = {
   value: string;
   label: string;
@@ -51,21 +65,17 @@ export async function loginToWaystar(page: Page, credentials: WaystarCredentials
 }
 
 export async function openEligibilityInquiry(page: Page): Promise<Page> {
-  const existingInquiryPage = page.context().pages().find((candidate) =>
+  const existingInquiryPages = page.context().pages().filter((candidate) =>
     candidate !== page && candidate.url().includes("eligibility.zirmed.com/DDE"),
   );
-  if (existingInquiryPage) {
-    await existingInquiryPage.bringToFront().catch(() => {});
-    await waitForInquiryControls(existingInquiryPage);
-    return existingInquiryPage;
+  for (const existingInquiryPage of existingInquiryPages) {
+    await existingInquiryPage.close().catch(() => {});
   }
-
   const popupPromise = page.context().waitForEvent("page", { timeout: 15000 }).catch(() => null);
   await Promise.all([
     page.waitForLoadState("networkidle").catch(() => {}),
     page.locator(WAYSTAR_SELECTORS.navigation.eligibility).first().click(),
   ]);
-
   const popup = await popupPromise;
   const inquiryPage = popup ?? page;
   await inquiryPage.waitForLoadState("domcontentloaded").catch(() => {});
@@ -73,7 +83,6 @@ export async function openEligibilityInquiry(page: Page): Promise<Page> {
   await waitForInquiryControls(inquiryPage);
   return inquiryPage;
 }
-
 export async function submitWaystarInquiry(options: {
   page: Page;
   credentials: WaystarCredentials;
@@ -92,8 +101,8 @@ export async function submitWaystarInquiry(options: {
   await selectPayer(inquiryPage, payerName);
   await selectProvider(inquiryPage, credentials);
   await selectServiceType(inquiryPage, expectedServiceType);
-  await inquiryPage.locator(WAYSTAR_SELECTORS.inquiry.patientLookup).selectOption("10");
-  await inquiryPage.waitForTimeout(200);
+  await selectPatientLookup(inquiryPage, "10");
+  await waitForPatientFieldsReady(inquiryPage);
   await fillVerifiedText(inquiryPage, WAYSTAR_SELECTORS.inquiry.memberId, expectedMemberId, "Member ID");
   await fillVerifiedText(inquiryPage, WAYSTAR_SELECTORS.inquiry.lastName, expectedLastName, "Last Name");
   await fillVerifiedText(inquiryPage, WAYSTAR_SELECTORS.inquiry.firstName, expectedFirstName, "First Name");
@@ -195,6 +204,24 @@ export function findWaystarServiceTypeOption(
   return null;
 }
 
+export async function captureWaystarInquiryDiagnostics(page: Page): Promise<WaystarInquiryDiagnostics> {
+  const provider = page.locator(WAYSTAR_SELECTORS.inquiry.provider).first();
+
+  return {
+    pageUrl: page.url(),
+    pageTitle: await page.title().catch(() => ""),
+    payerInputVisible: await page.locator(WAYSTAR_SELECTORS.inquiry.payerInput).first().isVisible().catch(() => false),
+    payerSelectVisible: await page.locator(WAYSTAR_SELECTORS.inquiry.payerSelect).first().isVisible().catch(() => false),
+    providerVisible: await provider.isVisible().catch(() => false),
+    providerDisabled: await provider.isDisabled().catch(() => true),
+    serviceTypeVisible: await page.locator(WAYSTAR_SELECTORS.inquiry.serviceType).first().isVisible().catch(() => false),
+    submitVisible: await page.locator(WAYSTAR_SELECTORS.inquiry.submit).first().isVisible().catch(() => false),
+    activeCoverageVisible: await page.locator(WAYSTAR_SELECTORS.inquiry.activeCoverage).first().isVisible().catch(() => false),
+    popupPageCount: page.context().pages().length,
+    popupUrls: page.context().pages().map((candidate) => candidate.url()).filter(Boolean),
+  };
+}
+
 async function handleAdditionalAuthentication(
   page: Page,
   verificationAnswers: WaystarSecurityQuestion[],
@@ -245,28 +272,6 @@ async function waitForInquiryControls(page: Page): Promise<void> {
 }
 
 async function selectPayer(page: Page, payerName: string): Promise<void> {
-  const payerInput = page.locator(WAYSTAR_SELECTORS.inquiry.payerInput).first();
-  if (await payerInput.isVisible().catch(() => false)) {
-    await fillVerifiedText(page, WAYSTAR_SELECTORS.inquiry.payerInput, payerName, "Payer");
-
-    const exactSuggestion = await findExactPayerSuggestion(page, payerName);
-    if (exactSuggestion) {
-      await exactSuggestion.click();
-      await page.waitForTimeout(500);
-    } else {
-      await commitTypedPayerSelection(payerInput);
-    }
-
-    const currentValue = await payerInput.inputValue().catch(() => "");
-    const providerReady = await isProviderReady(page, 5000);
-    if (isExactWaystarPayerMatch(currentValue, payerName) || providerReady) {
-      await waitForProviderReady(page);
-      return;
-    }
-
-    throw new Error(`Waystar payer selection did not stick. Expected ${payerName}, found ${currentValue || "blank"}.`);
-  }
-
   const payerSelect = page.locator(WAYSTAR_SELECTORS.inquiry.payerSelect).first();
   if (await payerSelect.isVisible().catch(() => false)) {
     await payerSelect.selectOption({ label: payerName }).catch(async () => {
@@ -282,13 +287,112 @@ async function selectPayer(page: Page, payerName: string): Promise<void> {
       }
       await payerSelect.selectOption(match.value);
     });
+    await payerSelect.evaluate((element) => {
+      const select = element as HTMLSelectElement;
+      const onchangeAttr = select.getAttribute("onchange") || "";
+      select.dispatchEvent(new Event("input", { bubbles: true }));
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+      if (typeof select.onchange === "function") {
+        try {
+          select.onchange(new Event("change", { bubbles: true }));
+        } catch {}
+      }
+      if (onchangeAttr) {
+        try {
+          const fn = new Function(onchangeAttr);
+          fn.call(select);
+        } catch {}
+        const postbackMatch = onchangeAttr.match(/__doPostBack\((?:\'|")([^\'"]+)(?:\'|")\s*,\s*(?:\'|")([^\'"]*)(?:\'|")\)/i);
+        const doPostBack = (window as Window & { __doPostBack?: (target: string, argument: string) => void }).__doPostBack;
+        if (postbackMatch && typeof doPostBack === "function") {
+          try {
+            doPostBack(postbackMatch[1], postbackMatch[2]);
+          } catch {}
+        }
+      }
+      select.dispatchEvent(new Event("blur", { bubbles: true }));
+      select.dispatchEvent(new Event("focusout", { bubbles: true }));
+    }).catch(() => {});
+    await payerSelect.press("Tab").catch(() => {});
+    await page.waitForLoadState("domcontentloaded").catch(() => {});
+    await page.waitForLoadState("networkidle").catch(() => {});
+    await page.waitForTimeout(1200);
+    const selectedOption = await payerSelect.locator("option:checked").evaluate((node) => ({
+      value: (node as HTMLOptionElement | null)?.value || "",
+      label: (node as HTMLOptionElement | null)?.textContent?.trim() || "",
+    })).catch(() => ({ value: "", label: "" }));
+    if (!isExactWaystarPayerMatch(selectedOption.label || selectedOption.value, payerName)) {
+      throw new Error(
+        `Waystar payer selection did not stick in the DDE dropdown. Expected ${payerName}, found ${selectedOption.label || selectedOption.value || "blank"}.`,
+      );
+    }
     await waitForProviderReady(page);
     return;
   }
+  const payerInput = page.locator(WAYSTAR_SELECTORS.inquiry.payerInput).first();
+  if (await payerInput.isVisible().catch(() => false)) {
+    await resetWaystarPayerSelection(page);
+    await payerInput.scrollIntoViewIfNeeded().catch(() => {});
+    await payerInput.click({ clickCount: 3 }).catch(() => {});
+    await payerInput.press("Control+A").catch(() => {});
+    await payerInput.press("Backspace").catch(() => {});
+    await payerInput.fill("").catch(() => {});
+    await payerInput.type(payerName, { delay: 40 }).catch(async () => {
+      await fillVerifiedText(page, WAYSTAR_SELECTORS.inquiry.payerInput, payerName, "Payer");
+    });
+    await page.waitForTimeout(750);
 
+    const exactSuggestion = await findExactPayerSuggestion(page, payerName);
+    if (exactSuggestion) {
+      await exactSuggestion.scrollIntoViewIfNeeded().catch(() => {});
+      await exactSuggestion.hover().catch(() => {});
+      await exactSuggestion.dispatchEvent("mousedown").catch(() => {});
+      await exactSuggestion.click().catch(async () => {
+        await exactSuggestion.press("Enter").catch(() => {});
+      });
+    } else {
+      await payerInput.press("ArrowDown").catch(() => {});
+      await page.waitForTimeout(250);
+      await payerInput.press("Enter").catch(() => {});
+    }
+
+    await page.waitForLoadState("networkidle").catch(() => {});
+    await page.waitForTimeout(1000);
+
+    const commitState = await readWaystarPayerCommitState(page);
+    const providerReady = await isProviderReady(page, 8000);
+    if (
+      providerReady
+      || commitState.inquiryDetailsVisible
+      || await isInquiryDetailsReady(page)
+      || isExactWaystarPayerMatch(commitState.currentValue, payerName)
+      || isExactWaystarPayerMatch(commitState.hiddenPayerId, payerName)
+      || isExactWaystarPayerMatch(commitState.selectedPayerId, payerName)
+    ) {
+      await waitForProviderReady(page);
+      return;
+    }
+
+    await ensureWaystarPayerCommitted(page, payerName).catch(() => {});
+    const fallbackState = await readWaystarPayerCommitState(page);
+    if (
+      await isInquiryDetailsReady(page)
+      || await isProviderReady(page, 5000)
+      || fallbackState.inquiryDetailsVisible
+      || isExactWaystarPayerMatch(fallbackState.currentValue, payerName)
+      || isExactWaystarPayerMatch(fallbackState.hiddenPayerId, payerName)
+      || isExactWaystarPayerMatch(fallbackState.selectedPayerId, payerName)
+    ) {
+      await waitForProviderReady(page);
+      return;
+    }
+
+    throw new Error(
+      `Waystar payer selection did not commit. Expected ${payerName}, found input=${fallbackState.currentValue || "blank"}, hidden=${fallbackState.hiddenPayerId || "blank"}, selected=${fallbackState.selectedPayerId || "blank"}, inquiryVisible=${fallbackState.inquiryDetailsVisible}.`,
+    );
+  }
   throw new Error("Waystar payer control was not found on the DDE inquiry page.");
 }
-
 async function findExactPayerSuggestion(page: Page, payerName: string) {
   const deadline = Date.now() + 10000;
   while (Date.now() < deadline) {
@@ -306,20 +410,110 @@ async function findExactPayerSuggestion(page: Page, payerName: string) {
   return null;
 }
 
+type WaystarPayerCommitState = {
+  currentValue: string;
+  hiddenPayerId: string;
+  selectedPayerId: string;
+  inquiryDetailsVisible: boolean;
+  noPayerVisible: boolean;
+};
+
+async function resetWaystarPayerSelection(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const payerInput = document.querySelector("#payerText") as HTMLInputElement | null;
+    const hiddenPayer = document.querySelector("#hdnPayerId") as HTMLInputElement | null;
+    const selectedPayer = document.querySelector("#SelectedPayerId") as HTMLInputElement | null;
+    if (payerInput) payerInput.value = "";
+    if (hiddenPayer) hiddenPayer.value = "";
+    if (selectedPayer) selectedPayer.value = "";
+  }).catch(() => {});
+}
+
+async function ensureWaystarPayerCommitted(page: Page, payerName: string): Promise<void> {
+  const targetPayerId = extractWaystarPayerId(payerName);
+  const deadline = Date.now() + 10000;
+
+  while (Date.now() < deadline) {
+    const commitState = await readWaystarPayerCommitState(page);
+    const exactInputMatch = isExactWaystarPayerMatch(commitState.currentValue, payerName);
+    const exactHiddenMatch = isExactWaystarPayerMatch(commitState.hiddenPayerId, payerName)
+      || (targetPayerId && commitState.hiddenPayerId.toLowerCase() === targetPayerId);
+    const exactSelectedMatch = isExactWaystarPayerMatch(commitState.selectedPayerId, payerName)
+      || (targetPayerId && commitState.selectedPayerId.toLowerCase() === targetPayerId);
+
+    if ((exactHiddenMatch || exactSelectedMatch) && commitState.inquiryDetailsVisible && !commitState.noPayerVisible) {
+      return;
+    }
+
+    if (targetPayerId && (!exactHiddenMatch || !exactSelectedMatch || commitState.noPayerVisible)) {
+      await page.evaluate(({ payerId, payerLabel }) => {
+        const payerInput = document.querySelector("#payerText") as HTMLInputElement | null;
+        const hiddenPayer = document.querySelector("#hdnPayerId") as HTMLInputElement | null;
+        const selectedPayer = document.querySelector("#SelectedPayerId") as HTMLInputElement | null;
+        const windowWithPayer = window as Window & {
+          _inquiryPayerId?: string;
+          refreshPayerData?: boolean;
+          utility?: { refreshPayerData?: () => void };
+        };
+
+        if (payerInput) payerInput.value = payerLabel;
+        if (hiddenPayer) hiddenPayer.value = payerId;
+        if (selectedPayer) selectedPayer.value = payerId;
+        windowWithPayer._inquiryPayerId = payerId;
+        windowWithPayer.refreshPayerData = true;
+        windowWithPayer.utility?.refreshPayerData?.();
+      }, { payerId: targetPayerId, payerLabel: payerName }).catch(() => {});
+    }
+
+    await page.waitForLoadState("networkidle").catch(() => {});
+    await page.waitForTimeout(500);
+  }
+
+  throw new Error(`Exact Waystar payer commit was not observed for ${payerName}.`);
+}
+
+async function readWaystarPayerCommitState(page: Page): Promise<WaystarPayerCommitState> {
+  return page.evaluate(() => {
+    const payerInput = document.querySelector("#payerText") as HTMLInputElement | null;
+    const hiddenPayer = document.querySelector("#hdnPayerId") as HTMLInputElement | null;
+    const selectedPayer = document.querySelector("#SelectedPayerId") as HTMLInputElement | null;
+    const inquiryDetails = document.querySelector("#inqDetails") as HTMLElement | null;
+    const noPayer = document.querySelector(".contentContainer.nopayer") as HTMLElement | null;
+    const isVisible = (element: HTMLElement | null) => Boolean(element && element.style.display !== "none");
+
+    return {
+      currentValue: payerInput?.value?.trim() || "",
+      hiddenPayerId: hiddenPayer?.value?.trim() || "",
+      selectedPayerId: selectedPayer?.value?.trim() || "",
+      inquiryDetailsVisible: isVisible(inquiryDetails),
+      noPayerVisible: isVisible(noPayer),
+    };
+  });
+}
+
+
 async function waitForProviderReady(page: Page, timeoutMs = 30000): Promise<void> {
+  if (await isInquiryDetailsReady(page)) return;
   const provider = page.locator(WAYSTAR_SELECTORS.inquiry.provider).first();
   await provider.waitFor({ state: "visible", timeout: timeoutMs });
-
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
+    if (await isInquiryDetailsReady(page)) return;
     const disabled = await provider.isDisabled().catch(() => true);
     if (!disabled) return;
     await page.waitForTimeout(250);
   }
-
   throw new Error("Waystar provider field did not become active after selecting the payer.");
 }
-
+async function isInquiryDetailsReady(page: Page): Promise<boolean> {
+  const provider = page.locator(WAYSTAR_SELECTORS.inquiry.provider).first();
+  const serviceType = page.locator(WAYSTAR_SELECTORS.inquiry.serviceType).first();
+  const noPayer = page.locator('.contentContainer.nopayer').first();
+  const providerVisible = await provider.isVisible().catch(() => false);
+  const serviceTypeVisible = await serviceType.isVisible().catch(() => false);
+  const noPayerVisible = await noPayer.isVisible().catch(() => false);
+  return providerVisible && serviceTypeVisible && !noPayerVisible;
+}
 async function isProviderReady(page: Page, timeoutMs = 5000): Promise<boolean> {
   try {
     await waitForProviderReady(page, timeoutMs);
@@ -329,19 +523,11 @@ async function isProviderReady(page: Page, timeoutMs = 5000): Promise<boolean> {
   }
 }
 
-async function commitTypedPayerSelection(payerInput: Locator): Promise<void> {
-  await payerInput.press("ArrowDown").catch(() => {});
-  await payerInput.press("Enter").catch(() => {});
-  await payerInput.page().waitForTimeout(400);
-  await payerInput.press("Enter").catch(() => {});
-  await payerInput.page().waitForTimeout(250);
-  await payerInput.press("Tab").catch(() => {});
-  await payerInput.page().waitForTimeout(250);
-}
-
 async function selectServiceType(page: Page, serviceTypeCode: string): Promise<void> {
   const serviceType = page.locator(WAYSTAR_SELECTORS.inquiry.serviceType).first();
   await serviceType.waitFor({ state: "visible", timeout: 30000 });
+  await serviceType.scrollIntoViewIfNeeded().catch(() => {});
+  await page.waitForTimeout(250);
   await waitForEnabled(serviceType, "Waystar service type");
 
   const deadline = Date.now() + 30000;
@@ -395,6 +581,35 @@ async function selectServiceType(page: Page, serviceTypeCode: string): Promise<v
   }
 }
 
+async function selectPatientLookup(page: Page, lookupValue: string): Promise<void> {
+  const patientLookup = page.locator(WAYSTAR_SELECTORS.inquiry.patientLookup).first();
+  await patientLookup.waitFor({ state: "visible", timeout: 30000 });
+  await waitForEnabled(patientLookup, "Waystar patient lookup");
+  await patientLookup.selectOption(lookupValue);
+  await patientLookup.evaluate((element) => {
+    const select = element as HTMLSelectElement;
+    select.dispatchEvent(new Event("input", { bubbles: true }));
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+    select.dispatchEvent(new Event("blur", { bubbles: true }));
+  }).catch(() => {});
+  await page.waitForLoadState("networkidle").catch(() => {});
+  await page.waitForTimeout(250);
+}
+async function waitForPatientFieldsReady(page: Page, timeoutMs = 15000): Promise<void> {
+  const memberId = page.locator(WAYSTAR_SELECTORS.inquiry.memberId).first();
+  await memberId.waitFor({ state: "visible", timeout: timeoutMs });
+  await waitForTextFieldReady(memberId, "Waystar Member ID", timeoutMs);
+}
+async function waitForTextFieldReady(locator: Locator, label: string, timeoutMs = 30000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const disabled = await locator.isDisabled().catch(() => true);
+    const readonly = await locator.evaluate((element) => (element as HTMLInputElement).readOnly).catch(() => true);
+    if (!disabled && !readonly) return;
+    await locator.page().waitForTimeout(250);
+  }
+  throw new Error(`${label} did not become editable.`);
+}
 async function clickAddCodeIfVisible(page: Page): Promise<void> {
   const addCode = page.getByText("Add Code", { exact: true }).first();
   if (!(await addCode.isVisible().catch(() => false))) return;
@@ -405,22 +620,25 @@ async function clickAddCodeIfVisible(page: Page): Promise<void> {
   ]).catch(async () => {
     await addCode.click().catch(() => {});
   });
-  await page.waitForTimeout(300);
+  await page.waitForTimeout(500);
 }
 
 async function fillVerifiedText(page: Page, selector: string, value: string, label: string): Promise<void> {
   const input = page.locator(selector).first();
   await input.waitFor({ state: "visible", timeout: 30000 });
-  await input.fill("");
-  await input.fill(value);
-  await input.evaluate((element) => {
+  await waitForTextFieldReady(input, `Waystar ${label}`);
+  await input.fill("").catch(() => {});
+  await input.fill(value).catch(() => {});
+  await input.evaluate((element, nextValue) => {
     const field = element as HTMLInputElement;
+    const prototype = Object.getPrototypeOf(field) as HTMLInputElement;
+    const setter = Object.getOwnPropertyDescriptor(prototype, "value")?.set;
+    setter?.call(field, nextValue);
     field.dispatchEvent(new Event("input", { bubbles: true }));
     field.dispatchEvent(new Event("change", { bubbles: true }));
     field.dispatchEvent(new Event("blur", { bubbles: true }));
-  }).catch(() => {});
-  await page.waitForTimeout(100);
-
+  }, value).catch(() => {});
+  await page.waitForTimeout(150);
   const actualValue = await input.inputValue().catch(() => "");
   if (actualValue.trim() !== value.trim()) {
     throw new Error(`Waystar ${label} did not fill correctly. Expected ${value}, found ${actualValue || "blank"}.`);
@@ -512,15 +730,25 @@ function normalizeServiceTypeCode(value?: string): string | null {
   return match ? match[1].toUpperCase() : null;
 }
 
-function normalizeDate(value: string): string {
+export function normalizeDate(value: string): string {
   const trimmed = value.trim();
   const match = trimmed.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2}|\d{4})$/);
   if (!match) return trimmed;
   const [, month, day, year] = match;
-  const normalizedYear = year.length === 2 ? `20${year}` : year;
+  const normalizedYear = year.length === 2
+    ? resolveTwoDigitYear(year)
+    : year;
   return `${String(Number(month)).padStart(2, "0")}/${String(Number(day)).padStart(2, "0")}/${normalizedYear}`;
 }
 
+function resolveTwoDigitYear(twoDigitYear: string): string {
+  const numericYear = Number(twoDigitYear);
+  if (Number.isNaN(numericYear)) return twoDigitYear;
+
+  const currentTwoDigitYear = new Date().getUTCFullYear() % 100;
+  const century = numericYear > currentTwoDigitYear ? 1900 : 2000;
+  return String(century + numericYear);
+}
 function normalizeText(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().replace(/\s+/g, " ");
 }
@@ -562,3 +790,10 @@ async function waitForEnabled(locator: Locator, label: string): Promise<void> {
 
   throw new Error(`${label} did not become enabled.`);
 }
+
+
+
+
+
+
+

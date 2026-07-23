@@ -3,6 +3,7 @@ import { aerialScraper } from "./portals/aerial/scraper";
 import { availityScraper } from "./portals/availity/scraper";
 import { blueShieldScraper } from "./portals/blue-shield/scraper";
 import { iehpScraper } from "./portals/iehp/scraper";
+import { medpointScraper } from "./portals/medpoint/scraper";
 import { regalScraper } from "./portals/regal/scraper";
 import { waystarScraper } from "./portals/waystar/scraper";
 import { optumProScraper } from "../../scrapers/optum-pro/scraper";
@@ -14,6 +15,7 @@ export const claimStatusPortalRegistry = {
   availity: availityScraper,
   "blue-shield": blueShieldScraper,
   iehp: iehpScraper,
+  medpoint: medpointScraper,
   "optum-pro": optumProScraper,
   regal: regalScraper,
   waystar: waystarScraper,

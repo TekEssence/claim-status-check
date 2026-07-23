@@ -28,6 +28,7 @@ import optumLogo from "../../Assets/optum-logo.svg";
 import regalLogo from "../../Assets/channels4_profile (1).jpg";
 import availityLogo from "../../Assets/availity-logo.jpg";
 import waystarLogo from "../../Assets/waystar-logo-vector.png";
+import medpointLogo from "../../Assets/Screenshot 2026-07-21 152119.png";
 import { applyClaimRowUpdateToWorksheet, postProcessWorksheet } from "./portals/iehp/workbook";
 import { cancelScrapeJob as cancelScrapeJobRequest, getActiveScrapeJobErrorId, getCurrentScrapeJob, startScrapeJob, subscribeToScrapeJobEvents, submitScrapeJobInput, type CurrentScrapeJob } from "../../api/scrape-jobs-api";
 import { clearStoredRunContext, loadClaimFileHandle, loadIehpLoginFile, saveClaimFileHandle, saveIehpLoginFile } from "../../lib/run-context-store";
@@ -46,6 +47,8 @@ import { AvailityResultView } from "./portals/availity/AvailityResultView";
 import { OptumProInputForm } from "../../portals/optum-pro/OptumProInputForm";
 import { WaystarInputForm } from "./portals/waystar/WaystarInputForm";
 import { WaystarResultView } from "./portals/waystar/WaystarResultView";
+import { MedpointInputForm } from "./portals/medpoint/MedpointInputForm";
+import { MedpointResultView } from "./portals/medpoint/MedpointResultView";
 import { OptumProResultView } from "../../portals/optum-pro/OptumProResultView";
 import {
   aerialFrontendPortalConfig,
@@ -53,6 +56,7 @@ import {
   blueShieldFrontendPortalConfig,
   claimStatusPortalRegistry,
   iehpFrontendPortalConfig,
+  medpointFrontendPortalConfig,
   optumProFrontendPortalConfig,
   regalFrontendPortalConfig,
   waystarFrontendPortalConfig,
@@ -90,7 +94,7 @@ type IehpWorkbookBundle = {
   worksheet: ExcelJS.Worksheet;
 };
 
-export type PortalId = "iehp" | "aerial" | "regal" | "blue-shield" | "availity" | "waystar" | "optum-pro";
+export type PortalId = "iehp" | "aerial" | "regal" | "blue-shield" | "availity" | "waystar" | "medpoint" | "optum-pro";
 type DownloadFile = {
   filename: string;
   bytes: Uint8Array;
@@ -115,11 +119,12 @@ const PORTAL_ROUTE_MAP: Record<PortalId, string> = {
   "blue-shield": "/blue-shield",
   availity: "/availity",
   waystar: "/claim-status/waystar",
+  medpoint: "/medpoint",
   "optum-pro": "/optum-pro",
 };
 
 function isPortalId(value: string): value is PortalId {
-  return value === "iehp" || value === "aerial" || value === "regal" || value === "blue-shield" || value === "availity" || value === "waystar" || value === "optum-pro";
+  return value === "iehp" || value === "aerial" || value === "regal" || value === "blue-shield" || value === "availity" || value === "waystar" || value === "medpoint" || value === "optum-pro";
 }
 
 function canRestoreCurrentJob(job: CurrentScrapeJob): job is CurrentScrapeJob & { portalId: PortalId } {
@@ -261,6 +266,23 @@ const PORTAL_UI_META: Record<
       height: 40,
     },
   },
+  medpoint: {
+    shortCode: "MP",
+    logoClassName: "bg-white text-blue-700",
+    logoSrc: medpointLogo,
+    cardLogoFrameClassName: "h-10 w-[5.4rem] rounded-[1rem] px-1.5",
+    cardLogoImageClassName: "h-full w-full scale-[1.2] object-contain",
+    cardLogoSize: {
+      width: 78,
+      height: 32,
+    },
+    heroLogoFrameClassName: "h-14 w-[7.4rem] rounded-[1.15rem] px-2",
+    heroLogoImageClassName: "h-full w-full scale-[1.08] object-contain",
+    heroLogoSize: {
+      width: 112,
+      height: 44,
+    },
+  },
   "optum-pro": {
     shortCode: "OP",
     logoClassName: "bg-white text-orange-600",
@@ -310,6 +332,10 @@ const PORTAL_WORKSPACE_META: Record<
   waystar: {
     heroDescription: "Upload the Waystar login workbook and claim details workbook. Launch the Waystar claim status verification workspace.",
     processingDescription: "Waystar validates the upload, opens the live automation run, streams progress updates, and downloads the completed workbook.",
+  },
+  medpoint: {
+    heroDescription: "Medpoint has been added to the claim status dashboard as a new frontend portal destination.",
+    processingDescription: "Automation inputs, backend job wiring, and result streaming are still pending for Medpoint.",
   },
   "optum-pro": {
     heroDescription: "Upload the One Healthcare ID login workbook and Optum Pro claim workbook, then enter OTP when prompted.",
@@ -671,6 +697,11 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
   const [availityInputFile, setAvailityInputFile] = useState<File | null>(null);
   const [waystarLoginFile, setWaystarLoginFile] = useState<File | null>(null);
   const [waystarInputFile, setWaystarInputFile] = useState<File | null>(null);
+  const [medpointLoginFile, setMedpointLoginFile] = useState<File | null>(null);
+  const [medpointInputFile, setMedpointInputFile] = useState<File | null>(null);
+  const [medpointCaptchaRequest, setMedpointCaptchaRequest] = useState<{ inputName: string; label: string; message: string } | null>(null);
+  const [medpointOtpRequest, setMedpointOtpRequest] = useState<{ inputName: string; label: string; message: string } | null>(null);
+  const [medpointOtpValue, setMedpointOtpValue] = useState("");
   const [optumProLoginFile, setOptumProLoginFile] = useState<File | null>(null);
   const [optumProInputFile, setOptumProInputFile] = useState<File | null>(null);
   const [optumProJobId, setOptumProJobId] = useState<string>("");
@@ -735,8 +766,10 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
               ? availityFrontendPortalConfig
               : effectivePortalId === "waystar"
                 ? waystarFrontendPortalConfig
-                : effectivePortalId === "optum-pro"
-                  ? optumProFrontendPortalConfig
+                : effectivePortalId === "medpoint"
+                  ? medpointFrontendPortalConfig
+                  : effectivePortalId === "optum-pro"
+                    ? optumProFrontendPortalConfig
             : null;
   const selectedPortalUiMeta = effectivePortalId ? PORTAL_UI_META[effectivePortalId] : null;
   const filteredPortals = useMemo(() => {
@@ -792,6 +825,10 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     () => Boolean(waystarLoginFile && waystarInputFile && !isProcessing),
     [waystarInputFile, waystarLoginFile, isProcessing],
   );
+  const canSubmitMedpoint = useMemo(
+    () => Boolean(medpointLoginFile && medpointInputFile && !isProcessing),
+    [medpointInputFile, medpointLoginFile, isProcessing],
+  );
   const canSubmitOptumPro = useMemo(
     () => Boolean(optumProLoginFile && optumProInputFile && !isProcessing),
     [optumProLoginFile, optumProInputFile, isProcessing],
@@ -817,8 +854,10 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
               ? canSubmitAvaility
               : effectivePortalId === "waystar"
                 ? canSubmitWaystar
-                : effectivePortalId === "optum-pro"
-                  ? canSubmitOptumPro
+                : effectivePortalId === "medpoint"
+                  ? canSubmitMedpoint
+                  : effectivePortalId === "optum-pro"
+                    ? canSubmitOptumPro
             : false;
   const portalWorkflowMeta = effectivePortalId ? PORTAL_WORKSPACE_META[effectivePortalId] : null;
   const portalFileState = useMemo(() => {
@@ -876,6 +915,15 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
       };
     }
 
+    if (effectivePortalId === "medpoint") {
+      return {
+        claimFileLabel: medpointInputFile?.name ?? "",
+        claimReady: Boolean(medpointInputFile),
+        loginFileLabel: medpointLoginFile?.name ?? "",
+        loginReady: Boolean(medpointLoginFile),
+      };
+    }
+
     if (effectivePortalId === "optum-pro") {
       return {
         claimFileLabel: optumProInputFile?.name ?? "",
@@ -901,6 +949,8 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     claimFileName,
     effectivePortalId,
     iehpLoginFile,
+    medpointInputFile,
+    medpointLoginFile,
     optumProInputFile,
     optumProLoginFile,
     regalClaimFile,
@@ -1303,6 +1353,9 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     setRegalMfaValue("");
     setRegalOtpRequest(null);
     setRegalOtpValue("");
+    setMedpointCaptchaRequest(null);
+    setMedpointOtpRequest(null);
+    setMedpointOtpValue("");
     setBlueShieldJobId("");
     setBlueShieldOtpRequest(null);
     setBlueShieldOtpValue("");
@@ -1345,10 +1398,16 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     setPendingRegalRestoreJob(null);
     setPendingBlueShieldRestoreJob(null);
     setRegalJobId("");
+    setMedpointCaptchaRequest(null);
+    setMedpointOtpRequest(null);
+    setMedpointOtpValue("");
     setRegalMfaRequest(null);
     setRegalMfaValue("");
     setRegalOtpRequest(null);
     setRegalOtpValue("");
+    setMedpointCaptchaRequest(null);
+    setMedpointOtpRequest(null);
+    setMedpointOtpValue("");
     setBlueShieldJobId("");
     setBlueShieldOtpRequest(null);
     setBlueShieldOtpValue("");
@@ -1494,6 +1553,11 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     setBlueShieldJobId("");
     setBlueShieldOtpRequest(null);
     setBlueShieldOtpValue("");
+    setMedpointLoginFile(null);
+    setMedpointInputFile(null);
+    setMedpointCaptchaRequest(null);
+    setMedpointOtpRequest(null);
+    setMedpointOtpValue("");
     setOptumProLoginFile(null);
     setOptumProInputFile(null);
     setOptumProJobId("");
@@ -2897,6 +2961,144 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     }
   }
 
+  async function submitMedpoint(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!medpointLoginFile || !medpointInputFile) {
+      setStatus("Please provide both the Medpoint login Excel and claim Excel files.");
+      return;
+    }
+
+    resetRunState("Starting Medpoint processing...");
+
+    const formData = new FormData();
+    formData.append("portalId", "medpoint");
+    formData.append("loginExcel", medpointLoginFile);
+    formData.append("loginFileName", medpointLoginFile.name);
+    formData.append("claimExcel", medpointInputFile);
+    formData.append("claimFileName", medpointInputFile.name);
+
+    let hasError = false;
+    let wasCancelled = false;
+    let finalErrorMessage = "";
+    let subscribedJobId = "";
+    const streamAbortController = new AbortController();
+
+    const handleJobEvent = async (eventData: ScrapeJobEvent) => {
+      if (eventData.type === "log" && eventData.message) {
+        setLogs((prev) => [...prev, eventData.message ?? ""]);
+        setStatus(eventData.message);
+      } else if (eventData.type === "progress" && typeof eventData.completed === "number" && typeof eventData.total === "number") {
+        setProgress({ completed: eventData.completed, total: eventData.total });
+        setStatus(`Medpoint processing ${eventData.completed} of ${eventData.total} row(s)...`);
+      } else if (eventData.type === "input_request" && eventData.inputName) {
+        if (eventData.inputName === "medpoint_otp") {
+          setMedpointOtpRequest({
+            inputName: eventData.inputName,
+            label: eventData.label || "Medpoint OTP",
+            message: eventData.message || "Enter the Medpoint OTP code to continue.",
+          });
+          setMedpointOtpValue("");
+          setStatus(eventData.message || "Waiting for Medpoint OTP.");
+        } else {
+          setMedpointCaptchaRequest({
+            inputName: eventData.inputName,
+            label: eventData.label || "Medpoint captcha",
+            message: eventData.message || 'Complete "I\'m not a robot" in the Medpoint browser window, then click Completed here.',
+          });
+          setStatus(eventData.message || "Waiting for Medpoint captcha completion.");
+        }
+      } else if (eventData.type === "error_screenshot" && typeof eventData.index === "number" && eventData.image) {
+        setErrorScreenshots((prev) => [...prev, { index: eventData.index ?? -1, image: eventData.image ?? "" }]);
+      } else if (eventData.type === "file_download" && eventData.filename && eventData.base64) {
+        const artifactKey = buildDownloadArtifactKey(eventData);
+        if (!hasDownloadedArtifact(subscribedJobId, artifactKey)) {
+          downloadBase64File(eventData.filename, eventData.base64, eventData.mimeType || "application/octet-stream");
+          rememberDownloadedArtifact(subscribedJobId, artifactKey);
+          setStatus(`Downloaded ${eventData.filename}`);
+        }
+      } else if (eventData.type === "warning" && eventData.message) {
+        setLogs((prev) => [...prev, eventData.message ?? ""]);
+        setStatus(eventData.message);
+      } else if (eventData.type === "error" && eventData.message) {
+        finalErrorMessage = eventData.message;
+        setLogs((prev) => [...prev, `ERROR: ${eventData.message}`]);
+        setStatus(`Error: ${eventData.message}`);
+        hasError = true;
+      } else if (eventData.type === "cancelled") {
+        wasCancelled = true;
+        setLogs((prev) => [...prev, eventData.message || "Processing cancelled."]);
+        setStatus(eventData.message || "Processing cancelled.");
+      }
+    };
+
+    try {
+      const jobId = await startScrapeJob(formData);
+      subscribedJobId = jobId;
+      setActiveJobId(jobId);
+      await subscribeToScrapeJobEvents({
+        jobId,
+        signal: streamAbortController.signal,
+        onEvent: handleJobEvent,
+        onStreamError(error) {
+          console.error("Medpoint stream error:", error);
+          finalErrorMessage = getErrorMessage(error);
+          setLogs((prev) => [...prev, `STREAM ERROR: ${finalErrorMessage}`]);
+          setStatus(`Stream error: ${finalErrorMessage}`);
+          hasError = true;
+        },
+      });
+      setStatus(
+        wasCancelled
+          ? "Medpoint processing cancelled."
+          : hasError
+            ? `Medpoint processing finished with errors${finalErrorMessage ? `: ${finalErrorMessage}` : "."}`
+            : "Medpoint processing completed.",
+      );
+    } catch (error) {
+      setStatus(`Failed to process Medpoint claims: ${getErrorMessage(error)}`);
+    } finally {
+      setIsProcessing(false);
+      setActiveJobId("");
+      setMedpointCaptchaRequest(null);
+      setMedpointOtpRequest(null);
+      setMedpointOtpValue("");
+    }
+  }
+
+  async function submitMedpointCaptchaCompletion() {
+    if (!activeJobId || !medpointCaptchaRequest) return;
+
+    try {
+      await submitScrapeJobInput({
+        jobId: activeJobId,
+        inputName: medpointCaptchaRequest.inputName,
+        value: "completed",
+      });
+      setMedpointCaptchaRequest(null);
+      setStatus("Medpoint captcha completion submitted. Resuming automation...");
+    } catch (error) {
+      setStatus(`Failed to submit Medpoint captcha completion: ${getErrorMessage(error)}`);
+    }
+  }
+
+  async function submitMedpointOtp() {
+    if (!activeJobId || !medpointOtpRequest || !medpointOtpValue.trim()) return;
+
+    try {
+      await submitScrapeJobInput({
+        jobId: activeJobId,
+        inputName: medpointOtpRequest.inputName,
+        value: medpointOtpValue.trim(),
+      });
+      setMedpointOtpRequest(null);
+      setMedpointOtpValue("");
+      setStatus("Medpoint OTP submitted. Continuing automation...");
+    } catch (error) {
+      setStatus(`Failed to submit Medpoint OTP: ${getErrorMessage(error)}`);
+    }
+  }
+
   async function submitOptumPro(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
 
@@ -3912,6 +4114,16 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
                       onLoginFileChange={setWaystarLoginFile}
                       onSubmit={submitWaystar}
                     />
+                  ) : effectivePortalId === "medpoint" ? (
+                    <MedpointInputForm
+                      canSubmit={canSubmitMedpoint}
+                      inputFileName={medpointInputFile?.name ?? ""}
+                      isProcessing={isProcessing}
+                      loginFileName={medpointLoginFile?.name ?? ""}
+                      onInputFileChange={setMedpointInputFile}
+                      onLoginFileChange={setMedpointLoginFile}
+                      onSubmit={submitMedpoint}
+                    />
                   ) : effectivePortalId === "optum-pro" ? (
                     <OptumProInputForm
                       canSubmit={canSubmitOptumPro}
@@ -3988,6 +4200,20 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
                     logs={logs}
                     progress={progress}
                     status={status}
+                  />
+                </div>
+              ) : effectivePortalId === "medpoint" ? (
+                <div className="mt-5">
+                  <MedpointResultView
+                    captchaRequest={medpointCaptchaRequest}
+                    errorScreenshots={errorScreenshots}
+                    logs={logs}
+                    onCaptchaSubmit={submitMedpointCaptchaCompletion}
+                    onOtpChange={setMedpointOtpValue}
+                    onOtpSubmit={submitMedpointOtp}
+                    otpRequest={medpointOtpRequest}
+                    otpValue={medpointOtpValue}
+                    status={status || "Upload the Medpoint login and claim files to start processing."}
                   />
                 </div>
               ) : effectivePortalId === "optum-pro" ? (

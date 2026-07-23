@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { findWaystarServiceTypeOption } from "../portal";
+import { findWaystarServiceTypeOption, normalizeDate } from "../portal";
 
 test("matches Waystar service type options by code or full label", () => {
   const options = [
@@ -17,4 +17,10 @@ test("ignores placeholder service type options", () => {
   const options = [{ value: "", label: "Select Code" }];
 
   assert.equal(findWaystarServiceTypeOption(options, "30"), null);
+});
+
+test("normalizes two-digit DOB years without pushing past years into the future", () => {
+  assert.equal(normalizeDate("7/23/52"), "07/23/1952");
+  assert.equal(normalizeDate("7/23/10"), "07/23/2010");
+  assert.equal(normalizeDate("7/23/2026"), "07/23/2026");
 });

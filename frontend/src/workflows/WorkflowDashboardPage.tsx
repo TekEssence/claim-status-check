@@ -26,7 +26,7 @@ const workflows = [
   {
     id: "claim-status",
     name: "Claim Status",
-    description: "Verify claim status across IEHP, Aerial, Regal, Blue Shield, and Availity.",
+    description: "Verify claim status across IEHP, Aerial, Regal, Blue Shield, Availity, Waystar, Optum Pro, and Medpoint.",
     route: "/claim-status",
     icon: FileSearch,
     iconClassName: "bg-blue-100 text-blue-700",
@@ -81,10 +81,6 @@ export function WorkflowDashboardPage() {
   }
 
   function handleWorkflowSelect(route: string) {
-    if (route === "/eligibility") {
-      setWorkflowNotice("Eligibility Verification portal is currently under progress.");
-      return;
-    }
     setWorkflowNotice("");
     router.push(route);
   }
