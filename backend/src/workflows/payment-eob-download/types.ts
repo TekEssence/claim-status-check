@@ -8,10 +8,19 @@ export type PaymentEobCredentials = {
   username: string;
   password: string;
   totpSecret: string;
+  sharePoint?: PaymentEobSharePointCredentials;
   organization?: string;
   startDate?: string;
   endDate?: string;
   lookbackDays: number;
+};
+
+export type PaymentEobSharePointCredentials = {
+  tenantId?: string;
+  clientId?: string;
+  clientSecret?: string;
+  siteUrl?: string;
+  folderPath?: string;
 };
 
 export type PaymentEobReferenceRow = {

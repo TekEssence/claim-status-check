@@ -13,6 +13,8 @@ import type {
 } from "../../types";
 import { normalizeCheckNumber } from "./input";
 import { createPaymentEobResultWorkbookBuffer } from "./output-builder";
+import { uploadPaymentEobOutputToSharePoint } from "./sharepoint";
+import { createStoredZipFromFolder } from "./zip";
 
 const require = createRequire(import.meta.url);
 const { submitLogin } = require("../../../claim-status/portals/availity/legacy/pages/login.page.js");
@@ -29,6 +31,11 @@ type RemittanceSurface = Page | Frame;
 function todayMmDdYyyy(): string {
   const date = new Date();
   return `${String(date.getMonth() + 1).padStart(2, "0")}/${String(date.getDate()).padStart(2, "0")}/${date.getFullYear()}`;
+}
+
+function todayYyyyMmDd(): string {
+  const date = new Date();
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }
 
 function daysAgoMmDdYyyy(days: number): string {
@@ -518,6 +525,99 @@ async function clickFirstVisible(candidates: Locator[], timeoutMs: number): Prom
   throw new Error(`Unable to click visible menu item after ${timeoutMs}ms.${lastError ? ` Last error: ${lastError}` : ""}`);
 }
 
+async function clickChromePdfViewerDownload(pdfPage: Page): Promise<void> {
+  await pdfPage.waitForFunction(() => {
+    const viewer = document.querySelector("pdf-viewer");
+    const viewerRoot = viewer?.shadowRoot;
+    const toolbar = viewerRoot?.querySelector("viewer-toolbar");
+    const toolbarRoot = toolbar?.shadowRoot;
+    const downloads = toolbarRoot?.querySelector("viewer-download-controls#downloads");
+    const downloadsRoot = downloads?.shadowRoot;
+    return Boolean(downloadsRoot?.querySelector("cr-icon-button#save"));
+  }, null, { timeout: 90000 });
+
+  await pdfPage.evaluate(() => {
+    const viewer = document.querySelector("pdf-viewer");
+    const viewerRoot = viewer?.shadowRoot;
+    const toolbar = viewerRoot?.querySelector("viewer-toolbar");
+    const toolbarRoot = toolbar?.shadowRoot;
+    const downloads = toolbarRoot?.querySelector("viewer-download-controls#downloads");
+    const downloadsRoot = downloads?.shadowRoot;
+    const button = downloadsRoot?.querySelector<HTMLElement>("cr-icon-button#save");
+    if (!button) throw new Error("Chrome PDF viewer download button was not found.");
+    button.click();
+  });
+}
+
+async function waitForPdfViewerPage(page: Page, clickPdfIcon: () => Promise<void>): Promise<Page> {
+  const context = page.context();
+  const popupPromise = page.waitForEvent("popup", { timeout: 90000 }).catch(() => null);
+  const pagePromise = context.waitForEvent("page", { timeout: 90000 }).catch(() => null);
+
+  await clickPdfIcon();
+
+  const openedPage = await Promise.race([popupPromise, pagePromise]);
+  if (!openedPage) {
+    throw new Error("Payer-issued PDF tab did not open after clicking the row PDF icon.");
+  }
+
+  await openedPage.waitForLoadState("domcontentloaded", { timeout: 90000 }).catch(() => {});
+  await openedPage.waitForFunction(() => window.location.href.startsWith("blob:"), null, { timeout: 90000 }).catch(() => {});
+  await openedPage.waitForLoadState("networkidle", { timeout: 30000 }).catch(() => {});
+  return openedPage;
+}
+
+async function downloadFromActionMenu(
+  surface: RemittanceSurface,
+  page: Page,
+  matchingRow: Locator,
+  pdfPath: string,
+): Promise<void> {
+  const menuItemName = "Download Check Summary and Multiple Claims Per Page";
+  await matchingRow.getByRole("button", { name: "Action Menu" }).click({ timeout: 15000 });
+
+  const downloadPromise = page.waitForEvent("download", { timeout: 90000 });
+  try {
+    await clickFirstVisible([
+      surface.getByRole("menuitem", { name: menuItemName }),
+      page.getByRole("menuitem", { name: menuItemName }),
+      surface.locator('[role="menuitem"]').filter({ hasText: menuItemName }),
+      page.locator('[role="menuitem"]').filter({ hasText: menuItemName }),
+      surface.getByText(menuItemName, { exact: true }),
+      page.getByText(menuItemName, { exact: true }),
+    ], 10000);
+  } catch (error) {
+    void downloadPromise.catch(() => {});
+    throw error;
+  }
+
+  const pdfDownload = await downloadPromise;
+  await pdfDownload.saveAs(pdfPath);
+  await verifyPdf(pdfPath);
+}
+
+async function downloadFromPayerIssuedPdfIcon(
+  page: Page,
+  matchingRow: Locator,
+  pdfPath: string,
+): Promise<void> {
+  const pdfButton = matchingRow.getByRole("button", { name: "Download Check Payer-Issued Admittance Advice" });
+  let pdfPage: Page | null = null;
+  try {
+    pdfPage = await waitForPdfViewerPage(page, async () => {
+      await pdfButton.click({ timeout: 30000 });
+    });
+
+    const downloadPromise = pdfPage.waitForEvent("download", { timeout: 90000 });
+    await clickChromePdfViewerDownload(pdfPage);
+    const download = await downloadPromise;
+    await download.saveAs(pdfPath);
+    await verifyPdf(pdfPath);
+  } finally {
+    if (pdfPage && !pdfPage.isClosed()) await pdfPage.close().catch(() => {});
+  }
+}
+
 async function downloadPdfFromMatchingRow(
   surface: RemittanceSurface,
   page: Page,
@@ -526,7 +626,6 @@ async function downloadPdfFromMatchingRow(
   outputPdfFolder: string,
   context: AutomationContext,
 ): Promise<{ filename: string; message: string; found: boolean }> {
-  const menuItemName = "Download Check Summary and Multiple Claims Per Page";
   const filename = `${safeFilePart(record.checkNumber)}_${dateFilePart(record.checkDate)}.pdf`;
   const pdfPath = path.join(outputPdfFolder, filename);
   let lastError = "";
@@ -539,31 +638,36 @@ async function downloadPdfFromMatchingRow(
         eventName: "payment_eob_pdf_menu_open",
       });
       await matchingRow.scrollIntoViewIfNeeded({ timeout: 10000 }).catch(() => {});
-      await matchingRow.getByRole("button", { name: "Action Menu" }).click({ timeout: 15000 });
-
-      const downloadPromise = page.waitForEvent("download", { timeout: 90000 });
-      await clickFirstVisible([
-        surface.getByRole("menuitem", { name: menuItemName }),
-        page.getByRole("menuitem", { name: menuItemName }),
-        surface.locator('[role="menuitem"]').filter({ hasText: menuItemName }),
-        page.locator('[role="menuitem"]').filter({ hasText: menuItemName }),
-        surface.getByText(menuItemName, { exact: true }),
-        page.getByText(menuItemName, { exact: true }),
-      ], 30000);
-
-      const pdfDownload = await downloadPromise;
-      await pdfDownload.saveAs(pdfPath);
-      await verifyPdf(pdfPath);
+      await downloadFromActionMenu(surface, page, matchingRow, pdfPath);
       return { filename, message: "Success", found: true };
     } catch (error) {
       lastError = error instanceof Error ? error.message : String(error);
       await context.log({
         level: "warn",
-        message: `PDF download attempt ${attempt}/3 failed for ${record.checkNumber}: ${lastError}`,
+        message: `Multiple-claims PDF menu download attempt ${attempt}/3 failed for ${record.checkNumber}: ${lastError}`,
         eventName: "payment_eob_pdf_download_retry",
       });
       await page.keyboard.press("Escape").catch(() => {});
       await surface.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
+
+      try {
+        await context.log({
+          level: "info",
+          message: `Trying payer-issued PDF icon fallback for ${record.checkNumber} (attempt ${attempt}/3).`,
+          eventName: "payment_eob_pdf_icon_fallback",
+        });
+        await matchingRow.scrollIntoViewIfNeeded({ timeout: 10000 }).catch(() => {});
+        await downloadFromPayerIssuedPdfIcon(page, matchingRow, pdfPath);
+        return { filename, message: "Success via payer-issued PDF icon", found: true };
+      } catch (fallbackError) {
+        lastError = fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
+        await context.log({
+          level: "warn",
+          message: `Payer-issued PDF icon fallback attempt ${attempt}/3 failed for ${record.checkNumber}: ${lastError}`,
+          eventName: "payment_eob_pdf_icon_fallback_retry",
+        });
+      }
+
       if (attempt < 3) {
         await page.waitForTimeout(2000);
       }
@@ -603,6 +707,32 @@ function downloadableFileEvent(filename: string, buffer: Buffer, mimeType: strin
     base64: buffer.toString("base64"),
     mimeType,
   };
+}
+
+async function emitRunZip(outputRoot: string, context: AutomationContext): Promise<void> {
+  const datePart = todayYyyyMmDd();
+  const runFolder = "run-01";
+  const zipRootName = `PaymentEobDownloads/${datePart}/${runFolder}`;
+  const zipBuffer = await createStoredZipFromFolder(outputRoot, zipRootName);
+  const zipFilename = `PaymentEobDownloads_${datePart}_${runFolder}.zip`;
+  await context.emit(downloadableFileEvent(zipFilename, zipBuffer, "application/zip"));
+  await context.log({
+    level: "info",
+    message: `Payment EOB run ZIP is ready: ${zipFilename}. It contains ${zipRootName}/ with PDFs and output files.`,
+    eventName: "payment_eob_zip_ready",
+  });
+}
+
+async function uploadToSharePointIfEnabled(credentials: PaymentEobCredentials, outputRoot: string, context: AutomationContext): Promise<void> {
+  if (process.env.PAYMENT_EOB_SHAREPOINT_UPLOAD_ENABLED !== "true") {
+    await context.log({
+      level: "info",
+      message: "SharePoint upload is disabled for now. Set PAYMENT_EOB_SHAREPOINT_UPLOAD_ENABLED=true when the hosted backend is ready.",
+      eventName: "payment_eob_sharepoint_disabled",
+    });
+    return;
+  }
+  await uploadPaymentEobOutputToSharePoint(credentials, outputRoot, context);
 }
 
 export async function runAvailityRemittanceJob(input: RunInput, context: AutomationContext): Promise<void> {
@@ -710,6 +840,8 @@ export async function runAvailityRemittanceJob(input: RunInput, context: Automat
     await fs.writeFile(path.join(outputRoot, "processing_log.csv"), logCsv, "utf8");
     await fs.writeFile(path.join(outputRoot, "processing_log.xlsx"), workbookBuffer);
     await context.emit(downloadableFileEvent("processing_log.xlsx", workbookBuffer, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"));
+    await emitRunZip(outputRoot, context);
+    await uploadToSharePointIfEnabled(input.credentials, outputRoot, context);
     await context.log({ level: "info", message: `Payment EOB processing completed. Output folder: ${outputRoot}`, eventName: "payment_eob_completed" });
   } finally {
     if (page && !page.isClosed()) await logoutIfPresent(page).catch(() => {});

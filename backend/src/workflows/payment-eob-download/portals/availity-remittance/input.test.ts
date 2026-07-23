@@ -51,8 +51,20 @@ test("decodes Google Authenticator migration data into a base32 TOTP secret", ()
 
 test("reads Availity Remittance credentials from workbook aliases", async () => {
   const file = await workbookFile("credentials.xlsx", [
-    ["User ID", "Password", "Secret Key", "Login URL", "Organization", "Lookback Days"],
-    ["rcmben", "secret-password", "JBSWY3DPEHPK3PXP", "", "BENTONVILLE PEDIATRICS, P.A.", "20"],
+    ["User ID", "Password", "Secret Key", "Login URL", "Organization", "Lookback Days", "Tenant ID", "Client ID", "Client Secret", "SharePoint Site URL", "SharePoint Folder"],
+    [
+      "rcmben",
+      "secret-password",
+      "JBSWY3DPEHPK3PXP",
+      "",
+      "BENTONVILLE PEDIATRICS, P.A.",
+      "20",
+      "tenant-from-excel",
+      "client-from-excel",
+      "secret-from-excel",
+      "https://contoso.sharepoint.com/sites/CH001_PEDI_BENT",
+      "Documents/Payments Tracker/PaymentEobDownloads",
+    ],
   ]);
 
   const credentials = await readAvailityRemittanceCredentials(file);
@@ -63,6 +75,13 @@ test("reads Availity Remittance credentials from workbook aliases", async () => 
   assert.equal(credentials.organization, "BENTONVILLE PEDIATRICS, P.A.");
   assert.equal(credentials.lookbackDays, 20);
   assert.match(credentials.loginUrl, /^https:\/\/essentials\.availity\.com/);
+  assert.deepEqual(credentials.sharePoint, {
+    tenantId: "tenant-from-excel",
+    clientId: "client-from-excel",
+    clientSecret: "secret-from-excel",
+    siteUrl: "https://contoso.sharepoint.com/sites/CH001_PEDI_BENT",
+    folderPath: "Documents/Payments Tracker/PaymentEobDownloads",
+  });
 });
 
 test("reads Availity Remittance credentials with Google Authenticator migration data", async () => {

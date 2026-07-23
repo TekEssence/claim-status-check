@@ -239,6 +239,13 @@ export async function readAvailityRemittanceCredentials(file: File): Promise<Pay
       username,
       password,
       totpSecret,
+      sharePoint: {
+        tenantId: findValue(row, ["Tenant ID", "Microsoft Tenant ID", "Azure Tenant ID", "SharePoint Tenant ID"]),
+        clientId: findValue(row, ["Client ID", "Microsoft Client ID", "Azure Client ID", "SharePoint Client ID"]),
+        clientSecret: findValue(row, ["Client Secret", "Microsoft Client Secret", "Azure Client Secret", "SharePoint Client Secret"]),
+        siteUrl: findValue(row, ["SharePoint Site URL", "Site URL", "SharePoint URL"]),
+        folderPath: findValue(row, ["SharePoint Folder", "SharePoint Folder Path", "SharePoint Path", "Output Folder"]),
+      },
       organization: findValue(row, ["Organization", "Org", "Provider Organization", "Practice", "Payee"]),
       startDate: findValue(row, ["Start Date", "Check Start Date", "From Date"]),
       endDate: findValue(row, ["End Date", "Check End Date", "To Date"]),
