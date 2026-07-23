@@ -24,6 +24,27 @@ type AuthUser = {
 const WORKFLOW_ID = "payment-eob-download";
 const PORTAL_ID = "availity-remittance";
 
+function base64ToArrayBuffer(base64: string): ArrayBuffer {
+  const binaryString = window.atob(base64);
+  const buffer = new ArrayBuffer(binaryString.length);
+  const bytes = new Uint8Array(buffer);
+  for (let index = 0; index < binaryString.length; index += 1) {
+    bytes[index] = binaryString.charCodeAt(index);
+  }
+  return buffer;
+}
+
+function downloadBase64File(filename: string, base64: string, type: string): void {
+  const url = URL.createObjectURL(new Blob([base64ToArrayBuffer(base64)], { type }));
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
+
 export function PaymentEobPage() {
   const router = useRouter();
   const portal = getPaymentEobPortal(PORTAL_ID);
@@ -47,6 +68,9 @@ export function PaymentEobPage() {
       setLogs((current) => [...current, event.message!]);
     } else if (event.type === "progress" && typeof event.completed === "number" && typeof event.total === "number") {
       setProgress({ completed: event.completed, total: event.total });
+    } else if (event.type === "file_download" && event.filename && event.base64) {
+      downloadBase64File(event.filename, event.base64, event.mimeType || "application/octet-stream");
+      setLogs((current) => [...current, `Downloaded ${event.filename}.`]);
     } else if (event.type === "error") {
       const message = event.message || "Payment EOB workflow failed.";
       setErrors((current) => [...current, message]);
@@ -228,4 +252,3 @@ export function PaymentEobPage() {
     </main>
   );
 }
-

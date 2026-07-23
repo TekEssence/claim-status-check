@@ -1,6 +1,8 @@
 import type { AutomationRunner } from "../../../types";
 import type { PaymentEobRunInput } from "../../types";
 import { availityRemittanceConfig } from "./config";
+import { readAvailityRemittanceCredentials, readReferenceRows } from "./input";
+import { runAvailityRemittanceJob } from "./remittance";
 
 function requireFile(formData: FormData, key: string, label: string): File {
   const value = formData.get(key);
@@ -25,18 +27,14 @@ export function createAvailityRemittanceRunner(): AutomationRunner<PaymentEobRun
       };
     },
     async run(input, context) {
+      const credentials = await readAvailityRemittanceCredentials(input.credentialExcel);
+      const referenceRows = await readReferenceRows(input.referenceExcel);
       await context.log({
         level: "info",
-        message: `Payment EOB input validation completed for ${input.credentialExcel.name || "credential workbook"} and ${input.referenceExcel.name || "reference workbook"}.`,
+        message: `Payment EOB input validation completed for ${input.credentialExcel.name || "credential workbook"} and ${input.referenceExcel.name || "reference workbook"}. ${referenceRows.length} reference row(s) loaded.`,
         eventName: "payment_eob_validation_complete",
       });
-      await context.emit({ type: "progress", completed: 1, total: 1 });
-      await context.log({
-        level: "info",
-        message: "Payment EOB workflow shell is ready. Portal automation is not implemented yet.",
-        eventName: "payment_eob_shell_ready",
-      });
+      await runAvailityRemittanceJob({ credentials, referenceRows }, context);
     },
   };
 }
-

@@ -62,28 +62,14 @@ test("payment EOB validation requires referenceExcel", () => {
   );
 });
 
-test("valid payment EOB shell job completes successfully", async () => {
+test("payment EOB validation accepts required workbook uploads", () => {
   const runner = getAutomationRunner("payment-eob-download", "availity-remittance");
   const formData = new FormData();
   formData.append("credentialExcel", new File(["credential"], "credential.xlsx"));
   formData.append("referenceExcel", new File(["reference"], "reference.xlsx"));
+
   const input = runner.validateInput(formData);
-  const logs: string[] = [];
-  const events: Record<string, unknown>[] = [];
 
-  await runner.run(input, {
-    jobId: "payment-eob-shell-test",
-    workflowId: "payment-eob-download",
-    portalId: "availity-remittance",
-    log: async (event) => {
-      logs.push(event.message);
-    },
-    emit: async (event) => {
-      events.push(event);
-    },
-  });
-
-  assert.deepEqual(events, [{ type: "progress", completed: 1, total: 1 }]);
-  assert.ok(logs.some((message) => message.includes("Payment EOB input validation completed")));
-  assert.ok(logs.some((message) => message.includes("Portal automation is not implemented yet")));
+  assert.equal(input.credentialExcel.name, "credential.xlsx");
+  assert.equal(input.referenceExcel.name, "reference.xlsx");
 });
