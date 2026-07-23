@@ -6,13 +6,51 @@ import type {
 import type { WaystarPayerHandler } from "../types";
 
 type BcbsHealthBenefitPlanCoveragePayload = {
+  overallStatus?: unknown;
+  sectionStatuses?: Array<{ title?: unknown; status?: unknown }>;
+  subscriberInformation?: BcbsSubscriberInformation;
+  subscriberCoverageInformation?: BcbsSubscriberCoverageInformation;
+  general?: { primaryCareProvider?: unknown };
   healthBenefitPlanCoverage?: {
     coverageDescription?: unknown;
     eligibilityBeginDate?: unknown;
     eligibilityEndDate?: unknown;
     planStatus?: unknown;
     planType?: unknown;
+    general?: { coverageDescription?: unknown };
+    benefitSections?: BcbsProfessionalOfficeSection[];
   };
+  professionalOffice?: BcbsProfessionalOfficeSection[];
+};
+
+type BcbsSubscriberInformation = {
+  patientName?: unknown;
+  address?: unknown;
+  memberId?: unknown;
+  dateOfBirth?: unknown;
+  sex?: unknown;
+};
+
+type BcbsSubscriberCoverageInformation = {
+  groupNumber?: unknown;
+  planDate?: unknown;
+  premiumPaidToDateEnd?: unknown;
+  insuranceType?: unknown;
+};
+
+export type BcbsProfessionalOfficeEntry = {
+  type?: unknown;
+  value?: unknown;
+  period?: unknown;
+  placeOfService?: unknown;
+  payerNote?: unknown;
+  includedProviderSpecialties?: unknown;
+};
+
+export type BcbsProfessionalOfficeSection = {
+  network?: unknown;
+  coverageLevel?: unknown;
+  entries?: BcbsProfessionalOfficeEntry[];
 };
 
 const commonRequiredFields = ["memberId", "patientFirstName", "patientLastName", "dateOfBirth"];
@@ -57,17 +95,36 @@ export function parseBlueCrossBlueShieldResult(
   row: EligibilityInputRow,
   payerId: string,
 ): EligibilityResult {
-  const coverage = asBcbsPayload(payload).healthBenefitPlanCoverage;
-  if (!coverage) {
-    throw new Error("Missing Health Benefit Plan Coverage section in Waystar BCBS response.");
-  }
-
-  const planStatus = asText(coverage.planStatus);
+  const result = asBcbsPayload(payload);
+  const coverage = result.healthBenefitPlanCoverage;
+  const sectionStatuses = result.sectionStatuses ?? [];
+  const planStatus = asText(coverage?.planStatus) ||
+    asText(result.overallStatus) ||
+    sectionStatuses.map((section) => asText(section.status)).find(Boolean);
   const coverageStatus = normalizeCoverageStatus(planStatus);
-  const planType = normalizePlanType(asText(coverage.planType));
-  const planName = asText(coverage.coverageDescription);
-  const effectiveDate = asText(coverage.eligibilityBeginDate);
-  const terminationDate = asText(coverage.eligibilityEndDate);
+  const planType = normalizePlanType(asText(coverage?.planType));
+  const planName = asText(coverage?.coverageDescription) ||
+    sectionStatuses.map((section) => asText(section.title)).filter(Boolean).join(", ") ||
+    undefined;
+  const effectiveDate = asText(coverage?.eligibilityBeginDate);
+  const terminationDate = asText(coverage?.eligibilityEndDate);
+  const subscriber = result.subscriberInformation ?? {};
+  const subscriberCoverage = result.subscriberCoverageInformation ?? {};
+  const professionalOffice = selectProfessionalOfficeBenefits(
+    result.professionalOffice,
+    coverage?.benefitSections,
+  );
+  const benefits = coverage
+    ? [{
+        serviceType: "30 - Health Benefit Plan Coverage",
+        coverageStatus,
+        notes: planStatus || undefined,
+      }]
+    : sectionStatuses.map((section) => ({
+        serviceType: asText(section.title) || "Waystar Eligibility",
+        coverageStatus: normalizeCoverageStatus(asText(section.status)),
+        notes: asText(section.status),
+      }));
 
   return {
     rowIndex: row.originalIndex,
@@ -78,23 +135,171 @@ export function parseBlueCrossBlueShieldResult(
     planStatus,
     effectiveDate,
     terminationDate,
-    benefits: [
-      {
-        serviceType: "30 - Health Benefit Plan Coverage",
-        coverageStatus,
-        notes: planStatus || undefined,
-      },
-    ],
+    premiumPaidEndDate: asText(subscriberCoverage.premiumPaidToDateEnd),
+    insuranceType: asText(subscriberCoverage.insuranceType),
+    patientName: asText(subscriber.patientName),
+    address: asText(subscriber.address),
+    memberId: asText(subscriber.memberId),
+    dateOfBirth: asText(subscriber.dateOfBirth),
+    sex: asText(subscriber.sex),
+    groupNumber: asText(subscriberCoverage.groupNumber),
+    planDate: asText(subscriberCoverage.planDate),
+    primaryCareProvider: asText(result.general?.primaryCareProvider),
+    coverageDescription: asText(coverage?.general?.coverageDescription) || planName,
+    ...professionalOffice,
+    benefits,
     metadata: {
-      healthBenefitPlanCoverage: {
-        planType,
-        planName,
-        planStatus,
-        eligibilityBeginDate: effectiveDate,
-        eligibilityEndDate: terminationDate,
-      },
+      ...(coverage ? {
+        healthBenefitPlanCoverage: {
+          planType,
+          planName,
+          planStatus,
+          eligibilityBeginDate: effectiveDate,
+          eligibilityEndDate: terminationDate,
+        },
+      } : {}),
+      sections: sectionStatuses,
+      subscriberInformation: subscriber,
+      subscriberCoverageInformation: subscriberCoverage,
+      professionalOffice,
     },
   };
+}
+
+export function selectProfessionalOfficeBenefits(
+  sections?: BcbsProfessionalOfficeSection[],
+  healthBenefitPlanSections?: BcbsProfessionalOfficeSection[],
+): Pick<EligibilityResult, "coinsurance" | "copay" | "deductible" | "deductibleMet" | "outOfPocket" | "outOfPocketMet" | "inOutNetwork"> {
+  const section = selectPreferredIndividualNetwork(sections);
+  if (!section) return {};
+
+  const entries = section.entries ?? [];
+  const officeEntries = entries.filter((entry) => isOffice(entry.placeOfService));
+  const coinsurance = highestValue(officeEntries.filter((entry) => {
+    const type = normalize(entry.type);
+    return type.includes("co insurance") || type.includes("coinsurance");
+  }), "%");
+  const copayEntries = entries.filter((entry) => isCopay(entry.type));
+  const specialtyCopayEntries = copayEntries.filter((entry) => isSpecialtyCopay(entry));
+  const copay = highestValue(
+  specialtyCopayEntries.length > 0 ? specialtyCopayEntries : copayEntries,
+  "$",
+);
+  const professionalDeductibleEntries = officeEntries.filter((entry) => normalize(entry.type).includes("deductible"));
+  const professionalOopEntries = officeEntries.filter((entry) => {
+    const type = normalize(entry.type);
+    return type.includes("out of pocket") || type === "oop";
+  });
+  const healthBenefitSection = selectPreferredIndividualNetwork(healthBenefitPlanSections);
+  const healthBenefitEntries = healthBenefitSection?.entries ?? [];
+  const deductibleEntries = professionalDeductibleEntries.length > 0
+    ? professionalDeductibleEntries
+    : healthBenefitEntries.filter((entry) => normalize(entry.type).includes("deductible"));
+  const oopEntries = professionalOopEntries.length > 0
+    ? professionalOopEntries
+    : healthBenefitEntries.filter((entry) => {
+      const type = normalize(entry.type);
+      return type.includes("out of pocket") || type === "oop";
+    });
+  const deductible = annualValue(deductibleEntries);
+  const deductibleRemaining = remainingValue(deductibleEntries);
+  const outOfPocket = annualValue(oopEntries);
+  const outOfPocketRemaining = remainingValue(oopEntries);
+
+  return {
+    coinsurance,
+    copay,
+    deductible: formatMoney(deductible),
+    deductibleMet: formatDifference(deductible, deductibleRemaining),
+    outOfPocket: formatMoney(outOfPocket),
+    outOfPocketMet: formatDifference(outOfPocket, outOfPocketRemaining),
+    inOutNetwork: normalize(section.network).includes("out of network") ? "OON" :
+      normalize(section.network).includes("in network") ? "INN" : undefined,
+  };
+}
+
+function selectPreferredIndividualNetwork(
+  sections?: BcbsProfessionalOfficeSection[],
+): BcbsProfessionalOfficeSection | undefined {
+  const individual = (sections ?? []).filter((candidate) =>
+    normalize(candidate.coverageLevel).includes("individual"),
+  );
+  return individual.find((candidate) => isInNetwork(candidate.network)) ?? individual[0];
+}
+
+function isInNetwork(value: unknown): boolean {
+  const network = normalize(value);
+  return network.includes("in network") && !network.includes("out of network");
+}
+
+function isOffice(value: unknown): boolean {
+  const text = normalize(value);
+  return text === "office" || text.includes(" office");
+}
+
+function hasIncludedProviderSpecialties(value: unknown): boolean {
+  const text = normalize(value);
+  return Boolean(text) && !["none", "n a", "not applicable", "unknown"].includes(text);
+}
+
+function isCopay(value: unknown): boolean {
+  const type = normalize(value);
+  return ["copay", "co pay", "copayment", "co payment"].some((name) => type.includes(name));
+}
+
+function isSpecialtyCopay(entry: BcbsProfessionalOfficeEntry): boolean {
+  return normalize(entry.payerNote).includes("specialist") ||
+    hasIncludedProviderSpecialties(entry.includedProviderSpecialties);
+}
+
+function highestValue(entries: BcbsProfessionalOfficeEntry[], unit: "$" | "%"): string | undefined {
+  const values = entries.map((entry) => ({ raw: asText(entry.value), amount: numericValue(entry.value) }))
+    .filter((entry): entry is { raw: string; amount: number } => entry.raw !== undefined && entry.amount !== undefined);
+  if (values.length === 0) return undefined;
+  const highest = values.reduce((best, current) => current.amount > best.amount ? current : best);
+  return unit === "%" ? `${formatNumber(highest.amount)}%` : formatMoney(highest.amount);
+}
+
+function annualValue(entries: BcbsProfessionalOfficeEntry[]): number | undefined {
+  const annual = entries.filter((entry) => entryQualifier(entry).includes("calendar year"));
+  return maximumNumeric(annual.length > 0 ? annual : entries.filter((entry) => !entryQualifier(entry).includes("remaining")));
+}
+
+function remainingValue(entries: BcbsProfessionalOfficeEntry[]): number | undefined {
+  return maximumNumeric(entries.filter((entry) => entryQualifier(entry).includes("remaining")));
+}
+
+function entryQualifier(entry: BcbsProfessionalOfficeEntry): string {
+  return `${normalize(entry.period)} ${normalize(entry.value)}`.trim();
+}
+
+function maximumNumeric(entries: BcbsProfessionalOfficeEntry[]): number | undefined {
+  const values = entries.map((entry) => numericValue(entry.value)).filter((value): value is number => value !== undefined);
+  return values.length > 0 ? Math.max(...values) : undefined;
+}
+
+function numericValue(value: unknown): number | undefined {
+  const match = asText(value)?.replace(/,/g, "").match(/-?\d+(?:\.\d+)?/);
+  if (!match) return undefined;
+  const number = Number(match[0]);
+  return Number.isFinite(number) ? number : undefined;
+}
+
+function formatDifference(total?: number, remaining?: number): string | undefined {
+  if (total === undefined || remaining === undefined) return undefined;
+  return formatMoney(Math.max(0, total - remaining));
+}
+
+function formatMoney(value?: number): string | undefined {
+  return value === undefined ? undefined : `$${formatNumber(value)}`;
+}
+
+function formatNumber(value: number): string {
+  return value.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+}
+
+function normalize(value: unknown): string {
+  return (asText(value) ?? "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 }
 
 function asBcbsPayload(payload: unknown): BcbsHealthBenefitPlanCoveragePayload {

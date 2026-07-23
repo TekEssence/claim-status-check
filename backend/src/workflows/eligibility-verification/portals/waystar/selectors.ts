@@ -30,5 +30,6 @@ export const WAYSTAR_SELECTORS = {
     sectionHeaders: ".SectionHeader",
     sectionTitle: ".SectionTitle",
     sectionStatus: ".SectionStatus",
+    changeInquiryDetails: "#btnUpdateInquiry:visible",
   },
 } as const;

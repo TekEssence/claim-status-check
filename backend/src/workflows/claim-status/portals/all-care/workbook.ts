@@ -15,12 +15,27 @@ export function allCareFinalStatus(netAmount: string): "Paid" | "Denied" | "Unkn
   return parsed === 0 ? "Denied" : "Paid";
 }
 
+function isAllCareInProcess(status: string): boolean {
+  return /\b(in\s*process|processing|pending)\b/i.test(status.trim());
+}
+
+export function allCareClaimOutcome(portalStatus: string, netAmount: string): "Paid" | "Denied" | "In Process" | "Unknown" {
+  return isAllCareInProcess(portalStatus) ? "In Process" : allCareFinalStatus(netAmount);
+}
+
 export function allCareFinalStatusText(row: AllCareInputRow, details: AllCareClaimDetails, serviceLine: AllCareServiceLine): string {
   const net = serviceLine.net || details.netAmount;
   const outcome = allCareFinalStatus(net);
   const dos = row.dos || serviceLine.from || serviceLine.to;
   const received = details.dateReceived || "";
   const claimNumber = details.claimNumber || "";
+  if (isAllCareInProcess(details.portalStatus)) {
+    const parsedNet = amount(net);
+    if (parsedNet != null && parsedNet > 0) {
+      return `DOS ${dos}: Checked All Care portal claim received on ${received} and set-to-pay ${net}. Claim # ${claimNumber}.`;
+    }
+    return `DOS ${dos}: Checked All Care portal claim received on ${received} and still in process. Claim # ${claimNumber}.`;
+  }
   if (outcome === "Paid") {
     return `DOS ${dos}: Checked All Care portal claim received on ${received} paid on ${details.datePaid || ""} paid amount ${net} EFT/Check # ${details.checkNumber || ""}. Claim # ${claimNumber}.`;
   }
@@ -76,7 +91,7 @@ export function allCareOutputRows(row: AllCareInputRow, details: AllCareClaimDet
     RARC: serviceLine.rarc,
     "CARC Description": serviceLine.carcDescription || "",
     "RARC Description": serviceLine.rarcDescription || "",
-    claim_outcome: allCareFinalStatus(net),
+    claim_outcome: allCareClaimOutcome(details.portalStatus, net),
     final_status: result === "success" ? allCareFinalStatusText(row, details, serviceLine) : (notes || "No data found in portal."),
     result,
     notes,

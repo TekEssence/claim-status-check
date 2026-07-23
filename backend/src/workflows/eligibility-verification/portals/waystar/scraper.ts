@@ -1,13 +1,15 @@
 import type { Browser, BrowserContext, Page } from "playwright-core";
+import { readFile } from "node:fs/promises";
 import { launchAutomationBrowser } from "@/backend/src/core/browser";
 import { closeAutomationResources } from "@/backend/src/core/runtime-config";
 import { saveScreenshotForJob } from "@/backend/src/core/screenshots";
 import type { AutomationRunner } from "../../../types";
-import type { EligibilityInputRow, EligibilityRunInput } from "../../types";
-import { readWaystarCredentials } from "./credentials";
+import type { EligibilityInputRow, EligibilityResult, EligibilityRunInput } from "../../types";
+import { findWaystarCredentialsForPayer, readWaystarCredentialProfiles } from "./credentials";
 import { readWaystarEligibilityWorkbook } from "./input";
 import { getWaystarPayer } from "./payer-registry";
 import { loginToWaystar, submitWaystarInquiry } from "./portal";
+import { buildWaystarOutputWorkbook } from "./output";
 
 function requireFile(formData: FormData, key: string, label: string): File {
   const value = formData.get(key);
@@ -33,7 +35,7 @@ export function createWaystarRunner(): AutomationRunner<EligibilityRunInput> {
     },
     async run(input, context) {
       const routing = await readWaystarEligibilityWorkbook(input.inputFile);
-      const credentials = await readWaystarCredentials(input.credentialFile);
+      const credentialProfiles = await readWaystarCredentialProfiles(input.credentialFile);
       await context.emit({
         type: "progress",
         completed: 0,
@@ -67,85 +69,218 @@ export function createWaystarRunner(): AutomationRunner<EligibilityRunInput> {
         throw new Error("No supported Waystar payer rows were found in the workbook.");
       }
 
-      let completed = 0;
+      let completed = routing.unsupportedRows.length;
+      let failureCount = routing.unsupportedRows.length;
+      const inputRows = new Map<number, EligibilityInputRow>(
+        routing.batches.flatMap((batch) => batch.rows).map((row) => [row.originalIndex, row]),
+      );
+      const results = new Map<number, EligibilityResult>();
+      const rowsWithMissingData = new Set<number>();
+      const rowErrors = new Map<number, string>(
+        routing.unsupportedRows.map((row) => [
+          row.rowIndex,
+          `Unsupported or empty payer "${row.insuranceName || "blank"}".`,
+        ]),
+      );
+      const errorReportLines = routing.unsupportedRows.map((row) =>
+        `Row ${row.rowIndex}: unsupported or empty payer "${row.insuranceName || "blank"}".`,
+      );
       let browser: Browser | null = null;
       let browserContext: BrowserContext | null = null;
       let page: Page | null = null;
 
       try {
-        const session = await launchAutomationBrowser();
-        browser = session.browser;
-        browserContext = session.context;
-        page = await browserContext.newPage();
-        await loginToWaystar(page, credentials);
-        await context.log({
-          level: "info",
-          message: "Waystar login completed successfully without OTP.",
-          eventName: "eligibility_waystar_login_complete",
-        });
-
         for (const batch of routing.batches) {
           const payer = getWaystarPayer(batch.payerId);
-          if (payer.id !== "medicare") {
+          const credentials = findWaystarCredentialsForPayer(credentialProfiles, payer);
+          if (!credentials) {
+            failureCount += batch.rows.length;
             completed += batch.rows.length;
+            const message = `No matching Waystar credential row was found for ${payer.name}.`;
+            for (const row of batch.rows) rowErrors.set(row.originalIndex, message);
             await context.log({
-              level: "warn",
-              message: `Skipping ${batch.rows.length} ${payer.name} row(s). Only Waystar Medicare is implemented right now.`,
-              eventName: "eligibility_payer_not_implemented",
+              level: "error",
+              message: `No matching Waystar credential row was found for ${payer.name}. Add a row with Portal=Waystar and Payer=${payer.name}.`,
+              eventName: "eligibility_credentials_not_found",
               meta: { payerId: payer.id, rowCount: batch.rows.length },
             });
+            errorReportLines.push(`${payer.name}: no matching credential row. Expected Portal=Waystar and Payer=${payer.name}.`);
             await context.emit({ type: "progress", completed, total: routing.totalRows });
             continue;
           }
 
-          for (const row of batch.rows) {
-            if (context.isCancelled?.()) {
-              await context.log({
-                level: "warn",
-                message: "Eligibility run cancellation requested. Stopping after the current row.",
-                eventName: "eligibility_cancel_requested",
-              });
-              return;
-            }
+          try {
+            const session = await launchAutomationBrowser();
+            browser = session.browser;
+            browserContext = session.context;
+            page = await browserContext.newPage();
+            await loginToWaystar(page, credentials);
+            await context.log({
+              level: "info",
+              message: `Waystar login completed for ${payer.name} using its matching credential row.`,
+              eventName: "eligibility_waystar_login_complete",
+              meta: { payerId: payer.id, credentialPayer: credentials.payer },
+            });
 
-            try {
-              ensureRequiredFields(row, payer.requiredFields);
-              const payload = await submitWaystarInquiry({
-                page,
-                credentials,
-                payerName: payer.portalPayerName,
-                row,
-              });
-              const result = payer.parseResult(payload, row);
-              await context.log({
-                level: "info",
-                message: `Medicare eligibility row ${row.originalIndex} completed with ${result.coverageStatus} coverage.`,
-                rowIndex: row.originalIndex,
-                eventName: "eligibility_row_completed",
-                meta: result.metadata as Record<string, unknown> | undefined,
-              });
-            } catch (error) {
-              const message = error instanceof Error ? error.message : "Unknown Waystar Medicare automation error.";
-              await context.log({
-                level: "error",
-                message: `Medicare eligibility row ${row.originalIndex} failed: ${message}`,
-                rowIndex: row.originalIndex,
-                eventName: "eligibility_row_failed",
-              });
-              const artifactPath = await saveRowScreenshot(context.jobId, page, row.originalIndex);
-              if (artifactPath) {
-                await context.emit({
-                  type: "error_screenshot",
-                  index: row.originalIndex,
-                  filename: `waystar-medicare-row-${row.originalIndex}.jpg`,
-                  path: artifactPath,
-                  mimeType: "image/jpeg",
+            let batchSuccessCount = 0;
+            for (let rowPosition = 0; rowPosition < batch.rows.length; rowPosition += 1) {
+              const row = batch.rows[rowPosition];
+              if (context.isCancelled?.()) {
+                await context.log({
+                  level: "warn",
+                  message: "Eligibility run cancellation requested. Stopping after the current row.",
+                  eventName: "eligibility_cancel_requested",
                 });
+                return;
+              }
+
+              try {
+                ensureRequiredFields(row, payer.requiredFields);
+                const payload = await submitWaystarInquiry({
+                  page,
+                  credentials,
+                  payerName: payer.portalPayerName,
+                  row,
+                });
+                const result = payer.parseResult(payload, row);
+                results.set(row.originalIndex, result);
+                const extraction = describeEligibilityExtraction(result);
+                if (extraction.missing.length > 0) {
+                  rowsWithMissingData.add(row.originalIndex);
+                  errorReportLines.push(
+                    `${payer.name} row ${row.originalIndex}: Waystar's response did not contain values for: ${extraction.missing.join(", ")}. ` +
+                    `Data extracted: ${extraction.extracted.join(", ") || "none"}.`,
+                  );
+                }
+                await context.log({
+                  level: extraction.missing.length > 0 ? "warn" : "info",
+                  message:
+                    `${payer.name} eligibility row ${row.originalIndex} completed with ${result.coverageStatus} coverage. ` +
+                    `Extracted: ${extraction.extracted.join(", ") || "none"}. ` +
+                    `Not fetched: ${extraction.missing.join(", ") || "none"}.`,
+                  rowIndex: row.originalIndex,
+                  eventName: "eligibility_row_completed",
+                  meta: {
+                    ...(result.metadata ?? {}),
+                    extractedFields: extraction.extracted,
+                    missingFields: extraction.missing,
+                  },
+                });
+                batchSuccessCount += 1;
+              } catch (error) {
+                failureCount += 1;
+                const message = error instanceof Error ? error.message : "Unknown Waystar eligibility automation error.";
+                await context.log({
+                  level: "error",
+                  message: `${payer.name} eligibility row ${row.originalIndex} failed; no eligibility data was extracted. Reason: ${message}`,
+                  rowIndex: row.originalIndex,
+                  eventName: "eligibility_row_failed",
+                });
+                errorReportLines.push(
+                  `${payer.name} row ${row.originalIndex}: no eligibility data was fetched because the row failed: ${message}`,
+                );
+                rowErrors.set(row.originalIndex, message);
+                const artifact = await saveRowScreenshot(context.jobId, page, row.originalIndex);
+                if (artifact) {
+                  await context.emit({
+                    type: "error_screenshot",
+                    index: row.originalIndex,
+                    filename: `waystar-eligibility-row-${row.originalIndex}.jpg`,
+                    path: artifact.path,
+                    image: artifact.image,
+                    mimeType: "image/jpeg",
+                  });
+                }
+                if (batchSuccessCount === 0 && isBatchBlockingError(message)) {
+                  const unprocessed = batch.rows.length - rowPosition - 1;
+                  failureCount += unprocessed;
+                  completed += unprocessed;
+                  for (const unprocessedRow of batch.rows.slice(rowPosition + 1)) {
+                    rowErrors.set(
+                      unprocessedRow.originalIndex,
+                      "Not attempted because the payer workflow never became ready.",
+                    );
+                  }
+                  errorReportLines.push(`${payer.name}: stopped early; ${unprocessed} remaining row(s) were not attempted because the payer workflow never became ready.`);
+                  await context.log({
+                    level: "error",
+                    message: `Stopping ${payer.name} after the first setup failure because no rows were processed. ${unprocessed} remaining row(s) were not attempted.`,
+                    eventName: "eligibility_payer_stopped_no_progress",
+                    meta: { payerId: payer.id, unprocessedRows: unprocessed },
+                  });
+                  completed += 1;
+                  await context.emit({ type: "progress", completed, total: routing.totalRows });
+                  break;
+                }
+              }
+
+              completed += 1;
+              await context.emit({ type: "progress", completed, total: routing.totalRows });
+            }
+          } catch (error) {
+            failureCount += batch.rows.length;
+            completed += batch.rows.length;
+            const message = error instanceof Error ? error.message : "Waystar payer login failed.";
+            for (const row of batch.rows) {
+              if (!results.has(row.originalIndex) && !rowErrors.has(row.originalIndex)) {
+                rowErrors.set(row.originalIndex, message);
               }
             }
+            errorReportLines.push(`${payer.name}: batch failed before row processing: ${message}`);
+            await context.log({
+              level: "error",
+              message: `${payer.name} batch failed before row processing: ${message}`,
+              eventName: "eligibility_payer_batch_failed",
+              meta: { payerId: payer.id },
+            });
+            const artifact = page ? await saveRowScreenshot(context.jobId, page, -1) : null;
+            if (artifact) {
+              await context.emit({ type: "error_screenshot", index: -1, filename: `waystar-${payer.id}-login-error.jpg`, path: artifact.path, image: artifact.image, mimeType: "image/jpeg" });
+            }
+            await context.emit({ type: "progress", completed: Math.min(completed, routing.totalRows), total: routing.totalRows });
+          } finally {
+            await closeAutomationResources({ browser, context: browserContext, page, log: (message) => context.log({ level: "debug", message, eventName: "eligibility_browser_cleanup" }) });
+            browser = null;
+            browserContext = null;
+            page = null;
+          }
+        }
+        const output = await buildWaystarOutputWorkbook({
+          inputFile: input.inputFile,
+          rows: inputRows,
+          results,
+          errors: rowErrors,
+        });
+        await context.emit({
+          type: "file_download",
+          filename: "waystar-eligibility-output.xlsx",
+          mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          base64: output.toString("base64"),
+        });
+        await context.log({
+          level: "info",
+          message: `Created Waystar eligibility output workbook with ${results.size} completed row(s).`,
+          eventName: "eligibility_output_created",
+        });
 
-            completed += 1;
-            await context.emit({ type: "progress", completed, total: routing.totalRows });
+        if (failureCount > 0 || rowsWithMissingData.size > 0) {
+          const report = [
+            "Waystar eligibility error report",
+            `Generated: ${new Date().toISOString()}`,
+            `Total rows: ${routing.totalRows}`,
+            `Failed or unsupported rows: ${failureCount}`,
+            `Completed rows with data not fetched: ${rowsWithMissingData.size}`,
+            "",
+            ...errorReportLines,
+          ].join("\n");
+          await context.emit({
+            type: "file_download",
+            filename: "waystar-eligibility-error-report.txt",
+            mimeType: "text/plain",
+            base64: Buffer.from(report, "utf8").toString("base64"),
+          });
+          if (failureCount > 0) {
+            throw new Error(`Eligibility verification finished with ${failureCount} failed or unsupported row(s). Review the errors and screenshots below.`);
           }
         }
       } finally {
@@ -163,6 +298,60 @@ export function createWaystarRunner(): AutomationRunner<EligibilityRunInput> {
       }
     },
   };
+}
+
+const ELIGIBILITY_RESULT_FIELDS: Array<{
+  label: string;
+  hasValue: (result: EligibilityResult) => boolean;
+}> = [
+  { label: "Coverage Status", hasValue: (result) => result.coverageStatus !== "unknown" && result.coverageStatus !== "error" },
+  { label: "Plan Type", hasValue: (result) => Boolean(result.planType) },
+  { label: "Plan Name", hasValue: (result) => Boolean(result.planName) },
+  { label: "Plan Status", hasValue: (result) => Boolean(result.planStatus) },
+  { label: "Effective Date", hasValue: (result) => Boolean(result.effectiveDate) },
+  { label: "Termination Date", hasValue: (result) => Boolean(result.terminationDate) },
+  { label: "Premium Paid End Date", hasValue: (result) => Boolean(result.premiumPaidEndDate) },
+  { label: "Insurance Type", hasValue: (result) => Boolean(result.insuranceType) },
+  { label: "Patient Name", hasValue: (result) => Boolean(result.patientName) },
+  { label: "Address", hasValue: (result) => Boolean(result.address) },
+  { label: "Member ID", hasValue: (result) => Boolean(result.memberId) },
+  { label: "Date of Birth", hasValue: (result) => Boolean(result.dateOfBirth) },
+  { label: "Sex", hasValue: (result) => Boolean(result.sex) },
+  { label: "Group Number", hasValue: (result) => Boolean(result.groupNumber) },
+  { label: "Plan Date", hasValue: (result) => Boolean(result.planDate) },
+  { label: "Primary Care Provider", hasValue: (result) => Boolean(result.primaryCareProvider) },
+  { label: "Coverage Description", hasValue: (result) => Boolean(result.coverageDescription) },
+  { label: "Coinsurance", hasValue: (result) => Boolean(result.coinsurance) },
+  { label: "Copay", hasValue: (result) => Boolean(result.copay) },
+  { label: "Deductible", hasValue: (result) => Boolean(result.deductible) },
+  { label: "Deductible Met", hasValue: (result) => Boolean(result.deductibleMet) },
+  { label: "Out of Pocket", hasValue: (result) => Boolean(result.outOfPocket) },
+  { label: "Out of Pocket Met", hasValue: (result) => Boolean(result.outOfPocketMet) },
+  { label: "Network", hasValue: (result) => Boolean(result.inOutNetwork) },
+  { label: "Benefits", hasValue: (result) => result.benefits.length > 0 },
+];
+
+export function describeEligibilityExtraction(result: EligibilityResult): {
+  extracted: string[];
+  missing: string[];
+} {
+  const extracted: string[] = [];
+  const missing: string[] = [];
+  for (const field of ELIGIBILITY_RESULT_FIELDS) {
+    (field.hasValue(result) ? extracted : missing).push(field.label);
+  }
+  return { extracted, missing };
+}
+
+function isBatchBlockingError(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return [
+    "payer selection did not activate",
+    "provider field did not become active",
+    "waiting for locator('#ddlprov",
+    "payer control was not found",
+    "inquiry controls",
+  ].some((fragment) => normalized.includes(fragment));
 }
 
 function ensureRequiredFields(row: EligibilityInputRow, requiredFields: string[]): void {
@@ -186,14 +375,16 @@ function ensureRequiredFields(row: EligibilityInputRow, requiredFields: string[]
   }
 }
 
-async function saveRowScreenshot(jobId: string, page: Page, rowIndex: number): Promise<string> {
+async function saveRowScreenshot(jobId: string, page: Page, rowIndex: number): Promise<{ path: string; image: string } | null> {
   try {
-    return await saveScreenshotForJob({
+    const path = await saveScreenshotForJob({
       jobId,
       page,
-      filename: `waystar-medicare-row-${rowIndex}.jpg`,
+      filename: `waystar-eligibility-row-${rowIndex}.jpg`,
     });
+    const image = (await readFile(path)).toString("base64");
+    return { path, image };
   } catch {
-    return "";
+    return null;
   }
 }

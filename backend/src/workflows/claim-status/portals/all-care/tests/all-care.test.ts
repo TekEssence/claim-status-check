@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import * as XLSX from "xlsx";
 import { readAllCareCredentials, readAllCareInputRows, routeAllCareRows } from "../input";
-import { allCareFinalStatus, allCareFinalStatusText, allCareOutputRow, allCareOutputRows } from "../workbook";
+import { allCareClaimOutcome, allCareFinalStatus, allCareFinalStatusText, allCareOutputRow, allCareOutputRows } from "../workbook";
 import { allCareClaimNameMatches, allCareMemberNameSearchCandidates, allCareProviderPortalMatches, allCareResultDosMatches, allCareServiceLinesForDos, allCareServiceLinesForDosAndCpt } from "../portal";
 
 function buffer(rows: Record<string, string>[]): ArrayBuffer {
@@ -167,6 +167,19 @@ test("AllCare builds paid and denied final status narratives", () => {
   const deniedLine = { ...line, net: "$0.00", memoLine1: "Not covered" };
   const denied = allCareFinalStatusText(row, { claimNumber: "CLM-10", dateReceived: "06/09/2025", datePaid: "", dateDenied: "06/11/2025", checkNumber: "", portalStatus: "Denied", netAmount: "$0.00", cptCodes: ["99223"], memoLine1: "", serviceLines: [deniedLine] }, deniedLine);
   assert.equal(denied, "DOS 06/02/2025: Checked All Care portal claim received on 06/09/2025 denied on 06/11/2025 denial reason Not covered. Claim# CLM-10.");
+});
+
+test("AllCare builds in-process final status with and without a set-to-pay amount", () => {
+  const [row] = readAllCareInputRows(buffer([{ Group: "ALPHA", Payer: "Payer One", ID: "MEM-IP", DOS: "5/12/26", CPT: "99214" }]));
+  const baseLine = { from: "05/12/2026", to: "05/12/2026", cpt: "P- 99214", modifier: "", diagCode: "", qty: "1", billed: "$265.00", coPay: "$0.00", coInsure: "$0.00", deductible: "$0.00", adjustment: "$0.00", net: "$113.99", memoLine1: "" };
+  const details = { claimNumber: "20260528920371100028", dateReceived: "05/28/2026", datePaid: "", checkNumber: "", portalStatus: "In Process", netAmount: "$113.99", cptCodes: ["P- 99214"], memoLine1: "", serviceLines: [baseLine] };
+
+  assert.equal(allCareClaimOutcome(details.portalStatus, baseLine.net), "In Process");
+  assert.equal(allCareFinalStatusText(row, details, baseLine), "DOS 5/12/26: Checked All Care portal claim received on 05/28/2026 and set-to-pay $113.99. Claim # 20260528920371100028.");
+
+  const noAmountLine = { ...baseLine, net: "" };
+  const noAmountDetails = { ...details, netAmount: "", serviceLines: [noAmountLine] };
+  assert.equal(allCareFinalStatusText(row, noAmountDetails, noAmountLine), "DOS 5/12/26: Checked All Care portal claim received on 05/28/2026 and still in process. Claim # 20260528920371100028.");
 });
 
 test("AllCare outputs matched CARC and RARC descriptions and uses them as the denial reason", () => {

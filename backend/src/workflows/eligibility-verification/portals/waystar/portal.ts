@@ -3,27 +3,47 @@ import { WAYSTAR_SELECTORS } from "./selectors";
 import type { WaystarCredentials, WaystarSecurityQuestion } from "./credentials";
 import type { EligibilityInputRow } from "../../types";
 
+export type WaystarBenefitEntry = {
+  type?: string;
+  value?: string;
+  placeOfService?: string;
+  payerNote?: string;
+  includedProviderSpecialties?: string;
+};
+
+export type WaystarBenefitSection = {
+  network?: string;
+  coverageLevel?: string;
+  entries: WaystarBenefitEntry[];
+};
+
 export type WaystarInquiryPayload = {
   overallStatus: string;
-  sectionStatuses: Array<{
-    title: string;
-    status: string;
-  }>;
-};
-
-type WaystarSelectOption = {
-  value: string;
-  label: string;
-  disabled?: boolean;
-};
-
-type WaystarInquirySnapshot = {
-  serviceTypeValue: string;
-  serviceTypeLabel: string;
-  memberId: string;
-  lastName: string;
-  firstName: string;
-  dateOfBirth: string;
+  sectionStatuses: Array<{ title: string; status: string }>;
+  subscriberInformation?: {
+    patientName?: string;
+    address?: string;
+    memberId?: string;
+    dateOfBirth?: string;
+    sex?: string;
+  };
+  subscriberCoverageInformation?: {
+    groupNumber?: string;
+    planDate?: string;
+    premiumPaidToDateEnd?: string;
+    insuranceType?: string;
+  };
+  general?: { primaryCareProvider?: string };
+  healthBenefitPlanCoverage?: {
+    coverageDescription?: string;
+    eligibilityBeginDate?: string;
+    eligibilityEndDate?: string;
+    planStatus?: string;
+    planType?: string;
+    general?: { coverageDescription?: string };
+    benefitSections?: WaystarBenefitSection[];
+  };
+  professionalOffice?: WaystarBenefitSection[];
 };
 
 const WAYSTAR_PAYER_SUGGESTION_SELECTOR = [
@@ -35,8 +55,11 @@ const WAYSTAR_PAYER_SUGGESTION_SELECTOR = [
 export async function loginToWaystar(page: Page, credentials: WaystarCredentials): Promise<void> {
   await page.goto(credentials.loginUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
   await page.locator(WAYSTAR_SELECTORS.login.username).first().waitFor({ state: "visible", timeout: 30000 });
-  await page.locator(WAYSTAR_SELECTORS.login.username).fill(credentials.username);
-  await page.locator(WAYSTAR_SELECTORS.login.password).fill(credentials.password);
+  await humanPause(page, 700, 1300);
+  await humanType(page.locator(WAYSTAR_SELECTORS.login.username).first(), credentials.username);
+  await humanPause(page, 350, 750);
+  await humanType(page.locator(WAYSTAR_SELECTORS.login.password).first(), credentials.password);
+  await humanPause(page, 500, 1000);
   await Promise.all([
     page.waitForLoadState("networkidle").catch(() => {}),
     page.locator(WAYSTAR_SELECTORS.login.submit).click(),
@@ -52,10 +75,36 @@ export async function loginToWaystar(page: Page, credentials: WaystarCredentials
 
 export async function openEligibilityInquiry(page: Page): Promise<Page> {
   const existingInquiryPage = page.context().pages().find((candidate) =>
-    candidate !== page && candidate.url().includes("eligibility.zirmed.com/DDE"),
+    candidate !== page && !candidate.isClosed() && candidate.url().includes("eligibility.zirmed.com/DDE"),
   );
   if (existingInquiryPage) {
     await existingInquiryPage.bringToFront().catch(() => {});
+    const changeInquiry = existingInquiryPage.locator(
+      WAYSTAR_SELECTORS.inquiry.changeInquiryDetails,
+    ).first();
+    if (await changeInquiry.isVisible().catch(() => false)) {
+      await humanPause(existingInquiryPage, 1200, 2000);
+      const editUrl = await changeInquiry.getAttribute("onclick").then((script) => {
+        const relativeUrl = script?.match(/OpenDDE\(\s*['"]([^'"]+)['"]/)?.[1];
+        return relativeUrl ? new URL(relativeUrl, existingInquiryPage.url()).toString() : null;
+      }).catch(() => null);
+
+      if (editUrl) {
+        await existingInquiryPage.goto(editUrl, {
+          waitUntil: "domcontentloaded",
+          timeout: 30000,
+        });
+      } else {
+        await changeInquiry.click();
+        await existingInquiryPage.waitForLoadState("domcontentloaded").catch(() => {});
+      }
+
+      await existingInquiryPage.bringToFront().catch(() => {});
+      await waitForInquiryControls(existingInquiryPage);
+      await humanPause(existingInquiryPage, 1000, 1800);
+      return existingInquiryPage;
+    }
+
     await waitForInquiryControls(existingInquiryPage);
     return existingInquiryPage;
   }
@@ -82,6 +131,7 @@ export async function submitWaystarInquiry(options: {
 }): Promise<WaystarInquiryPayload> {
   const { page, credentials, payerName, row } = options;
   const inquiryPage = await openEligibilityInquiry(page);
+  await humanPause(inquiryPage, 650, 1200);
   const expectedServiceType = normalizeServiceTypeCode(row.serviceType) || credentials.serviceTypeCode;
   const expectedMemberId = row.memberId || row.subscriberId || "";
   const expectedLastName = row.patientLastName || "";
@@ -89,11 +139,15 @@ export async function submitWaystarInquiry(options: {
   const expectedDateOfBirth = normalizeDate(row.dateOfBirth || "");
 
   await inquiryPage.locator(WAYSTAR_SELECTORS.inquiry.subscriberRadio).check().catch(() => {});
+  await humanPause(inquiryPage);
   await selectPayer(inquiryPage, payerName);
+  await humanPause(inquiryPage);
   await selectProvider(inquiryPage, credentials);
+  await humanPause(inquiryPage);
   await selectServiceType(inquiryPage, expectedServiceType);
+  await humanPause(inquiryPage);
   await inquiryPage.locator(WAYSTAR_SELECTORS.inquiry.patientLookup).selectOption("10");
-  await inquiryPage.waitForTimeout(200);
+  await humanPause(inquiryPage);
   await fillVerifiedText(inquiryPage, WAYSTAR_SELECTORS.inquiry.memberId, expectedMemberId, "Member ID");
   await fillVerifiedText(inquiryPage, WAYSTAR_SELECTORS.inquiry.lastName, expectedLastName, "Last Name");
   await fillVerifiedText(inquiryPage, WAYSTAR_SELECTORS.inquiry.firstName, expectedFirstName, "First Name");
@@ -105,6 +159,7 @@ export async function submitWaystarInquiry(options: {
     firstName: expectedFirstName,
     dateOfBirth: expectedDateOfBirth,
   });
+  await humanPause(inquiryPage, 700, 1300);
 
   await Promise.all([
     inquiryPage.waitForLoadState("networkidle").catch(() => {}),
@@ -116,15 +171,204 @@ export async function submitWaystarInquiry(options: {
     timeout: 30000,
   });
 
-  return inquiryPage.evaluate((selectors) => {
-    const overallStatus = document.querySelector(selectors.inquiry.activeCoverageDom)?.textContent?.trim() || "";
-    const sectionStatuses = Array.from(document.querySelectorAll(selectors.inquiry.sectionHeaders)).map((element) => {
-      const title = element.querySelector(selectors.inquiry.sectionTitle)?.textContent?.trim() || "";
-      const status = element.querySelector(selectors.inquiry.sectionStatus)?.textContent?.trim() || "";
-      return { title, status };
-    }).filter((entry) => entry.title || entry.status);
+  // --- TEMPORARY DEBUG DUMP: remove once we've extended the scraper ---
+  
+  // --- END TEMPORARY DEBUG DUMP ---
 
-    return { overallStatus, sectionStatuses };
+  return inquiryPage.evaluate((selectors) => {
+    // ---- generic helpers ----
+    function textOf(el: Element | null): string {
+      return el?.textContent?.trim() || "";
+    }
+
+    function valueOf(row: Element): string {
+      const valueEl = row.querySelector(".Text");
+      if (!valueEl) return "";
+      const listItems = Array.from(valueEl.querySelectorAll(".ListItem"))
+        .map((el) => textOf(el))
+        .filter(Boolean);
+      return listItems.length > 0 ? listItems.join(", ") : textOf(valueEl);
+    }
+
+    // Parses a .SectionContents element into network/coverageLevel/entries groups.
+    // Works for Health Benefit Plan Coverage, Professional Office Visit, and
+    // any other Waystar benefit section since they all share this DOM shape.
+    function parseSectionContents(contents: Element | null) {
+      const sections: Array<{ network?: string; coverageLevel?: string; entries: Array<Record<string, string>> }> = [];
+      if (!contents) return sections;
+
+      const typeKeywords = [
+        "co-insurance", "coinsurance", "co-payment", "copayment", "copay",
+        "deductible", "out of pocket", "limitations",
+      ];
+
+      const subSections = Array.from(contents.querySelectorAll(":scope > .SubSection"));
+      for (const sub of subSections) {
+        const network = textOf(sub.querySelector(":scope > .NetworkLine"));
+        const groupings = Array.from(sub.querySelectorAll(":scope > .Grouping.clearfix"));
+        for (const grouping of groupings) {
+          const groupingLabel = grouping.querySelector(":scope > .GroupingLabel");
+          const coverageLevel = textOf(groupingLabel?.querySelector(".CoverageLevel") ?? null) ||
+            textOf(groupingLabel?.querySelector(".InsuranceType") ?? null) || undefined;
+          const rightColumn = grouping.querySelector(":scope > .SubSection.RightColumn");
+          if (!rightColumn) continue;
+
+          // Split the Row children into chunks, each chunk separated by an hrDivider.
+          const children = Array.from(rightColumn.children);
+          const chunks: Element[][] = [];
+          let current: Element[] = [];
+          for (const child of children) {
+            if (child.classList.contains("hrDivider")) {
+              if (current.length > 0) chunks.push(current);
+              current = [];
+            } else if (child.classList.contains("Row")) {
+              current.push(child);
+            }
+          }
+          if (current.length > 0) chunks.push(current);
+
+          const entries = chunks.map((rows) => {
+            const entry: Record<string, string> = {};
+            for (const row of rows) {
+              const label = textOf(row.querySelector(".Label")).toLowerCase();
+              const value = valueOf(row);
+              if (!value) continue;
+              if (!entry.type && typeKeywords.some((keyword) => label.includes(keyword))) {
+                entry.type = textOf(row.querySelector(".Label"));
+                entry.value = value;
+              } else if (label.includes("place of service")) {
+                entry.placeOfService = value;
+              } else if (label.includes("payer note")) {
+                entry.payerNote = value;
+              } else if (label.includes("included provider special")) {
+                entry.includedProviderSpecialties = value;
+              }
+            }
+            return entry;
+          }).filter((entry) => entry.type);
+
+          if (entries.length > 0) {
+            sections.push({ network: network || undefined, coverageLevel, entries });
+          }
+        }
+      }
+      return sections;
+    }
+
+    function findSectionByTitle(matchesTitle: (title: string) => boolean) {
+      const headers = Array.from(document.querySelectorAll(".SectionHeader"));
+      for (const header of headers) {
+        const title = textOf(header.querySelector(".SectionTitle"));
+        if (matchesTitle(title)) {
+          const dataId = header.getAttribute("data-id");
+          const contents = dataId ? document.querySelector(`.SectionContents[data-id="${dataId}"]`) : null;
+          const status = textOf(header.querySelector(".SectionStatus"));
+          return { title, status, contents };
+        }
+      }
+      return null;
+    }
+
+    // Reads a labeled two-column block (e.g. "Subscriber Information").
+    // Waystar echoes the bot-entered data first, then the payer-returned data
+    // under the same heading further down the page — we want the LAST match.
+    function readHalfColumn(headingText: string) {
+      const halfColumns = Array.from(document.querySelectorAll(".HalfColumn"));
+      const matches = halfColumns.filter((hc) =>
+        textOf(hc.querySelector(":scope > h4")).toLowerCase() === headingText.toLowerCase(),
+      );
+      const target = matches[matches.length - 1];
+      if (!target) return null;
+
+      const fields: Record<string, string> = {};
+      for (const row of Array.from(target.querySelectorAll(":scope > .Row.clearfix"))) {
+        const label = textOf(row.querySelector(".Label"));
+        const value = textOf(row.querySelector(".Text"));
+        if (label) fields[label] = value;
+      }
+      const name = textOf(target.querySelector(":scope > .Text:not(.Address)")) || undefined;
+      const address = textOf(target.querySelector(":scope > .Text.Address")) || undefined;
+      return { fields, name, address };
+    }
+
+    function findRowValueByLabel(label: string): string | undefined {
+      const rows = Array.from(document.querySelectorAll(".SectionContents .Row.clearfix"));
+      for (const row of rows) {
+        if (textOf(row.querySelector(".Label")) === label) {
+          const value = valueOf(row);
+          if (value) return value;
+        }
+      }
+      return undefined;
+    }
+
+    // ---- overall status + fallback section list (unchanged) ----
+    const overallStatus = textOf(document.querySelector(selectors.inquiry.activeCoverageDom));
+    const sectionStatuses = Array.from(document.querySelectorAll(selectors.inquiry.sectionHeaders)).map((element) => ({
+      title: textOf(element.querySelector(selectors.inquiry.sectionTitle)),
+      status: textOf(element.querySelector(selectors.inquiry.sectionStatus)),
+    })).filter((entry) => entry.title || entry.status);
+
+    // ---- subscriber information ----
+    const subscriberBlock = readHalfColumn("Subscriber Information");
+    const subscriberInformation = subscriberBlock ? {
+      patientName: subscriberBlock.name,
+      address: subscriberBlock.address,
+      memberId: subscriberBlock.fields["Member ID"],
+      dateOfBirth: subscriberBlock.fields["Date of Birth"],
+      sex: subscriberBlock.fields["Sex"],
+    } : undefined;
+
+    const coverageBlock = readHalfColumn("Subscriber Coverage Information");
+    const subscriberCoverageInformation = coverageBlock ? {
+      groupNumber: coverageBlock.fields["Group Number"],
+      planDate: coverageBlock.fields["Plan Date"],
+      premiumPaidToDateEnd: coverageBlock.fields["Premium Paid-to Date End"],
+      insuranceType: coverageBlock.fields["Insurance Type"],
+    } : undefined;
+
+    const primaryCareProvider = findRowValueByLabel("Primary Care Provider");
+
+    // ---- Health Benefit Plan Coverage (may be absent) ----
+    const hbpc = findSectionByTitle((title) => title.toLowerCase().includes("health benefit plan coverage"));
+    let healthBenefitPlanCoverage: {
+      coverageDescription?: string;
+      eligibilityBeginDate?: string;
+      eligibilityEndDate?: string;
+      planStatus?: string;
+      planType?: string;
+      benefitSections?: ReturnType<typeof parseSectionContents>;
+    } | undefined;
+
+    if (hbpc) {
+      const hbpcSections = parseSectionContents(hbpc.contents);
+      const planTypeEl = hbpc.contents?.querySelector(".InsuranceType") ?? null;
+      healthBenefitPlanCoverage = {
+        coverageDescription: findRowValueByLabel("Coverage Description"),
+        eligibilityBeginDate: findRowValueByLabel("Eligibility Begin Date"),
+        eligibilityEndDate: findRowValueByLabel("Eligibility End Date"),
+        planStatus: hbpc.status,
+        planType: textOf(planTypeEl) || undefined,
+        benefitSections: hbpcSections.length > 0 ? hbpcSections : undefined,
+      };
+    }
+
+    // ---- Professional (Physician) Visit - Office ----
+    const officeSection = findSectionByTitle((title) => {
+      const normalized = title.toLowerCase();
+      return normalized.includes("professional") && normalized.includes("office");
+    });
+    const professionalOffice = officeSection ? parseSectionContents(officeSection.contents) : undefined;
+
+    return {
+      overallStatus,
+      sectionStatuses,
+      subscriberInformation,
+      subscriberCoverageInformation,
+      general: primaryCareProvider ? { primaryCareProvider } : undefined,
+      healthBenefitPlanCoverage,
+      professionalOffice,
+    };
   }, {
     inquiry: {
       activeCoverageDom: sanitizeDomSelector(WAYSTAR_SELECTORS.inquiry.activeCoverage),
@@ -167,6 +411,20 @@ export function isExactWaystarPayerMatch(candidate: string, target: string): boo
   const targetId = extractWaystarPayerId(target);
   return Boolean(candidateId && targetId && candidateId === targetId);
 }
+type WaystarSelectOption = {
+  value: string;
+  label: string;
+  disabled?: boolean;
+};
+
+type WaystarInquirySnapshot = {
+  serviceTypeValue: string;
+  serviceTypeLabel: string;
+  memberId: string;
+  lastName: string;
+  firstName: string;
+  dateOfBirth: string;
+};
 
 export function findWaystarServiceTypeOption(
   options: WaystarSelectOption[],
@@ -247,24 +505,27 @@ async function waitForInquiryControls(page: Page): Promise<void> {
 async function selectPayer(page: Page, payerName: string): Promise<void> {
   const payerInput = page.locator(WAYSTAR_SELECTORS.inquiry.payerInput).first();
   if (await payerInput.isVisible().catch(() => false)) {
-    await fillVerifiedText(page, WAYSTAR_SELECTORS.inquiry.payerInput, payerName, "Payer");
+    const searchTerms = payerSearchTerms(payerName);
+    for (const searchTerm of searchTerms) {
+      await typePayerSearch(page, payerInput, searchTerm);
+      const exactSuggestion = await findExactPayerSuggestion(page, payerName);
+      if (exactSuggestion) {
+        await exactSuggestion.scrollIntoViewIfNeeded().catch(() => {});
+        await humanPause(page, 300, 650);
+        await exactSuggestion.click();
+        await humanPause(page, 450, 850);
+      } else if (searchTerm === payerName) {
+        await commitTypedPayerSelection(payerInput);
+      }
 
-    const exactSuggestion = await findExactPayerSuggestion(page, payerName);
-    if (exactSuggestion) {
-      await exactSuggestion.click();
-      await page.waitForTimeout(500);
-    } else {
-      await commitTypedPayerSelection(payerInput);
+      if (await isProviderReady(page, 5000)) {
+        await waitForProviderReady(page);
+        return;
+      }
     }
 
     const currentValue = await payerInput.inputValue().catch(() => "");
-    const providerReady = await isProviderReady(page, 5000);
-    if (isExactWaystarPayerMatch(currentValue, payerName) || providerReady) {
-      await waitForProviderReady(page);
-      return;
-    }
-
-    throw new Error(`Waystar payer selection did not stick. Expected ${payerName}, found ${currentValue || "blank"}.`);
+    throw new Error(`Waystar payer selection did not activate the provider list after trying ${searchTerms.join(", ")}. Expected ${payerName}, found ${currentValue || "blank"}.`);
   }
 
   const payerSelect = page.locator(WAYSTAR_SELECTORS.inquiry.payerSelect).first();
@@ -296,6 +557,7 @@ async function findExactPayerSuggestion(page: Page, payerName: string) {
     const count = await suggestions.count().catch(() => 0);
     for (let index = 0; index < count; index += 1) {
       const suggestion = suggestions.nth(index);
+      await suggestion.scrollIntoViewIfNeeded().catch(() => {});
       const label = (await suggestion.innerText().catch(() => "")).trim();
       if (isExactWaystarPayerMatch(label, payerName)) {
         return suggestion;
@@ -318,6 +580,22 @@ async function waitForProviderReady(page: Page, timeoutMs = 30000): Promise<void
   }
 
   throw new Error("Waystar provider field did not become active after selecting the payer.");
+}
+
+async function typePayerSearch(page: Page, payerInput: Locator, searchTerm: string): Promise<void> {
+  await humanPause(page, 250, 600);
+  await humanType(payerInput, searchTerm);
+
+  const actualValue = await payerInput.inputValue().catch(() => "");
+  if (actualValue.trim() !== searchTerm.trim()) {
+    throw new Error(
+      `Waystar payer search did not fill correctly. Expected ${searchTerm}, found ${actualValue || "blank"}.`,
+    );
+  }
+
+  // Keep focus on the autocomplete. Dispatching change/blur here closes Waystar's
+  // suggestion menu before its selection callback can populate the provider list.
+  await page.waitForTimeout(500);
 }
 
 async function isProviderReady(page: Page, timeoutMs = 5000): Promise<boolean> {
@@ -371,8 +649,10 @@ async function selectServiceType(page: Page, serviceTypeCode: string): Promise<v
   }
 
   if (matchingOption.value) {
+    await humanPause(page, 300, 650);
     await serviceType.selectOption(matchingOption.value);
   } else {
+    await humanPause(page, 300, 650);
     await serviceType.selectOption({ label: matchingOption.label });
   }
 
@@ -411,15 +691,15 @@ async function clickAddCodeIfVisible(page: Page): Promise<void> {
 async function fillVerifiedText(page: Page, selector: string, value: string, label: string): Promise<void> {
   const input = page.locator(selector).first();
   await input.waitFor({ state: "visible", timeout: 30000 });
-  await input.fill("");
-  await input.fill(value);
+  await humanPause(page, 250, 600);
+  await humanType(input, value);
   await input.evaluate((element) => {
     const field = element as HTMLInputElement;
     field.dispatchEvent(new Event("input", { bubbles: true }));
     field.dispatchEvent(new Event("change", { bubbles: true }));
     field.dispatchEvent(new Event("blur", { bubbles: true }));
   }).catch(() => {});
-  await page.waitForTimeout(100);
+  await page.waitForTimeout(500);
 
   const actualValue = await input.inputValue().catch(() => "");
   if (actualValue.trim() !== value.trim()) {
@@ -484,10 +764,12 @@ async function selectProvider(page: Page, credentials: WaystarCredentials): Prom
   const provider = page.locator(WAYSTAR_SELECTORS.inquiry.provider).first();
   await provider.waitFor({ state: "visible", timeout: 30000 });
   if (credentials.providerId) {
+    await humanPause(page, 300, 650);
     await provider.selectOption(credentials.providerId);
     return;
   }
   if (credentials.providerName) {
+    await humanPause(page, 300, 650);
     await provider.selectOption({ label: credentials.providerName }).catch(async () => {
       const normalizedTarget = normalizeText(credentials.providerName || "");
       const options = await provider.locator("option").evaluateAll((nodes) =>
@@ -503,6 +785,29 @@ async function selectProvider(page: Page, credentials: WaystarCredentials): Prom
       await provider.selectOption(match.value);
     });
   }
+}
+
+function payerSearchTerms(payerName: string): string[] {
+  const normalized = normalizeText(payerName);
+  if (!normalized.includes("bcbs") && !normalized.includes("blue cross")) return [payerName];
+
+  const state = normalized.includes("texas") ? "Texas" : normalized.includes("florida") ? "Florida" : "";
+  return Array.from(new Set(["BCBS", state ? `BCBS ${state}` : "", payerName].filter(Boolean)));
+}
+
+async function humanType(locator: Locator, value: string): Promise<void> {
+  await locator.click();
+  await locator.press("Control+A").catch(() => {});
+  await locator.press("Backspace").catch(() => {});
+  await locator.pressSequentially(value, { delay: randomBetween(85, 140) });
+}
+
+async function humanPause(page: Page, minimumMs = 800, maximumMs = 1400): Promise<void> {
+  await page.waitForTimeout(randomBetween(minimumMs, maximumMs));
+}
+
+function randomBetween(minimum: number, maximum: number): number {
+  return Math.floor(Math.random() * (maximum - minimum + 1)) + minimum;
 }
 
 function normalizeServiceTypeCode(value?: string): string | null {
@@ -544,7 +849,7 @@ function normalizePayerSuggestion(value: string): string {
 }
 
 function extractWaystarPayerId(value: string): string {
-  const match = value.match(/\(([a-z]?\d{4,})\)\s*$/i);
+  const match = value.match(/\(([a-z]{0,3}\d{3,})\)\s*$/i);
   return match?.[1]?.toLowerCase() || "";
 }
 

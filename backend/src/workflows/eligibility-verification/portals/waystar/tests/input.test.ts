@@ -64,6 +64,32 @@ test("reads abbreviated patient and subscriber headers from the workbook", () =>
   assert.equal(row?.dateOfService, "07/09/2026");
 });
 
+test("accepts all requested eligibility input header aliases", () => {
+  const cases = [
+    { payerHeader: "Primary Insurance Name", memberHeader: "Primary Ins Subscriber No", firstHeader: "First Name", lastHeader: "Last Name", dobHeader: "DOB" },
+    { payerHeader: "Insurance Name", memberHeader: "Subscriber ID", firstHeader: "Patient F Name", lastHeader: "Patient Last Name", dobHeader: "Date of Birth" },
+    { payerHeader: "Insurance", memberHeader: "Member ID", firstHeader: "Patient First Name", lastHeader: "Patient L Name", dobHeader: "Pat Birthdate" },
+    { payerHeader: "Payer", memberHeader: "Subscriber No", firstHeader: "Pat F Name", lastHeader: "Pat L Name", dobHeader: "Patient Birthdate" },
+    { payerHeader: "Primary Insurance Name", memberHeader: "ID", firstHeader: "First Name", lastHeader: "Last Name", dobHeader: "Patient DOB" },
+    { payerHeader: "Primary Insurance Name", memberHeader: "Member ID", firstHeader: "First Name", lastHeader: "Last Name", dobHeader: "Birthdate" },
+  ];
+
+  for (const aliases of cases) {
+    const row = {
+      [aliases.payerHeader]: "Medicare",
+      [aliases.memberHeader]: "SUB-999",
+      [aliases.firstHeader]: "Jane",
+      [aliases.lastHeader]: "Doe",
+      [aliases.dobHeader]: "02/03/1960",
+    };
+    const parsed = routeWaystarRowsByPayer([row]).batches[0]?.rows[0];
+    assert.equal(parsed?.memberId, "SUB-999", aliases.memberHeader);
+    assert.equal(parsed?.patientFirstName, "Jane", aliases.firstHeader);
+    assert.equal(parsed?.patientLastName, "Doe", aliases.lastHeader);
+    assert.equal(parsed?.dateOfBirth, "02/03/1960", aliases.dobHeader);
+  }
+});
+
 test("reads common Medicare-style headers including Patient Name and Patient DOB", () => {
   const routing = routeWaystarRowsByPayer([
     {
@@ -140,13 +166,10 @@ test("groups mixed payer rows so each payer can use its own portal flow", () => 
   );
 });
 
-test("accepts Primary Ins Subscriber No as a BCBS payer source column", () => {
-  const routing = routeWaystarRowsByPayer([
-    { "Primary Ins Subscriber No": "Blue Cross and Blue Shield of Texas" },
-  ]);
-
-  assert.equal(routing.payerHeader, "Primary Ins Subscriber No");
-  assert.equal(routing.batches[0].payerId, "blue-cross-blue-shield-texas");
+test("does not confuse Primary Ins Subscriber No with the payer column", () => {
+  assert.throws(() => routeWaystarRowsByPayer([
+    { "Primary Ins Subscriber No": "SUB-123" },
+  ]), /missing payer column/i);
 });
 
 test("routes BCBS rows using the BCBS_Payer_Mappings workbook sheet", async () => {
@@ -154,8 +177,8 @@ test("routes BCBS rows using the BCBS_Payer_Mappings workbook sheet", async () =
   XLSX.utils.book_append_sheet(
     workbook,
     XLSX.utils.json_to_sheet([
-      { "Primary Ins Subscriber No": "Blue Cross and Blue Shield of Texas" },
-      { "Primary Ins Subscriber No": "Blue Cross and Blue Shield of Florida" },
+      { "Primary Insurance Name": "Blue Cross and Blue Shield of Texas", "Primary Ins Subscriber No": "TX-123" },
+      { "Primary Insurance Name": "Blue Cross and Blue Shield of Florida", "Primary Ins Subscriber No": "FL-456" },
     ]),
     "Eligibility",
   );

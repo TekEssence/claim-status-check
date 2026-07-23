@@ -21,11 +21,11 @@ export const INSURANCE_HEADER_ALIASES = [
   "insurance payer",
   "insurance payer state",
   "insurance",
-  "primary ins subscriber no",
 ] as const;
 
 const MEMBER_ID_HEADER_ALIASES = [
   "member id",
+  "id",
   "member number",
   "member no",
   "member #",
@@ -56,6 +56,7 @@ const SUBSCRIBER_ID_HEADER_ALIASES = [
 
 const FIRST_NAME_HEADER_ALIASES = [
   "patient first name",
+  "patient f name",
   "first name",
   "pat f name",
   "pat first name",
@@ -68,6 +69,7 @@ const FIRST_NAME_HEADER_ALIASES = [
 
 const LAST_NAME_HEADER_ALIASES = [
   "patient last name",
+  "patient l name",
   "last name",
   "pat l name",
   "pat last name",
@@ -97,6 +99,7 @@ const DATE_OF_BIRTH_HEADER_ALIASES = [
   "member dob",
   "subscriber dob",
   "birth date",
+  "birthdate",
 ] as const;
 
 const DATE_OF_SERVICE_HEADER_ALIASES = [
