@@ -525,30 +525,6 @@ async function clickFirstVisible(candidates: Locator[], timeoutMs: number): Prom
   throw new Error(`Unable to click visible menu item after ${timeoutMs}ms.${lastError ? ` Last error: ${lastError}` : ""}`);
 }
 
-async function clickChromePdfViewerDownload(pdfPage: Page): Promise<void> {
-  await pdfPage.waitForFunction(() => {
-    const viewer = document.querySelector("pdf-viewer");
-    const viewerRoot = viewer?.shadowRoot;
-    const toolbar = viewerRoot?.querySelector("viewer-toolbar");
-    const toolbarRoot = toolbar?.shadowRoot;
-    const downloads = toolbarRoot?.querySelector("viewer-download-controls#downloads");
-    const downloadsRoot = downloads?.shadowRoot;
-    return Boolean(downloadsRoot?.querySelector("cr-icon-button#save"));
-  }, null, { timeout: 90000 });
-
-  await pdfPage.evaluate(() => {
-    const viewer = document.querySelector("pdf-viewer");
-    const viewerRoot = viewer?.shadowRoot;
-    const toolbar = viewerRoot?.querySelector("viewer-toolbar");
-    const toolbarRoot = toolbar?.shadowRoot;
-    const downloads = toolbarRoot?.querySelector("viewer-download-controls#downloads");
-    const downloadsRoot = downloads?.shadowRoot;
-    const button = downloadsRoot?.querySelector<HTMLElement>("cr-icon-button#save");
-    if (!button) throw new Error("Chrome PDF viewer download button was not found.");
-    button.click();
-  });
-}
-
 async function waitForPdfViewerPage(page: Page, clickPdfIcon: () => Promise<void>): Promise<Page> {
   const context = page.context();
   const popupPromise = page.waitForEvent("popup", { timeout: 90000 }).catch(() => null);
@@ -565,6 +541,37 @@ async function waitForPdfViewerPage(page: Page, clickPdfIcon: () => Promise<void
   await openedPage.waitForFunction(() => window.location.href.startsWith("blob:"), null, { timeout: 90000 }).catch(() => {});
   await openedPage.waitForLoadState("networkidle", { timeout: 30000 }).catch(() => {});
   return openedPage;
+}
+
+async function readBlobPdfFromViewerPage(pdfPage: Page): Promise<Buffer> {
+  const base64 = await pdfPage.evaluate(async () => {
+    const response = await fetch(window.location.href);
+    if (!response.ok) {
+      throw new Error(`Blob PDF fetch failed with status ${response.status}.`);
+    }
+    const contentType = response.headers.get("content-type") || "";
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    let binary = "";
+    const chunkSize = 0x8000;
+    for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+      binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
+    }
+    return {
+      base64: btoa(binary),
+      contentType,
+    };
+  });
+
+  const buffer = Buffer.from(base64.base64, "base64");
+  if (base64.contentType && !base64.contentType.toLowerCase().includes("pdf")) {
+    // Some blob URLs are served as application/octet-stream. Keep that valid,
+    // but fail fast for obvious HTML/error blobs.
+    const firstBytes = buffer.subarray(0, 5).toString();
+    if (firstBytes !== "%PDF-") {
+      throw new Error(`Blob PDF returned unexpected content type "${base64.contentType}".`);
+    }
+  }
+  return buffer;
 }
 
 async function downloadFromActionMenu(
@@ -608,10 +615,8 @@ async function downloadFromPayerIssuedPdfIcon(
       await pdfButton.click({ timeout: 30000 });
     });
 
-    const downloadPromise = pdfPage.waitForEvent("download", { timeout: 90000 });
-    await clickChromePdfViewerDownload(pdfPage);
-    const download = await downloadPromise;
-    await download.saveAs(pdfPath);
+    const buffer = await readBlobPdfFromViewerPage(pdfPage);
+    await fs.writeFile(pdfPath, buffer);
     await verifyPdf(pdfPath);
   } finally {
     if (pdfPage && !pdfPage.isClosed()) await pdfPage.close().catch(() => {});
