@@ -230,6 +230,28 @@ function normalizeOrgLabel(value: string): string {
   return value.toLowerCase().replace(/\s+/g, " ").trim();
 }
 
+async function selectedOrganizationText(surface: RemittanceSurface): Promise<string> {
+  return (await surface.locator("#checkEFTorganizationId .av__single-value").innerText().catch(() => "")).trim();
+}
+
+function organizationMatches(actual: string, expected: string | undefined): boolean {
+  if (!expected || !expected.trim()) return true;
+  const actualNorm = normalizeOrgLabel(actual);
+  const expectedNorm = normalizeOrgLabel(expected);
+  return actualNorm.includes(expectedNorm) || expectedNorm.includes(actualNorm);
+}
+
+async function dateInputValue(surface: RemittanceSurface, selector: string): Promise<string> {
+  return (await surface.locator(selector).inputValue().catch(() => "")).trim();
+}
+
+async function filterValuesMatch(surface: RemittanceSurface, organization: string | undefined, startDate: string, endDate: string): Promise<boolean> {
+  const selectedOrg = await selectedOrganizationText(surface);
+  const selectedStartDate = await dateInputValue(surface, "#checkEFTcheckExchangeDates-start");
+  const selectedEndDate = await dateInputValue(surface, "#checkEFTcheckExchangeDates-end");
+  return organizationMatches(selectedOrg, organization) && selectedStartDate === startDate && selectedEndDate === endDate;
+}
+
 /**
  * The "Organization" field on the Remittance Viewer filter panel is NOT a native
  * <select>/<option> element — it's a react-select style combobox rendered as:
@@ -324,8 +346,8 @@ async function selectOrganizationIfProvided(
   await options.nth(matchedIndex).click();
   await menu.waitFor({ state: "hidden", timeout: 10000 }).catch(() => {});
 
-  const selectedText = (await surface.locator("#checkEFTorganizationId .av__single-value").innerText().catch(() => "")).trim();
-  const stuck = normalizeOrgLabel(selectedText).includes(normalizedTarget) || normalizedTarget.includes(normalizeOrgLabel(selectedText));
+  const selectedText = await selectedOrganizationText(surface);
+  const stuck = organizationMatches(selectedText, target);
   if (!stuck) {
     await context.log({
       level: "warn",
@@ -355,12 +377,38 @@ async function downloadPortalCsv(surface: RemittanceSurface, page: Page, context
   const startDate = credentials.startDate || daysAgoMmDdYyyy(credentials.lookbackDays);
   const endDate = credentials.endDate || todayMmDdYyyy();
 
-  await context.log({ level: "info", message: "Selecting Availity organization filter.", eventName: "payment_eob_org_select" });
-  await selectOrganizationIfProvided(surface, page, credentials.organization, context, outputFolder);
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    await context.log({
+      level: "info",
+      message: `Setting Received by Availity date range ${startDate} - ${endDate} (filter setup attempt ${attempt}/3).`,
+      eventName: "payment_eob_date_range",
+    });
+    await fillDate(surface.locator("#checkEFTcheckExchangeDates-start"), startDate);
+    await fillDate(surface.locator("#checkEFTcheckExchangeDates-end"), endDate);
+    await surface.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
 
-  await context.log({ level: "info", message: `Setting Received by Availity filter range ${startDate} - ${endDate}.`, eventName: "payment_eob_date_range" });
-  await fillDate(surface.locator("#checkEFTcheckExchangeDates-start"), startDate);
-  await fillDate(surface.locator("#checkEFTcheckExchangeDates-end"), endDate);
+    await context.log({ level: "info", message: "Selecting Availity organization filter.", eventName: "payment_eob_org_select" });
+    await selectOrganizationIfProvided(surface, page, credentials.organization, context, outputFolder);
+    await surface.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
+
+    const selectedOrg = await selectedOrganizationText(surface);
+    const selectedStartDate = await dateInputValue(surface, "#checkEFTcheckExchangeDates-start");
+    const selectedEndDate = await dateInputValue(surface, "#checkEFTcheckExchangeDates-end");
+    await context.log({
+      level: "info",
+      message: `Filter verification after attempt ${attempt}/3: Organization="${selectedOrg || "(blank)"}", Received by Availity=${selectedStartDate || "(blank)"} - ${selectedEndDate || "(blank)"}.`,
+      eventName: "payment_eob_filter_verify",
+    });
+
+    if (await filterValuesMatch(surface, credentials.organization, startDate, endDate)) {
+      break;
+    }
+
+    if (attempt === 3) {
+      await captureDiagnostics(page, outputFolder, "filter-values-not-stable");
+      throw new Error(`Unable to keep filter values stable before clicking Filter. Expected Organization="${credentials.organization || "All"}", Received by Availity=${startDate} - ${endDate}. Current Organization="${selectedOrg || "(blank)"}", Received by Availity=${selectedStartDate || "(blank)"} - ${selectedEndDate || "(blank)"}."`);
+    }
+  }
 
   const filterButton = surface.locator("#checkFilterButton");
   await context.log({ level: "info", message: "Clicking Filter.", eventName: "payment_eob_filter_click" });
@@ -376,6 +424,7 @@ async function downloadPortalCsv(surface: RemittanceSurface, page: Page, context
   await context.log({ level: "info", message: `Downloaded portal remittance CSV to ${csvPath}.`, eventName: "payment_eob_csv_downloaded" });
 
   const csvText = await fs.readFile(csvPath, "utf8");
+  await context.emit(downloadableFileEvent("portal_remittance_results.csv", Buffer.from(csvText, "utf8"), "text/csv"));
   const records = parseRemittanceCsv(csvText);
   if (!records.length) {
     await context.log({ level: "warn", message: "Portal CSV did not contain any Check/EFT records.", eventName: "payment_eob_csv_empty" });
@@ -387,6 +436,31 @@ async function selectCheckSuggestion(surface: RemittanceSurface, checkNumber: st
   const suggestion = surface.locator(".suggestion").filter({ hasText: `Check / EFT Number ${checkNumber}` }).first();
   if (await suggestion.isVisible().catch(() => false)) {
     await suggestion.click();
+  }
+}
+
+async function clearSearchFilterChips(surface: RemittanceSurface, context?: AutomationContext): Promise<void> {
+  const chips = surface.locator('button.search-form-filter[aria-label="Remove Filter"]').filter({ hasText: "Check / EFT Number" });
+  for (let attempt = 1; attempt <= 5; attempt += 1) {
+    const count = await chips.count();
+    if (count === 0) return;
+
+    await context?.log({
+      level: "info",
+      message: `Removing ${count} existing Check/EFT search filter chip(s).`,
+      eventName: "payment_eob_search_chips_clear",
+    });
+
+    for (let index = count - 1; index >= 0; index -= 1) {
+      await chips.nth(index).click({ timeout: 5000 }).catch(() => {});
+      await surface.waitForTimeout(300);
+    }
+    await surface.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
+  }
+
+  const remaining = await chips.count();
+  if (remaining > 0) {
+    throw new Error(`Unable to clear ${remaining} existing Check/EFT search filter chip(s).`);
   }
 }
 
@@ -423,31 +497,103 @@ async function verifyPdf(pdfPath: string): Promise<void> {
   }
 }
 
-async function searchAndDownloadPdf(surface: RemittanceSurface, page: Page, record: PaymentEobPortalRecord, outputPdfFolder: string): Promise<{ filename: string; message: string; found: boolean }> {
-  await surface.locator("#checkSearchInput").fill(record.checkNumber);
-  await selectCheckSuggestion(surface, record.checkNumber);
-  await fillDate(surface.locator("#checkcheckDates-start"), record.checkDate);
-  await fillDate(surface.locator("#checkcheckDates-end"), record.checkDate);
-  await surface.locator("#checkSearchButton").click();
+async function clickFirstVisible(candidates: Locator[], timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  let lastError = "";
 
-  const matchingRow = await findMatchingResultRow(surface, record.checkNumber, record.checkDate);
-  if (!matchingRow) {
-    return { filename: "", message: "No matching result row.", found: false };
+  while (Date.now() < deadline) {
+    for (const candidate of candidates) {
+      try {
+        if (await candidate.first().isVisible({ timeout: 500 })) {
+          await candidate.first().click({ timeout: 5000 });
+          return;
+        }
+      } catch (error) {
+        lastError = error instanceof Error ? error.message : String(error);
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500));
   }
 
-  await matchingRow.getByRole("button", { name: "Action Menu" }).click();
-  const pdfDownloadPromise = page.waitForEvent("download");
-  await surface.getByRole("menuitem", { name: "Download Check Summary and Multiple Claims Per Page" }).click();
-  const pdfDownload = await pdfDownloadPromise;
+  throw new Error(`Unable to click visible menu item after ${timeoutMs}ms.${lastError ? ` Last error: ${lastError}` : ""}`);
+}
+
+async function downloadPdfFromMatchingRow(
+  surface: RemittanceSurface,
+  page: Page,
+  matchingRow: Locator,
+  record: PaymentEobPortalRecord,
+  outputPdfFolder: string,
+  context: AutomationContext,
+): Promise<{ filename: string; message: string; found: boolean }> {
+  const menuItemName = "Download Check Summary and Multiple Claims Per Page";
   const filename = `${safeFilePart(record.checkNumber)}_${dateFilePart(record.checkDate)}.pdf`;
   const pdfPath = path.join(outputPdfFolder, filename);
-  await pdfDownload.saveAs(pdfPath);
-  await verifyPdf(pdfPath);
+  let lastError = "";
 
-  await clearInput(surface.locator("#checkSearchInput"));
-  await clearInput(surface.locator("#checkcheckDates-start"));
-  await clearInput(surface.locator("#checkcheckDates-end"));
-  return { filename, message: "Success", found: true };
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      await context.log({
+        level: "info",
+        message: `Opening PDF action menu for ${record.checkNumber} (attempt ${attempt}/3).`,
+        eventName: "payment_eob_pdf_menu_open",
+      });
+      await matchingRow.scrollIntoViewIfNeeded({ timeout: 10000 }).catch(() => {});
+      await matchingRow.getByRole("button", { name: "Action Menu" }).click({ timeout: 15000 });
+
+      const downloadPromise = page.waitForEvent("download", { timeout: 90000 });
+      await clickFirstVisible([
+        surface.getByRole("menuitem", { name: menuItemName }),
+        page.getByRole("menuitem", { name: menuItemName }),
+        surface.locator('[role="menuitem"]').filter({ hasText: menuItemName }),
+        page.locator('[role="menuitem"]').filter({ hasText: menuItemName }),
+        surface.getByText(menuItemName, { exact: true }),
+        page.getByText(menuItemName, { exact: true }),
+      ], 30000);
+
+      const pdfDownload = await downloadPromise;
+      await pdfDownload.saveAs(pdfPath);
+      await verifyPdf(pdfPath);
+      return { filename, message: "Success", found: true };
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : String(error);
+      await context.log({
+        level: "warn",
+        message: `PDF download attempt ${attempt}/3 failed for ${record.checkNumber}: ${lastError}`,
+        eventName: "payment_eob_pdf_download_retry",
+      });
+      await page.keyboard.press("Escape").catch(() => {});
+      await surface.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
+      if (attempt < 3) {
+        await page.waitForTimeout(2000);
+      }
+    }
+  }
+
+  throw new Error(lastError || `Unable to download PDF for ${record.checkNumber}.`);
+}
+
+async function searchAndDownloadPdf(surface: RemittanceSurface, page: Page, record: PaymentEobPortalRecord, outputPdfFolder: string, context: AutomationContext): Promise<{ filename: string; message: string; found: boolean }> {
+  try {
+    await clearSearchFilterChips(surface, context);
+    await surface.locator("#checkSearchInput").fill(record.checkNumber);
+    await selectCheckSuggestion(surface, record.checkNumber);
+    await fillDate(surface.locator("#checkcheckDates-start"), record.checkDate);
+    await fillDate(surface.locator("#checkcheckDates-end"), record.checkDate);
+    await surface.locator("#checkSearchButton").click();
+
+    const matchingRow = await findMatchingResultRow(surface, record.checkNumber, record.checkDate);
+    if (!matchingRow) {
+      return { filename: "", message: "No matching result row.", found: false };
+    }
+
+    return await downloadPdfFromMatchingRow(surface, page, matchingRow, record, outputPdfFolder, context);
+  } finally {
+    await clearInput(surface.locator("#checkSearchInput")).catch(() => {});
+    await clearInput(surface.locator("#checkcheckDates-start")).catch(() => {});
+    await clearInput(surface.locator("#checkcheckDates-end")).catch(() => {});
+    await clearSearchFilterChips(surface).catch(() => {});
+  }
 }
 
 function downloadableFileEvent(filename: string, buffer: Buffer, mimeType: string): Record<string, unknown> {
@@ -507,7 +653,7 @@ export async function runAvailityRemittanceJob(input: RunInput, context: Automat
       }
       try {
         await context.log({ level: "info", message: `Searching unmatched Check/EFT ${record.checkNumber} (${record.checkDate}).`, eventName: "payment_eob_pdf_search" });
-        const result = await searchAndDownloadPdf(remittanceSurface, page, record, outputPdfFolder);
+        const result = await searchAndDownloadPdf(remittanceSurface, page, record, outputPdfFolder, context);
         comparisonRows.push({
           checkNumber: record.checkNumber,
           checkDate: record.checkDate,
