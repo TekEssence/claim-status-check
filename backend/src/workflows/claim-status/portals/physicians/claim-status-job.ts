@@ -141,14 +141,68 @@ function baseOutputRow(inputRow: PhysiciansInputRow, botStatus: string, botMessa
   };
 }
 
+function hasText(value: string): boolean {
+  return cleanText(value).length > 0;
+}
+
+function appendSentencePart(parts: string[], label: string, value: string): void {
+  const text = cleanText(value);
+  if (text) parts.push(`${label} ${text}`);
+}
+
+function physiciansPaidAmount(result: PhysiciansClaimRow, serviceLine?: PhysiciansServiceLine): string {
+  return serviceLine?.net || result.netAmount || result.checkTotalAmount;
+}
+
+function physiciansDenialReason(result: PhysiciansClaimRow, serviceLine?: PhysiciansServiceLine): string {
+  return serviceLine?.adjustmentDescription || serviceLine?.financialResponsibility || serviceLine?.status || result.outcome;
+}
+
+function buildPhysiciansFinalStatusText(inputRow: PhysiciansInputRow, result: PhysiciansClaimRow, serviceLine?: PhysiciansServiceLine): string {
+  const dos = inputRow.dos || serviceLine?.serviceDate || result.serviceDate;
+  const status = cleanText(serviceLine?.status || result.outcome);
+  const receivedDate = result.receivedDate;
+  const paidDate = serviceLine?.paidDate || "";
+  const checkNumber = serviceLine?.checkNumber || "";
+  const paidAmount = physiciansPaidAmount(result, serviceLine);
+  const checkTotalAmount = result.checkTotalAmount;
+  const denialReason = physiciansDenialReason(result, serviceLine);
+  const cptCode = serviceLine?.serviceCode || inputRow.cptCode;
+  const lowerStatus = status.toLowerCase();
+
+  const receivedPart = hasText(receivedDate) ? ` claim received on ${receivedDate}` : " claim";
+  const suffixParts: string[] = [];
+  appendSentencePart(suffixParts, "Claim #", result.claimNumber);
+  appendSentencePart(suffixParts, "CPT", cptCode);
+
+  if (/paid|pay|complete/i.test(lowerStatus) && !/denied|deny|rejected/i.test(lowerStatus)) {
+    const paidDatePart = hasText(paidDate) ? ` paid on ${paidDate}` : " paid";
+    const paidAmountPart = hasText(paidAmount) ? ` paid amount ${paidAmount}` : "";
+    const checkPart = hasText(checkNumber) ? ` EFT/Check # ${checkNumber}` : "";
+    const checkTotalPart = hasText(checkTotalAmount) ? ` Check Total Amount: ${checkTotalAmount}` : "";
+    return cleanText(
+      `DOS ${dos}: Checked Physicians portal${receivedPart}${paidDatePart}${paidAmountPart}${checkPart}.${checkTotalPart}. ${suffixParts.join(". ")}.`,
+    );
+  }
+
+  if (/denied|deny|rejected|not payable|disallow/i.test(lowerStatus) || /denied|deny|rejected|not payable|disallow/i.test(denialReason)) {
+    const deniedDatePart = hasText(paidDate) ? ` denied/processed on ${paidDate}` : " denied/processed";
+    const reasonPart = hasText(denialReason) ? ` denial reason ${denialReason}` : "";
+    return cleanText(`DOS ${dos}: Checked Physicians portal${receivedPart}${deniedDatePart}${reasonPart}. ${suffixParts.join(". ")}.`);
+  }
+
+  if (/pending|process|progress|received|open/i.test(lowerStatus)) {
+    return cleanText(`DOS ${dos}: Checked Physicians portal${receivedPart} present as In Progress. ${suffixParts.join(". ")}.`);
+  }
+
+  const statusPart = hasText(status) ? ` present as ${status}` : " found";
+  const amountPart = hasText(paidAmount) ? ` net amount ${paidAmount}` : "";
+  const checkTotalPart = hasText(checkTotalAmount) ? ` Check Total Amount: ${checkTotalAmount}.` : "";
+  return cleanText(`DOS ${dos}: Checked Physicians portal${receivedPart}${statusPart}${amountPart}.${checkTotalPart} ${suffixParts.join(". ")}.`);
+}
+
 function outputRowFromClaim(inputRow: PhysiciansInputRow, result: PhysiciansClaimRow, serviceLine?: PhysiciansServiceLine): PhysiciansOutputRow {
-  const status = serviceLine?.status || result.outcome;
-  const netAmount = serviceLine?.net || result.netAmount;
-  const finalStatus = cleanText(
-    `DOS ${inputRow.dos}: Physicians claim ${result.claimNumber} found` +
-      `${status ? ` with status ${status}` : ""}` +
-      `${netAmount ? ` and net amount ${netAmount}` : ""}.`,
-  );
+  const finalStatus = buildPhysiciansFinalStatusText(inputRow, result, serviceLine);
   return {
     ...baseOutputRow(inputRow, "Success", "Claim found."),
     claimNumber: result.claimNumber,

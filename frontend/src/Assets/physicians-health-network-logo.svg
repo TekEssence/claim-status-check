@@ -1,0 +1,13 @@
+<svg width="614" height="167" viewBox="0 0 614 167" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="614" height="167" fill="#ffffff"/>
+  <path d="M4 2H89C100 2 108 15 102 25L75 67L96 81V166H80V91L54 76V166H37V53H55V68L78 32H4V2Z" fill="#e9685d"/>
+  <path d="M35 50H54V72L80 88V166H66V96L54 90V166H35V50Z" fill="#ffffff"/>
+  <path d="M40 53H58V78L84 93V166H74V100L58 91V166H40V53Z" fill="#e9685d"/>
+  <path d="M149 166H614" stroke="#e9685d" stroke-width="3"/>
+  <text x="130" y="75" fill="#111827" font-family="Arial, Helvetica, sans-serif" font-size="31" font-weight="700" letter-spacing="1.5">
+    Physicians Health Network
+  </text>
+  <text x="132" y="115" fill="#111827" font-family="Arial, Helvetica, sans-serif" font-size="26" letter-spacing="1.2">
+    Medical Group, Inc.
+  </text>
+</svg>

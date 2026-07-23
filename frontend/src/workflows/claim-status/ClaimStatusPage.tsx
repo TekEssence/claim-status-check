@@ -28,6 +28,7 @@ import iehpLogo from "../../Assets/channels4_profile.jpg";
 import kaiserLogo from "../../Assets/kaiser-permanente-logo.svg";
 import myFamilyLogo from "../../Assets/my-family-medical-group-logo.svg";
 import optumLogo from "../../Assets/optum-logo.svg";
+import physiciansLogo from "../../Assets/physicians-health-network-logo.svg";
 import regalLogo from "../../Assets/channels4_profile (1).jpg";
 import availityLogo from "../../Assets/availity-logo.jpg";
 import { applyClaimRowUpdateToWorksheet, postProcessWorksheet } from "./portals/iehp/workbook";
@@ -341,8 +342,19 @@ const PORTAL_UI_META: Record<
   physicians: {
     shortCode: "PHN",
     logoClassName: "bg-white text-red-700",
-    cardLogoFrameClassName: "h-10 w-14 rounded-[1rem]",
-    heroLogoFrameClassName: "h-14 w-20 rounded-[1.15rem]",
+    logoSrc: physiciansLogo,
+    cardLogoFrameClassName: "h-10 w-[9.4rem] rounded-[1rem] px-2",
+    cardLogoImageClassName: "h-7 w-full object-contain",
+    cardLogoSize: {
+      width: 136,
+      height: 37,
+    },
+    heroLogoFrameClassName: "h-14 w-[13rem] rounded-[1.15rem] px-3",
+    heroLogoImageClassName: "h-10 w-full object-contain",
+    heroLogoSize: {
+      width: 190,
+      height: 52,
+    },
   },
 };
 

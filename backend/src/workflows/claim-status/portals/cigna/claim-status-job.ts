@@ -242,10 +242,71 @@ function baseOutputRow(inputRow: CignaInputRow, botStatus: string, botMessage: s
   };
 }
 
-function outputRowFromClaim(inputRow: CignaInputRow, result: SearchResultRow, details: ClaimDetails, procedure: ProcedureLine): CignaOutputRow {
-  const finalStatus = cleanText(
-    `DOS ${inputRow.dos || result.datesOfService}: Cigna claim ${details.claimNumber || result.claimNumber} ${details.claimStatus || result.claimStatus || "found"} matched CPT ${procedure.procedureCode}.`,
+function hasText(value: string): boolean {
+  return cleanText(value).length > 0;
+}
+
+function appendSentencePart(parts: string[], label: string, value: string): void {
+  const text = cleanText(value);
+  if (text) parts.push(`${label} ${text}`);
+}
+
+function cignaPaidAmount(details: ClaimDetails, procedure: ProcedureLine): string {
+  return (
+    details.payment.paymentAmount ||
+    details.totalProviderPayment ||
+    details.claimAmountPaid ||
+    procedure.planCoinsurancePaid ||
+    procedure.coveredBalance
   );
+}
+
+function cignaDenialReason(details: ClaimDetails, procedure: ProcedureLine): string {
+  return details.remarkCodes || procedure.remarkCodes || details.payment.paymentStatus || procedure.amountNotCovered;
+}
+
+function buildCignaFinalStatusText(inputRow: CignaInputRow, result: SearchResultRow, details: ClaimDetails, procedure: ProcedureLine): string {
+  const dos = inputRow.dos || result.datesOfService || procedure.datesOfService;
+  const claimNumber = details.claimNumber || result.claimNumber;
+  const claimStatus = cleanText(details.claimStatus || result.claimStatus);
+  const receivedDate = details.dateReceived;
+  const processedDate = details.payment.paymentIssued || details.dateProcessed || details.payment.paymentCleared;
+  const checkNumber = details.payment.remittanceTrackingNumber;
+  const cptCode = procedure.procedureCode || inputRow.cptCode;
+  const paidAmount = cignaPaidAmount(details, procedure);
+  const denialReason = cignaDenialReason(details, procedure);
+  const lowerStatus = claimStatus.toLowerCase();
+
+  const receivedPart = hasText(receivedDate) ? ` claim received on ${receivedDate}` : " claim";
+  const suffixParts: string[] = [];
+  appendSentencePart(suffixParts, "Claim #", claimNumber);
+  appendSentencePart(suffixParts, "CPT", cptCode);
+
+  if (/paid|pay|processed|complete/i.test(lowerStatus) && !/denied|deny|rejected/i.test(lowerStatus)) {
+    const paidDatePart = hasText(processedDate) ? ` paid/processed on ${processedDate}` : " paid/processed";
+    const paidAmountPart = hasText(paidAmount) ? ` paid amount ${paidAmount}` : "";
+    const checkPart = hasText(checkNumber) ? ` EFT/Check # ${checkNumber}` : "";
+    return cleanText(
+      `DOS ${dos}: Checked Cigna portal${receivedPart}${paidDatePart}${paidAmountPart}${checkPart}. ${suffixParts.join(". ")}.`,
+    );
+  }
+
+  if (/denied|deny|rejected|not covered|disallow/i.test(lowerStatus) || hasText(denialReason)) {
+    const deniedDatePart = hasText(processedDate) ? ` denied/processed on ${processedDate}` : " denied/processed";
+    const reasonPart = hasText(denialReason) ? ` denial reason ${denialReason}` : "";
+    return cleanText(`DOS ${dos}: Checked Cigna portal${receivedPart}${deniedDatePart}${reasonPart}. ${suffixParts.join(". ")}.`);
+  }
+
+  if (/pending|process|progress|received|open/i.test(lowerStatus)) {
+    return cleanText(`DOS ${dos}: Checked Cigna portal${receivedPart} present as In Progress. ${suffixParts.join(". ")}.`);
+  }
+
+  const statusPart = hasText(claimStatus) ? ` present as ${claimStatus}` : " found";
+  return cleanText(`DOS ${dos}: Checked Cigna portal${receivedPart}${statusPart}. ${suffixParts.join(". ")}.`);
+}
+
+function outputRowFromClaim(inputRow: CignaInputRow, result: SearchResultRow, details: ClaimDetails, procedure: ProcedureLine): CignaOutputRow {
+  const finalStatus = buildCignaFinalStatusText(inputRow, result, details, procedure);
   return {
     ...baseOutputRow(inputRow, "Success", "Claim found."),
     claimNumber: details.claimNumber || result.claimNumber,
