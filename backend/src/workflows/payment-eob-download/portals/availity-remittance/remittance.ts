@@ -44,10 +44,6 @@ function daysAgoMmDdYyyy(days: number): string {
   return `${String(date.getMonth() + 1).padStart(2, "0")}/${String(date.getDate()).padStart(2, "0")}/${date.getFullYear()}`;
 }
 
-function csvEscape(value: string): string {
-  return /[",\r\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
-}
-
 export function parseRemittanceCsv(text: string): PaymentEobPortalRecord[] {
   const rows: string[][] = [];
   let row: string[] = [];
@@ -830,21 +826,6 @@ export async function runAvailityRemittanceJob(input: RunInput, context: Automat
     await fs.writeFile(path.join(outputRoot, "comparison_result.xlsx"), workbookBuffer);
     await context.emit(downloadableFileEvent("comparison_result.xlsx", workbookBuffer, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"));
 
-    const logCsv = [
-      ["Check/EFT Number", "Check Date", "Comparison", "Search Result", "PDF Status", "Filename", "Message"].map(csvEscape).join(","),
-      ...comparisonRows.map((row) => [
-        row.checkNumber,
-        row.checkDate,
-        row.comparison,
-        row.searchResult,
-        row.pdfStatus,
-        row.filename,
-        row.message,
-      ].map(csvEscape).join(",")),
-    ].join("\n");
-    await fs.writeFile(path.join(outputRoot, "processing_log.csv"), logCsv, "utf8");
-    await fs.writeFile(path.join(outputRoot, "processing_log.xlsx"), workbookBuffer);
-    await context.emit(downloadableFileEvent("processing_log.xlsx", workbookBuffer, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"));
     await emitRunZip(outputRoot, context);
     await uploadToSharePointIfEnabled(input.credentials, outputRoot, context);
     await context.log({ level: "info", message: `Payment EOB processing completed. Output folder: ${outputRoot}`, eventName: "payment_eob_completed" });
