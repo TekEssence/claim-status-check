@@ -9,3 +9,4 @@ export default defineConfig({
     ssl: process.env.DB_SSL === "false" ? false : "require",
   },
 });
+

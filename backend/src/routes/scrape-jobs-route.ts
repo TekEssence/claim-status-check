@@ -22,6 +22,12 @@ import {
   updateScrapeJobSnapshot,
 } from "@/lib/scrape-jobs/db";
 import { getClaimStatusScraper } from "@/backend/src/workflows/claim-status/registry";
+import { scheduleTaskShutdownAfterWorkflow } from "@/backend/src/core/task-shutdown";
+import {
+  uploadWorkflowArtifact,
+  uploadWorkflowFile,
+  uploadWorkflowJson,
+} from "@/backend/src/core/workflow-s3-storage";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -83,6 +89,9 @@ export async function POST(req: Request) {
       totalRows,
       currentCompleted: startIndex,
     });
+    await uploadClaimStatusInputs(job.id, formData).catch((error) => {
+      console.error("Upload claim-status input files to S3 failed", error);
+    });
 
     scraper.run(input, {
       jobId: job.id,
@@ -119,6 +128,9 @@ export async function POST(req: Request) {
         currentCompleted: completed,
         totalRows: finalTotalRows,
       }).catch(() => {});
+      if (finalStatus !== "waiting_resume") {
+        scheduleTaskShutdownAfterWorkflow(`claim-status:${finalStatus}`);
+      }
     }).catch(async (error) => {
       const message = error instanceof Error ? error.message : "Unexpected automation error.";
       emitScrapeJobEvent(job.id, { type: "error", message });
@@ -129,6 +141,7 @@ export async function POST(req: Request) {
         currentCompleted: getScrapeJob(job.id)?.currentCompleted ?? startIndex,
         totalRows: getScrapeJob(job.id)?.totalRows || totalRows,
       }).catch(() => {});
+      scheduleTaskShutdownAfterWorkflow("claim-status:failed");
   });
 
     return Response.json({ jobId: job.id, portalId });
@@ -211,6 +224,7 @@ export async function DELETE(req: Request) {
     currentCompleted: getScrapeJob(jobId)?.currentCompleted ?? ownedJob.currentCompleted,
     totalRows: ownedJob.totalRows,
   }).catch(() => {});
+  scheduleTaskShutdownAfterWorkflow("claim-status:cancelled");
 
   return Response.json({ ok: true, alreadyStopped: !cancelled });
 }
@@ -320,13 +334,26 @@ async function persistScrapeJobEvent(jobId: string, data: Record<string, unknown
 
   if (data.type === "error_screenshot" || data.type === "debug_html" || data.type === "pdf_download" || data.type === "file_download" || data.type === "output_snapshot") {
     const persistedPath = getArtifactPathForPersistence(jobId, data);
+    const s3Key = await uploadWorkflowArtifact({
+      workflowId: "claim-status",
+      jobId,
+      artifactType: String(data.type),
+      filename: typeof data.filename === "string" ? data.filename : artifactFilename(data),
+      path: persistedPath || (typeof data.path === "string" ? data.path : undefined),
+      base64: typeof data.base64 === "string" ? data.base64 : typeof data.image === "string" ? data.image : undefined,
+      text: typeof data.html === "string" ? data.html : undefined,
+      mimeType: typeof data.mimeType === "string" ? data.mimeType : undefined,
+    }).catch((error) => {
+      console.error("Upload claim-status output artifact to S3 failed", error);
+      return "";
+    });
     await appendScrapeJobArtifact({
       jobId,
       rowIndex: typeof data.index === "number" ? data.index : null,
       artifactType: String(data.type),
       filename: typeof data.filename === "string" ? data.filename : undefined,
       mimeType: typeof data.mimeType === "string" ? data.mimeType : undefined,
-      pathOrKey: persistedPath || (typeof data.path === "string" ? data.path : undefined),
+      pathOrKey: s3Key || persistedPath || (typeof data.path === "string" ? data.path : undefined),
     }).catch(() => {});
     return;
   }
@@ -395,6 +422,50 @@ function persistArtifactPayload(jobId: string, data: Record<string, unknown>): s
 
 function isTerminalJobStatus(status: string): boolean {
   return status === "done" || status === "error" || status === "cancelled";
+}
+
+async function uploadClaimStatusInputs(jobId: string, formData: FormData): Promise<void> {
+  const uploadFileFields = [
+    ["claimExcel", "claim.xlsx"],
+    ["loginExcel", "login.xlsx"],
+    ["inputExcel", "input.xlsx"],
+    ["credentialExcel", "credentials.xlsx"],
+  ] as const;
+
+  await Promise.all(
+    uploadFileFields.map(async ([fieldName, fallbackName]) => {
+      const value = formData.get(fieldName);
+      if (!(value instanceof File) || value.size === 0) return;
+      await uploadWorkflowFile({
+        workflowId: "claim-status",
+        jobId,
+        area: "input",
+        file: value,
+        fallbackName,
+      });
+    }),
+  );
+
+  const claimRows = formData.get("claimRows");
+  if (typeof claimRows === "string" && claimRows.trim()) {
+    const parsed = JSON.parse(claimRows);
+    await uploadWorkflowJson({
+      workflowId: "claim-status",
+      jobId,
+      area: "input",
+      filename: "claimRows.json",
+      value: parsed,
+    });
+  }
+}
+
+function artifactFilename(data: Record<string, unknown>): string {
+  const type = String(data.type ?? "artifact");
+  const row = typeof data.index === "number" ? `row_${data.index + 1}_` : "";
+  if (type === "debug_html") return `${row}debug_${Date.now()}.html`;
+  if (type === "error_screenshot") return `${row}screenshot_${Date.now()}.jpg`;
+  if (type === "pdf_download") return `${row}download_${Date.now()}.pdf`;
+  return `${row}artifact_${Date.now()}.bin`;
 }
 
 function sseHeaders(): HeadersInit {

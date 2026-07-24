@@ -17,6 +17,11 @@ import {
   getAutomationJobForUser,
   updateAutomationJob,
 } from "@/lib/automation-jobs/db";
+import { scheduleTaskShutdownAfterWorkflow } from "@/backend/src/core/task-shutdown";
+import {
+  uploadWorkflowArtifact,
+  uploadWorkflowFile,
+} from "@/backend/src/core/workflow-s3-storage";
 import { getLastEventId, streamScrapeJobEvents } from "./scrape-jobs-route";
 
 export const runtime = "nodejs";
@@ -74,6 +79,9 @@ export async function POST(req: Request) {
       primaryInputFileName: inputFile instanceof File ? inputFile.name : "",
       credentialFileName: credentialFile instanceof File ? credentialFile.name : "",
     });
+    await uploadEligibilityInputs(job.id, inputFile, credentialFile).catch((error) => {
+      console.error("Upload eligibility input files to S3 failed", error);
+    });
 
     void runner.run(input, {
       jobId: job.id,
@@ -95,11 +103,13 @@ export async function POST(req: Request) {
         status: cancelled ? "cancelled" : "completed",
         currentCompleted: current?.currentCompleted ?? 0,
       }).catch(() => {});
+      scheduleTaskShutdownAfterWorkflow(cancelled ? "eligibility-verification:cancelled" : "eligibility-verification:completed");
     }).catch(async (error) => {
       const message = error instanceof Error ? error.message : "Eligibility automation failed.";
       emitScrapeJobEvent(job.id, { type: "error", message });
       emitScrapeJobEvent(job.id, { type: "done" });
       await updateAutomationJob({ jobId: job.id, status: "failed" }).catch(() => {});
+      scheduleTaskShutdownAfterWorkflow("eligibility-verification:failed");
     });
 
     return Response.json({ jobId: job.id, workflowId, portalId, payerId });
@@ -157,6 +167,7 @@ export async function DELETE(req: Request) {
   emitScrapeJobEvent(jobId, { type: "cancelled" });
   emitScrapeJobEvent(jobId, { type: "done" });
   await updateAutomationJob({ jobId, status: "cancelled" });
+  scheduleTaskShutdownAfterWorkflow("eligibility-verification:cancelled");
   return Response.json({ ok: true });
 }
 
@@ -182,15 +193,63 @@ async function persistEvent(jobId: string, event: Record<string, unknown>) {
   } else if (event.type === "cancelled") {
     await updateAutomationJob({ jobId, status: "cancelled" }).catch(() => {});
   } else if (["error_screenshot", "debug_html", "file_download", "output_snapshot"].includes(String(event.type))) {
+    const s3Key = await uploadWorkflowArtifact({
+      workflowId: "eligibility-verification",
+      jobId,
+      artifactType: String(event.type),
+      filename: typeof event.filename === "string" ? event.filename : automationArtifactFilename(event),
+      path: typeof event.path === "string" ? event.path : undefined,
+      base64: typeof event.base64 === "string" ? event.base64 : typeof event.image === "string" ? event.image : undefined,
+      text: typeof event.html === "string" ? event.html : undefined,
+      mimeType: typeof event.mimeType === "string" ? event.mimeType : undefined,
+    }).catch((error) => {
+      console.error("Upload eligibility output artifact to S3 failed", error);
+      return "";
+    });
     await appendAutomationJobArtifact({
       jobId,
       artifactType: String(event.type),
       rowIndex: typeof event.index === "number" ? event.index : undefined,
       filename: typeof event.filename === "string" ? event.filename : undefined,
       mimeType: typeof event.mimeType === "string" ? event.mimeType : undefined,
-      pathOrKey: typeof event.path === "string" ? event.path : undefined,
+      pathOrKey: s3Key || (typeof event.path === "string" ? event.path : undefined),
     }).catch(() => {});
   }
+}
+
+async function uploadEligibilityInputs(
+  jobId: string,
+  inputFile: FormDataEntryValue | null,
+  credentialFile: FormDataEntryValue | null,
+): Promise<void> {
+  await Promise.all([
+    inputFile instanceof File && inputFile.size > 0
+      ? uploadWorkflowFile({
+          workflowId: "eligibility-verification",
+          jobId,
+          area: "input",
+          file: inputFile,
+          fallbackName: "input.xlsx",
+        })
+      : Promise.resolve(""),
+    credentialFile instanceof File && credentialFile.size > 0
+      ? uploadWorkflowFile({
+          workflowId: "eligibility-verification",
+          jobId,
+          area: "input",
+          file: credentialFile,
+          fallbackName: "credentials.xlsx",
+        })
+      : Promise.resolve(""),
+  ]);
+}
+
+function automationArtifactFilename(event: Record<string, unknown>): string {
+  const type = String(event.type ?? "artifact");
+  const row = typeof event.index === "number" ? `row_${event.index + 1}_` : "";
+  if (type === "debug_html") return `${row}debug_${Date.now()}.html`;
+  if (type === "error_screenshot") return `${row}screenshot_${Date.now()}.jpg`;
+  return `${row}artifact_${Date.now()}.bin`;
 }
 
 function getRequiredString(formData: FormData, key: string): string {
