@@ -244,15 +244,9 @@ function organizationMatches(actual: string, expected: string | undefined): bool
   return actualNorm.includes(expectedNorm) || expectedNorm.includes(actualNorm);
 }
 
-async function dateInputValue(surface: RemittanceSurface, selector: string): Promise<string> {
-  return (await surface.locator(selector).inputValue().catch(() => "")).trim();
-}
-
-async function filterValuesMatch(surface: RemittanceSurface, organization: string | undefined, startDate: string, endDate: string): Promise<boolean> {
+async function organizationFilterValueMatches(surface: RemittanceSurface, organization: string | undefined): Promise<boolean> {
   const selectedOrg = await selectedOrganizationText(surface);
-  const selectedStartDate = await dateInputValue(surface, "#checkEFTcheckExchangeDates-start");
-  const selectedEndDate = await dateInputValue(surface, "#checkEFTcheckExchangeDates-end");
-  return organizationMatches(selectedOrg, organization) && selectedStartDate === startDate && selectedEndDate === endDate;
+  return organizationMatches(selectedOrg, organization);
 }
 
 /**
@@ -381,43 +375,44 @@ async function downloadPortalCsv(surface: RemittanceSurface, page: Page, context
   const endDate = credentials.endDate || todayMmDdYyyy();
 
   for (let attempt = 1; attempt <= 3; attempt += 1) {
-    await context.log({
-      level: "info",
-      message: `Setting Received by Availity date range ${startDate} - ${endDate} (filter setup attempt ${attempt}/3).`,
-      eventName: "payment_eob_date_range",
-    });
-    await fillDate(surface.locator("#checkEFTcheckExchangeDates-start"), startDate);
-    await fillDate(surface.locator("#checkEFTcheckExchangeDates-end"), endDate);
-    await surface.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
-
     await context.log({ level: "info", message: "Selecting Availity organization filter.", eventName: "payment_eob_org_select" });
     await selectOrganizationIfProvided(surface, page, credentials.organization, context, outputFolder);
     await surface.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
 
     const selectedOrg = await selectedOrganizationText(surface);
-    const selectedStartDate = await dateInputValue(surface, "#checkEFTcheckExchangeDates-start");
-    const selectedEndDate = await dateInputValue(surface, "#checkEFTcheckExchangeDates-end");
     await context.log({
       level: "info",
-      message: `Filter verification after attempt ${attempt}/3: Organization="${selectedOrg || "(blank)"}", Received by Availity=${selectedStartDate || "(blank)"} - ${selectedEndDate || "(blank)"}.`,
+      message: `Organization filter verification after attempt ${attempt}/3: Organization="${selectedOrg || "(blank)"}".`,
       eventName: "payment_eob_filter_verify",
     });
 
-    if (await filterValuesMatch(surface, credentials.organization, startDate, endDate)) {
+    if (await organizationFilterValueMatches(surface, credentials.organization)) {
       break;
     }
 
     if (attempt === 3) {
       await captureDiagnostics(page, outputFolder, "filter-values-not-stable");
-      throw new Error(`Unable to keep filter values stable before clicking Filter. Expected Organization="${credentials.organization || "All"}", Received by Availity=${startDate} - ${endDate}. Current Organization="${selectedOrg || "(blank)"}", Received by Availity=${selectedStartDate || "(blank)"} - ${selectedEndDate || "(blank)"}."`);
+      throw new Error(`Unable to keep organization filter stable before clicking Filter. Expected Organization="${credentials.organization || "All"}". Current Organization="${selectedOrg || "(blank)"}".`);
     }
   }
 
   const filterButton = surface.locator("#checkFilterButton");
-  await context.log({ level: "info", message: "Clicking Filter.", eventName: "payment_eob_filter_click" });
+  await context.log({ level: "info", message: "Clicking organization Filter.", eventName: "payment_eob_filter_click" });
   await filterButton.click();
   await waitForResultsRefresh(surface);
-  await context.log({ level: "info", message: "Filtered results loaded.", eventName: "payment_eob_filter_loaded" });
+  await context.log({ level: "info", message: "Organization-filtered results loaded.", eventName: "payment_eob_filter_loaded" });
+
+  await context.log({
+    level: "info",
+    message: `Setting Check Dates search range ${startDate} - ${endDate}.`,
+    eventName: "payment_eob_check_date_range",
+  });
+  await fillDate(surface.locator("#checkcheckDates-start"), startDate);
+  await fillDate(surface.locator("#checkcheckDates-end"), endDate);
+  await context.log({ level: "info", message: "Clicking Search for Check Dates.", eventName: "payment_eob_check_date_search" });
+  await surface.locator("#checkSearchButton").click();
+  await waitForResultsRefresh(surface);
+  await context.log({ level: "info", message: "Check Date results loaded.", eventName: "payment_eob_check_date_loaded" });
 
   const csvDownloadPromise = page.waitForEvent("download");
   await surface.getByRole("button", { name: /Download CSV/i }).click();
