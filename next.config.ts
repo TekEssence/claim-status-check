@@ -1,9 +1,12 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  serverExternalPackages: ["@sparticuz/chromium"],
+  serverExternalPackages: ["@sparticuz/chromium", "playwright-core"],
   outputFileTracingIncludes: {
-    "/api/scrape-jobs": ["node_modules/@sparticuz/chromium/bin/**/*"],
+    "/api/**/*": [
+      "node_modules/@sparticuz/chromium/**/*",
+      "node_modules/playwright-core/**/*",
+    ],
   },
   turbopack: {
     // Stub out Node.js built-ins that ExcelJS references but aren't needed in the browser
