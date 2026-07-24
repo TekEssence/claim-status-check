@@ -89,6 +89,13 @@ const FULL_NAME_HEADER_ALIASES = [
   "patient",
 ] as const;
 
+const RELATIONSHIP_HEADER_ALIASES = [
+  "relationship to subscriber",
+  "patient relationship to subscriber",
+  "relationship",
+  "patient relationship",
+  "relation to subscriber",
+] as const;
 const DATE_OF_BIRTH_HEADER_ALIASES = [
   "date of birth",
   "dob",
@@ -187,6 +194,7 @@ export function routeWaystarRowsByPayer(
       subscriberId,
       patientFirstName: parsedName.firstName,
       patientLastName: parsedName.lastName,
+      relationshipToSubscriber: findValue(raw, RELATIONSHIP_HEADER_ALIASES),
       dateOfBirth: findValue(raw, DATE_OF_BIRTH_HEADER_ALIASES),
       dateOfService: findValue(raw, DATE_OF_SERVICE_HEADER_ALIASES),
       serviceType: findValue(raw, SERVICE_TYPE_HEADER_ALIASES),

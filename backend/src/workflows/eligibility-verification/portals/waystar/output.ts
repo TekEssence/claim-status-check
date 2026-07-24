@@ -1,5 +1,6 @@
-import * as XLSX from "xlsx";
+import ExcelJS from "exceljs";
 import type { EligibilityInputRow, EligibilityResult } from "../../types";
+import { normalizeWaystarDate } from "./dates";
 
 const OUTPUT_COLUMNS: Array<{
   header: string;
@@ -8,19 +9,17 @@ const OUTPUT_COLUMNS: Array<{
   { header: "Bot Entered First Name", value: (row) => row?.patientFirstName ?? "" },
   { header: "Bot Entered Last Name", value: (row) => row?.patientLastName ?? "" },
   { header: "Bot Entered Member ID", value: (row) => row?.memberId || row?.subscriberId || "" },
-  { header: "Bot Entered Date of Birth", value: (row) => row?.dateOfBirth ?? "" },
+  { header: "Bot Entered Date of Birth", value: (row) => row?.dateOfBirth ? normalizeWaystarDate(row.dateOfBirth) : "" },
+  { header: "Bot Entered Relationship to Subscriber", value: (row, result) => result?.relationshipToSubscriber || row?.relationshipToSubscriber || "" },
   { header: "Bot Coverage Status", value: (_row, result) => result?.coverageStatus ?? "" },
+  { header: "Bot Network", value: (_row, result) => result?.inOutNetwork ?? "" },
   { header: "Bot Plan Type", value: (_row, result) => result?.planType ?? "" },
   { header: "Bot Plan Name", value: (_row, result) => result?.planName ?? "" },
-  { header: "Bot Plan Status", value: (_row, result) => result?.planStatus ?? "" },
   { header: "Bot Effective Date", value: (_row, result) => result?.effectiveDate ?? "" },
   { header: "Bot Termination Date", value: (_row, result) => result?.terminationDate ?? "" },
   { header: "Bot Premium Paid End Date", value: (_row, result) => result?.premiumPaidEndDate ?? "" },
   { header: "Bot Insurance Type", value: (_row, result) => result?.insuranceType ?? "" },
-  { header: "Bot Patient Name", value: (_row, result) => result?.patientName ?? "" },
   { header: "Bot Address", value: (_row, result) => result?.address ?? "" },
-  { header: "Bot Member ID", value: (_row, result) => result?.memberId ?? "" },
-  { header: "Bot Date of Birth", value: (_row, result) => result?.dateOfBirth ?? "" },
   { header: "Bot Sex", value: (_row, result) => result?.sex ?? "" },
   { header: "Bot Group Number", value: (_row, result) => result?.groupNumber ?? "" },
   { header: "Bot Plan Date", value: (_row, result) => result?.planDate ?? "" },
@@ -32,7 +31,7 @@ const OUTPUT_COLUMNS: Array<{
   { header: "Bot Deductible Met", value: (_row, result) => result?.deductibleMet ?? "" },
   { header: "Bot Out of Pocket", value: (_row, result) => result?.outOfPocket ?? "" },
   { header: "Bot Out of Pocket Met", value: (_row, result) => result?.outOfPocketMet ?? "" },
-  { header: "Bot Network", value: (_row, result) => result?.inOutNetwork ?? "" },
+  { header: "Bot Payer Note", value: (_row, result) => result?.specialistPayerNote ?? "" },
   {
     header: "Bot Benefits",
     value: (_row, result) => result?.benefits
@@ -42,24 +41,40 @@ const OUTPUT_COLUMNS: Array<{
   { header: "Bot Error", value: (_row, _result, error) => error ?? "" },
 ];
 
+function formatOutputValue(value: unknown): unknown {
+  if (value === null || value === undefined) return "-";
+  if (typeof value === "string" && value.trim() === "") return "-";
+  return value;
+}
+
 export async function buildWaystarOutputWorkbook(options: {
   inputFile: File;
   rows: Map<number, EligibilityInputRow>;
   results: Map<number, EligibilityResult>;
   errors: Map<number, string>;
 }): Promise<Buffer> {
-  const workbook = XLSX.read(await options.inputFile.arrayBuffer(), {
-    type: "array",
-    cellDates: true,
-  });
-  const sheet = workbook.Sheets[workbook.SheetNames[0]];
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(await options.inputFile.arrayBuffer());
+  const sheet = workbook.worksheets[0];
   if (!sheet) throw new Error("The eligibility workbook does not contain a worksheet.");
 
-  const range = XLSX.utils.decode_range(sheet["!ref"] || "A1");
-  const outputStartColumn = range.e.c + 1;
-  XLSX.utils.sheet_add_aoa(sheet, [OUTPUT_COLUMNS.map((column) => column.header)], {
-    origin: { r: 0, c: outputStartColumn },
+  const outputStartColumn = sheet.columnCount + 1;
+  const headerRow = sheet.getRow(1);
+  OUTPUT_COLUMNS.forEach((column, offset) => {
+    const cell = headerRow.getCell(outputStartColumn + offset);
+    cell.value = column.header;
+    cell.font = { bold: true, color: { argb: "FFFFFFFF" } };
+    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1F4E78" } };
+    cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
+    cell.border = {
+      top: { style: "thin", color: { argb: "FFB4C6E7" } },
+      left: { style: "thin", color: { argb: "FFB4C6E7" } },
+      bottom: { style: "thin", color: { argb: "FFB4C6E7" } },
+      right: { style: "thin", color: { argb: "FFB4C6E7" } },
+    };
+    sheet.getColumn(outputStartColumn + offset).width = Math.max(14, Math.min(32, column.header.length + 2));
   });
+  headerRow.height = Math.max(headerRow.height || 15, 30);
 
   const rowIndexes = new Set([
     ...options.rows.keys(),
@@ -70,12 +85,13 @@ export async function buildWaystarOutputWorkbook(options: {
     const row = options.rows.get(rowIndex);
     const result = options.results.get(rowIndex);
     const error = options.errors.get(rowIndex);
-    XLSX.utils.sheet_add_aoa(
-      sheet,
-      [OUTPUT_COLUMNS.map((column) => column.value(row, result, error))],
-      { origin: { r: rowIndex - 1, c: outputStartColumn } },
-    );
+    const worksheetRow = sheet.getRow(rowIndex);
+    OUTPUT_COLUMNS.forEach((column, offset) => {
+      const cell = worksheetRow.getCell(outputStartColumn + offset);
+      cell.value = formatOutputValue(column.value(row, result, error)) as ExcelJS.CellValue;
+      cell.alignment = { vertical: "top", wrapText: true };
+    });
   }
 
-  return XLSX.write(workbook, { type: "buffer", bookType: "xlsx" }) as Buffer;
+  return Buffer.from(await workbook.xlsx.writeBuffer());
 }

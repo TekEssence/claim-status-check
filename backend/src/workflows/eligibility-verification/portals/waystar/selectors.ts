@@ -26,6 +26,8 @@ export const WAYSTAR_SELECTORS = {
     dateOfBirth: "#DOB:visible",
     submit: "#SubmitInquiry:visible",
     subscriberRadio: "input[name='PatientType'][value='S']:visible",
+    patientRadio: "input[name='PatientType'][value='P']:visible, input[name='PatientType'][value='D']:visible, input[name='PatientType']:not([value='S']):visible",
+    relationship: "select[id*='Relation' i]:visible, select[name*='Relation' i]:visible",
     activeCoverage: "#id_InquiryStatus:visible",
     sectionHeaders: ".SectionHeader",
     sectionTitle: ".SectionTitle",

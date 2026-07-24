@@ -2,6 +2,7 @@ import type { Locator, Page } from "playwright-core";
 import { WAYSTAR_SELECTORS } from "./selectors";
 import type { WaystarCredentials, WaystarSecurityQuestion } from "./credentials";
 import type { EligibilityInputRow } from "../../types";
+import { normalizeWaystarDate } from "./dates";
 
 export type WaystarBenefitEntry = {
   type?: string;
@@ -26,6 +27,13 @@ export type WaystarInquiryPayload = {
     memberId?: string;
     dateOfBirth?: string;
     sex?: string;
+  };
+  patientInformation?: {
+    patientName?: string;
+    address?: string;
+    dateOfBirth?: string;
+    sex?: string;
+    relationshipToSubscriber?: string;
   };
   subscriberCoverageInformation?: {
     groupNumber?: string;
@@ -136,9 +144,9 @@ export async function submitWaystarInquiry(options: {
   const expectedMemberId = row.memberId || row.subscriberId || "";
   const expectedLastName = row.patientLastName || "";
   const expectedFirstName = row.patientFirstName || "";
-  const expectedDateOfBirth = normalizeDate(row.dateOfBirth || "");
+  const expectedDateOfBirth = normalizeWaystarDate(row.dateOfBirth || "");
 
-  await inquiryPage.locator(WAYSTAR_SELECTORS.inquiry.subscriberRadio).check().catch(() => {});
+  await selectInquiryPatientType(inquiryPage, row.relationshipToSubscriber);
   await humanPause(inquiryPage);
   await selectPayer(inquiryPage, payerName);
   await humanPause(inquiryPage);
@@ -151,7 +159,7 @@ export async function submitWaystarInquiry(options: {
   await fillVerifiedText(inquiryPage, WAYSTAR_SELECTORS.inquiry.memberId, expectedMemberId, "Member ID");
   await fillVerifiedText(inquiryPage, WAYSTAR_SELECTORS.inquiry.lastName, expectedLastName, "Last Name");
   await fillVerifiedText(inquiryPage, WAYSTAR_SELECTORS.inquiry.firstName, expectedFirstName, "First Name");
-  await fillVerifiedText(inquiryPage, WAYSTAR_SELECTORS.inquiry.dateOfBirth, expectedDateOfBirth, "Date of Birth");
+  await fillVerifiedText(inquiryPage, WAYSTAR_SELECTORS.inquiry.dateOfBirth, expectedDateOfBirth, "Date of Birth", true);
   await verifyInquiryFieldsBeforeSubmit(inquiryPage, {
     serviceTypeCode: expectedServiceType,
     memberId: expectedMemberId,
@@ -159,7 +167,7 @@ export async function submitWaystarInquiry(options: {
     firstName: expectedFirstName,
     dateOfBirth: expectedDateOfBirth,
   });
-  await humanPause(inquiryPage, 700, 1300);
+  await humanPause(inquiryPage, 1800, 3000);
 
   await Promise.all([
     inquiryPage.waitForLoadState("networkidle").catch(() => {}),
@@ -170,6 +178,9 @@ export async function submitWaystarInquiry(options: {
     state: "visible",
     timeout: 30000,
   });
+  // The status bar can appear before all payer-returned sections finish rendering.
+  // Keep the result visible before taking the DOM snapshot.
+  await humanPause(inquiryPage, 8000, 12000);
 
   // --- TEMPORARY DEBUG DUMP: remove once we've extended the scraper ---
   
@@ -198,70 +209,62 @@ export async function submitWaystarInquiry(options: {
       if (!contents) return sections;
 
       const typeKeywords = [
-        "co-insurance", "coinsurance", "co-payment", "copayment", "copay",
-        "deductible", "out of pocket", "limitations",
+        "co-insurance", "co insurance", "coinsurance", "co-payment", "co payment",
+        "copayment", "copay", "deductible", "out of pocket", "out-of-pocket",
+        "limitations",
       ];
 
-      const subSections = Array.from(contents.querySelectorAll(":scope > .SubSection"));
-      for (const sub of subSections) {
-        const network = textOf(sub.querySelector(":scope > .NetworkLine"));
-        const groupings = Array.from(sub.querySelectorAll(":scope > .Grouping.clearfix"));
+      const subSections = Array.from(contents.querySelectorAll(".SubSection"));
+      const containers = subSections.length > 0 ? subSections : [contents];
+      for (const sub of containers) {
+        const subNetwork = textOf(sub.querySelector(".NetworkLine"));
+        const foundGroupings = Array.from(sub.querySelectorAll(".Grouping"));
+        const groupings = foundGroupings.length > 0 ? foundGroupings : [sub];
         for (const grouping of groupings) {
-          const groupingLabel = grouping.querySelector(":scope > .GroupingLabel");
-          const coverageLevel = textOf(groupingLabel?.querySelector(".CoverageLevel") ?? null) ||
-            textOf(groupingLabel?.querySelector(".InsuranceType") ?? null) || undefined;
-          const rightColumn = grouping.querySelector(":scope > .SubSection.RightColumn");
-          if (!rightColumn) continue;
+          const coverageLevel = textOf(grouping.querySelector(".CoverageLevel")) ||
+            textOf(grouping.querySelector(".InsuranceType")) || undefined;
+          const network = textOf(grouping.querySelector(".NetworkLine")) || subNetwork || undefined;
+          const entries: Array<Record<string, string>> = [];
+          let currentEntry: Record<string, string> | null = null;
 
-          // Split the Row children into chunks, each chunk separated by an hrDivider.
-          const children = Array.from(rightColumn.children);
-          const chunks: Element[][] = [];
-          let current: Element[] = [];
-          for (const child of children) {
-            if (child.classList.contains("hrDivider")) {
-              if (current.length > 0) chunks.push(current);
-              current = [];
-            } else if (child.classList.contains("Row")) {
-              current.push(child);
+          for (const row of Array.from(grouping.querySelectorAll(".Row"))) {
+            const rawLabel = textOf(row.querySelector(".Label"));
+            const label = rawLabel.toLowerCase().replace(/\s+/g, " ");
+            const value = valueOf(row);
+            if (!value) continue;
+
+            if (typeKeywords.some((keyword) => label.includes(keyword))) {
+              currentEntry = { type: rawLabel, value };
+              entries.push(currentEntry);
+            } else if (currentEntry && label.includes("place of service")) {
+              currentEntry.placeOfService = value;
+            } else if (currentEntry && label.includes("payer note")) {
+              currentEntry.payerNote = value;
+            } else if (currentEntry && label.includes("included provider special")) {
+              currentEntry.includedProviderSpecialties = value;
             }
           }
-          if (current.length > 0) chunks.push(current);
 
-          const entries = chunks.map((rows) => {
-            const entry: Record<string, string> = {};
-            for (const row of rows) {
-              const label = textOf(row.querySelector(".Label")).toLowerCase();
-              const value = valueOf(row);
-              if (!value) continue;
-              if (!entry.type && typeKeywords.some((keyword) => label.includes(keyword))) {
-                entry.type = textOf(row.querySelector(".Label"));
-                entry.value = value;
-              } else if (label.includes("place of service")) {
-                entry.placeOfService = value;
-              } else if (label.includes("payer note")) {
-                entry.payerNote = value;
-              } else if (label.includes("included provider special")) {
-                entry.includedProviderSpecialties = value;
-              }
-            }
-            return entry;
-          }).filter((entry) => entry.type);
-
-          if (entries.length > 0) {
-            sections.push({ network: network || undefined, coverageLevel, entries });
-          }
+          if (entries.length > 0) sections.push({ network, coverageLevel, entries });
         }
       }
       return sections;
     }
-
     function findSectionByTitle(matchesTitle: (title: string) => boolean) {
       const headers = Array.from(document.querySelectorAll(".SectionHeader"));
       for (const header of headers) {
         const title = textOf(header.querySelector(".SectionTitle"));
         if (matchesTitle(title)) {
-          const dataId = header.getAttribute("data-id");
-          const contents = dataId ? document.querySelector(`.SectionContents[data-id="${dataId}"]`) : null;
+const dataId = header.getAttribute("data-id");
+          const contentsById = dataId
+            ? Array.from(document.querySelectorAll(".SectionContents"))
+              .find((candidate) => candidate.getAttribute("data-id") === dataId) ?? null
+            : null;
+          const nextElement = header.nextElementSibling?.classList.contains("SectionContents")
+            ? header.nextElementSibling
+            : null;
+          const contents = contentsById || nextElement ||
+            header.parentElement?.querySelector(".SectionContents") || null;
           const status = textOf(header.querySelector(".SectionStatus"));
           return { title, status, contents };
         }
@@ -319,6 +322,15 @@ export async function submitWaystarInquiry(options: {
       sex: subscriberBlock.fields["Sex"],
     } : undefined;
 
+    const patientBlock = readHalfColumn("Patient Information");
+    const patientInformation = patientBlock ? {
+      patientName: patientBlock.name,
+      address: patientBlock.address,
+      dateOfBirth: patientBlock.fields["Date of Birth"],
+      sex: patientBlock.fields["Sex"],
+      relationshipToSubscriber: patientBlock.fields["Relationship to Subscriber"],
+    } : undefined;
+
     const coverageBlock = readHalfColumn("Subscriber Coverage Information");
     const subscriberCoverageInformation = coverageBlock ? {
       groupNumber: coverageBlock.fields["Group Number"],
@@ -364,6 +376,7 @@ export async function submitWaystarInquiry(options: {
       overallStatus,
       sectionStatuses,
       subscriberInformation,
+      patientInformation,
       subscriberCoverageInformation,
       general: primaryCareProvider ? { primaryCareProvider } : undefined,
       healthBenefitPlanCoverage,
@@ -502,6 +515,52 @@ async function waitForInquiryControls(page: Page): Promise<void> {
   ]);
 }
 
+async function selectInquiryPatientType(page: Page, relationship?: string): Promise<void> {
+  const normalizedRelationship = normalizeText(relationship || "");
+  const isSubscriber = !normalizedRelationship || ["self", "subscriber", "18"].includes(normalizedRelationship);
+  if (isSubscriber) {
+    await page.locator(WAYSTAR_SELECTORS.inquiry.subscriberRadio).first().check();
+    return;
+  }
+
+  const patientRadio = page.locator(WAYSTAR_SELECTORS.inquiry.patientRadio).first();
+  await patientRadio.waitFor({ state: "visible", timeout: 30000 });
+  await patientRadio.check();
+  await humanPause(page);
+
+  const relationshipSelect = page.locator(WAYSTAR_SELECTORS.inquiry.relationship).first();
+  await relationshipSelect.waitFor({ state: "visible", timeout: 30000 });
+  await waitForEnabled(relationshipSelect, "Waystar relationship to subscriber");
+  const options = await relationshipSelect.locator("option").evaluateAll((nodes) =>
+    nodes.map((node) => ({
+      value: (node as HTMLOptionElement).value,
+      label: node.textContent?.trim() || "",
+    })),
+  );
+  const target = normalizeRelationship(relationship || "");
+  const match = options.find((option) => {
+    const label = normalizeRelationship(option.label);
+    const value = normalizeRelationship(option.value);
+    return label === target || value === target || label.includes(target) || target.includes(label);
+  });
+  if (!match?.value) {
+    throw new Error(
+      `Waystar relationship "${relationship}" was not available. Options: ${options.map((option) => option.label).filter(Boolean).join(", ") || "none"}.`,
+    );
+  }
+  await relationshipSelect.selectOption(match.value);
+  const selectedLabel = await relationshipSelect.locator("option:checked").textContent().catch(() => "");
+  if (normalizeRelationship(selectedLabel || "") !== normalizeRelationship(match.label)) {
+    throw new Error(`Waystar relationship to subscriber did not remain selected. Expected ${match.label}.`);
+  }
+}
+
+function normalizeRelationship(value: string): string {
+  const normalized = normalizeText(value);
+  if (["wife", "husband"].includes(normalized)) return "spouse";
+  if (["son", "daughter"].includes(normalized)) return "child";
+  return normalized;
+}
 async function selectPayer(page: Page, payerName: string): Promise<void> {
   const payerInput = page.locator(WAYSTAR_SELECTORS.inquiry.payerInput).first();
   if (await payerInput.isVisible().catch(() => false)) {
@@ -688,7 +747,7 @@ async function clickAddCodeIfVisible(page: Page): Promise<void> {
   await page.waitForTimeout(300);
 }
 
-async function fillVerifiedText(page: Page, selector: string, value: string, label: string): Promise<void> {
+async function fillVerifiedText(page: Page, selector: string, value: string, label: string, compareAsDate = false): Promise<void> {
   const input = page.locator(selector).first();
   await input.waitFor({ state: "visible", timeout: 30000 });
   await humanPause(page, 250, 600);
@@ -702,7 +761,10 @@ async function fillVerifiedText(page: Page, selector: string, value: string, lab
   await page.waitForTimeout(500);
 
   const actualValue = await input.inputValue().catch(() => "");
-  if (actualValue.trim() !== value.trim()) {
+  const matches = compareAsDate
+    ? waystarDatesMatch(actualValue, value)
+    : actualValue.trim() === value.trim();
+  if (!matches) {
     throw new Error(`Waystar ${label} did not fill correctly. Expected ${value}, found ${actualValue || "blank"}.`);
   }
 }
@@ -734,12 +796,20 @@ async function verifyInquiryFieldsBeforeSubmit(
   if (snapshot.firstName.trim() !== expected.firstName.trim()) {
     missing.push(`firstName=${snapshot.firstName || "blank"}`);
   }
-  if (snapshot.dateOfBirth.trim() !== expected.dateOfBirth.trim()) {
+  if (!waystarDatesMatch(snapshot.dateOfBirth, expected.dateOfBirth)) {
     missing.push(`dateOfBirth=${snapshot.dateOfBirth || "blank"}`);
   }
 
   if (missing.length > 0) {
     throw new Error(`Waystar inquiry fields were not present on the page before submit. ${missing.join(", ")}.`);
+  }
+}
+
+function waystarDatesMatch(actual: string, expected: string): boolean {
+  try {
+    return normalizeWaystarDate(actual) === normalizeWaystarDate(expected);
+  } catch {
+    return false;
   }
 }
 
@@ -815,15 +885,6 @@ function normalizeServiceTypeCode(value?: string): string | null {
   if (!text) return null;
   const match = text.match(/^([A-Za-z0-9]{1,3})\b/);
   return match ? match[1].toUpperCase() : null;
-}
-
-function normalizeDate(value: string): string {
-  const trimmed = value.trim();
-  const match = trimmed.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2}|\d{4})$/);
-  if (!match) return trimmed;
-  const [, month, day, year] = match;
-  const normalizedYear = year.length === 2 ? `20${year}` : year;
-  return `${String(Number(month)).padStart(2, "0")}/${String(Number(day)).padStart(2, "0")}/${normalizedYear}`;
 }
 
 function normalizeText(value: string): string {

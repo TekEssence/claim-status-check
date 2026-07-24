@@ -10,6 +10,7 @@ export type EligibilityInputRow = {
   subscriberId?: string;
   patientFirstName?: string;
   patientLastName?: string;
+  relationshipToSubscriber?: string;
   dateOfBirth?: string;
   dateOfService?: string;
   serviceType?: string;
@@ -37,6 +38,7 @@ export type EligibilityResult = {
   premiumPaidEndDate?: string;
   insuranceType?: string;
   patientName?: string;
+  relationshipToSubscriber?: string;
   address?: string;
   memberId?: string;
   dateOfBirth?: string;
@@ -52,6 +54,7 @@ export type EligibilityResult = {
   outOfPocket?: string;
   outOfPocketMet?: string;
   inOutNetwork?: "INN" | "OON";
+  specialistPayerNote?: "Specialist";
   benefits: EligibilityBenefit[];
   metadata?: Record<string, unknown>;
 };

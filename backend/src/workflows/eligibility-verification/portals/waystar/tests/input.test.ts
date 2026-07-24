@@ -232,3 +232,15 @@ test("requires a recognized insurance header", () => {
     /missing payer column/i,
   );
 });
+test("reads Relationship to Subscriber for dependent-patient inquiries", () => {
+  const routing = routeWaystarRowsByPayer([{
+    "Primary Insurance Name": "Blue Cross and Blue Shield of Texas",
+    "Member ID": "SUB-100",
+    "Patient First Name": "Dependent",
+    "Patient Last Name": "Member",
+    "Patient DOB": "01/02/2010",
+    "Relationship to Subscriber": "Child",
+  }]);
+
+  assert.equal(routing.batches[0]?.rows[0]?.relationshipToSubscriber, "Child");
+});

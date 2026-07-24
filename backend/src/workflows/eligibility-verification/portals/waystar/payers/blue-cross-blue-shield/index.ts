@@ -9,6 +9,7 @@ type BcbsHealthBenefitPlanCoveragePayload = {
   overallStatus?: unknown;
   sectionStatuses?: Array<{ title?: unknown; status?: unknown }>;
   subscriberInformation?: BcbsSubscriberInformation;
+  patientInformation?: BcbsPatientInformation;
   subscriberCoverageInformation?: BcbsSubscriberCoverageInformation;
   general?: { primaryCareProvider?: unknown };
   healthBenefitPlanCoverage?: {
@@ -31,6 +32,13 @@ type BcbsSubscriberInformation = {
   sex?: unknown;
 };
 
+type BcbsPatientInformation = {
+  patientName?: unknown;
+  address?: unknown;
+  dateOfBirth?: unknown;
+  sex?: unknown;
+  relationshipToSubscriber?: unknown;
+};
 type BcbsSubscriberCoverageInformation = {
   groupNumber?: unknown;
   planDate?: unknown;
@@ -109,6 +117,7 @@ export function parseBlueCrossBlueShieldResult(
   const effectiveDate = asText(coverage?.eligibilityBeginDate);
   const terminationDate = asText(coverage?.eligibilityEndDate);
   const subscriber = result.subscriberInformation ?? {};
+  const patient = result.patientInformation ?? {};
   const subscriberCoverage = result.subscriberCoverageInformation ?? {};
   const professionalOffice = selectProfessionalOfficeBenefits(
     result.professionalOffice,
@@ -137,11 +146,12 @@ export function parseBlueCrossBlueShieldResult(
     terminationDate,
     premiumPaidEndDate: asText(subscriberCoverage.premiumPaidToDateEnd),
     insuranceType: asText(subscriberCoverage.insuranceType),
-    patientName: asText(subscriber.patientName),
-    address: asText(subscriber.address),
+    patientName: asText(patient.patientName) || asText(subscriber.patientName),
+    relationshipToSubscriber: asText(patient.relationshipToSubscriber),
+    address: asText(patient.address) || asText(subscriber.address),
     memberId: asText(subscriber.memberId),
-    dateOfBirth: asText(subscriber.dateOfBirth),
-    sex: asText(subscriber.sex),
+    dateOfBirth: asText(patient.dateOfBirth) || asText(subscriber.dateOfBirth),
+    sex: asText(patient.sex) || asText(subscriber.sex),
     groupNumber: asText(subscriberCoverage.groupNumber),
     planDate: asText(subscriberCoverage.planDate),
     primaryCareProvider: asText(result.general?.primaryCareProvider),
@@ -160,6 +170,7 @@ export function parseBlueCrossBlueShieldResult(
       } : {}),
       sections: sectionStatuses,
       subscriberInformation: subscriber,
+      patientInformation: patient,
       subscriberCoverageInformation: subscriberCoverage,
       professionalOffice,
     },
@@ -169,62 +180,92 @@ export function parseBlueCrossBlueShieldResult(
 export function selectProfessionalOfficeBenefits(
   sections?: BcbsProfessionalOfficeSection[],
   healthBenefitPlanSections?: BcbsProfessionalOfficeSection[],
-): Pick<EligibilityResult, "coinsurance" | "copay" | "deductible" | "deductibleMet" | "outOfPocket" | "outOfPocketMet" | "inOutNetwork"> {
-  const section = selectPreferredIndividualNetwork(sections);
-  if (!section) return {};
+): Pick<EligibilityResult, "coinsurance" | "copay" | "deductible" | "deductibleMet" | "outOfPocket" | "outOfPocketMet" | "inOutNetwork" | "specialistPayerNote"> {
+  const selectedProfessionalSections = selectPreferredIndividualNetworkSections(sections);
+  const professionalEntries = selectedProfessionalSections
+    .flatMap((section) => section.entries ?? [])
+    .filter((entry) => isOfficeOrUnspecified(entry.placeOfService));
+  const selectedHealthBenefitSections = selectPreferredIndividualNetworkSections(healthBenefitPlanSections);
+  const healthBenefitEntries = selectedHealthBenefitSections.flatMap((section) => section.entries ?? []);
 
-  const entries = section.entries ?? [];
-  const officeEntries = entries.filter((entry) => isOffice(entry.placeOfService));
-  const coinsurance = highestValue(officeEntries.filter((entry) => {
-    const type = normalize(entry.type);
-    return type.includes("co insurance") || type.includes("coinsurance");
-  }), "%");
-  const copayEntries = entries.filter((entry) => isCopay(entry.type));
-  const specialtyCopayEntries = copayEntries.filter((entry) => isSpecialtyCopay(entry));
-  const copay = highestValue(
-  specialtyCopayEntries.length > 0 ? specialtyCopayEntries : copayEntries,
-  "$",
-);
-  const professionalDeductibleEntries = officeEntries.filter((entry) => normalize(entry.type).includes("deductible"));
-  const professionalOopEntries = officeEntries.filter((entry) => {
-    const type = normalize(entry.type);
-    return type.includes("out of pocket") || type === "oop";
-  });
-  const healthBenefitSection = selectPreferredIndividualNetwork(healthBenefitPlanSections);
-  const healthBenefitEntries = healthBenefitSection?.entries ?? [];
-  const deductibleEntries = professionalDeductibleEntries.length > 0
-    ? professionalDeductibleEntries
-    : healthBenefitEntries.filter((entry) => normalize(entry.type).includes("deductible"));
-  const oopEntries = professionalOopEntries.length > 0
-    ? professionalOopEntries
-    : healthBenefitEntries.filter((entry) => {
-      const type = normalize(entry.type);
-      return type.includes("out of pocket") || type === "oop";
-    });
-  const deductible = annualValue(deductibleEntries);
-  const deductibleRemaining = remainingValue(deductibleEntries);
-  const outOfPocket = annualValue(oopEntries);
-  const outOfPocketRemaining = remainingValue(oopEntries);
+  const healthCoinsurance = filterCoinsurance(healthBenefitEntries);
+  const professionalCoinsurance = filterCoinsurance(professionalEntries);
+  const selectedCoinsurance = preferEntries(healthCoinsurance, professionalCoinsurance);
+  const healthCopay = healthBenefitEntries.filter((entry) => isCopay(entry.type));
+  const professionalCopay = professionalEntries.filter((entry) => isCopay(entry.type));
+  const selectedCopay = preferEntries(healthCopay, professionalCopay);
+  const specialistCopay = selectedCopay.filter((entry) => isSpecialtyCopay(entry));
+  const healthDeductible = healthBenefitEntries.filter((entry) => normalize(entry.type).includes("deductible"));
+  const professionalDeductible = professionalEntries.filter((entry) => normalize(entry.type).includes("deductible"));
+  const selectedDeductible = preferEntries(healthDeductible, professionalDeductible);
+  const healthOop = filterOutOfPocket(healthBenefitEntries);
+  const professionalOop = filterOutOfPocket(professionalEntries);
+  const selectedOop = preferEntries(healthOop, professionalOop);
+
+  const deductible = annualValue(selectedDeductible);
+  const deductibleRemaining = remainingValue(selectedDeductible);
+  const outOfPocket = annualValue(selectedOop);
+  const outOfPocketRemaining = remainingValue(selectedOop);
+  const selectedBenefitEntries = [
+    ...selectedCoinsurance,
+    ...selectedCopay,
+    ...selectedDeductible,
+    ...selectedOop,
+  ];
 
   return {
-    coinsurance,
-    copay,
+    coinsurance: highestValue(selectedCoinsurance, "%"),
+    copay: highestValue(specialistCopay.length > 0 ? specialistCopay : selectedCopay, "$"),
     deductible: formatMoney(deductible),
     deductibleMet: formatDifference(deductible, deductibleRemaining),
     outOfPocket: formatMoney(outOfPocket),
     outOfPocketMet: formatDifference(outOfPocket, outOfPocketRemaining),
-    inOutNetwork: normalize(section.network).includes("out of network") ? "OON" :
-      normalize(section.network).includes("in network") ? "INN" : undefined,
+    inOutNetwork: resolveNetwork(
+      selectedHealthBenefitSections.length > 0
+        ? selectedHealthBenefitSections
+        : selectedProfessionalSections,
+    ),
+    specialistPayerNote: selectedBenefitEntries.some((entry) =>
+      normalize(entry.payerNote).includes("specialist")
+    ) ? "Specialist" : undefined,
   };
 }
 
-function selectPreferredIndividualNetwork(
+function preferEntries(
+  healthBenefitEntries: BcbsProfessionalOfficeEntry[],
+  professionalEntries: BcbsProfessionalOfficeEntry[],
+): BcbsProfessionalOfficeEntry[] {
+  return healthBenefitEntries.length > 0 ? healthBenefitEntries : professionalEntries;
+}
+
+function filterCoinsurance(entries: BcbsProfessionalOfficeEntry[]): BcbsProfessionalOfficeEntry[] {
+  return entries.filter((entry) => {
+    const type = normalize(entry.type);
+    return type.includes("co insurance") || type.includes("coinsurance");
+  });
+}
+
+function filterOutOfPocket(entries: BcbsProfessionalOfficeEntry[]): BcbsProfessionalOfficeEntry[] {
+  return entries.filter((entry) => {
+    const type = normalize(entry.type);
+    return type.includes("out of pocket") || type === "oop";
+  });
+}
+function resolveNetwork(sections: BcbsProfessionalOfficeSection[]): "INN" | "OON" | undefined {
+  if (sections.some((section) => normalize(section.network).includes("out of network"))) return "OON";
+  if (sections.some((section) => normalize(section.network).includes("in network"))) return "INN";
+  return undefined;
+}
+function selectPreferredIndividualNetworkSections(
   sections?: BcbsProfessionalOfficeSection[],
-): BcbsProfessionalOfficeSection | undefined {
-  const individual = (sections ?? []).filter((candidate) =>
+): BcbsProfessionalOfficeSection[] {
+  const available = (sections ?? []).filter((section) => (section.entries?.length ?? 0) > 0);
+  const individual = available.filter((candidate) =>
     normalize(candidate.coverageLevel).includes("individual"),
   );
-  return individual.find((candidate) => isInNetwork(candidate.network)) ?? individual[0];
+  const coverageCandidates = individual.length > 0 ? individual : available;
+  const inNetwork = coverageCandidates.filter((candidate) => isInNetwork(candidate.network));
+  return inNetwork.length > 0 ? inNetwork : coverageCandidates;
 }
 
 function isInNetwork(value: unknown): boolean {
@@ -235,6 +276,10 @@ function isInNetwork(value: unknown): boolean {
 function isOffice(value: unknown): boolean {
   const text = normalize(value);
   return text === "office" || text.includes(" office");
+}
+
+function isOfficeOrUnspecified(value: unknown): boolean {
+  return !normalize(value) || isOffice(value);
 }
 
 function hasIncludedProviderSpecialties(value: unknown): boolean {
@@ -311,6 +356,7 @@ function normalizeCoverageStatus(value?: string): EligibilityCoverageStatus {
   const normalized = (value ?? "").toLowerCase();
   if (normalized.includes("inactive")) return "inactive";
   if (normalized.includes("active")) return "active";
+  if (normalized.includes("failed at payer") || normalized.includes("subscriber not found")) return "error";
   return "unknown";
 }
 

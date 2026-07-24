@@ -175,6 +175,112 @@ test("uses only OON when it is the sole professional office network", () => {
   assert.equal(result.coinsurance, "40%");
 });
 
+test("extracts benefits when Waystar omits the Individual Coverage label and place of service", () => {
+  const result = selectProfessionalOfficeBenefits([{
+    network: "In Network",
+    entries: [
+      { type: "Co-Insurance", value: "20%" },
+      { type: "Co-Payment", value: "$40" },
+    ],
+  }], [{
+    network: "In Network",
+    entries: [
+      { type: "Deductible", value: "$1,000 Calendar Year" },
+      { type: "Deductible", value: "$250 Remaining" },
+      { type: "Out of Pocket", value: "$5,000 Calendar Year" },
+      { type: "Out of Pocket", value: "$1,200 Remaining" },
+    ],
+  }]);
+
+  assert.equal(result.coinsurance, "20%");
+  assert.equal(result.copay, "$40");
+  assert.equal(result.deductible, "$1,000");
+  assert.equal(result.deductibleMet, "$750");
+  assert.equal(result.outOfPocket, "$5,000");
+  assert.equal(result.outOfPocketMet, "$3,800");
+  assert.equal(result.inOutNetwork, "INN");
+});
+
+test("falls back field-by-field to Health Benefit Plan Coverage benefits", () => {
+  const result = selectProfessionalOfficeBenefits(undefined, [{
+    network: "In Network",
+    coverageLevel: "Individual Coverage",
+    entries: [
+      { type: "Co-Insurance", value: "25%" },
+      { type: "Co-Payment", value: "$45" },
+      { type: "Deductible", value: "$2,000 Calendar Year" },
+      { type: "Deductible", value: "$500 Remaining" },
+      { type: "Out of Pocket (Stop Loss)", value: "$6,000 Calendar Year" },
+      { type: "Out of Pocket (Stop Loss)", value: "$2,000 Remaining" },
+    ],
+  }]);
+
+  assert.equal(result.coinsurance, "25%");
+  assert.equal(result.copay, "$45");
+  assert.equal(result.deductible, "$2,000");
+  assert.equal(result.deductibleMet, "$1,500");
+  assert.equal(result.outOfPocket, "$6,000");
+  assert.equal(result.outOfPocketMet, "$4,000");
+  assert.equal(result.inOutNetwork, "INN");
+});
+test("prioritizes Health Benefit values and outputs only a Specialist payer-note marker", () => {
+  const result = selectProfessionalOfficeBenefits(
+    [{
+      network: "Out of Network",
+      coverageLevel: "Individual Coverage",
+      entries: [
+        { type: "Co-Insurance", value: "40%", payerNote: "general office" },
+        { type: "Co-Payment", value: "$80", payerNote: "general office" },
+        { type: "Deductible", value: "$4,000 Calendar Year" },
+        { type: "Out of Pocket", value: "$9,000 Calendar Year" },
+      ],
+    }],
+    [{
+      network: "In Network",
+      coverageLevel: "Individual Coverage",
+      entries: [
+        { type: "Co-Insurance", value: "20%", payerNote: "Specialist services" },
+        { type: "Co-Payment", value: "$45", payerNote: "Specialist office visit" },
+        { type: "Deductible", value: "$2,000 Calendar Year" },
+        { type: "Deductible", value: "$500 Remaining" },
+        { type: "Out of Pocket", value: "$6,000 Calendar Year" },
+        { type: "Out of Pocket", value: "$2,000 Remaining" },
+      ],
+    }],
+  );
+
+  assert.equal(result.coinsurance, "20%");
+  assert.equal(result.copay, "$45");
+  assert.equal(result.deductible, "$2,000");
+  assert.equal(result.outOfPocket, "$6,000");
+  assert.equal(result.inOutNetwork, "INN");
+  assert.equal(result.specialistPayerNote, "Specialist");
+});
+
+test("leaves the payer-note output blank when selected benefit notes do not say specialist", () => {
+  const result = selectProfessionalOfficeBenefits(undefined, [{
+    network: "In Network",
+    entries: [{ type: "Co-Payment", value: "$25", payerNote: "Primary care only" }],
+  }]);
+
+  assert.equal(result.copay, "$25");
+  assert.equal(result.specialistPayerNote, undefined);
+});
+test("maps payer failures and subscriber-not-found outcomes to error instead of unknown", () => {
+  const failed = parseBlueCrossBlueShieldResult(
+    { overallStatus: "Failed at Payer" },
+    { originalIndex: 4, raw: {} },
+    "blue-cross-blue-shield-texas",
+  );
+  const notFound = parseBlueCrossBlueShieldResult(
+    { overallStatus: "Subscriber Not Found" },
+    { originalIndex: 5, raw: {} },
+    "blue-cross-blue-shield-texas",
+  );
+
+  assert.equal(failed.coverageStatus, "error");
+  assert.equal(notFound.coverageStatus, "error");
+});
 test("falls back to In Network Health Benefit Plan Coverage deductible and OOP", () => {
   const result = selectProfessionalOfficeBenefits(
     [{
@@ -208,4 +314,26 @@ test("falls back to In Network Health Benefit Plan Coverage deductible and OOP",
   assert.equal(result.deductibleMet, "$600");
   assert.equal(result.outOfPocket, "$5,000");
   assert.equal(result.outOfPocketMet, "$3,500");
+});
+test("uses dependent Patient Information while retaining the subscriber member ID", () => {
+  const result = parseBlueCrossBlueShieldResult({
+    overallStatus: "Active Coverage",
+    subscriberInformation: {
+      patientName: "Subscriber Name",
+      memberId: "SUB-100",
+      dateOfBirth: "01/01/1980",
+    },
+    patientInformation: {
+      patientName: "Dependent Member",
+      dateOfBirth: "01/02/2010",
+      sex: "Female",
+      relationshipToSubscriber: "Child",
+    },
+  }, { originalIndex: 5, raw: {} }, "blue-cross-blue-shield-texas");
+
+  assert.equal(result.memberId, "SUB-100");
+  assert.equal(result.patientName, "Dependent Member");
+  assert.equal(result.dateOfBirth, "01/02/2010");
+  assert.equal(result.sex, "Female");
+  assert.equal(result.relationshipToSubscriber, "Child");
 });

@@ -136,13 +136,29 @@ export function createWaystarRunner(): AutomationRunner<EligibilityRunInput> {
 
               try {
                 ensureRequiredFields(row, payer.requiredFields);
-                const payload = await submitWaystarInquiry({
+                let payload = await submitWaystarInquiry({
                   page,
                   credentials,
                   payerName: payer.portalPayerName,
                   row,
                 });
-                const result = payer.parseResult(payload, row);
+                let result = payer.parseResult(payload, row);
+                if (isFailedAtPayerResult(result)) {
+                  await context.log({
+                    level: "warn",
+                    message: `${payer.name} eligibility row ${row.originalIndex} returned Failed at Payer. Waiting and retrying the inquiry once.`,
+                    rowIndex: row.originalIndex,
+                    eventName: "eligibility_row_retry_failed_at_payer",
+                  });
+                  await page.waitForTimeout(5000);
+                  payload = await submitWaystarInquiry({
+                    page,
+                    credentials,
+                    payerName: payer.portalPayerName,
+                    row,
+                  });
+                  result = payer.parseResult(payload, row);
+                }
                 results.set(row.originalIndex, result);
                 const extraction = describeEligibilityExtraction(result);
                 if (extraction.missing.length > 0) {
@@ -313,6 +329,7 @@ const ELIGIBILITY_RESULT_FIELDS: Array<{
   { label: "Premium Paid End Date", hasValue: (result) => Boolean(result.premiumPaidEndDate) },
   { label: "Insurance Type", hasValue: (result) => Boolean(result.insuranceType) },
   { label: "Patient Name", hasValue: (result) => Boolean(result.patientName) },
+  { label: "Relationship to Subscriber", hasValue: (result) => Boolean(result.relationshipToSubscriber) },
   { label: "Address", hasValue: (result) => Boolean(result.address) },
   { label: "Member ID", hasValue: (result) => Boolean(result.memberId) },
   { label: "Date of Birth", hasValue: (result) => Boolean(result.dateOfBirth) },
@@ -337,12 +354,25 @@ export function describeEligibilityExtraction(result: EligibilityResult): {
 } {
   const extracted: string[] = [];
   const missing: string[] = [];
-  for (const field of ELIGIBILITY_RESULT_FIELDS) {
-    (field.hasValue(result) ? extracted : missing).push(field.label);
+for (const field of ELIGIBILITY_RESULT_FIELDS) {
+    if (field.hasValue(result)) {
+      extracted.push(field.label);
+      continue;
+    }
+    if (
+      (field.label === "Effective Date" || field.label === "Termination Date") &&
+      result.coverageStatus !== "inactive"
+    ) {
+      continue;
+    }
+    missing.push(field.label);
   }
   return { extracted, missing };
 }
 
+function isFailedAtPayerResult(result: EligibilityResult): boolean {
+  return String(result.planStatus || "").toLowerCase().includes("failed at payer");
+}
 function isBatchBlockingError(message: string): boolean {
   const normalized = message.toLowerCase();
   return [
