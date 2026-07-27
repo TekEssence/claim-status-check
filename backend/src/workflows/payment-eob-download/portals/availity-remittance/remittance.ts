@@ -516,22 +516,75 @@ async function clickFirstVisible(candidates: Locator[], timeoutMs: number): Prom
   throw new Error(`Unable to click visible menu item after ${timeoutMs}ms.${lastError ? ` Last error: ${lastError}` : ""}`);
 }
 
-async function waitForPdfViewerPage(page: Page, clickPdfIcon: () => Promise<void>): Promise<Page> {
+async function waitForNewPage(page: Page, timeoutMs: number): Promise<Page | null> {
   const context = page.context();
-  const popupPromise = page.waitForEvent("popup", { timeout: 90000 }).catch(() => null);
-  const pagePromise = context.waitForEvent("page", { timeout: 90000 }).catch(() => null);
+  const popupPromise = page.waitForEvent("popup", { timeout: timeoutMs }).catch(() => null);
+  const pagePromise = context.waitForEvent("page", { timeout: timeoutMs }).catch(() => null);
+  return await Promise.race([popupPromise, pagePromise]);
+}
 
-  await clickPdfIcon();
-
-  const openedPage = await Promise.race([popupPromise, pagePromise]);
-  if (!openedPage) {
-    throw new Error("Payer-issued PDF tab did not open after clicking the row PDF icon.");
-  }
-
+async function preparePdfViewerPage(openedPage: Page): Promise<Page> {
   await openedPage.waitForLoadState("domcontentloaded", { timeout: 90000 }).catch(() => {});
   await openedPage.waitForFunction(() => window.location.href.startsWith("blob:"), null, { timeout: 90000 }).catch(() => {});
   await openedPage.waitForLoadState("networkidle", { timeout: 30000 }).catch(() => {});
   return openedPage;
+}
+
+async function clickPayerIssuedModalDownload(surface: RemittanceSurface): Promise<boolean> {
+  const popover = surface.locator(".popover-body").filter({ has: surface.locator('input[name="documentRadio"]') }).first();
+  const title = surface.getByText(/Payer-Issued Remittance Advice Downloads/i).first();
+  const modalVisible = await Promise.race([
+    popover.waitFor({ state: "visible", timeout: 10000 }).then(() => true).catch(() => false),
+    title.waitFor({ state: "visible", timeout: 10000 }).then(() => true).catch(() => false),
+  ]);
+  if (!modalVisible) return false;
+
+  const radio = surface.locator('input[name="documentRadio"]').first();
+  const label = surface.locator('label[for="document0"]').first();
+  if (await label.isVisible({ timeout: 5000 }).catch(() => false)) {
+    await label.click({ timeout: 10000 });
+  } else {
+    await radio.check({ force: true, timeout: 10000 });
+  }
+
+  const downloadButton = surface.locator("button.btn-primary").filter({ hasText: /^Download$/ }).first();
+  await downloadButton.waitFor({ state: "visible", timeout: 10000 });
+  await surface.waitForFunction(() => {
+    const buttons = [...document.querySelectorAll("button.btn-primary")];
+    return buttons.some((button) => button.textContent?.trim() === "Download" && !button.hasAttribute("disabled"));
+  }, null, { timeout: 10000 });
+  await downloadButton.click({ timeout: 10000 });
+  return true;
+}
+
+async function waitForPdfViewerPage(surface: RemittanceSurface, page: Page, clickPdfIcon: () => Promise<void>): Promise<Page> {
+  const directPagePromise = waitForNewPage(page, 90000);
+  const modalPromise = surface.getByText("Payer-Issued Remittance Advice Downloads:", { exact: true })
+    .waitFor({ state: "visible", timeout: 15000 })
+    .then(() => "modal" as const)
+    .catch(() => null);
+
+  await clickPdfIcon();
+
+  const firstResult = await Promise.race([directPagePromise, modalPromise]);
+  if (firstResult && firstResult !== "modal") {
+    return await preparePdfViewerPage(firstResult);
+  }
+
+  if (firstResult === "modal" || await clickPayerIssuedModalDownload(surface)) {
+    const modalPagePromise = waitForNewPage(page, 90000);
+    if (firstResult === "modal") {
+      await clickPayerIssuedModalDownload(surface);
+    }
+    const modalPage = await modalPagePromise;
+    if (modalPage) return await preparePdfViewerPage(modalPage);
+  }
+
+  const openedPage = await directPagePromise;
+  if (!openedPage) {
+    throw new Error("Payer-issued PDF tab did not open after clicking the row PDF icon.");
+  }
+  return await preparePdfViewerPage(openedPage);
 }
 
 async function readBlobPdfFromViewerPage(pdfPage: Page): Promise<Buffer> {
@@ -595,6 +648,7 @@ async function downloadFromActionMenu(
 }
 
 async function downloadFromPayerIssuedPdfIcon(
+  surface: RemittanceSurface,
   page: Page,
   matchingRow: Locator,
   pdfPath: string,
@@ -602,7 +656,7 @@ async function downloadFromPayerIssuedPdfIcon(
   const pdfButton = matchingRow.getByRole("button", { name: "Download Check Payer-Issued Admittance Advice" });
   let pdfPage: Page | null = null;
   try {
-    pdfPage = await waitForPdfViewerPage(page, async () => {
+    pdfPage = await waitForPdfViewerPage(surface, page, async () => {
       await pdfButton.click({ timeout: 30000 });
     });
 
@@ -653,7 +707,7 @@ async function downloadPdfFromMatchingRow(
           eventName: "payment_eob_pdf_icon_fallback",
         });
         await matchingRow.scrollIntoViewIfNeeded({ timeout: 10000 }).catch(() => {});
-        await downloadFromPayerIssuedPdfIcon(page, matchingRow, pdfPath);
+        await downloadFromPayerIssuedPdfIcon(surface, page, matchingRow, pdfPath);
         return { filename, message: "Success via payer-issued PDF icon", found: true };
       } catch (fallbackError) {
         lastError = fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
