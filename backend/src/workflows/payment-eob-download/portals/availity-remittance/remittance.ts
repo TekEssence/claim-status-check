@@ -557,34 +557,73 @@ async function clickPayerIssuedModalDownload(surface: RemittanceSurface): Promis
   return true;
 }
 
-async function waitForPdfViewerPage(surface: RemittanceSurface, page: Page, clickPdfIcon: () => Promise<void>): Promise<Page> {
+async function savePdfFromViewerPage(pdfPage: Page, pdfPath: string): Promise<void> {
+  const buffer = await readBlobPdfFromViewerPage(pdfPage);
+  await fs.writeFile(pdfPath, buffer);
+  await verifyPdf(pdfPath);
+}
+
+async function waitForPayerIssuedPdf(
+  surface: RemittanceSurface,
+  page: Page,
+  clickPdfIcon: () => Promise<void>,
+  pdfPath: string,
+): Promise<{ message: string }> {
   const directPagePromise = waitForNewPage(page, 90000);
   const modalPromise = surface.getByText("Payer-Issued Remittance Advice Downloads:", { exact: true })
     .waitFor({ state: "visible", timeout: 15000 })
     .then(() => "modal" as const)
     .catch(() => null);
+  let pdfPage: Page | null = null;
 
   await clickPdfIcon();
 
   const firstResult = await Promise.race([directPagePromise, modalPromise]);
   if (firstResult && firstResult !== "modal") {
-    return await preparePdfViewerPage(firstResult);
+    pdfPage = await preparePdfViewerPage(firstResult);
+    try {
+      await savePdfFromViewerPage(pdfPage, pdfPath);
+    } finally {
+      if (!pdfPage.isClosed()) await pdfPage.close().catch(() => {});
+    }
+    return { message: "Success via payer-issued PDF icon direct tab" };
   }
 
   if (firstResult === "modal" || await clickPayerIssuedModalDownload(surface)) {
+    const modalDownloadPromise = page.waitForEvent("download", { timeout: 90000 }).catch(() => null);
     const modalPagePromise = waitForNewPage(page, 90000);
     if (firstResult === "modal") {
       await clickPayerIssuedModalDownload(surface);
     }
+    const modalResult = await Promise.race([modalDownloadPromise, modalPagePromise]);
+    if (modalResult && "saveAs" in modalResult) {
+      await modalResult.saveAs(pdfPath);
+      await verifyPdf(pdfPath);
+      return { message: "Success via payer-issued PDF modal download" };
+    }
     const modalPage = await modalPagePromise;
-    if (modalPage) return await preparePdfViewerPage(modalPage);
+    if (modalPage) {
+      pdfPage = await preparePdfViewerPage(modalPage);
+      try {
+        await savePdfFromViewerPage(pdfPage, pdfPath);
+      } finally {
+        if (!pdfPage.isClosed()) await pdfPage.close().catch(() => {});
+      }
+      return { message: "Success via payer-issued PDF modal tab" };
+    }
   }
 
   const openedPage = await directPagePromise;
   if (!openedPage) {
-    throw new Error("Payer-issued PDF tab did not open after clicking the row PDF icon.");
+    throw new Error("Payer-issued PDF did not open a tab or start a browser download after clicking the row PDF icon.");
   }
-  return await preparePdfViewerPage(openedPage);
+  pdfPage = await preparePdfViewerPage(openedPage);
+  try {
+    await savePdfFromViewerPage(pdfPage, pdfPath);
+  } finally {
+    if (!pdfPage.isClosed()) await pdfPage.close().catch(() => {});
+  }
+  return { message: "Success via payer-issued PDF icon direct tab" };
 }
 
 async function readBlobPdfFromViewerPage(pdfPage: Page): Promise<Buffer> {
@@ -652,20 +691,11 @@ async function downloadFromPayerIssuedPdfIcon(
   page: Page,
   matchingRow: Locator,
   pdfPath: string,
-): Promise<void> {
+): Promise<{ message: string }> {
   const pdfButton = matchingRow.getByRole("button", { name: "Download Check Payer-Issued Admittance Advice" });
-  let pdfPage: Page | null = null;
-  try {
-    pdfPage = await waitForPdfViewerPage(surface, page, async () => {
-      await pdfButton.click({ timeout: 30000 });
-    });
-
-    const buffer = await readBlobPdfFromViewerPage(pdfPage);
-    await fs.writeFile(pdfPath, buffer);
-    await verifyPdf(pdfPath);
-  } finally {
-    if (pdfPage && !pdfPage.isClosed()) await pdfPage.close().catch(() => {});
-  }
+  return await waitForPayerIssuedPdf(surface, page, async () => {
+    await pdfButton.click({ timeout: 30000 });
+  }, pdfPath);
 }
 
 async function downloadPdfFromMatchingRow(
@@ -707,8 +737,8 @@ async function downloadPdfFromMatchingRow(
           eventName: "payment_eob_pdf_icon_fallback",
         });
         await matchingRow.scrollIntoViewIfNeeded({ timeout: 10000 }).catch(() => {});
-        await downloadFromPayerIssuedPdfIcon(surface, page, matchingRow, pdfPath);
-        return { filename, message: "Success via payer-issued PDF icon", found: true };
+        const fallbackResult = await downloadFromPayerIssuedPdfIcon(surface, page, matchingRow, pdfPath);
+        return { filename, message: fallbackResult.message, found: true };
       } catch (fallbackError) {
         lastError = fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
         await context.log({
