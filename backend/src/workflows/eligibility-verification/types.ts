@@ -46,6 +46,7 @@ export type EligibilityResult = {
   groupNumber?: string;
   planDate?: string;
   primaryCareProvider?: string;
+  ipa?: string;
   coverageDescription?: string;
   coinsurance?: string;
   copay?: string;

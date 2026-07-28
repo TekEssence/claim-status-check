@@ -244,3 +244,77 @@ test("reads Relationship to Subscriber for dependent-patient inquiries", () => {
 
   assert.equal(routing.batches[0]?.rows[0]?.relationshipToSubscriber, "Child");
 });
+
+test("routes Excel-configured Van Lang IPA rows to Amerigroup Wellpoint", async () => {
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(
+    workbook,
+    XLSX.utils.json_to_sheet([
+      { "Primary Insurance Name": "Van Lang IPA", "Primary Ins Subscriber No": "VL-123" },
+    ]),
+    "Eligibility",
+  );
+  XLSX.utils.book_append_sheet(
+    workbook,
+    XLSX.utils.json_to_sheet([
+      {
+        "INPUT_Insurance payer_state": "Van Lang IPA",
+        "Payer portal": "Amerigroup Wellpoint (WLPNT)",
+      },
+    ]),
+    "Payer_Mappings",
+  );
+
+  const file = new File(
+    [XLSX.write(workbook, { type: "buffer", bookType: "xlsx" })],
+    "eligibility.xlsx",
+  );
+  const routing = await readWaystarEligibilityWorkbook(file);
+
+  assert.deepEqual(
+    routing.batches.map((batch) => [batch.payerId, batch.rows.length]),
+    [["amerigroup-wellpoint", 1]],
+  );
+});
+test("reads Payer_Mappings from the separate login workbook", async () => {
+  const inputWorkbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(
+    inputWorkbook,
+    XLSX.utils.json_to_sheet([
+      { "Primary Insurance Name": "VICARE Health IPA", "Primary Ins Subscriber No": "VI-123" },
+      { "Primary Insurance Name": "Integranet", "Primary Ins Subscriber No": "IN-456" },
+    ]),
+    "Eligibility",
+  );
+
+  const loginWorkbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(
+    loginWorkbook,
+    XLSX.utils.json_to_sheet([{ Portal: "Waystar", Payer: "Amerigroup" }]),
+    "Credentials",
+  );
+  XLSX.utils.book_append_sheet(
+    loginWorkbook,
+    XLSX.utils.json_to_sheet([
+      { "INPUT_Insurance payer_state": "VICARE Health IPA", "Payer portal": "Amerigroup Wellpoint(WLPNT)" },
+      { "INPUT_Insurance payer_state": "Integranet", "Payer portal": "Amerigroup Wellpoint(WLPNT)" },
+    ]),
+    "Payer_Mappings",
+  );
+
+  const inputFile = new File(
+    [XLSX.write(inputWorkbook, { type: "buffer", bookType: "xlsx" })],
+    "eligibility.xlsx",
+  );
+  const loginFile = new File(
+    [XLSX.write(loginWorkbook, { type: "buffer", bookType: "xlsx" })],
+    "login.xlsx",
+  );
+  const routing = await readWaystarEligibilityWorkbook(inputFile, loginFile);
+
+  assert.deepEqual(
+    routing.batches.map((batch) => [batch.payerId, batch.rows.length]),
+    [["amerigroup-wellpoint", 2]],
+  );
+  assert.equal(routing.unsupportedRows.length, 0);
+});

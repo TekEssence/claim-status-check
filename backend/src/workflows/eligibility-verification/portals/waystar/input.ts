@@ -123,6 +123,8 @@ const SERVICE_TYPE_HEADER_ALIASES = [
 ] as const;
 
 export const BCBS_PAYER_MAPPINGS_SHEET = "BCBS_Payer_Mappings";
+export const WAYSTAR_PAYER_MAPPINGS_SHEET = "Waystar_Payer_Mappings";
+export const PAYER_MAPPINGS_SHEET = "Payer_Mappings";
 
 export type WaystarPayerPortalMapping = {
   inputInsurancePayerState: string;
@@ -145,6 +147,7 @@ export type WaystarRoutingOptions = {
 
 export async function readWaystarEligibilityWorkbook(
   file: File,
+  payerMappingFile?: File,
 ): Promise<WaystarWorkbookRouting> {
   const workbook = XLSX.read(await file.arrayBuffer(), { type: "array" });
   const sheet = workbook.Sheets[workbook.SheetNames[0]];
@@ -154,8 +157,12 @@ export async function readWaystarEligibilityWorkbook(
     defval: "",
     raw: false,
   });
+  const inputMappings = readWaystarPayerMappings(workbook);
+  const credentialMappings = payerMappingFile
+    ? readWaystarPayerMappings(XLSX.read(await payerMappingFile.arrayBuffer(), { type: "array" }))
+    : [];
   return routeWaystarRowsByPayer(rows, {
-    payerMappings: readBcbsPayerMappings(workbook),
+    payerMappings: credentialMappings.length > 0 ? credentialMappings : inputMappings,
   });
 }
 
@@ -261,9 +268,10 @@ export function splitPatientName(fullName?: string): {
   };
 }
 
-function readBcbsPayerMappings(workbook: XLSX.WorkBook): WaystarPayerPortalMapping[] {
-  const sheetName = workbook.SheetNames.find(
-    (name) => normalizeHeader(name) === normalizeHeader(BCBS_PAYER_MAPPINGS_SHEET),
+function readWaystarPayerMappings(workbook: XLSX.WorkBook): WaystarPayerPortalMapping[] {
+  const supportedSheetNames = [PAYER_MAPPINGS_SHEET, WAYSTAR_PAYER_MAPPINGS_SHEET, BCBS_PAYER_MAPPINGS_SHEET].map(normalizeHeader);
+  const sheetName = workbook.SheetNames.find((name) =>
+    supportedSheetNames.includes(normalizeHeader(name))
   );
   const sheet = sheetName ? workbook.Sheets[sheetName] : null;
   if (!sheet) return [];

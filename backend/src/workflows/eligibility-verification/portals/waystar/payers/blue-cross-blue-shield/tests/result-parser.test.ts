@@ -59,8 +59,8 @@ test("extracts BCBS active subscriber and coverage fields", () => {
     },
   }, { originalIndex: 3, raw: {} }, "blue-cross-blue-shield-texas");
 
-  assert.equal(result.patientName, "Jane Doe");
-  assert.equal(result.memberId, "ABC123");
+  assert.equal(result.patientName, undefined);
+  assert.equal(result.memberId, undefined);
   assert.equal(result.groupNumber, "G100");
   assert.equal(result.planDate, "01/01/2026 - 12/31/2026");
   assert.equal(result.premiumPaidEndDate, "07/31/2026");
@@ -331,9 +331,9 @@ test("uses dependent Patient Information while retaining the subscriber member I
     },
   }, { originalIndex: 5, raw: {} }, "blue-cross-blue-shield-texas");
 
-  assert.equal(result.memberId, "SUB-100");
-  assert.equal(result.patientName, "Dependent Member");
-  assert.equal(result.dateOfBirth, "01/02/2010");
-  assert.equal(result.sex, "Female");
+  assert.equal(result.memberId, undefined);
+  assert.equal(result.patientName, undefined);
+  assert.equal(result.dateOfBirth, undefined);
+  assert.equal(result.sex, undefined);
   assert.equal(result.relationshipToSubscriber, "Child");
 });

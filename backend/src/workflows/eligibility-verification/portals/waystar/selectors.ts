@@ -29,6 +29,8 @@ export const WAYSTAR_SELECTORS = {
     patientRadio: "input[name='PatientType'][value='P']:visible, input[name='PatientType'][value='D']:visible, input[name='PatientType']:not([value='S']):visible",
     relationship: "select[id*='Relation' i]:visible, select[name*='Relation' i]:visible",
     activeCoverage: "#id_InquiryStatus:visible",
+    responseReady: "#id_InquiryStatus:visible, .SectionHeader:visible, #btnUpdateInquiry:visible",
+    blockingOverlay: "#progressBackgroundFilter:visible, .ui-widget-overlay:visible",
     sectionHeaders: ".SectionHeader",
     sectionTitle: ".SectionTitle",
     sectionStatus: ".SectionStatus",

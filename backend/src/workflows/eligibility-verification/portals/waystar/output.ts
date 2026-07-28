@@ -1,15 +1,10 @@
 import ExcelJS from "exceljs";
 import type { EligibilityInputRow, EligibilityResult } from "../../types";
-import { normalizeWaystarDate } from "./dates";
 
 const OUTPUT_COLUMNS: Array<{
   header: string;
   value: (row: EligibilityInputRow | undefined, result: EligibilityResult | undefined, error: string | undefined) => unknown;
 }> = [
-  { header: "Bot Entered First Name", value: (row) => row?.patientFirstName ?? "" },
-  { header: "Bot Entered Last Name", value: (row) => row?.patientLastName ?? "" },
-  { header: "Bot Entered Member ID", value: (row) => row?.memberId || row?.subscriberId || "" },
-  { header: "Bot Entered Date of Birth", value: (row) => row?.dateOfBirth ? normalizeWaystarDate(row.dateOfBirth) : "" },
   { header: "Bot Entered Relationship to Subscriber", value: (row, result) => result?.relationshipToSubscriber || row?.relationshipToSubscriber || "" },
   { header: "Bot Coverage Status", value: (_row, result) => result?.coverageStatus ?? "" },
   { header: "Bot Network", value: (_row, result) => result?.inOutNetwork ?? "" },
@@ -19,11 +14,10 @@ const OUTPUT_COLUMNS: Array<{
   { header: "Bot Termination Date", value: (_row, result) => result?.terminationDate ?? "" },
   { header: "Bot Premium Paid End Date", value: (_row, result) => result?.premiumPaidEndDate ?? "" },
   { header: "Bot Insurance Type", value: (_row, result) => result?.insuranceType ?? "" },
-  { header: "Bot Address", value: (_row, result) => result?.address ?? "" },
-  { header: "Bot Sex", value: (_row, result) => result?.sex ?? "" },
   { header: "Bot Group Number", value: (_row, result) => result?.groupNumber ?? "" },
   { header: "Bot Plan Date", value: (_row, result) => result?.planDate ?? "" },
   { header: "Bot Primary Care Provider", value: (_row, result) => result?.primaryCareProvider ?? "" },
+  { header: "Bot IPA", value: (_row, result) => result?.ipa ?? "" },
   { header: "Bot Coverage Description", value: (_row, result) => result?.coverageDescription ?? "" },
   { header: "Bot Coinsurance", value: (_row, result) => result?.coinsurance ?? "" },
   { header: "Bot Copay", value: (_row, result) => result?.copay ?? "" },
@@ -40,6 +34,7 @@ const OUTPUT_COLUMNS: Array<{
   },
   { header: "Bot Error", value: (_row, _result, error) => error ?? "" },
 ];
+
 
 function formatOutputValue(value: unknown): unknown {
   if (value === null || value === undefined) return "-";

@@ -41,7 +41,7 @@ export type WaystarInquiryPayload = {
     premiumPaidToDateEnd?: string;
     insuranceType?: string;
   };
-  general?: { primaryCareProvider?: string };
+  general?: { primaryCareProvider?: string; ipa?: string };
   healthBenefitPlanCoverage?: {
     coverageDescription?: string;
     eligibilityBeginDate?: string;
@@ -87,6 +87,7 @@ export async function openEligibilityInquiry(page: Page): Promise<Page> {
   );
   if (existingInquiryPage) {
     await existingInquiryPage.bringToFront().catch(() => {});
+    await recoverStaleInquiryOverlay(existingInquiryPage);
     const changeInquiry = existingInquiryPage.locator(
       WAYSTAR_SELECTORS.inquiry.changeInquiryDetails,
     ).first();
@@ -154,8 +155,13 @@ export async function submitWaystarInquiry(options: {
   await humanPause(inquiryPage);
   await selectServiceType(inquiryPage, expectedServiceType);
   await humanPause(inquiryPage);
-  await inquiryPage.locator(WAYSTAR_SELECTORS.inquiry.patientLookup).selectOption("10");
+  const patientLookup = inquiryPage.locator(WAYSTAR_SELECTORS.inquiry.patientLookup).first();
+  if (await patientLookup.isVisible().catch(() => false)) {
+    const hasLookupOption = await patientLookup.locator('option[value="10"]').count() > 0;
+    if (hasLookupOption) await patientLookup.selectOption("10");
+  }
   await humanPause(inquiryPage);
+  await waitForBlockingOverlaysToClear(inquiryPage, 30000);
   await fillVerifiedText(inquiryPage, WAYSTAR_SELECTORS.inquiry.memberId, expectedMemberId, "Member ID");
   await fillVerifiedText(inquiryPage, WAYSTAR_SELECTORS.inquiry.lastName, expectedLastName, "Last Name");
   await fillVerifiedText(inquiryPage, WAYSTAR_SELECTORS.inquiry.firstName, expectedFirstName, "First Name");
@@ -174,9 +180,11 @@ export async function submitWaystarInquiry(options: {
     inquiryPage.locator(WAYSTAR_SELECTORS.inquiry.submit).click(),
   ]);
 
-  await inquiryPage.locator(WAYSTAR_SELECTORS.inquiry.activeCoverage).first().waitFor({
+  await inquiryPage.waitForTimeout(500);
+  await waitForBlockingOverlaysToClear(inquiryPage, 90000);
+  await inquiryPage.locator(WAYSTAR_SELECTORS.inquiry.responseReady).first().waitFor({
     state: "visible",
-    timeout: 30000,
+    timeout: 90000,
   });
   // The status bar can appear before all payer-returned sections finish rendering.
   // Keep the result visible before taking the DOM snapshot.
@@ -340,6 +348,7 @@ const dataId = header.getAttribute("data-id");
     } : undefined;
 
     const primaryCareProvider = findRowValueByLabel("Primary Care Provider");
+    const ipa = findRowValueByLabel("Independent Physicians Association (IPA)") || findRowValueByLabel("IPA");
 
     // ---- Health Benefit Plan Coverage (may be absent) ----
     const hbpc = findSectionByTitle((title) => title.toLowerCase().includes("health benefit plan coverage"));
@@ -378,7 +387,7 @@ const dataId = header.getAttribute("data-id");
       subscriberInformation,
       patientInformation,
       subscriberCoverageInformation,
-      general: primaryCareProvider ? { primaryCareProvider } : undefined,
+      general: primaryCareProvider || ipa ? { primaryCareProvider, ipa } : undefined,
       healthBenefitPlanCoverage,
       professionalOffice,
     };
@@ -564,6 +573,16 @@ function normalizeRelationship(value: string): string {
 async function selectPayer(page: Page, payerName: string): Promise<void> {
   const payerInput = page.locator(WAYSTAR_SELECTORS.inquiry.payerInput).first();
   if (await payerInput.isVisible().catch(() => false)) {
+    const retainedPayer = await payerInput.inputValue().catch(() => "");
+    if (isExactWaystarPayerMatch(retainedPayer, payerName)) {
+      if (await isProviderReady(page, 2000)) return;
+      await commitTypedPayerSelection(payerInput);
+      if (await isProviderReady(page, 5000)) {
+        await waitForProviderReady(page);
+        return;
+      }
+    }
+
     const searchTerms = payerSearchTerms(payerName);
     for (const searchTerm of searchTerms) {
       await typePayerSearch(page, payerInput, searchTerm);
@@ -720,7 +739,7 @@ async function selectServiceType(page: Page, serviceTypeCode: string): Promise<v
     input.dispatchEvent(new Event("change", { bubbles: true }));
     input.dispatchEvent(new Event("blur", { bubbles: true }));
   }).catch(() => {});
-  await clickAddCodeIfVisible(page);
+
 
   const selectedOption = await serviceType.locator("option:checked").evaluate((node) => ({
     value: (node as HTMLOptionElement | null)?.value || "",
@@ -865,6 +884,22 @@ function payerSearchTerms(payerName: string): string[] {
   return Array.from(new Set(["BCBS", state ? `BCBS ${state}` : "", payerName].filter(Boolean)));
 }
 
+async function waitForBlockingOverlaysToClear(page: Page, timeoutMs: number): Promise<void> {
+  const overlays = page.locator(WAYSTAR_SELECTORS.inquiry.blockingOverlay);
+  if (await overlays.count().catch(() => 0) === 0) return;
+  await overlays.first().waitFor({ state: "hidden", timeout: timeoutMs });
+}
+
+async function recoverStaleInquiryOverlay(page: Page): Promise<void> {
+  const overlays = page.locator(WAYSTAR_SELECTORS.inquiry.blockingOverlay);
+  if (await overlays.count().catch(() => 0) === 0) return;
+
+  await overlays.first().waitFor({ state: "hidden", timeout: 5000 }).catch(() => {});
+  if (await overlays.count().catch(() => 0) === 0) return;
+
+  await page.reload({ waitUntil: "domcontentloaded", timeout: 30000 });
+  await waitForInquiryControls(page);
+}
 async function humanType(locator: Locator, value: string): Promise<void> {
   await locator.click();
   await locator.press("Control+A").catch(() => {});

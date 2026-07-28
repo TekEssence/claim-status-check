@@ -51,7 +51,7 @@ test("creates a Waystar output workbook with verified inputs, results, and row e
   await styledWorkbook.xlsx.load(output);
   const styledSheet = styledWorkbook.worksheets[0];
   const generatedHeader = styledSheet.getRow(1).getCell(5);
-  assert.equal(generatedHeader.value, "Bot Entered First Name");
+  assert.equal(generatedHeader.value, "Bot Entered Relationship to Subscriber");
   assert.equal(generatedHeader.font.bold, true);
   assert.equal(generatedHeader.font.color?.argb, "FFFFFFFF");
   assert.equal(generatedHeader.fill.type, "pattern");
@@ -63,10 +63,12 @@ test("creates a Waystar output workbook with verified inputs, results, and row e
     { defval: "" },
   );
 
-  assert.equal(rows[0]["Bot Entered First Name"], "Jane");
-  assert.equal(rows[0]["Bot Entered Last Name"], "Doe");
-  assert.equal(rows[0]["Bot Entered Member ID"], "ABC123");
-  assert.equal(rows[0]["Bot Entered Date of Birth"], "01/02/1980");
+  assert.equal("Bot Entered First Name" in rows[0], false);
+  assert.equal("Bot Entered Last Name" in rows[0], false);
+  assert.equal("Bot Entered Member ID" in rows[0], false);
+  assert.equal("Bot Entered Date of Birth" in rows[0], false);
+  assert.equal("Bot Address" in rows[0], false);
+  assert.equal("Bot Sex" in rows[0], false);
   assert.equal(rows[0]["Bot Coverage Status"], "active");
   assert.equal("Bot Plan Status" in rows[0], false);
   const headerValues = styledSheet.getRow(1).values as unknown[];

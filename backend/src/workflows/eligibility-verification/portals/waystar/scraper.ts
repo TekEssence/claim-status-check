@@ -34,7 +34,7 @@ export function createWaystarRunner(): AutomationRunner<EligibilityRunInput> {
       };
     },
     async run(input, context) {
-      const routing = await readWaystarEligibilityWorkbook(input.inputFile);
+      const routing = await readWaystarEligibilityWorkbook(input.inputFile, input.credentialFile);
       const credentialProfiles = await readWaystarCredentialProfiles(input.credentialFile);
       await context.emit({
         type: "progress",
@@ -337,6 +337,7 @@ const ELIGIBILITY_RESULT_FIELDS: Array<{
   { label: "Group Number", hasValue: (result) => Boolean(result.groupNumber) },
   { label: "Plan Date", hasValue: (result) => Boolean(result.planDate) },
   { label: "Primary Care Provider", hasValue: (result) => Boolean(result.primaryCareProvider) },
+  { label: "IPA", hasValue: (result) => Boolean(result.ipa) },
   { label: "Coverage Description", hasValue: (result) => Boolean(result.coverageDescription) },
   { label: "Coinsurance", hasValue: (result) => Boolean(result.coinsurance) },
   { label: "Copay", hasValue: (result) => Boolean(result.copay) },

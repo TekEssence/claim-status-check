@@ -11,7 +11,7 @@ type BcbsHealthBenefitPlanCoveragePayload = {
   subscriberInformation?: BcbsSubscriberInformation;
   patientInformation?: BcbsPatientInformation;
   subscriberCoverageInformation?: BcbsSubscriberCoverageInformation;
-  general?: { primaryCareProvider?: unknown };
+  general?: { primaryCareProvider?: unknown; ipa?: unknown };
   healthBenefitPlanCoverage?: {
     coverageDescription?: unknown;
     eligibilityBeginDate?: unknown;
@@ -102,6 +102,7 @@ export function parseBlueCrossBlueShieldResult(
   payload: unknown,
   row: EligibilityInputRow,
   payerId: string,
+  includeIpa = false,
 ): EligibilityResult {
   const result = asBcbsPayload(payload);
   const coverage = result.healthBenefitPlanCoverage;
@@ -146,15 +147,16 @@ export function parseBlueCrossBlueShieldResult(
     terminationDate,
     premiumPaidEndDate: asText(subscriberCoverage.premiumPaidToDateEnd),
     insuranceType: asText(subscriberCoverage.insuranceType),
-    patientName: asText(patient.patientName) || asText(subscriber.patientName),
+
     relationshipToSubscriber: asText(patient.relationshipToSubscriber),
     address: asText(patient.address) || asText(subscriber.address),
-    memberId: asText(subscriber.memberId),
-    dateOfBirth: asText(patient.dateOfBirth) || asText(subscriber.dateOfBirth),
-    sex: asText(patient.sex) || asText(subscriber.sex),
+
+
+
     groupNumber: asText(subscriberCoverage.groupNumber),
     planDate: asText(subscriberCoverage.planDate),
     primaryCareProvider: asText(result.general?.primaryCareProvider),
+    ipa: includeIpa ? asText(result.general?.ipa) : undefined,
     coverageDescription: asText(coverage?.general?.coverageDescription) || planName,
     ...professionalOffice,
     benefits,
