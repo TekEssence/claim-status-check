@@ -8,6 +8,7 @@ import {
   cancelAutomationJob,
   getCurrentAutomationJob,
   startAutomationJob,
+  submitAutomationJobInput,
   subscribeToAutomationJob,
 } from "../../api/automation-jobs-api";
 import type { JobProgressValue, ScrapeJobEvent } from "../../types/job";
@@ -63,6 +64,8 @@ export function PaymentEobPage({ portalId: initialPortalId }: PaymentEobPageProp
   const [errors, setErrors] = useState<string[]>([]);
   const [isRunning, setIsRunning] = useState(false);
   const [isStopping, setIsStopping] = useState(false);
+  const [otpRequest, setOtpRequest] = useState<{ inputName: string; label: string; message: string } | null>(null);
+  const [otpValue, setOtpValue] = useState("");
   const streamController = useRef<AbortController | null>(null);
 
   const canStart = Boolean(selectedPortalId && credentialFile && referenceFile && !isRunning);
@@ -78,6 +81,8 @@ export function PaymentEobPage({ portalId: initialPortalId }: PaymentEobPageProp
     setErrors([]);
     setIsRunning(false);
     setIsStopping(false);
+    setOtpRequest(null);
+    setOtpValue("");
   }
 
   function choosePortal(nextPortalId: string) {
@@ -99,6 +104,14 @@ export function PaymentEobPage({ portalId: initialPortalId }: PaymentEobPageProp
     } else if (event.type === "file_download" && event.filename && event.base64) {
       downloadBase64File(event.filename, event.base64, event.mimeType || "application/octet-stream");
       setLogs((current) => [...current, `Downloaded ${event.filename}.`]);
+    } else if (event.type === "input_request" && event.inputName) {
+      setOtpRequest({
+        inputName: event.inputName,
+        label: event.label || "InstaMed verification code",
+        message: event.message || "Enter the InstaMed verification code sent by text message.",
+      });
+      setOtpValue("");
+      setStatus(event.message || "Waiting for InstaMed verification code.");
     } else if (event.type === "error") {
       const message = event.message || "Payment EOB workflow failed.";
       setErrors((current) => [...current, message]);
@@ -209,6 +222,24 @@ export function PaymentEobPage({ portalId: initialPortalId }: PaymentEobPageProp
     }
   }
 
+  async function submitOtp() {
+    if (!jobId || !otpRequest || !otpValue.trim()) return;
+    try {
+      await submitAutomationJobInput({
+        jobId,
+        inputName: otpRequest.inputName,
+        value: otpValue.trim(),
+      });
+      setOtpRequest(null);
+      setOtpValue("");
+      setStatus("InstaMed verification code submitted.");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unable to submit InstaMed verification code.";
+      setErrors((current) => [...current, message]);
+      setStatus(message);
+    }
+  }
+
   async function logout() {
     await fetch("/api/auth/logout", { method: "POST" }).catch(() => {});
     router.replace("/");
@@ -299,6 +330,10 @@ export function PaymentEobPage({ portalId: initialPortalId }: PaymentEobPageProp
               errors={errors}
               canStop={Boolean(jobId && isRunning)}
               isStopping={isStopping}
+              otpRequest={otpRequest}
+              otpValue={otpValue}
+              onOtpChange={setOtpValue}
+              onOtpSubmit={submitOtp}
               onStop={stop}
             />
           </div>

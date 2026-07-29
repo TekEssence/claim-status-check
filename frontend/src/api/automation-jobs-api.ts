@@ -40,6 +40,22 @@ export async function cancelAutomationJob(jobId: string): Promise<void> {
   }
 }
 
+export async function submitAutomationJobInput(options: {
+  jobId: string;
+  inputName: string;
+  value: string;
+}): Promise<void> {
+  const response = await fetch("/api/automation-jobs", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(options),
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({})) as { error?: string };
+    throw new Error(body.error || "Unable to submit automation workflow input.");
+  }
+}
+
 export async function subscribeToAutomationJob(options: {
   jobId: string;
   signal: AbortSignal;

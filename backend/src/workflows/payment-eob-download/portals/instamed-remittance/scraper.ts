@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright-core";
+import { waitForScrapeJobInput } from "@/backend/src/jobs/job-store";
 import type { AutomationContext, AutomationRunner } from "../../../types";
 import { launchAutomationBrowser } from "@/backend/src/core/browser";
 import { getJobDataPath } from "@/backend/src/core/storage";
@@ -49,6 +50,19 @@ function todayYyyyMmDd(): string {
 
 function safeFilePart(value: string): string {
   return value.replace(/[<>:"/\\|?*]/g, "_");
+}
+
+export function dateFilePart(value: string): string {
+  const trimmed = value.trim();
+  const mmDdYyyy = trimmed.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (mmDdYyyy) {
+    return `${mmDdYyyy[3]}-${mmDdYyyy[1].padStart(2, "0")}-${mmDdYyyy[2].padStart(2, "0")}`;
+  }
+  const yyyyMmDd = trimmed.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (yyyyMmDd) {
+    return `${yyyyMmDd[1]}-${yyyyMmDd[2].padStart(2, "0")}-${yyyyMmDd[3].padStart(2, "0")}`;
+  }
+  return safeFilePart(trimmed);
 }
 
 function parseCsv(text: string): Record<string, string>[] {
@@ -154,6 +168,32 @@ async function clickRemittanceSearch(page: Page, context: AutomationContext): Pr
   await page.locator("#MyFormPanel-button-Search").click({ timeout: 30000 });
 }
 
+async function requestInstamedOtp(context: AutomationContext): Promise<string> {
+  const timeoutMs = Number(process.env.PORTAL_INSTAMED_OTP_TIMEOUT_MS || 300000);
+  await context.emit({
+    type: "input_request",
+    inputName: "instamed_otp",
+    label: "InstaMed text message verification",
+    message: "Enter the InstaMed verification code sent by text message within 5 minutes.",
+    timeoutMs,
+  });
+  return waitForScrapeJobInput(context.jobId, "instamed_otp", timeoutMs);
+}
+
+async function submitInstamedOtp(page: Page, context: AutomationContext): Promise<void> {
+  const verificationInput = page.locator("#MyFormPanel-VerificationCode-inputEl:visible, input[name='VerificationCode']:visible").first();
+  await context.log({
+    level: "warn",
+    message: "InstaMed two-step verification is required. Waiting for code entry in the Payment EOB page.",
+    eventName: "payment_eob_instamed_mfa_required",
+  });
+  const otp = await requestInstamedOtp(context);
+  await verificationInput.fill(otp);
+  await page.locator("#MyFormPanel-button-Next, a:has-text('Next'), button:has-text('Next')").first().click({ timeout: 30000 });
+  await page.waitForLoadState("networkidle", { timeout: 30000 }).catch(() => {});
+  await context.log({ level: "info", message: "InstaMed verification code submitted.", eventName: "payment_eob_instamed_mfa_submitted" });
+}
+
 async function login(page: Page, credentials: PaymentEobCredentials, context: AutomationContext): Promise<void> {
   await context.log({ level: "info", message: "Opening InstaMed login page.", eventName: "payment_eob_instamed_login_open" });
   await page.goto(credentials.loginUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
@@ -165,11 +205,7 @@ async function login(page: Page, credentials: PaymentEobCredentials, context: Au
 
   const verificationInput = page.locator("#MyFormPanel-VerificationCode-inputEl, input[name='VerificationCode']").first();
   if (await verificationInput.isVisible({ timeout: 15000 }).catch(() => false)) {
-    await context.log({
-      level: "warn",
-      message: "InstaMed two-step verification is required. Enter the texted verification code in the browser and click Next; the job will continue after login completes.",
-      eventName: "payment_eob_instamed_mfa_required",
-    });
+    await submitInstamedOtp(page, context);
     await page.waitForURL(/\/providers\/Form\/(Insight\/Payment|Healthcare\/RemittanceSearch|Home)/i, { timeout: 180000 });
   }
 
@@ -260,7 +296,10 @@ async function downloadEdiFromSummary(page: Page, outputFolder: string, record: 
   const download = await downloadPromise;
   const suggested = download.suggestedFilename();
   const extension = path.extname(suggested) || ".txt";
-  const filename = `${safeFilePart(record.checkNumber)}${extension}`;
+  const paymentDatePart = dateFilePart(record.checkDate);
+  const filename = paymentDatePart
+    ? `${safeFilePart(record.checkNumber)}_${paymentDatePart}${extension}`
+    : `${safeFilePart(record.checkNumber)}${extension}`;
   await download.saveAs(path.join(outputFolder, filename));
   await page.locator("a,button").filter({ hasText: /^Close$/i }).first().click({ timeout: 10000 }).catch(async () => {
     await page.keyboard.press("Escape").catch(() => {});

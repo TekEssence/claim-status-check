@@ -13,6 +13,10 @@ type PaymentEobResultViewProps = {
   errors: string[];
   canStop: boolean;
   isStopping: boolean;
+  otpRequest?: { inputName: string; label: string; message: string } | null;
+  otpValue?: string;
+  onOtpChange?: (value: string) => void;
+  onOtpSubmit?: () => void;
   onStop: () => void;
 };
 
@@ -24,6 +28,10 @@ export function PaymentEobResultView({
   errors,
   canStop,
   isStopping,
+  otpRequest,
+  otpValue,
+  onOtpChange,
+  onOtpSubmit,
   onStop,
 }: PaymentEobResultViewProps) {
   return (
@@ -44,6 +52,44 @@ export function PaymentEobResultView({
       </div>
 
       <JobProgress progress={progress} />
+
+      {otpRequest ? (
+        <div className="mt-4 rounded-md border border-blue-200 bg-blue-50 p-4">
+          <label className="block text-xs font-semibold uppercase text-blue-900" htmlFor="paymentEobOtp">
+            {otpRequest.label}
+          </label>
+          <p className="mt-2 text-sm text-blue-900">{otpRequest.message}</p>
+          <div className="mt-3 flex gap-3">
+            <input
+              id="paymentEobOtp"
+              type="text"
+              value={otpValue || ""}
+              onChange={(event) => onOtpChange?.(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && otpValue?.trim()) {
+                  event.preventDefault();
+                  onOtpSubmit?.();
+                }
+              }}
+              className="min-w-0 flex-1 rounded-md border border-slate-300 bg-white px-3 py-2 text-center text-lg font-semibold tracking-[0.25em] text-slate-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-200"
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              autoCorrect="off"
+              autoCapitalize="off"
+              maxLength={10}
+            />
+            <button
+              type="button"
+              onClick={onOtpSubmit}
+              disabled={!otpValue?.trim()}
+              className="rounded-md bg-blue-700 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-800 disabled:cursor-not-allowed disabled:bg-slate-400"
+            >
+              Confirm
+            </button>
+          </div>
+        </div>
+      ) : null}
+
       <StatusMessage status={status} />
 
       {errors.length > 0 ? (
@@ -61,4 +107,3 @@ export function PaymentEobResultView({
     </div>
   );
 }
-

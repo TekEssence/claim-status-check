@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { parseInstamedRemittanceCsv } from "./scraper";
+import { dateFilePart, parseInstamedRemittanceCsv } from "./scraper";
 
 test("parses InstaMed remittance CSV and skips totals row", () => {
   const records = parseInstamedRemittanceCsv([
@@ -17,3 +17,7 @@ test("parses InstaMed remittance CSV and skips totals row", () => {
   assert.equal(records[0].amount, "$123.60");
 });
 
+test("formats payment date for InstaMed EDI filenames", () => {
+  assert.equal(dateFilePart("07/01/2026"), "2026-07-01");
+  assert.equal(dateFilePart("07/01/2026 12:00:00 AM"), "2026-07-01");
+});
