@@ -183,6 +183,17 @@ async function openRemittanceSearch(page: Page, context: AutomationContext): Pro
   await context.log({ level: "info", message: "InstaMed Remittance Search opened.", eventName: "payment_eob_instamed_remittance_opened" });
 }
 
+async function ensureRemittanceSearchPage(page: Page, context: AutomationContext): Promise<void> {
+  const searchInput = page.locator("#MyFormPanel-RemittanceSimpleSearchValue-inputEl:visible, input[name='RemittanceSimpleSearchValue']:visible").first();
+  if (await searchInput.isVisible({ timeout: 3000 }).catch(() => false)) return;
+  await context.log({
+    level: "info",
+    message: "Returning to InstaMed Remittance Search before the next trace search.",
+    eventName: "payment_eob_instamed_return_to_search",
+  });
+  await openRemittanceSearch(page, context);
+}
+
 async function waitForSearchSettled(page: Page): Promise<void> {
   await page.waitForLoadState("networkidle", { timeout: 20000 }).catch(() => {});
   await Promise.race([
@@ -221,7 +232,8 @@ async function downloadPortalCsv(page: Page, context: AutomationContext, outputF
 }
 
 async function searchOnePayment(page: Page, checkNumber: string, context: AutomationContext): Promise<boolean> {
-  const searchInput = page.locator("#MyFormPanel-RemittanceSimpleSearchValue-inputEl, input[name='RemittanceSimpleSearchValue']").first();
+  await ensureRemittanceSearchPage(page, context);
+  const searchInput = page.locator("#MyFormPanel-RemittanceSimpleSearchValue-inputEl:visible, input[name='RemittanceSimpleSearchValue']:visible").first();
   await searchInput.click();
   await searchInput.press("Control+A");
   await searchInput.fill(checkNumber);
@@ -232,7 +244,12 @@ async function searchOnePayment(page: Page, checkNumber: string, context: Automa
 }
 
 async function openSummary(page: Page): Promise<void> {
-  await page.locator("a").filter({ hasText: /^Summary$/i }).first().click({ timeout: 30000 });
+  const rowSummaryLink = page
+    .locator('a.detail_action_link:visible[onclick*="PaymentsQuickSearchController.viewBatchSummary"]')
+    .filter({ hasText: /^Summary$/i })
+    .first();
+  await rowSummaryLink.scrollIntoViewIfNeeded({ timeout: 15000 }).catch(() => {});
+  await rowSummaryLink.click({ timeout: 30000 });
   await page.getByText("Payment Remittance Response", { exact: true }).waitFor({ state: "visible", timeout: 60000 });
 }
 
