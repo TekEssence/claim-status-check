@@ -8,6 +8,7 @@ export type PaymentEobCredentials = {
   username: string;
   password: string;
   totpSecret: string;
+  corporateId?: string;
   sharePoint?: PaymentEobSharePointCredentials;
   organization?: string;
   startDate?: string;

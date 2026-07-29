@@ -3,7 +3,7 @@
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
-import { ArrowLeft, LoaderCircle, LogOut } from "lucide-react";
+import { ArrowLeft, ArrowRight, LoaderCircle, LogOut, ReceiptText } from "lucide-react";
 import {
   cancelAutomationJob,
   getCurrentAutomationJob,
@@ -11,7 +11,7 @@ import {
   subscribeToAutomationJob,
 } from "../../api/automation-jobs-api";
 import type { JobProgressValue, ScrapeJobEvent } from "../../types/job";
-import { getPaymentEobPortal } from "./registry";
+import { getPaymentEobPortal, paymentEobPortals } from "./registry";
 import { PaymentEobInputForm } from "./portals/availity-remittance/PaymentEobInputForm";
 import { PaymentEobResultView } from "./portals/availity-remittance/PaymentEobResultView";
 
@@ -22,7 +22,6 @@ type AuthUser = {
 };
 
 const WORKFLOW_ID = "payment-eob-download";
-const PORTAL_ID = "availity-remittance";
 
 function base64ToArrayBuffer(base64: string): ArrayBuffer {
   const binaryString = window.atob(base64);
@@ -45,9 +44,14 @@ function downloadBase64File(filename: string, base64: string, type: string): voi
   URL.revokeObjectURL(url);
 }
 
-export function PaymentEobPage() {
+type PaymentEobPageProps = {
+  portalId?: string;
+};
+
+export function PaymentEobPage({ portalId: initialPortalId }: PaymentEobPageProps) {
   const router = useRouter();
-  const portal = getPaymentEobPortal(PORTAL_ID);
+  const [selectedPortalId, setSelectedPortalId] = useState<string | null>(initialPortalId ?? null);
+  const portal = getPaymentEobPortal(selectedPortalId);
   const [user, setUser] = useState<AuthUser | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [credentialFile, setCredentialFile] = useState<File | null>(null);
@@ -61,7 +65,31 @@ export function PaymentEobPage() {
   const [isStopping, setIsStopping] = useState(false);
   const streamController = useRef<AbortController | null>(null);
 
-  const canStart = Boolean(credentialFile && referenceFile && !isRunning);
+  const canStart = Boolean(selectedPortalId && credentialFile && referenceFile && !isRunning);
+
+  function resetPortalRunState() {
+    streamController.current?.abort();
+    setCredentialFile(null);
+    setReferenceFile(null);
+    setJobId("");
+    setStatus("");
+    setProgress(null);
+    setLogs([]);
+    setErrors([]);
+    setIsRunning(false);
+    setIsStopping(false);
+  }
+
+  function choosePortal(nextPortalId: string) {
+    resetPortalRunState();
+    setSelectedPortalId(nextPortalId);
+  }
+
+  function backFromPortal() {
+    if (isRunning) return;
+    resetPortalRunState();
+    setSelectedPortalId(null);
+  }
 
   const handleEvent = useCallback((event: ScrapeJobEvent) => {
     if (event.type === "log" && event.message) {
@@ -125,7 +153,9 @@ export function PaymentEobPage() {
   useEffect(() => {
     if (!user) return;
     void getCurrentAutomationJob().then((job) => {
-      if (!job || job.workflowId !== WORKFLOW_ID || job.portalId !== PORTAL_ID) return;
+      if (!job || job.workflowId !== WORKFLOW_ID) return;
+      if (initialPortalId && job.portalId !== initialPortalId) return;
+      setSelectedPortalId(job.portalId);
       setJobId(job.jobId);
       setLogs(job.logs.map((log) => log.message));
       setProgress(job.totalItems > 0 ? { completed: job.currentCompleted, total: job.totalItems } : null);
@@ -133,11 +163,11 @@ export function PaymentEobPage() {
       setIsRunning(true);
       connect(job.jobId);
     }).catch(() => {});
-  }, [user, connect]);
+  }, [user, connect, initialPortalId]);
 
   async function start(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!credentialFile || !referenceFile) return;
+    if (!selectedPortalId || !credentialFile || !referenceFile) return;
 
     setIsRunning(true);
     setStatus("Starting Payment EOB workflow...");
@@ -148,7 +178,7 @@ export function PaymentEobPage() {
     try {
       const formData = new FormData();
       formData.append("workflowId", WORKFLOW_ID);
-      formData.append("portalId", PORTAL_ID);
+      formData.append("portalId", selectedPortalId);
       formData.append("credentialExcel", credentialFile);
       formData.append("referenceExcel", referenceFile);
       const nextJobId = await startAutomationJob(formData);
@@ -213,41 +243,66 @@ export function PaymentEobPage() {
             <p className="text-xs font-semibold uppercase text-blue-600">Payment EOB Download</p>
             <h1 className="mt-2 text-2xl font-semibold">{portal?.name ?? "Payment EOB Download"}</h1>
             <p className="mt-1 text-sm text-slate-600">
-              {portal?.description ?? "Prepare Payment EOB download automation."}
+              {portal?.description ?? "Choose a payment portal to start remittance comparison and EOB download automation."}
             </p>
           </div>
           <button
-            onClick={() => router.push("/portal")}
+            onClick={selectedPortalId ? backFromPortal : () => router.push("/portal")}
+            disabled={Boolean(selectedPortalId && isRunning)}
             className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
           >
             <ArrowLeft className="h-4 w-4" />
-            Back
+            {selectedPortalId ? "Portals" : "Back"}
           </button>
         </div>
 
-        <div className="mt-6 grid gap-5 xl:grid-cols-[minmax(0,1fr)_380px]">
-          <div className="rounded-md border border-slate-200 bg-white p-5 shadow-sm">
-            <PaymentEobInputForm
-              credentialFileName={credentialFile?.name ?? ""}
-              referenceFileName={referenceFile?.name ?? ""}
-              isRunning={isRunning}
-              canStart={canStart}
-              onCredentialFileChange={setCredentialFile}
-              onReferenceFileChange={setReferenceFile}
-              onSubmit={start}
+        {!selectedPortalId ? (
+          <div className="mt-6 grid gap-5 md:grid-cols-2">
+            {paymentEobPortals.map((paymentPortal) => (
+              <button
+                key={paymentPortal.id}
+                type="button"
+                onClick={() => choosePortal(paymentPortal.id)}
+                className="group flex min-h-48 flex-col border border-slate-200 bg-white p-6 text-left shadow-sm transition hover:border-blue-400 hover:shadow-md"
+              >
+                <span className="flex h-11 w-11 items-center justify-center rounded-md bg-blue-100 text-blue-700">
+                  <ReceiptText className="h-5 w-5" />
+                </span>
+                <h2 className="mt-5 text-xl font-semibold">{paymentPortal.name}</h2>
+                <p className="mt-2 flex-1 text-sm leading-6 text-slate-600">{paymentPortal.description}</p>
+                <span className="mt-5 inline-flex items-center gap-2 text-sm font-semibold text-blue-700">
+                  Open portal
+                  <ArrowRight className="h-4 w-4 transition group-hover:translate-x-1" />
+                </span>
+              </button>
+            ))}
+          </div>
+        ) : (
+          <div className="mt-6 grid gap-5 xl:grid-cols-[minmax(0,1fr)_380px]">
+            <div className="rounded-md border border-slate-200 bg-white p-5 shadow-sm">
+              <PaymentEobInputForm
+                portalName={portal?.name ?? "Payment EOB"}
+                credentialFileName={credentialFile?.name ?? ""}
+                referenceFileName={referenceFile?.name ?? ""}
+                isRunning={isRunning}
+                canStart={canStart}
+                onCredentialFileChange={setCredentialFile}
+                onReferenceFileChange={setReferenceFile}
+                onSubmit={start}
+              />
+            </div>
+            <PaymentEobResultView
+              jobId={jobId}
+              status={status}
+              progress={progress}
+              logs={logs}
+              errors={errors}
+              canStop={Boolean(jobId && isRunning)}
+              isStopping={isStopping}
+              onStop={stop}
             />
           </div>
-          <PaymentEobResultView
-            jobId={jobId}
-            status={status}
-            progress={progress}
-            logs={logs}
-            errors={errors}
-            canStop={Boolean(jobId && isRunning)}
-            isStopping={isStopping}
-            onStop={stop}
-          />
-        </div>
+        )}
       </div>
     </main>
   );

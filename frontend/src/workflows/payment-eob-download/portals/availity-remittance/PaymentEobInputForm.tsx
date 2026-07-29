@@ -5,6 +5,7 @@ import { FileSpreadsheet, KeyRound } from "lucide-react";
 import { PortalUploadCard } from "../../../../components/portal-workflow/PortalUploadCard";
 
 type PaymentEobInputFormProps = {
+  portalName?: string;
   credentialFileName?: string;
   referenceFileName?: string;
   isRunning: boolean;
@@ -15,6 +16,7 @@ type PaymentEobInputFormProps = {
 };
 
 export function PaymentEobInputForm({
+  portalName = "Availity",
   credentialFileName,
   referenceFileName,
   isRunning,
@@ -30,7 +32,7 @@ export function PaymentEobInputForm({
           mode="file"
           accept=".xlsx,.xls,.csv"
           acceptedFormats=".xlsx, .xls, .csv"
-          description="Upload the workbook containing Availity URL, username, password, and MFA details."
+          description={`Upload the workbook containing ${portalName} credential details.`}
           fileName={credentialFileName}
           icon={KeyRound}
           inputId="paymentEobCredentialExcel"
@@ -62,4 +64,3 @@ export function PaymentEobInputForm({
     </form>
   );
 }
-
