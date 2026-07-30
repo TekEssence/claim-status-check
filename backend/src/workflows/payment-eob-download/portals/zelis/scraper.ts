@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import type { Locator, Page } from "playwright-core";
 import type { AutomationContext, AutomationRunner } from "../../../types";
@@ -10,7 +11,7 @@ import { createPaymentEobResultWorkbookBuffer } from "../availity-remittance/out
 import { uploadPaymentEobOutputToSharePoint } from "../availity-remittance/sharepoint";
 import { createStoredZipFromFolder } from "../availity-remittance/zip";
 import { zelisConfig } from "./config";
-import { readReferenceRows, readZelisCredentials } from "./input";
+import { readZelisCredentials } from "./input";
 
 type RunInput = {
   credentials: PaymentEobCredentials;
@@ -197,6 +198,7 @@ async function openPaymentPage(page: Page, context: AutomationContext): Promise<
   await page.goto(paymentUrl, { waitUntil: "domcontentloaded", timeout: 60000 }).catch(() => {});
   await page.waitForLoadState("networkidle", { timeout: 30000 }).catch(() => {});
   await page.locator("#PaymentView, #paymentsGrid, .payment-holder").first().waitFor({ state: "visible", timeout: 90000 });
+  await waitForPaymentGrid(page);
   await context.log({ level: "info", message: "Zelis Payment page opened.", eventName: "payment_eob_zelis_payment_opened" });
 }
 
@@ -236,16 +238,16 @@ async function readPaymentRows(page: Page): Promise<ZelisPaymentRow[]> {
     if (!paymentId) continue;
     const cells = row.locator("td[role='gridcell'], td");
     const paymentDate = (await cells.nth(1).innerText().catch(() => "")).trim();
-    const actions = cells.last();
-    const actionHtml = (await actions.evaluate((node) => node.innerHTML).catch(() => "")).toLowerCase();
-    const hasCapturedCheckmark = /fa-check|check-circle|k-i-check|text-success|success|green/.test(actionHtml);
+    const downloadLink = row.locator("a.downloadPaymentLink").filter({ hasText: /^Download$/i }).first();
+    const downloadClass = (await downloadLink.getAttribute("class").catch(() => "")) ?? "";
+    const hasCapturedCheckmark = /\bdownloadSelected\b/.test(downloadClass);
     result.push({ row, paymentDate, paymentId, hasCapturedCheckmark });
   }
   return result;
 }
 
 async function saveZelisDownload(page: Page, payment: ZelisPaymentRow, outputFolder: string): Promise<string> {
-  const downloadLink = payment.row.locator("a.downloadPaymentLink, #downloadPaymentLink, a").filter({ hasText: /^Download$/i }).first();
+  const downloadLink = payment.row.locator("a.downloadPaymentLink").filter({ hasText: /^Download$/i }).first();
   const downloadPromise = page.waitForEvent("download", { timeout: 90000 });
   await downloadLink.scrollIntoViewIfNeeded({ timeout: 10000 }).catch(() => {});
   await downloadLink.click({ timeout: 30000 });
@@ -294,7 +296,27 @@ async function emitRunZip(outputRoot: string, context: AutomationContext): Promi
   const zipRootName = `PaymentEobDownloads/${datePart}/${runFolder}`;
   const zipBuffer = await createStoredZipFromFolder(outputRoot, zipRootName);
   const zipFilename = `ZelisPaymentEobDownloads_${datePart}_${runFolder}.zip`;
+  await fs.writeFile(path.join(outputRoot, zipFilename), zipBuffer);
   await context.emit(downloadableFileEvent(zipFilename, zipBuffer, "application/zip"));
+}
+
+function getLocalDownloadsRoot(jobId: string): string {
+  return path.join(os.homedir(), "Downloads", `ZelisPaymentEobDownloads_${todayYyyyMmDd()}_${safeFilePart(jobId)}`);
+}
+
+async function copyFolderContents(sourceRoot: string, targetRoot: string): Promise<void> {
+  await fs.mkdir(targetRoot, { recursive: true });
+  const entries = await fs.readdir(sourceRoot, { withFileTypes: true });
+  for (const entry of entries) {
+    const sourcePath = path.join(sourceRoot, entry.name);
+    const targetPath = path.join(targetRoot, entry.name);
+    if (entry.isDirectory()) {
+      await copyFolderContents(sourcePath, targetPath);
+    } else if (entry.isFile()) {
+      await fs.mkdir(path.dirname(targetPath), { recursive: true });
+      await fs.copyFile(sourcePath, targetPath);
+    }
+  }
 }
 
 async function uploadToSharePointIfEnabled(credentials: PaymentEobCredentials, outputRoot: string, context: AutomationContext): Promise<void> {
@@ -322,19 +344,17 @@ export async function runZelisJob(input: RunInput, context: AutomationContext): 
 
     await login(page, input.credentials, context);
     await openPaymentPage(page, context);
-    await selectNotDownloaded(page, context);
+    await context.log({
+      level: "info",
+      message: "Processing Zelis payments from the default All filter. Rows with a green checkmark will be skipped.",
+      eventName: "payment_eob_zelis_all_filter_processing",
+    });
+
+    let generatedFileCount = 0;
+    let pendingPaymentCount = 0;
 
     if (await hasNoRecords(page)) {
-      comparisonRows.push({
-        checkNumber: "",
-        checkDate: "",
-        comparison: "Unique",
-        searchResult: "Not found",
-        pdfStatus: "Not downloaded",
-        filename: "",
-        message: "No results found",
-      });
-      await context.log({ level: "info", message: "Zelis returned no Not Downloaded payment records.", eventName: "payment_eob_zelis_no_results" });
+      await context.log({ level: "info", message: "Zelis returned no payment records in the All filter.", eventName: "payment_eob_zelis_no_results" });
     } else {
       let completed = 0;
       let pageIndex = 1;
@@ -357,6 +377,7 @@ export async function runZelisJob(input: RunInput, context: AutomationContext): 
               message: "Green checkmark present; skipped.",
             });
             completed += 1;
+            await context.emit({ type: "progress", completed, total: Math.max(completed, 1) });
             continue;
           }
 
@@ -364,6 +385,8 @@ export async function runZelisJob(input: RunInput, context: AutomationContext): 
             await context.log({ level: "info", message: `Processing Zelis Payment ID ${payment.paymentId}.`, eventName: "payment_eob_zelis_payment_process" });
             const downloadFilename = await saveZelisDownload(page, payment, outputPdfFolder);
             const screenshotFilename = await capturePaymentPopupScreenshot(page, payment, screenshotFolder);
+            pendingPaymentCount += 1;
+            generatedFileCount += 2;
             comparisonRows.push({
               checkNumber: payment.paymentId,
               checkDate: payment.paymentDate,
@@ -391,10 +414,37 @@ export async function runZelisJob(input: RunInput, context: AutomationContext): 
       } while (!context.isCancelled?.() && pageIndex <= 20 && await goToNextPage(page));
     }
 
-    const workbookBuffer = await createPaymentEobResultWorkbookBuffer(comparisonRows);
-    await fs.writeFile(path.join(outputRoot, "comparison_result.xlsx"), workbookBuffer);
-    await context.emit(downloadableFileEvent("comparison_result.xlsx", workbookBuffer, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"));
-    await emitRunZip(outputRoot, context);
+    if (comparisonRows.length > 0 && pendingPaymentCount === 0 && comparisonRows.every((row) => row.pdfStatus === "Skipped")) {
+      await context.log({
+        level: "info",
+        message: "No pending payments found. All visible rows already have green tick.",
+        eventName: "payment_eob_zelis_no_pending_green_tick",
+      });
+    }
+
+    if (comparisonRows.some((row) => row.pdfStatus !== "Skipped")) {
+      const workbookBuffer = await createPaymentEobResultWorkbookBuffer(comparisonRows);
+      const summaryFilename = "zelis_processing_summary.xlsx";
+      await fs.writeFile(path.join(outputRoot, summaryFilename), workbookBuffer);
+      await context.emit(downloadableFileEvent(summaryFilename, workbookBuffer, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"));
+    }
+
+    if (generatedFileCount > 0) {
+      await emitRunZip(outputRoot, context);
+      const downloadsRoot = getLocalDownloadsRoot(context.jobId);
+      await copyFolderContents(outputRoot, downloadsRoot);
+      await context.log({
+        level: "info",
+        message: `Copied Zelis output files to Downloads folder: ${downloadsRoot}`,
+        eventName: "payment_eob_zelis_downloads_copy_complete",
+      });
+    } else {
+      await context.log({
+        level: "info",
+        message: "No Zelis PDFs or screenshots were generated, so no ZIP file was created.",
+        eventName: "payment_eob_zelis_zip_skipped",
+      });
+    }
     await uploadToSharePointIfEnabled(input.credentials, outputRoot, context);
     await context.log({ level: "info", message: `Zelis Payment EOB processing completed. Output folder: ${outputRoot}`, eventName: "payment_eob_zelis_completed" });
   } finally {
@@ -416,15 +466,13 @@ export function createZelisRunner(): AutomationRunner<PaymentEobRunInput> {
       }
       return {
         credentialExcel: requireFile(input, "credentialExcel", "Credential Excel"),
-        referenceExcel: requireFile(input, "referenceExcel", "Reference Excel"),
       };
     },
     async run(input, context) {
       const credentials = await readZelisCredentials(input.credentialExcel);
-      const referenceRows = await readReferenceRows(input.referenceExcel);
       await context.log({
         level: "info",
-        message: `Zelis Payment EOB input validation completed for ${input.credentialExcel.name || "credential workbook"} and ${input.referenceExcel.name || "reference workbook"}. ${referenceRows.length} reference row(s) loaded.`,
+        message: `Zelis Payment EOB input validation completed for ${input.credentialExcel.name || "credential workbook"}.`,
         eventName: "payment_eob_zelis_validation_complete",
       });
       await runZelisJob({ credentials }, context);

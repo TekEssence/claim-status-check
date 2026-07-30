@@ -448,10 +448,10 @@ export function createInstamedRemittanceRunner(): AutomationRunner<PaymentEobRun
     },
     async run(input, context) {
       const credentials = await readInstamedRemittanceCredentials(input.credentialExcel);
-      const referenceRows = await readReferenceRows(input.referenceExcel);
+      const referenceRows = await readReferenceRows(input.referenceExcel!);
       await context.log({
         level: "info",
-        message: `InstaMed Payment EOB input validation completed for ${input.credentialExcel.name || "credential workbook"} and ${input.referenceExcel.name || "reference workbook"}. ${referenceRows.length} reference row(s) loaded.`,
+        message: `InstaMed Payment EOB input validation completed for ${input.credentialExcel.name || "credential workbook"} and ${input.referenceExcel!.name || "reference workbook"}. ${referenceRows.length} reference row(s) loaded.`,
         eventName: "payment_eob_instamed_validation_complete",
       });
       await runInstamedRemittanceJob({ credentials, referenceRows }, context);

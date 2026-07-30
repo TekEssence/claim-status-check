@@ -53,6 +53,7 @@ export function PaymentEobPage({ portalId: initialPortalId }: PaymentEobPageProp
   const router = useRouter();
   const [selectedPortalId, setSelectedPortalId] = useState<string | null>(initialPortalId ?? null);
   const portal = getPaymentEobPortal(selectedPortalId);
+  const requiresReferenceExcel = portal?.requiresReferenceExcel ?? true;
   const [user, setUser] = useState<AuthUser | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [credentialFile, setCredentialFile] = useState<File | null>(null);
@@ -68,7 +69,7 @@ export function PaymentEobPage({ portalId: initialPortalId }: PaymentEobPageProp
   const [otpValue, setOtpValue] = useState("");
   const streamController = useRef<AbortController | null>(null);
 
-  const canStart = Boolean(selectedPortalId && credentialFile && referenceFile && !isRunning);
+  const canStart = Boolean(selectedPortalId && credentialFile && (!requiresReferenceExcel || referenceFile) && !isRunning);
 
   function resetPortalRunState() {
     streamController.current?.abort();
@@ -180,7 +181,7 @@ export function PaymentEobPage({ portalId: initialPortalId }: PaymentEobPageProp
 
   async function start(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!selectedPortalId || !credentialFile || !referenceFile) return;
+    if (!selectedPortalId || !credentialFile || (requiresReferenceExcel && !referenceFile)) return;
 
     setIsRunning(true);
     setStatus("Starting Payment EOB workflow...");
@@ -193,7 +194,9 @@ export function PaymentEobPage({ portalId: initialPortalId }: PaymentEobPageProp
       formData.append("workflowId", WORKFLOW_ID);
       formData.append("portalId", selectedPortalId);
       formData.append("credentialExcel", credentialFile);
-      formData.append("referenceExcel", referenceFile);
+      if (requiresReferenceExcel && referenceFile) {
+        formData.append("referenceExcel", referenceFile);
+      }
       const nextJobId = await startAutomationJob(formData);
       setJobId(nextJobId);
       connect(nextJobId);
@@ -315,6 +318,7 @@ export function PaymentEobPage({ portalId: initialPortalId }: PaymentEobPageProp
                 portalName={portal?.name ?? "Payment EOB"}
                 credentialFileName={credentialFile?.name ?? ""}
                 referenceFileName={referenceFile?.name ?? ""}
+                requiresReferenceExcel={requiresReferenceExcel}
                 isRunning={isRunning}
                 canStart={canStart}
                 onCredentialFileChange={setCredentialFile}

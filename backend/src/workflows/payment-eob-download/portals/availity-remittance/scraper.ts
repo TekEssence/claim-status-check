@@ -28,10 +28,10 @@ export function createAvailityRemittanceRunner(): AutomationRunner<PaymentEobRun
     },
     async run(input, context) {
       const credentials = await readAvailityRemittanceCredentials(input.credentialExcel);
-      const referenceRows = await readReferenceRows(input.referenceExcel);
+      const referenceRows = await readReferenceRows(input.referenceExcel!);
       await context.log({
         level: "info",
-        message: `Payment EOB input validation completed for ${input.credentialExcel.name || "credential workbook"} and ${input.referenceExcel.name || "reference workbook"}. ${referenceRows.length} reference row(s) loaded.`,
+        message: `Payment EOB input validation completed for ${input.credentialExcel.name || "credential workbook"} and ${input.referenceExcel!.name || "reference workbook"}. ${referenceRows.length} reference row(s) loaded.`,
         eventName: "payment_eob_validation_complete",
       });
       await runAvailityRemittanceJob({ credentials, referenceRows }, context);

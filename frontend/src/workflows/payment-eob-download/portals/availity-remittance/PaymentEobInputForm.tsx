@@ -8,6 +8,7 @@ type PaymentEobInputFormProps = {
   portalName?: string;
   credentialFileName?: string;
   referenceFileName?: string;
+  requiresReferenceExcel?: boolean;
   isRunning: boolean;
   canStart: boolean;
   onCredentialFileChange: (file: File | null) => void;
@@ -19,6 +20,7 @@ export function PaymentEobInputForm({
   portalName = "Availity",
   credentialFileName,
   referenceFileName,
+  requiresReferenceExcel = true,
   isRunning,
   canStart,
   onCredentialFileChange,
@@ -27,7 +29,7 @@ export function PaymentEobInputForm({
 }: PaymentEobInputFormProps) {
   return (
     <form className="space-y-5" onSubmit={onSubmit}>
-      <div className="grid gap-4 md:grid-cols-2">
+      <div className={`grid gap-4 ${requiresReferenceExcel ? "md:grid-cols-2" : ""}`}>
         <PortalUploadCard
           mode="file"
           accept=".xlsx,.xls,.csv"
@@ -40,18 +42,20 @@ export function PaymentEobInputForm({
           sizeHint="25 MB"
           title="Upload Credential Excel"
         />
-        <PortalUploadCard
-          mode="file"
-          accept=".xlsx,.xls,.csv"
-          acceptedFormats=".xlsx, .xls, .csv"
-          description="Upload the reference workbook containing Check, EFT, or FD numbers to compare."
-          fileName={referenceFileName}
-          icon={FileSpreadsheet}
-          inputId="paymentEobReferenceExcel"
-          onFileSelect={onReferenceFileChange}
-          sizeHint="25 MB"
-          title="Upload Reference Excel"
-        />
+        {requiresReferenceExcel ? (
+          <PortalUploadCard
+            mode="file"
+            accept=".xlsx,.xls,.csv"
+            acceptedFormats=".xlsx, .xls, .csv"
+            description="Upload the reference workbook containing Check, EFT, or FD numbers to compare."
+            fileName={referenceFileName}
+            icon={FileSpreadsheet}
+            inputId="paymentEobReferenceExcel"
+            onFileSelect={onReferenceFileChange}
+            sizeHint="25 MB"
+            title="Upload Reference Excel"
+          />
+        ) : null}
       </div>
 
       <button

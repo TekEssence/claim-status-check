@@ -1,6 +1,6 @@
 export type PaymentEobRunInput = {
   credentialExcel: File;
-  referenceExcel: File;
+  referenceExcel?: File;
 };
 
 export type PaymentEobCredentials = {

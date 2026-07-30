@@ -80,5 +80,16 @@ test("payment EOB validation accepts required workbook uploads", () => {
   const input = runner.validateInput(formData) as PaymentEobRunInput;
 
   assert.equal(input.credentialExcel.name, "credential.xlsx");
-  assert.equal(input.referenceExcel.name, "reference.xlsx");
+  assert.equal(input.referenceExcel?.name, "reference.xlsx");
+});
+
+test("Zelis payment EOB validation only requires credentialExcel", () => {
+  const runner = getAutomationRunner("payment-eob-download", "zelis");
+  const formData = new FormData();
+  formData.append("credentialExcel", new File(["credential"], "credential.xlsx"));
+
+  const input = runner.validateInput(formData) as PaymentEobRunInput;
+
+  assert.equal(input.credentialExcel.name, "credential.xlsx");
+  assert.equal(input.referenceExcel, undefined);
 });
