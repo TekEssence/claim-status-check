@@ -266,12 +266,14 @@ async function capturePaymentPopupScreenshot(page: Page, payment: ZelisPaymentRo
   await paymentLink.scrollIntoViewIfNeeded({ timeout: 10000 }).catch(() => {});
   await paymentLink.click({ timeout: 30000 });
 
-  const modal = page.locator("#modalPopupDiv:visible, [role='dialog']:visible").first();
+  const modal = page.locator("#modalPopupDiv:visible").first();
   await modal.waitFor({ state: "visible", timeout: 30000 });
   await page.waitForTimeout(500);
 
   const filename = `${safeFilePart(payment.paymentId)}_CC.png`;
-  await modal.screenshot({ path: path.join(screenshotFolder, filename) });
+  const modalWindow = modal.locator("xpath=ancestor::*[contains(concat(' ', normalize-space(@class), ' '), ' k-window ')][1]");
+  const screenshotTarget = await modalWindow.isVisible({ timeout: 3000 }).catch(() => false) ? modalWindow : modal;
+  await screenshotTarget.screenshot({ path: path.join(screenshotFolder, filename) });
 
   await page.locator(".k-window-action[aria-label='Close'], .k-window-titlebar .k-i-close, button[aria-label='Close']").first().click({ timeout: 5000 }).catch(async () => {
     await page.keyboard.press("Escape").catch(() => {});
