@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { getAutomationRunner } from "../registry";
 import { getClaimStatusScraper } from "../claim-status/registry";
+import type { PaymentEobRunInput } from "../payment-eob-download/types";
 import { WORKFLOW_IDS } from "../types";
 
 test("claim status portals resolve through the workflow registry", () => {
@@ -31,6 +32,14 @@ test("payment EOB resolves Availity Remittance runner", () => {
   assert.equal(runner.workflowId, "payment-eob-download");
   assert.equal(runner.portalId, "availity-remittance");
   assert.equal(runner.name, "Availity Remittance EOB Download");
+});
+
+test("payment EOB resolves Zelis runner", () => {
+  const runner = getAutomationRunner("payment-eob-download", "zelis");
+
+  assert.equal(runner.workflowId, "payment-eob-download");
+  assert.equal(runner.portalId, "zelis");
+  assert.equal(runner.name, "Zelis Payments EOB Download");
 });
 
 test("claim status registry behavior remains unchanged", () => {
@@ -68,7 +77,7 @@ test("payment EOB validation accepts required workbook uploads", () => {
   formData.append("credentialExcel", new File(["credential"], "credential.xlsx"));
   formData.append("referenceExcel", new File(["reference"], "reference.xlsx"));
 
-  const input = runner.validateInput(formData);
+  const input = runner.validateInput(formData) as PaymentEobRunInput;
 
   assert.equal(input.credentialExcel.name, "credential.xlsx");
   assert.equal(input.referenceExcel.name, "reference.xlsx");
