@@ -39,7 +39,7 @@ test("payment EOB resolves Zelis runner", () => {
 
   assert.equal(runner.workflowId, "payment-eob-download");
   assert.equal(runner.portalId, "zelis");
-  assert.equal(runner.name, "Zelis Payments EOB Download");
+  assert.equal(runner.name, "Zelis Remittance EOB Download");
 });
 
 test("claim status registry behavior remains unchanged", () => {
