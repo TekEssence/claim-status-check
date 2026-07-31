@@ -27,6 +27,7 @@ import {
 import type { ErrorScreenshot, JobProgressValue, ScrapeJobEvent } from "../../types/job";
 import { WaystarInputForm } from "./portals/waystar/WaystarInputForm";
 import { WaystarResultView } from "./portals/waystar/WaystarResultView";
+import { AvailityInputForm } from "./portals/availity/AvailityInputForm";
 
 type AuthUser = {
   username: string;
@@ -65,6 +66,7 @@ export function EligibilityPage() {
   const [logs, setLogs] = useState<string[]>([]);
   const [errorScreenshots, setErrorScreenshots] = useState<ErrorScreenshot[]>([]);
   const [downloads, setDownloads] = useState<DownloadArtifact[]>([]);
+  const [resultRows, setResultRows] = useState<Array<Record<string, string>>>([]);
   const [progress, setProgress] = useState<JobProgressValue | null>(null);
   const [hasCompleted, setHasCompleted] = useState(false);
   const [isRunning, setIsRunning] = useState(false);
@@ -104,6 +106,12 @@ export function EligibilityPage() {
     }
     if (event.type === "error_screenshot" && typeof event.image === "string" && event.image) {
       setErrorScreenshots((current) => [...current, { index: typeof event.index === "number" ? event.index : -1, image: event.image! }]);
+    }
+    if (event.type === "eligibility_availity_result" && event.update) {
+      const result = Object.fromEntries(
+        Object.entries(event.update).map(([key, value]) => [key, value == null ? "" : String(value)]),
+      );
+      setResultRows((current) => [...current, result]);
     }
     if (event.type === "file_download" && event.filename && event.base64) {
       const artifact = {
@@ -170,6 +178,7 @@ export function EligibilityPage() {
     setLogs([]);
     setErrorScreenshots([]);
     setDownloads([]);
+    setResultRows([]);
     setProgress(null);
     setHasCompleted(false);
     jobFailed.current = false;
@@ -288,7 +297,7 @@ export function EligibilityPage() {
                   <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_19rem] lg:items-center">
                     <div className="max-w-xl">
                       <div className="flex items-center gap-3">
-                        <span className="flex h-12 w-12 items-center justify-center rounded-[1rem] bg-blue-50 text-sm font-semibold text-blue-700 shadow-inner">WS</span>
+                        <span className="flex h-12 w-12 items-center justify-center rounded-[1rem] bg-blue-50 text-sm font-semibold text-blue-700 shadow-inner">{portal.id === "availity" ? "AV" : "WS"}</span>
                         <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-1 text-[0.72rem] font-semibold text-emerald-600"><span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />Ready</span>
                       </div>
                       <h1 className="mt-4 text-[1.8rem] font-semibold tracking-[-0.05em] text-slate-950">{heading}</h1>
@@ -316,9 +325,9 @@ export function EligibilityPage() {
 
                 <div className="mt-5 rounded-[1.7rem] border border-sky-100 bg-white/92 p-5 shadow-[0_16px_38px_rgba(148,163,184,0.12)]">
                   <p className="mb-5 text-[0.7rem] font-semibold uppercase tracking-[0.22em] text-sky-600">Portal Workflow</p>
-                  <WaystarInputForm inputFile={inputFile} credentialFile={credentialFile} isRunning={isRunning} canStart={canStart} onInputFileChange={setInputFile} onCredentialFileChange={setCredentialFile} onSubmit={start} onCancel={cancel} />
+                  {portal.id === "availity" ? <AvailityInputForm inputFile={inputFile} credentialFile={credentialFile} isRunning={isRunning} canStart={canStart} onInputFileChange={setInputFile} onCredentialFileChange={setCredentialFile} onSubmit={start} onCancel={cancel} /> : <WaystarInputForm inputFile={inputFile} credentialFile={credentialFile} isRunning={isRunning} canStart={canStart} onInputFileChange={setInputFile} onCredentialFileChange={setCredentialFile} onSubmit={start} onCancel={cancel} />}
                 </div>
-                <div className="mt-5"><WaystarResultView status={status} logs={logs} errorScreenshots={errorScreenshots} progress={progress} downloads={downloads} onDownload={downloadBase64File} /></div>
+                <div className="mt-5"><WaystarResultView status={status} logs={logs} errorScreenshots={errorScreenshots} progress={progress} downloads={downloads} resultRows={resultRows} onDownload={downloadBase64File} /></div>
               </>
             )}
           </section>

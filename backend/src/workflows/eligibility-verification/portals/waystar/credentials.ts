@@ -8,6 +8,7 @@ export type WaystarSecurityQuestion = {
 export type WaystarCredentials = {
   portal?: string;
   payer?: string;
+  project?: string;
   loginUrl: string;
   username: string;
   password: string;
@@ -46,6 +47,7 @@ export async function readWaystarCredentialProfiles(file: File): Promise<Waystar
     return [{
       portal: findValue(row, ["portal", "portal name"]),
       payer: findValue(row, ["payer", "payer name", "insurance", "insurance name"]),
+      project: findValue(row, ["project", "project name"]),
       loginUrl: normalizeLoginUrl(rawLoginUrl || DEFAULT_LOGIN_URL),
       username,
       password,
@@ -67,9 +69,9 @@ export async function readWaystarCredentialProfiles(file: File): Promise<Waystar
 
 export function findWaystarCredentialsForPayer(
   credentials: WaystarCredentials[],
-  payer: { id: string; name: string; portalPayerName: string; insuranceNameAliases: string[] },
+  payer: { id: string; name: string; portalPayerName: string; insuranceNameAliases: string[]; credentialProject?: string },
 ): WaystarCredentials | null {
-  const portalMatches = credentials.filter((entry) => !entry.portal || normalizeHeader(entry.portal).includes("waystar"));
+  const portalMatches = credentials.filter((entry) => (!entry.portal || normalizeHeader(entry.portal).includes("waystar")) && (!payer.credentialProject || normalizeHeader(entry.project ?? "") === normalizeHeader(payer.credentialProject)));
   const exact = portalMatches.find((entry) => {
     const credentialPayer = normalizeHeader(entry.payer ?? "");
     if (!credentialPayer) return false;
@@ -78,6 +80,7 @@ export function findWaystarCredentialsForPayer(
       .some((candidate) => credentialPayer === candidate || credentialPayer.includes(candidate) || candidate.includes(credentialPayer));
   });
   if (exact) return exact;
+  if (payer.credentialProject && portalMatches.length > 0) return portalMatches[0];
 
   const unscoped = portalMatches.filter((entry) => !entry.payer);
   return credentials.length === 1 && unscoped.length === 1 ? unscoped[0] : null;

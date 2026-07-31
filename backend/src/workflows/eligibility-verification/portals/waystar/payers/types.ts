@@ -8,6 +8,7 @@ export interface WaystarPayerHandler {
   name: string;
   portalPayerName: string;
   insuranceNameAliases: string[];
+  credentialProject?: string;
   requiredFields: string[];
   parseResult(payload: unknown, row: EligibilityInputRow): EligibilityResult;
 }

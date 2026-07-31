@@ -89,7 +89,12 @@ export async function POST(req: Request) {
     }).then(async () => {
       const current = getScrapeJob(job.id);
       const cancelled = current?.cancelRequested || current?.status === "cancelled";
-      emitScrapeJobEvent(job.id, cancelled ? { type: "cancelled" } : { type: "done" });
+      if (cancelled) {
+        emitScrapeJobEvent(job.id, { type: "cancelled" });
+        emitScrapeJobEvent(job.id, { type: "done" });
+      } else {
+        emitScrapeJobEvent(job.id, { type: "done" });
+      }
       await updateAutomationJob({
         jobId: job.id,
         status: cancelled ? "cancelled" : "completed",
@@ -153,10 +158,10 @@ export async function DELETE(req: Request) {
   if (!(await getAutomationJobForUser(jobId, session.userId))) {
     return Response.json({ error: "Run not found." }, { status: 404 });
   }
-  cancelScrapeJob(jobId, "Eligibility run cancellation requested.");
-  emitScrapeJobEvent(jobId, { type: "cancelled" });
-  emitScrapeJobEvent(jobId, { type: "done" });
-  await updateAutomationJob({ jobId, status: "cancelled" });
+  cancelScrapeJob(jobId, "Eligibility run cancellation requested.", {
+    emitCancelled: false,
+    emitDone: false,
+  });
   return Response.json({ ok: true });
 }
 

@@ -34,3 +34,11 @@ test("eligibility resolves Waystar without requiring a payer selection", () => {
   assert.equal(runner.payerId, undefined);
   assert.equal(runner.name, "Waystar Eligibility Verification");
 });
+
+test("eligibility resolves Availity independently from claim status", () => {
+  const runner = getAutomationRunner("eligibility-verification", "availity");
+
+  assert.equal(runner.workflowId, "eligibility-verification");
+  assert.equal(runner.portalId, "availity");
+  assert.equal(runner.name, "Availity Eligibility Verification");
+});

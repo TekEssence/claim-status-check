@@ -44,6 +44,8 @@ type BcbsSubscriberCoverageInformation = {
   planDate?: unknown;
   premiumPaidToDateEnd?: unknown;
   insuranceType?: unknown;
+  otherInsurance?: unknown;
+  otherInsuranceEffectiveDate?: unknown;
 };
 
 export type BcbsProfessionalOfficeEntry = {
@@ -107,10 +109,20 @@ export function parseBlueCrossBlueShieldResult(
   const result = asBcbsPayload(payload);
   const coverage = result.healthBenefitPlanCoverage;
   const sectionStatuses = result.sectionStatuses ?? [];
+  const overallStatus = asText(result.overallStatus);
+  const sectionStatus = sectionStatuses.map((section) => asText(section.status)).find(Boolean);
   const planStatus = asText(coverage?.planStatus) ||
-    asText(result.overallStatus) ||
-    sectionStatuses.map((section) => asText(section.status)).find(Boolean);
-  const coverageStatus = normalizeCoverageStatus(planStatus);
+    sectionStatus ||
+    overallStatus;
+  const planCoverageStatus = normalizeCoverageStatus(
+    asText(coverage?.planStatus) || sectionStatus,
+  );
+  const overallCoverageStatus = normalizeCoverageStatus(overallStatus);
+  const coverageStatus = isCoverageDetermination(planCoverageStatus)
+    ? planCoverageStatus
+    : overallCoverageStatus !== "unknown"
+    ? overallCoverageStatus
+    : normalizeCoverageStatus(planStatus);
   const planType = normalizePlanType(asText(coverage?.planType));
   const planName = asText(coverage?.coverageDescription) ||
     sectionStatuses.map((section) => asText(section.title)).filter(Boolean).join(", ") ||
@@ -147,6 +159,8 @@ export function parseBlueCrossBlueShieldResult(
     terminationDate,
     premiumPaidEndDate: asText(subscriberCoverage.premiumPaidToDateEnd),
     insuranceType: asText(subscriberCoverage.insuranceType),
+    otherInsurance: asText(subscriberCoverage.otherInsurance),
+    otherInsuranceEffectiveDate: asText(subscriberCoverage.otherInsuranceEffectiveDate),
 
     relationshipToSubscriber: asText(patient.relationshipToSubscriber),
     address: asText(patient.address) || asText(subscriber.address),
@@ -360,6 +374,12 @@ function normalizeCoverageStatus(value?: string): EligibilityCoverageStatus {
   if (normalized.includes("active")) return "active";
   if (normalized.includes("failed at payer") || normalized.includes("subscriber not found")) return "error";
   return "unknown";
+}
+
+function isCoverageDetermination(
+  status: EligibilityCoverageStatus,
+): status is "active" | "inactive" {
+  return status === "active" || status === "inactive";
 }
 
 function normalizePlanType(value?: string): string | undefined {

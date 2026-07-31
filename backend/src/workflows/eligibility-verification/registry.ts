@@ -1,8 +1,10 @@
 import { UnknownPortalError } from "../../core/errors";
 import type { AutomationRunner } from "../types";
+import { createAvailityEligibilityRunner } from "./portals/availity/scraper";
 import { createWaystarRunner } from "./portals/waystar/scraper";
 
 export const eligibilityPortalRegistry = {
+  availity: createAvailityEligibilityRunner,
   waystar: createWaystarRunner,
 } satisfies Record<string, () => AutomationRunner>;
 

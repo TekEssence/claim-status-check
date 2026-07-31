@@ -1,7 +1,7 @@
 import ExcelJS from "exceljs";
 import type { EligibilityInputRow, EligibilityResult } from "../../types";
 
-const OUTPUT_COLUMNS: Array<{
+const LEGACY_OUTPUT_COLUMNS: Array<{
   header: string;
   value: (row: EligibilityInputRow | undefined, result: EligibilityResult | undefined, error: string | undefined) => unknown;
 }> = [
@@ -36,6 +36,17 @@ const OUTPUT_COLUMNS: Array<{
 ];
 
 
+const BCBS_OUTPUT_COLUMNS = [LEGACY_OUTPUT_COLUMNS[1], LEGACY_OUTPUT_COLUMNS[5], LEGACY_OUTPUT_COLUMNS[6], LEGACY_OUTPUT_COLUMNS[8], LEGACY_OUTPUT_COLUMNS[8], LEGACY_OUTPUT_COLUMNS[0], LEGACY_OUTPUT_COLUMNS[3], LEGACY_OUTPUT_COLUMNS[8]].map((column) => ({ ...column }));
+
+BCBS_OUTPUT_COLUMNS[0].header = "Coverage Status";
+BCBS_OUTPUT_COLUMNS[1].header = "Eff Date";
+BCBS_OUTPUT_COLUMNS[2].header = "End Date";
+BCBS_OUTPUT_COLUMNS[3] = { header: "Other Ins", value: (_row, result) => result?.otherInsurance || "" };
+BCBS_OUTPUT_COLUMNS[4] = { header: "Other Ins Eff Date", value: (_row, result) => result?.otherInsuranceEffectiveDate || "" };
+BCBS_OUTPUT_COLUMNS[5].header = "Relationship to Subscriber";
+BCBS_OUTPUT_COLUMNS[6].header = "Plan Type";
+BCBS_OUTPUT_COLUMNS[7].header = "Bot Insurance Type";
+
 function formatOutputValue(value: unknown): unknown {
   if (value === null || value === undefined) return "-";
   if (typeof value === "string" && value.trim() === "") return "-";
@@ -53,9 +64,12 @@ export async function buildWaystarOutputWorkbook(options: {
   const sheet = workbook.worksheets[0];
   if (!sheet) throw new Error("The eligibility workbook does not contain a worksheet.");
 
+  const outputColumns = [...options.results.values()].some((result) => result.payerId.startsWith("blue-cross-blue-shield-") || result.payerId === "baycare-plus-medicare-advantage" || result.payerId === "aetna-medicare-ppo")
+    ? BCBS_OUTPUT_COLUMNS
+    : LEGACY_OUTPUT_COLUMNS;
   const outputStartColumn = sheet.columnCount + 1;
   const headerRow = sheet.getRow(1);
-  OUTPUT_COLUMNS.forEach((column, offset) => {
+  outputColumns.forEach((column, offset) => {
     const cell = headerRow.getCell(outputStartColumn + offset);
     cell.value = column.header;
     cell.font = { bold: true, color: { argb: "FFFFFFFF" } };
@@ -81,10 +95,18 @@ export async function buildWaystarOutputWorkbook(options: {
     const result = options.results.get(rowIndex);
     const error = options.errors.get(rowIndex);
     const worksheetRow = sheet.getRow(rowIndex);
-    OUTPUT_COLUMNS.forEach((column, offset) => {
+    outputColumns.forEach((column, offset) => {
       const cell = worksheetRow.getCell(outputStartColumn + offset);
       cell.value = formatOutputValue(column.value(row, result, error)) as ExcelJS.CellValue;
-      cell.alignment = { vertical: "top", wrapText: true };
+cell.alignment = { vertical: "top", wrapText: true };
+      if (outputColumns === BCBS_OUTPUT_COLUMNS) {
+        cell.border = {
+          top: { style: "thin", color: { argb: "FFD9E2F3" } },
+          left: { style: "thin", color: { argb: "FFD9E2F3" } },
+          bottom: { style: "thin", color: { argb: "FFD9E2F3" } },
+          right: { style: "thin", color: { argb: "FFD9E2F3" } },
+        };
+      }
     });
   }
 

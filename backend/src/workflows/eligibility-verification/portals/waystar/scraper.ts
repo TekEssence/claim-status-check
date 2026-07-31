@@ -90,21 +90,24 @@ export function createWaystarRunner(): AutomationRunner<EligibilityRunInput> {
       let page: Page | null = null;
 
       try {
-        for (const batch of routing.batches) {
+        payerBatches: for (const batch of routing.batches) {
           const payer = getWaystarPayer(batch.payerId);
           const credentials = findWaystarCredentialsForPayer(credentialProfiles, payer);
           if (!credentials) {
             failureCount += batch.rows.length;
             completed += batch.rows.length;
             const message = `No matching Waystar credential row was found for ${payer.name}.`;
+            const expectedCredential = payer.credentialProject
+              ? `Portal=Waystar, Project=${payer.credentialProject}, and Payer=${payer.name}`
+              : `Portal=Waystar and Payer=${payer.name}`;
             for (const row of batch.rows) rowErrors.set(row.originalIndex, message);
             await context.log({
               level: "error",
-              message: `No matching Waystar credential row was found for ${payer.name}. Add a row with Portal=Waystar and Payer=${payer.name}.`,
+              message: `No matching Waystar credential row was found for ${payer.name}. Add a row with ${expectedCredential}.`,
               eventName: "eligibility_credentials_not_found",
               meta: { payerId: payer.id, rowCount: batch.rows.length },
             });
-            errorReportLines.push(`${payer.name}: no matching credential row. Expected Portal=Waystar and Payer=${payer.name}.`);
+            errorReportLines.push(`${payer.name}: no matching credential row. Expected ${expectedCredential}.`);
             await context.emit({ type: "progress", completed, total: routing.totalRows });
             continue;
           }
@@ -123,15 +126,16 @@ export function createWaystarRunner(): AutomationRunner<EligibilityRunInput> {
             });
 
             let batchSuccessCount = 0;
+            const timeoutRetryCounts = new Map<number, number>();
             for (let rowPosition = 0; rowPosition < batch.rows.length; rowPosition += 1) {
               const row = batch.rows[rowPosition];
               if (context.isCancelled?.()) {
                 await context.log({
                   level: "warn",
-                  message: "Eligibility run cancellation requested. Stopping after the current row.",
+                  message: "Eligibility run cancellation requested. Creating an Excel file from completed rows.",
                   eventName: "eligibility_cancel_requested",
                 });
-                return;
+                break payerBatches;
               }
 
               try {
@@ -184,8 +188,20 @@ export function createWaystarRunner(): AutomationRunner<EligibilityRunInput> {
                 });
                 batchSuccessCount += 1;
               } catch (error) {
-                failureCount += 1;
                 const message = error instanceof Error ? error.message : "Unknown Waystar eligibility automation error.";
+                const timeoutRetries = timeoutRetryCounts.get(row.originalIndex) ?? 0;
+                if (isWaystarInquiryTimeout(message) && timeoutRetries < 1) {
+                  timeoutRetryCounts.set(row.originalIndex, timeoutRetries + 1);
+                  batch.rows.push(row);
+                  await context.log({
+                    level: "warn",
+                    message: `${payer.name} eligibility row ${row.originalIndex} timed out at the payer. Deferred until the remaining rows finish.`,
+                    rowIndex: row.originalIndex,
+                    eventName: "eligibility_row_deferred_timeout",
+                  });
+                  continue;
+                }
+                failureCount += 1;
                 await context.log({
                   level: "error",
                   message: `${payer.name} eligibility row ${row.originalIndex} failed; no eligibility data was extracted. Reason: ${message}`,
@@ -353,6 +369,23 @@ export function describeEligibilityExtraction(result: EligibilityResult): {
   extracted: string[];
   missing: string[];
 } {
+  if ((result.payerId === "baycare-plus-medicare-advantage" || result.payerId === "aetna-medicare-ppo")) {
+    const fields = [
+      { label: "Coverage Status", value: result.coverageStatus !== "unknown" && result.coverageStatus !== "error", required: true },
+      { label: "Eff Date", value: Boolean(result.effectiveDate), required: false },
+      { label: "End Date", value: Boolean(result.terminationDate), required: false },
+      { label: "Other Ins", value: Boolean(result.otherInsurance), required: false },
+      { label: "Other Ins Eff Date", value: Boolean(result.otherInsuranceEffectiveDate), required: false },
+      { label: "Relationship to Subscriber", value: Boolean(result.relationshipToSubscriber), required: true },
+      { label: "Plan Type", value: Boolean(result.planType), required: true },
+      { label: "Bot Insurance Type", value: Boolean(result.insuranceType), required: true },
+    ];
+    return {
+      extracted: fields.filter((field) => field.value).map((field) => field.label),
+      missing: fields.filter((field) => field.required && !field.value).map((field) => field.label),
+    };
+  }
+
   const extracted: string[] = [];
   const missing: string[] = [];
 for (const field of ELIGIBILITY_RESULT_FIELDS) {
@@ -374,7 +407,9 @@ for (const field of ELIGIBILITY_RESULT_FIELDS) {
 function isFailedAtPayerResult(result: EligibilityResult): boolean {
   return String(result.planStatus || "").toLowerCase().includes("failed at payer");
 }
-function isBatchBlockingError(message: string): boolean {
+function isWaystarInquiryTimeout(message: string): boolean {
+  return message.toLowerCase().includes("eligibility inquiry timed out at the payer");
+}function isBatchBlockingError(message: string): boolean {
   const normalized = message.toLowerCase();
   return [
     "payer selection did not activate",

@@ -1,4 +1,4 @@
-import type { Locator, Page } from "playwright-core";
+import type { BrowserContext, Locator, Page } from "playwright-core";
 import { WAYSTAR_SELECTORS } from "./selectors";
 import type { WaystarCredentials, WaystarSecurityQuestion } from "./credentials";
 import type { EligibilityInputRow } from "../../types";
@@ -38,8 +38,12 @@ export type WaystarInquiryPayload = {
   subscriberCoverageInformation?: {
     groupNumber?: string;
     planDate?: string;
+    planBeginDate?: string;
+    planEndDate?: string;
     premiumPaidToDateEnd?: string;
     insuranceType?: string;
+    otherInsurance?: string;
+    otherInsuranceEffectiveDate?: string;
   };
   general?: { primaryCareProvider?: string; ipa?: string };
   healthBenefitPlanCoverage?: {
@@ -60,6 +64,8 @@ const WAYSTAR_PAYER_SUGGESTION_SELECTOR = [
   ".ui-autocomplete li:visible",
 ].join(", ");
 
+const authenticatedWaystarContexts = new WeakSet<BrowserContext>();
+
 export async function loginToWaystar(page: Page, credentials: WaystarCredentials): Promise<void> {
   await page.goto(credentials.loginUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
   await page.locator(WAYSTAR_SELECTORS.login.username).first().waitFor({ state: "visible", timeout: 30000 });
@@ -79,6 +85,7 @@ export async function loginToWaystar(page: Page, credentials: WaystarCredentials
     state: "visible",
     timeout: 30000,
   });
+  authenticatedWaystarContexts.add(page.context());
 }
 
 export async function openEligibilityInquiry(page: Page): Promise<Page> {
@@ -142,7 +149,7 @@ export async function submitWaystarInquiry(options: {
   const inquiryPage = await openEligibilityInquiry(page);
   await humanPause(inquiryPage, 650, 1200);
   const expectedServiceType = normalizeServiceTypeCode(row.serviceType) || credentials.serviceTypeCode;
-  const expectedMemberId = row.memberId || row.subscriberId || "";
+  const expectedMemberId = normalizeWaystarMemberIdForPayer(payerName, row.memberId || row.subscriberId || "");
   const expectedLastName = row.patientLastName || "";
   const expectedFirstName = row.patientFirstName || "";
   const expectedDateOfBirth = normalizeWaystarDate(row.dateOfBirth || "");
@@ -153,19 +160,20 @@ export async function submitWaystarInquiry(options: {
   await humanPause(inquiryPage);
   await selectProvider(inquiryPage, credentials);
   await humanPause(inquiryPage);
-  await selectServiceType(inquiryPage, expectedServiceType);
-  await humanPause(inquiryPage);
   const patientLookup = inquiryPage.locator(WAYSTAR_SELECTORS.inquiry.patientLookup).first();
   if (await patientLookup.isVisible().catch(() => false)) {
     const hasLookupOption = await patientLookup.locator('option[value="10"]').count() > 0;
     if (hasLookupOption) await patientLookup.selectOption("10");
   }
   await humanPause(inquiryPage);
+  await selectServiceType(inquiryPage, expectedServiceType);
   await waitForBlockingOverlaysToClear(inquiryPage, 30000);
+  await dismissWaystarDatePicker(inquiryPage);
   await fillVerifiedText(inquiryPage, WAYSTAR_SELECTORS.inquiry.memberId, expectedMemberId, "Member ID");
   await fillVerifiedText(inquiryPage, WAYSTAR_SELECTORS.inquiry.lastName, expectedLastName, "Last Name");
   await fillVerifiedText(inquiryPage, WAYSTAR_SELECTORS.inquiry.firstName, expectedFirstName, "First Name");
   await fillVerifiedText(inquiryPage, WAYSTAR_SELECTORS.inquiry.dateOfBirth, expectedDateOfBirth, "Date of Birth", true);
+  await dismissWaystarDatePicker(inquiryPage);
   await verifyInquiryFieldsBeforeSubmit(inquiryPage, {
     serviceTypeCode: expectedServiceType,
     memberId: expectedMemberId,
@@ -181,14 +189,37 @@ export async function submitWaystarInquiry(options: {
   ]);
 
   await inquiryPage.waitForTimeout(500);
-  await waitForBlockingOverlaysToClear(inquiryPage, 90000);
-  await inquiryPage.locator(WAYSTAR_SELECTORS.inquiry.responseReady).first().waitFor({
-    state: "visible",
-    timeout: 90000,
-  });
+  const timeoutDialog = inquiryPage.getByText("Eligibility Inquiry Timed Out", { exact: true });
+  const outcome = await Promise.race([
+    inquiryPage.waitForFunction(({ overallStatusSelector, sectionStatusSelector }) => {
+      const overallStatus = document.querySelector(overallStatusSelector)?.textContent || "";
+      const sectionStatuses = Array.from(document.querySelectorAll(sectionStatusSelector))
+        .map((element) => element.textContent || "")
+        .join(" ");
+      const visiblePageText = document.body.innerText || "";
+      const returnedStatus = `${overallStatus} ${sectionStatuses}`;
+      return /\b(?:inactive|active)\b/i.test(returnedStatus) ||
+        /\b(?:failed at payer|subscriber not found)\b/i.test(returnedStatus) ||
+        /\b(?:inactive|active)\s+coverage\b/i.test(visiblePageText);
+    }, {
+      overallStatusSelector: sanitizeDomSelector(WAYSTAR_SELECTORS.inquiry.activeCoverage),
+      sectionStatusSelector: sanitizeDomSelector(WAYSTAR_SELECTORS.inquiry.sectionStatus),
+    }, { timeout: 300000 }).then(() => "response" as const),
+    timeoutDialog.waitFor({ state: "visible", timeout: 300000 }).then(() => "timeout" as const),
+  ]);
+  if (outcome === "timeout") {
+    await inquiryPage.getByRole("button", { name: "New Inquiry", exact: true }).click()
+      .catch(() => inquiryPage.getByText("New Inquiry", { exact: true }).click());
+    await waitForInquiryControls(inquiryPage);
+    throw new Error("Waystar eligibility inquiry timed out at the payer.");
+  }
+  // Waystar can leave its loading overlay mounted after the payer result is
+  // already visible. Do not turn a visible ACTIVE/INACTIVE response into an
+  // automation error just because that stale overlay did not disappear.
+  await waitForBlockingOverlaysToClear(inquiryPage, 10000).catch(() => {});
   // The status bar can appear before all payer-returned sections finish rendering.
   // Keep the result visible before taking the DOM snapshot.
-  await humanPause(inquiryPage, 8000, 12000);
+  await inquiryPage.waitForTimeout(2000);
 
   // --- TEMPORARY DEBUG DUMP: remove once we've extended the scraper ---
   
@@ -314,7 +345,9 @@ const dataId = header.getAttribute("data-id");
     }
 
     // ---- overall status + fallback section list (unchanged) ----
-    const overallStatus = textOf(document.querySelector(selectors.inquiry.activeCoverageDom));
+    const statusElementText = textOf(document.querySelector(selectors.inquiry.activeCoverageDom));
+    const visibleCoverageBanner = document.body.innerText.match(/\b(?:INACTIVE|ACTIVE)\s+COVERAGE\b/i)?.[0];
+    const overallStatus = visibleCoverageBanner || statusElementText;
     const sectionStatuses = Array.from(document.querySelectorAll(selectors.inquiry.sectionHeaders)).map((element) => ({
       title: textOf(element.querySelector(selectors.inquiry.sectionTitle)),
       status: textOf(element.querySelector(selectors.inquiry.sectionStatus)),
@@ -343,8 +376,12 @@ const dataId = header.getAttribute("data-id");
     const subscriberCoverageInformation = coverageBlock ? {
       groupNumber: coverageBlock.fields["Group Number"],
       planDate: coverageBlock.fields["Plan Date"],
+      planBeginDate: coverageBlock.fields["Plan Begin Date"],
+      planEndDate: coverageBlock.fields["Plan End Date"],
       premiumPaidToDateEnd: coverageBlock.fields["Premium Paid-to Date End"],
       insuranceType: coverageBlock.fields["Insurance Type"],
+      otherInsurance: coverageBlock.fields["Other Insurance"] ?? coverageBlock.fields["Other Ins"] ?? findRowValueByLabel("Other Insurance") ?? findRowValueByLabel("Other Ins"),
+      otherInsuranceEffectiveDate: coverageBlock.fields["Other Insurance Effective Date"] ?? coverageBlock.fields["Other Insurance Eff Date"] ?? coverageBlock.fields["Other Ins Eff Date"] ?? findRowValueByLabel("Other Insurance Effective Date") ?? findRowValueByLabel("Other Insurance Eff Date") ?? findRowValueByLabel("Other Ins Eff Date"),
     } : undefined;
 
     const primaryCareProvider = findRowValueByLabel("Primary Care Provider");
@@ -362,7 +399,7 @@ const dataId = header.getAttribute("data-id");
     } | undefined;
 
     if (hbpc) {
-      const hbpcSections = parseSectionContents(hbpc.contents);
+      const hbpcSections = selectors.minimalEligibilityOnly ? [] : parseSectionContents(hbpc.contents);
       const planTypeEl = hbpc.contents?.querySelector(".InsuranceType") ?? null;
       healthBenefitPlanCoverage = {
         coverageDescription: findRowValueByLabel("Coverage Description"),
@@ -379,7 +416,7 @@ const dataId = header.getAttribute("data-id");
       const normalized = title.toLowerCase();
       return normalized.includes("professional") && normalized.includes("office");
     });
-    const professionalOffice = officeSection ? parseSectionContents(officeSection.contents) : undefined;
+    const professionalOffice = selectors.minimalEligibilityOnly ? undefined : officeSection ? parseSectionContents(officeSection.contents) : undefined;
 
     return {
       overallStatus,
@@ -392,6 +429,7 @@ const dataId = header.getAttribute("data-id");
       professionalOffice,
     };
   }, {
+    minimalEligibilityOnly: isExactWaystarPayerMatch(payerName, "BayCare Plus Medicare Advantage (81079)") || isExactWaystarPayerMatch(payerName, "Aetna (Medicare Advantage) (60054MA)"),
     inquiry: {
       activeCoverageDom: sanitizeDomSelector(WAYSTAR_SELECTORS.inquiry.activeCoverage),
       sectionHeaders: sanitizeDomSelector(WAYSTAR_SELECTORS.inquiry.sectionHeaders),
@@ -424,6 +462,14 @@ export function resolveWaystarSecurityAnswer(
   return partialMatch?.answer ?? null;
 }
 
+export function normalizeWaystarMemberIdForPayer(payerName: string, memberId: string): string {
+  const value = memberId.trim();
+  const isBayCare = isExactWaystarPayerMatch(
+    payerName,
+    "BayCare Plus Medicare Advantage (81079)",
+  );
+  return isBayCare && /^\d+$/.test(value) ? `000${value}` : value;
+}
 export function isExactWaystarPayerMatch(candidate: string, target: string): boolean {
   const normalizedCandidate = normalizePayerSuggestion(candidate);
   const normalizedTarget = normalizePayerSuggestion(target);
@@ -671,9 +717,8 @@ async function typePayerSearch(page: Page, payerInput: Locator, searchTerm: stri
     );
   }
 
-  // Keep focus on the autocomplete. Dispatching change/blur here closes Waystar's
-  // suggestion menu before its selection callback can populate the provider list.
-  await page.waitForTimeout(500);
+  // Keep focus while Waystar opens the autocomplete suggestions.
+  await page.waitForTimeout(50);
 }
 
 async function isProviderReady(page: Page, timeoutMs = 5000): Promise<boolean> {
@@ -688,11 +733,11 @@ async function isProviderReady(page: Page, timeoutMs = 5000): Promise<boolean> {
 async function commitTypedPayerSelection(payerInput: Locator): Promise<void> {
   await payerInput.press("ArrowDown").catch(() => {});
   await payerInput.press("Enter").catch(() => {});
-  await payerInput.page().waitForTimeout(400);
+  await payerInput.page().waitForTimeout(50);
   await payerInput.press("Enter").catch(() => {});
-  await payerInput.page().waitForTimeout(250);
+  await payerInput.page().waitForTimeout(50);
   await payerInput.press("Tab").catch(() => {});
-  await payerInput.page().waitForTimeout(250);
+  await payerInput.page().waitForTimeout(50);
 }
 
 async function selectServiceType(page: Page, serviceTypeCode: string): Promise<void> {
@@ -766,28 +811,48 @@ async function clickAddCodeIfVisible(page: Page): Promise<void> {
   await page.waitForTimeout(300);
 }
 
+async function dismissWaystarDatePicker(page: Page): Promise<void> {
+  await page.keyboard.press("Escape").catch(() => {});
+  const datePicker = page.locator("#ui-datepicker-div:visible").first();
+  if (await datePicker.isVisible().catch(() => false)) {
+    await datePicker.evaluate((element) => {
+      (element as HTMLElement).style.display = "none";
+    }).catch(() => {});
+  }
+}
 async function fillVerifiedText(page: Page, selector: string, value: string, label: string, compareAsDate = false): Promise<void> {
   const input = page.locator(selector).first();
   await input.waitFor({ state: "visible", timeout: 30000 });
-  await humanPause(page, 250, 600);
+  await waitForEnabled(input, `Waystar ${label}`);
   await humanType(input, value);
+  await commitInputValue(input);
+  await page.waitForTimeout(50);
+
+  let actualValue = await input.inputValue().catch(() => "");
+  let matches = compareAsDate ? waystarDatesMatch(actualValue, value) : actualValue.trim() === value.trim();
+  if (!matches) {
+    await input.click();
+    await input.press("Control+A").catch(() => {});
+    await input.press("Backspace").catch(() => {});
+    await input.pressSequentially(value, { delay: randomBetween(25, 40) });
+    await commitInputValue(input);
+    await page.waitForTimeout(150);
+    actualValue = await input.inputValue().catch(() => "");
+    matches = compareAsDate ? waystarDatesMatch(actualValue, value) : actualValue.trim() === value.trim();
+  }
+  if (!matches) {
+    throw new Error(`Waystar ${label} did not fill correctly. Expected ${value}, found ${actualValue || "blank"}.`);
+  }
+}
+
+async function commitInputValue(input: Locator): Promise<void> {
   await input.evaluate((element) => {
     const field = element as HTMLInputElement;
     field.dispatchEvent(new Event("input", { bubbles: true }));
     field.dispatchEvent(new Event("change", { bubbles: true }));
     field.dispatchEvent(new Event("blur", { bubbles: true }));
   }).catch(() => {});
-  await page.waitForTimeout(500);
-
-  const actualValue = await input.inputValue().catch(() => "");
-  const matches = compareAsDate
-    ? waystarDatesMatch(actualValue, value)
-    : actualValue.trim() === value.trim();
-  if (!matches) {
-    throw new Error(`Waystar ${label} did not fill correctly. Expected ${value}, found ${actualValue || "blank"}.`);
-  }
 }
-
 async function verifyInquiryFieldsBeforeSubmit(
   page: Page,
   expected: {
@@ -797,6 +862,7 @@ async function verifyInquiryFieldsBeforeSubmit(
     firstName: string;
     dateOfBirth: string;
   },
+  retryCount = 0,
 ): Promise<void> {
   const snapshot = await readInquirySnapshot(page);
   const missing: string[] = [];
@@ -819,8 +885,18 @@ async function verifyInquiryFieldsBeforeSubmit(
     missing.push(`dateOfBirth=${snapshot.dateOfBirth || "blank"}`);
   }
 
+  if (missing.length > 0 && retryCount === 0) {
+    await dismissWaystarDatePicker(page);
+    await selectServiceType(page, expected.serviceTypeCode);
+    await fillVerifiedText(page, WAYSTAR_SELECTORS.inquiry.memberId, expected.memberId, "Member ID");
+    await fillVerifiedText(page, WAYSTAR_SELECTORS.inquiry.lastName, expected.lastName, "Last Name");
+    await fillVerifiedText(page, WAYSTAR_SELECTORS.inquiry.firstName, expected.firstName, "First Name");
+    await fillVerifiedText(page, WAYSTAR_SELECTORS.inquiry.dateOfBirth, expected.dateOfBirth, "Date of Birth", true);
+    await dismissWaystarDatePicker(page);
+    return verifyInquiryFieldsBeforeSubmit(page, expected, 1);
+  }
   if (missing.length > 0) {
-    throw new Error(`Waystar inquiry fields were not present on the page before submit. ${missing.join(", ")}.`);
+    throw new Error(`Waystar inquiry fields were not present on the page before submit after one refill. ${missing.join(", ")}.`);
   }
 }
 
@@ -886,10 +962,13 @@ function payerSearchTerms(payerName: string): string[] {
 
 async function waitForBlockingOverlaysToClear(page: Page, timeoutMs: number): Promise<void> {
   const overlays = page.locator(WAYSTAR_SELECTORS.inquiry.blockingOverlay);
-  if (await overlays.count().catch(() => 0) === 0) return;
-  await overlays.first().waitFor({ state: "hidden", timeout: timeoutMs });
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await overlays.count().catch(() => 0) === 0) return;
+    await page.waitForTimeout(500);
+  }
+  throw new Error(`Waystar remained on its loading screen for ${Math.round(timeoutMs / 1000)} seconds.`);
 }
-
 async function recoverStaleInquiryOverlay(page: Page): Promise<void> {
   const overlays = page.locator(WAYSTAR_SELECTORS.inquiry.blockingOverlay);
   if (await overlays.count().catch(() => 0) === 0) return;
@@ -904,13 +983,15 @@ async function humanType(locator: Locator, value: string): Promise<void> {
   await locator.click();
   await locator.press("Control+A").catch(() => {});
   await locator.press("Backspace").catch(() => {});
-  await locator.pressSequentially(value, { delay: randomBetween(85, 140) });
+  const delay = authenticatedWaystarContexts.has(locator.page().context())
+    ? randomBetween(8, 18)
+    : randomBetween(85, 140);
+  await locator.pressSequentially(value, { delay });
 }
-
 async function humanPause(page: Page, minimumMs = 800, maximumMs = 1400): Promise<void> {
+  if (authenticatedWaystarContexts.has(page.context())) return;
   await page.waitForTimeout(randomBetween(minimumMs, maximumMs));
 }
-
 function randomBetween(minimum: number, maximum: number): number {
   return Math.floor(Math.random() * (maximum - minimum + 1)) + minimum;
 }

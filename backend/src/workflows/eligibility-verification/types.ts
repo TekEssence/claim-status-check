@@ -37,6 +37,8 @@ export type EligibilityResult = {
   terminationDate?: string;
   premiumPaidEndDate?: string;
   insuranceType?: string;
+  otherInsurance?: string;
+  otherInsuranceEffectiveDate?: string;
   patientName?: string;
   relationshipToSubscriber?: string;
   address?: string;

@@ -10,6 +10,7 @@ export function WaystarResultView(props: {
   errorScreenshots: ErrorScreenshot[];
   progress: JobProgressValue | null;
   downloads: Array<{ filename: string; base64: string; mimeType: string }>;
+  resultRows?: Array<Record<string, string>>;
   onDownload: (filename: string, base64: string, mimeType: string) => void;
 }) {
   return (
@@ -31,7 +32,22 @@ export function WaystarResultView(props: {
           ))}
         </div>
       ) : null}
-      <ScreenshotViewer screenshots={props.errorScreenshots} />
+      {props.resultRows && props.resultRows.length > 0 ? (
+        <div className="mt-5 overflow-x-auto rounded-xl border border-sky-100">
+          <table className="min-w-max text-left text-sm">
+            <thead className="bg-sky-50 text-slate-700">
+              <tr>{Object.keys(props.resultRows[0]).map((header) => <th key={header} className="whitespace-nowrap border-b border-sky-100 px-3 py-2 font-semibold">{header}</th>)}</tr>
+            </thead>
+            <tbody>
+              {props.resultRows.map((row, index) => (
+                <tr key={index} className="bg-white">
+                  {Object.keys(props.resultRows![0]).map((header) => <td key={header} className="whitespace-nowrap border-b border-sky-50 px-3 py-2 text-slate-700">{row[header] || ""}</td>)}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : null}      <ScreenshotViewer screenshots={props.errorScreenshots} />
       <LogsPanel logs={props.logs} />
       {!props.status && !props.progress && props.logs.length === 0 && props.errorScreenshots.length === 0 ? <p className="mt-4 text-sm text-slate-400">No activity yet.</p> : null}
     </div>

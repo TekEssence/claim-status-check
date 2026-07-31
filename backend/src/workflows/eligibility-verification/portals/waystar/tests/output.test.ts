@@ -51,35 +51,17 @@ test("creates a Waystar output workbook with verified inputs, results, and row e
   await styledWorkbook.xlsx.load(output);
   const styledSheet = styledWorkbook.worksheets[0];
   const generatedHeader = styledSheet.getRow(1).getCell(5);
-  assert.equal(generatedHeader.value, "Bot Entered Relationship to Subscriber");
+  assert.equal(generatedHeader.value, "Coverage Status");
   assert.equal(generatedHeader.font.bold, true);
-  assert.equal(generatedHeader.font.color?.argb, "FFFFFFFF");
-  assert.equal(generatedHeader.fill.type, "pattern");
-  assert.equal(generatedHeader.fill.type === "pattern" ? generatedHeader.fill.fgColor?.argb : undefined, "FF1F4E78");
+  const headerValues = styledSheet.getRow(1).values as unknown[];
+  assert.deepEqual(headerValues.slice(5), [
+    "Coverage Status", "Eff Date", "End Date", "Other Ins",
+    "Other Ins Eff Date", "Relationship to Subscriber", "Plan Type", "Bot Insurance Type",
+  ]);
 
   const workbook = XLSX.read(output, { type: "buffer" });
-  const rows = XLSX.utils.sheet_to_json<Record<string, string>>(
-    workbook.Sheets[workbook.SheetNames[0]],
-    { defval: "" },
-  );
-
-  assert.equal("Bot Entered First Name" in rows[0], false);
-  assert.equal("Bot Entered Last Name" in rows[0], false);
-  assert.equal("Bot Entered Member ID" in rows[0], false);
-  assert.equal("Bot Entered Date of Birth" in rows[0], false);
-  assert.equal("Bot Address" in rows[0], false);
-  assert.equal("Bot Sex" in rows[0], false);
-  assert.equal(rows[0]["Bot Coverage Status"], "active");
-  assert.equal("Bot Plan Status" in rows[0], false);
-  const headerValues = styledSheet.getRow(1).values as unknown[];
-  assert.equal(headerValues.indexOf("Bot Network"), headerValues.indexOf("Bot Coverage Status") + 1);
-  assert.equal(rows[0]["Bot Plan Name"], "PPO");
-  assert.equal(rows[0]["Bot Plan Type"], "-");
-  assert.equal(rows[0]["Bot Entered Relationship to Subscriber"], "Spouse");
-  assert.equal(rows[0]["Bot Error"], "-");
-  assert.equal("Bot Patient Name" in rows[0], false);
-  assert.equal("Bot Relationship to Subscriber" in rows[0], false);
-  assert.equal("Bot Member ID" in rows[0], false);
-  assert.equal("Bot Date of Birth" in rows[0], false);
-  assert.equal(rows[1]["Bot Error"], "Portal response was unavailable.");
-});
+  const rows = XLSX.utils.sheet_to_json<Record<string, string>>(workbook.Sheets[workbook.SheetNames[0]], { defval: "" });
+  assert.equal(rows[0]["Coverage Status"], "active");
+  assert.equal(rows[0]["Relationship to Subscriber"], "Spouse");
+  assert.equal("Bot Network" in rows[0], false);
+  assert.equal("Bot Error" in rows[0], false);});
