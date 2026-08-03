@@ -1,4 +1,4 @@
-import * as XLSX from "xlsx";
+﻿import * as XLSX from "xlsx";
 import type {
   EligibilityInputRow,
   EligibilityPayerBatch,
@@ -298,6 +298,8 @@ function resolveWaystarPayer(
     (entry) => normalizeHeader(entry.inputInsurancePayerState) === normalizedInsuranceName,
   );
   if (mapping) {
+    // A configured mapping is authoritative. Never silently fall back to the
+    // input payer, because that can select a different Waystar payer.
     return matchWaystarPayerByPortalName(mapping.payerPortal);
   }
 
@@ -334,3 +336,4 @@ function asText(value: unknown): string {
   if (value === null || value === undefined) return "";
   return String(value).trim();
 }
+

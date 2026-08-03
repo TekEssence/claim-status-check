@@ -65,6 +65,7 @@ const WAYSTAR_PAYER_SUGGESTION_SELECTOR = [
 ].join(", ");
 
 const authenticatedWaystarContexts = new WeakSet<BrowserContext>();
+const cardSwipeAutoClosePages = new WeakSet<Page>();
 
 export async function loginToWaystar(page: Page, credentials: WaystarCredentials): Promise<void> {
   await page.goto(credentials.loginUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
@@ -93,6 +94,7 @@ export async function openEligibilityInquiry(page: Page): Promise<Page> {
     candidate !== page && !candidate.isClosed() && candidate.url().includes("eligibility.zirmed.com/DDE"),
   );
   if (existingInquiryPage) {
+    await enableCardSwipeAutoClose(existingInquiryPage);
     await existingInquiryPage.bringToFront().catch(() => {});
     await recoverStaleInquiryOverlay(existingInquiryPage);
     const changeInquiry = existingInquiryPage.locator(
@@ -133,12 +135,50 @@ export async function openEligibilityInquiry(page: Page): Promise<Page> {
 
   const popup = await popupPromise;
   const inquiryPage = popup ?? page;
+  await enableCardSwipeAutoClose(inquiryPage);
   await inquiryPage.waitForLoadState("domcontentloaded").catch(() => {});
   await inquiryPage.bringToFront().catch(() => {});
   await waitForInquiryControls(inquiryPage);
   return inquiryPage;
 }
 
+async function enableCardSwipeAutoClose(page: Page): Promise<void> {
+  const installAutoClose = () => {
+    const state = window as typeof window & { __waystarCardSwipeObserver?: MutationObserver };
+    const dismiss = () => {
+      const titles = Array.from(document.querySelectorAll(".ui-dialog-title"));
+      for (const title of titles) {
+        if (!/^card\s*swipe$/i.test(title.textContent?.trim() || "")) continue;
+        const dialog = title.closest(".ui-dialog") ?? title.parentElement?.parentElement;
+        const closeIcon = dialog?.querySelector<HTMLElement>(".ui-icon-closethick");
+        const closeButton = closeIcon?.closest<HTMLElement>(
+          ".ui-dialog-titlebar-close, button, a",
+        ) ?? dialog?.querySelector<HTMLElement>(".ui-dialog-titlebar-close");
+        closeButton?.click();
+      }
+    };
+
+    if (!state.__waystarCardSwipeObserver) {
+      state.__waystarCardSwipeObserver = new MutationObserver(dismiss);
+      state.__waystarCardSwipeObserver.observe(document.documentElement, {
+        childList: true,
+        subtree: true,
+        characterData: true,
+        attributes: true,
+      });
+    }
+    dismiss();
+  };
+
+  if (!cardSwipeAutoClosePages.has(page)) {
+    cardSwipeAutoClosePages.add(page);
+    await page.addInitScript(installAutoClose);
+  }
+
+  // addInitScript applies to future documents. Install it immediately on the
+  // already-open DDE document too, so dialogs created by AJAX are closed.
+  await page.evaluate(installAutoClose).catch(() => {});
+}
 export async function submitWaystarInquiry(options: {
   page: Page;
   credentials: WaystarCredentials;
@@ -189,31 +229,19 @@ export async function submitWaystarInquiry(options: {
   ]);
 
   await inquiryPage.waitForTimeout(500);
-  const timeoutDialog = inquiryPage.getByText("Eligibility Inquiry Timed Out", { exact: true });
-  const outcome = await Promise.race([
-    inquiryPage.waitForFunction(({ overallStatusSelector, sectionStatusSelector }) => {
-      const overallStatus = document.querySelector(overallStatusSelector)?.textContent || "";
-      const sectionStatuses = Array.from(document.querySelectorAll(sectionStatusSelector))
-        .map((element) => element.textContent || "")
-        .join(" ");
-      const visiblePageText = document.body.innerText || "";
-      const returnedStatus = `${overallStatus} ${sectionStatuses}`;
-      return /\b(?:inactive|active)\b/i.test(returnedStatus) ||
-        /\b(?:failed at payer|subscriber not found)\b/i.test(returnedStatus) ||
-        /\b(?:inactive|active)\s+coverage\b/i.test(visiblePageText);
-    }, {
-      overallStatusSelector: sanitizeDomSelector(WAYSTAR_SELECTORS.inquiry.activeCoverage),
-      sectionStatusSelector: sanitizeDomSelector(WAYSTAR_SELECTORS.inquiry.sectionStatus),
-    }, { timeout: 300000 }).then(() => "response" as const),
-    timeoutDialog.waitFor({ state: "visible", timeout: 300000 }).then(() => "timeout" as const),
-  ]);
+  const outcome = await waitForWaystarEligibilityOutcome(inquiryPage, 900000);
   if (outcome === "timeout") {
     await inquiryPage.getByRole("button", { name: "New Inquiry", exact: true }).click()
       .catch(() => inquiryPage.getByText("New Inquiry", { exact: true }).click());
     await waitForInquiryControls(inquiryPage);
     throw new Error("Waystar eligibility inquiry timed out at the payer.");
   }
-  // Waystar can leave its loading overlay mounted after the payer result is
+  if (outcome === "login") {
+    throw new Error("Waystar session returned to the login page while waiting for the payer response.");
+  }
+  if (outcome === "stalled") {
+    throw new Error("Waystar eligibility inquiry timed out while waiting for the payer response.");
+  }  // Waystar can leave its loading overlay mounted after the payer result is
   // already visible. Do not turn a visible ACTIVE/INACTIVE response into an
   // automation error just because that stale overlay did not disappear.
   await waitForBlockingOverlaysToClear(inquiryPage, 10000).catch(() => {});
@@ -313,7 +341,7 @@ const dataId = header.getAttribute("data-id");
 
     // Reads a labeled two-column block (e.g. "Subscriber Information").
     // Waystar echoes the bot-entered data first, then the payer-returned data
-    // under the same heading further down the page — we want the LAST match.
+    // under the same heading further down the page â€” we want the LAST match.
     function readHalfColumn(headingText: string) {
       const halfColumns = Array.from(document.querySelectorAll(".HalfColumn"));
       const matches = halfColumns.filter((hc) =>
@@ -333,10 +361,15 @@ const dataId = header.getAttribute("data-id");
       return { fields, name, address };
     }
 
+    function normalizeFieldLabel(value: string): string {
+      return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+    }
+
     function findRowValueByLabel(label: string): string | undefined {
-      const rows = Array.from(document.querySelectorAll(".SectionContents .Row.clearfix"));
+      const wantedLabel = normalizeFieldLabel(label);
+      const rows = Array.from(document.querySelectorAll(".SectionContents .Row.clearfix, .HalfColumn .Row.clearfix"));
       for (const row of rows) {
-        if (textOf(row.querySelector(".Label")) === label) {
+        if (normalizeFieldLabel(textOf(row.querySelector(".Label"))) === wantedLabel) {
           const value = valueOf(row);
           if (value) return value;
         }
@@ -346,7 +379,7 @@ const dataId = header.getAttribute("data-id");
 
     // ---- overall status + fallback section list (unchanged) ----
     const statusElementText = textOf(document.querySelector(selectors.inquiry.activeCoverageDom));
-    const visibleCoverageBanner = document.body.innerText.match(/\b(?:INACTIVE|ACTIVE)\s+COVERAGE\b/i)?.[0];
+    const visibleCoverageBanner = document.body?.innerText.match(/\b(?:INACTIVE|ACTIVE)\s+COVERAGE\b/i)?.[0];
     const overallStatus = visibleCoverageBanner || statusElementText;
     const sectionStatuses = Array.from(document.querySelectorAll(selectors.inquiry.sectionHeaders)).map((element) => ({
       title: textOf(element.querySelector(selectors.inquiry.sectionTitle)),
@@ -373,15 +406,16 @@ const dataId = header.getAttribute("data-id");
     } : undefined;
 
     const coverageBlock = readHalfColumn("Subscriber Coverage Information");
+    const otherInsuranceBlock = readHalfColumn("Other Insurance Information") ?? readHalfColumn("Other Insurance");
     const subscriberCoverageInformation = coverageBlock ? {
       groupNumber: coverageBlock.fields["Group Number"],
-      planDate: coverageBlock.fields["Plan Date"],
-      planBeginDate: coverageBlock.fields["Plan Begin Date"],
-      planEndDate: coverageBlock.fields["Plan End Date"],
+      planDate: coverageBlock.fields["Plan Date"] || findRowValueByLabel("Plan Date"),
+      planBeginDate: coverageBlock.fields["Plan Begin Date"] || findRowValueByLabel("Plan Begin Date"),
+      planEndDate: coverageBlock.fields["Plan End Date"] || findRowValueByLabel("Plan End Date"),
       premiumPaidToDateEnd: coverageBlock.fields["Premium Paid-to Date End"],
       insuranceType: coverageBlock.fields["Insurance Type"],
-      otherInsurance: coverageBlock.fields["Other Insurance"] ?? coverageBlock.fields["Other Ins"] ?? findRowValueByLabel("Other Insurance") ?? findRowValueByLabel("Other Ins"),
-      otherInsuranceEffectiveDate: coverageBlock.fields["Other Insurance Effective Date"] ?? coverageBlock.fields["Other Insurance Eff Date"] ?? coverageBlock.fields["Other Ins Eff Date"] ?? findRowValueByLabel("Other Insurance Effective Date") ?? findRowValueByLabel("Other Insurance Eff Date") ?? findRowValueByLabel("Other Ins Eff Date"),
+      otherInsurance: otherInsuranceBlock?.fields["Payer Name"] ?? otherInsuranceBlock?.fields["Insurance Name"] ?? coverageBlock.fields["Other Insurance Payer Name"] ?? coverageBlock.fields["Other Insurance"] ?? coverageBlock.fields["Other Ins"] ?? findRowValueByLabel("Other Insurance Payer Name") ?? findRowValueByLabel("Other Payer Name") ?? findRowValueByLabel("Other Insurance") ?? findRowValueByLabel("Other Ins"),
+      otherInsuranceEffectiveDate: otherInsuranceBlock?.fields["Effective Date"] ?? otherInsuranceBlock?.fields["Eligibility Begin Date"] ?? coverageBlock.fields["Other Insurance Effective Date"] ?? coverageBlock.fields["Other Insurance Eff Date"] ?? coverageBlock.fields["Other Ins Eff Date"] ?? findRowValueByLabel("Other Insurance Effective Date") ?? findRowValueByLabel("Other Insurance Eff Date") ?? findRowValueByLabel("Other Ins Eff Date"),
     } : undefined;
 
     const primaryCareProvider = findRowValueByLabel("Primary Care Provider");
@@ -429,7 +463,7 @@ const dataId = header.getAttribute("data-id");
       professionalOffice,
     };
   }, {
-    minimalEligibilityOnly: isExactWaystarPayerMatch(payerName, "BayCare Plus Medicare Advantage (81079)") || isExactWaystarPayerMatch(payerName, "Aetna (Medicare Advantage) (60054MA)"),
+    minimalEligibilityOnly: isExactWaystarPayerMatch(payerName, "BayCare Plus Medicare Advantage (81079)") || isExactWaystarPayerMatch(payerName, "Aetna (Medicare Advantage) (60054MA)") || isExactWaystarPayerMatch(payerName, "United Healthcare(87726)") || isExactWaystarPayerMatch(payerName, "AARP Medicare Advantage Choice Plan (87726)"),
     inquiry: {
       activeCoverageDom: sanitizeDomSelector(WAYSTAR_SELECTORS.inquiry.activeCoverage),
       sectionHeaders: sanitizeDomSelector(WAYSTAR_SELECTORS.inquiry.sectionHeaders),
@@ -468,12 +502,23 @@ export function normalizeWaystarMemberIdForPayer(payerName: string, memberId: st
     payerName,
     "BayCare Plus Medicare Advantage (81079)",
   );
-  return isBayCare && /^\d+$/.test(value) ? `000${value}` : value;
+  const isUnitedHealthcare = isExactWaystarPayerMatch(payerName, "United Healthcare(87726)");
+  const isAarpMedicareComplete = isExactWaystarPayerMatch(payerName, "AARP Medicare Advantage Choice Plan (87726)");
+  return (isBayCare || isUnitedHealthcare || isAarpMedicareComplete) && /^\d+$/.test(value) ? `000${value}` : value;
 }
 export function isExactWaystarPayerMatch(candidate: string, target: string): boolean {
   const normalizedCandidate = normalizePayerSuggestion(candidate);
   const normalizedTarget = normalizePayerSuggestion(target);
   if (normalizedCandidate === normalizedTarget) return true;
+const candidateIsAarp = normalizedCandidate.includes("aarp");
+  const targetIsAarp = normalizedTarget.includes("aarp");
+  if (candidateIsAarp !== targetIsAarp) return false;
+if (
+    normalizedTarget.includes("united healthcare") &&
+    normalizedTarget.includes("all states") &&
+    normalizedCandidate.includes("united healthcare") &&
+    normalizedCandidate.includes("all states")
+  ) return true;
 
   const candidateId = extractWaystarPayerId(candidate);
   const targetId = extractWaystarPayerId(target);
@@ -952,14 +997,56 @@ async function selectProvider(page: Page, credentials: WaystarCredentials): Prom
   }
 }
 
-function payerSearchTerms(payerName: string): string[] {
+export function payerSearchTerms(payerName: string): string[] {
   const normalized = normalizeText(payerName);
+  if (normalized.includes("aarp medicare advantage choice plan")) {
+    return ["AARP Medicare Advantage Choice Plan", payerName];
+  }
+  if (extractWaystarPayerId(payerName) === "87726") {
+    return ["UHC", payerName];
+  }
+if (normalized.includes("united healthcare") && normalized.includes("all states")) {
+    return ["UHC", payerName];
+  }
   if (!normalized.includes("bcbs") && !normalized.includes("blue cross")) return [payerName];
 
   const state = normalized.includes("texas") ? "Texas" : normalized.includes("florida") ? "Florida" : "";
   return Array.from(new Set(["BCBS", state ? `BCBS ${state}` : "", payerName].filter(Boolean)));
 }
 
+async function waitForWaystarEligibilityOutcome(
+  page: Page,
+  timeoutMs: number,
+): Promise<"response" | "timeout" | "login" | "stalled"> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (page.isClosed()) return "stalled";
+    const state = await page.evaluate(({ overallStatusSelector, sectionStatusSelector }) => {
+      const bodyText = document.body?.innerText || "";
+      if (/Eligibility Inquiry Timed Out/i.test(bodyText)) return "timeout";
+      if (/login\.zirmed\.com/i.test(location.href) || document.querySelector("#loginName")) return "login";
+
+      const overallStatus = document.querySelector(overallStatusSelector)?.textContent || "";
+      const sectionStatuses = Array.from(document.querySelectorAll(sectionStatusSelector))
+        .map((element) => element.textContent || "")
+        .join(" ");
+      const returnedStatus = `${overallStatus} ${sectionStatuses}`;
+      const hasCoverageOutcome = /\b(?:inactive|active)\b/i.test(returnedStatus) ||
+        /\b(?:failed at payer|subscriber not found)\b/i.test(returnedStatus) ||
+        /\b(?:inactive|active)\s+coverage\b/i.test(bodyText);
+      const hasRenderedResult = Boolean(document.querySelector("#btnUpdateInquiry")) &&
+        (Boolean(document.querySelector(".SectionHeader")) || /Coverage Details/i.test(bodyText));
+      return hasCoverageOutcome || hasRenderedResult ? "response" : "waiting";
+    }, {
+      overallStatusSelector: sanitizeDomSelector(WAYSTAR_SELECTORS.inquiry.activeCoverage),
+      sectionStatusSelector: sanitizeDomSelector(WAYSTAR_SELECTORS.inquiry.sectionStatus),
+    }).catch(() => "waiting");
+
+    if (state !== "waiting") return state;
+    await page.waitForTimeout(1000);
+  }
+  return "stalled";
+}
 async function waitForBlockingOverlaysToClear(page: Page, timeoutMs: number): Promise<void> {
   const overlays = page.locator(WAYSTAR_SELECTORS.inquiry.blockingOverlay);
   const deadline = Date.now() + timeoutMs;
@@ -1044,3 +1131,8 @@ async function waitForEnabled(locator: Locator, label: string): Promise<void> {
 
   throw new Error(`${label} did not become enabled.`);
 }
+
+
+
+
+

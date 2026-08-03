@@ -1,12 +1,11 @@
 import { UnknownPortalError } from "../../../../core/errors";
 import { arpPayer } from "./payers/arp";
 import { aetnaMedicarePpoPayer } from "./payers/aetna-medicare-ppo";
+import { aarpMedicareCompletePayer } from "./payers/aarp-medicare-complete";
+import { unitedHealthcareAllStatesPayer } from "./payers/united-healthcare-all-states";
 import { amerigroupWellpointPayer } from "./payers/amerigroup";
 import { bayCarePlusMedicareAdvantagePayer } from "./payers/baycare-plus-medicare-advantage";
-import {
-  blueCrossBlueShieldFloridaPayer,
-  blueCrossBlueShieldTexasPayer,
-} from "./payers/blue-cross-blue-shield";
+import { bcbsPpoPayer } from "./payers/bcbs-ppo";
 import { medicarePayer } from "./payers/medicare";
 import type { WaystarPayerHandler } from "./payers/types";
 
@@ -14,10 +13,11 @@ export const waystarPayerRegistry = {
   medicare: medicarePayer,
   arp: arpPayer,
   "aetna-medicare-ppo": aetnaMedicarePpoPayer,
+  "aarp-medicare-complete": aarpMedicareCompletePayer,
+  "united-healthcare-all-states": unitedHealthcareAllStatesPayer,
   "amerigroup-wellpoint": amerigroupWellpointPayer,
   "baycare-plus-medicare-advantage": bayCarePlusMedicareAdvantagePayer,
-  "blue-cross-blue-shield-texas": blueCrossBlueShieldTexasPayer,
-  "blue-cross-blue-shield-florida": blueCrossBlueShieldFloridaPayer,
+  "bcbs-ppo": bcbsPpoPayer,
 } satisfies Record<string, WaystarPayerHandler>;
 
 export function getWaystarPayer(payerId: string): WaystarPayerHandler {
@@ -54,9 +54,12 @@ export function matchWaystarPayerByPortalName(portalPayerName: string): WaystarP
   const normalizedPortalName = normalizeLookupValue(portalPayerName);
   if (!normalizedPortalName) return null;
 
-  return Object.values(waystarPayerRegistry).find(
-    (payer) => normalizeLookupValue(payer.portalPayerName) === normalizedPortalName,
-  ) ?? null;
+  return Object.values(waystarPayerRegistry).find((payer) => {
+    const registeredPortalName = normalizeLookupValue(payer.portalPayerName);
+    return registeredPortalName === normalizedPortalName ||
+      registeredPortalName.startsWith(`${normalizedPortalName} `) ||
+      normalizedPortalName.startsWith(`${registeredPortalName} `);
+  }) ?? null;
 }
 
 function normalizeLookupValue(value: string): string {
@@ -66,3 +69,5 @@ function normalizeLookupValue(value: string): string {
     .trim()
     .replace(/\s+/g, " ");
 }
+
+

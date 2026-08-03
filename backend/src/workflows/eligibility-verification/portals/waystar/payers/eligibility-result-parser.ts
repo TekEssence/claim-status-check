@@ -2,15 +2,14 @@ import type {
   EligibilityCoverageStatus,
   EligibilityInputRow,
   EligibilityResult,
-} from "../../../../types";
-import type { WaystarPayerHandler } from "../types";
+} from "../../../types";
 
-type BcbsHealthBenefitPlanCoveragePayload = {
+type WaystarEligibilityPayload = {
   overallStatus?: unknown;
   sectionStatuses?: Array<{ title?: unknown; status?: unknown }>;
-  subscriberInformation?: BcbsSubscriberInformation;
-  patientInformation?: BcbsPatientInformation;
-  subscriberCoverageInformation?: BcbsSubscriberCoverageInformation;
+  subscriberInformation?: WaystarSubscriberInformation;
+  patientInformation?: WaystarPatientInformation;
+  subscriberCoverageInformation?: WaystarSubscriberCoverageInformation;
   general?: { primaryCareProvider?: unknown; ipa?: unknown };
   healthBenefitPlanCoverage?: {
     coverageDescription?: unknown;
@@ -19,12 +18,12 @@ type BcbsHealthBenefitPlanCoveragePayload = {
     planStatus?: unknown;
     planType?: unknown;
     general?: { coverageDescription?: unknown };
-    benefitSections?: BcbsProfessionalOfficeSection[];
+    benefitSections?: WaystarProfessionalOfficeSection[];
   };
-  professionalOffice?: BcbsProfessionalOfficeSection[];
+  professionalOffice?: WaystarProfessionalOfficeSection[];
 };
 
-type BcbsSubscriberInformation = {
+type WaystarSubscriberInformation = {
   patientName?: unknown;
   address?: unknown;
   memberId?: unknown;
@@ -32,14 +31,14 @@ type BcbsSubscriberInformation = {
   sex?: unknown;
 };
 
-type BcbsPatientInformation = {
+type WaystarPatientInformation = {
   patientName?: unknown;
   address?: unknown;
   dateOfBirth?: unknown;
   sex?: unknown;
   relationshipToSubscriber?: unknown;
 };
-type BcbsSubscriberCoverageInformation = {
+type WaystarSubscriberCoverageInformation = {
   groupNumber?: unknown;
   planDate?: unknown;
   premiumPaidToDateEnd?: unknown;
@@ -48,7 +47,7 @@ type BcbsSubscriberCoverageInformation = {
   otherInsuranceEffectiveDate?: unknown;
 };
 
-export type BcbsProfessionalOfficeEntry = {
+export type WaystarProfessionalOfficeEntry = {
   type?: unknown;
   value?: unknown;
   period?: unknown;
@@ -57,56 +56,19 @@ export type BcbsProfessionalOfficeEntry = {
   includedProviderSpecialties?: unknown;
 };
 
-export type BcbsProfessionalOfficeSection = {
+export type WaystarProfessionalOfficeSection = {
   network?: unknown;
   coverageLevel?: unknown;
-  entries?: BcbsProfessionalOfficeEntry[];
+  entries?: WaystarProfessionalOfficeEntry[];
 };
 
-const commonRequiredFields = ["memberId", "patientFirstName", "patientLastName", "dateOfBirth"];
-
-export const blueCrossBlueShieldTexasPayer: WaystarPayerHandler = {
-  id: "blue-cross-blue-shield-texas",
-  name: "Blue Cross Blue Shield Texas",
-  portalPayerName: "BCBS Texas(SB900)",
-  insuranceNameAliases: [
-    "blue cross and blue shield of texas",
-    "blue cross blue shield of texas",
-    "blue cross blue shield texas",
-    "bcbs texas",
-    "bcbstx",
-  ],
-  requiredFields: commonRequiredFields,
-  parseResult(payload, row) {
-    return parseBlueCrossBlueShieldResult(payload, row, "blue-cross-blue-shield-texas");
-  },
-};
-
-export const blueCrossBlueShieldFloridaPayer: WaystarPayerHandler = {
-  id: "blue-cross-blue-shield-florida",
-  name: "Blue Cross Blue Shield Florida",
-  portalPayerName: "BCBS Florida(SB590)",
-  insuranceNameAliases: [
-    "blue cross and blue shield of florida",
-    "blue cross blue shield of florida",
-    "blue cross blue shield florida",
-    "bcbs florida",
-    "bcbsfl",
-    "florida blue",
-  ],
-  requiredFields: commonRequiredFields,
-  parseResult(payload, row) {
-    return parseBlueCrossBlueShieldResult(payload, row, "blue-cross-blue-shield-florida");
-  },
-};
-
-export function parseBlueCrossBlueShieldResult(
+export function parseWaystarEligibilityResult(
   payload: unknown,
   row: EligibilityInputRow,
   payerId: string,
   includeIpa = false,
 ): EligibilityResult {
-  const result = asBcbsPayload(payload);
+  const result = asWaystarPayload(payload);
   const coverage = result.healthBenefitPlanCoverage;
   const sectionStatuses = result.sectionStatuses ?? [];
   const overallStatus = asText(result.overallStatus);
@@ -127,11 +89,14 @@ export function parseBlueCrossBlueShieldResult(
   const planName = asText(coverage?.coverageDescription) ||
     sectionStatuses.map((section) => asText(section.title)).filter(Boolean).join(", ") ||
     undefined;
-  const effectiveDate = asText(coverage?.eligibilityBeginDate);
-  const terminationDate = asText(coverage?.eligibilityEndDate);
   const subscriber = result.subscriberInformation ?? {};
   const patient = result.patientInformation ?? {};
   const subscriberCoverage = result.subscriberCoverageInformation ?? {};
+  const planDateRange = payerId === "bcbs-ppo"
+    ? splitPlanDateRange(asText(subscriberCoverage.planDate))
+    : {};
+  const effectiveDate = asText(coverage?.eligibilityBeginDate) || planDateRange.effectiveDate;
+  const terminationDate = asText(coverage?.eligibilityEndDate) || planDateRange.terminationDate;
   const professionalOffice = selectProfessionalOfficeBenefits(
     result.professionalOffice,
     coverage?.benefitSections,
@@ -194,8 +159,8 @@ export function parseBlueCrossBlueShieldResult(
 }
 
 export function selectProfessionalOfficeBenefits(
-  sections?: BcbsProfessionalOfficeSection[],
-  healthBenefitPlanSections?: BcbsProfessionalOfficeSection[],
+  sections?: WaystarProfessionalOfficeSection[],
+  healthBenefitPlanSections?: WaystarProfessionalOfficeSection[],
 ): Pick<EligibilityResult, "coinsurance" | "copay" | "deductible" | "deductibleMet" | "outOfPocket" | "outOfPocketMet" | "inOutNetwork" | "specialistPayerNote"> {
   const selectedProfessionalSections = selectPreferredIndividualNetworkSections(sections);
   const professionalEntries = selectedProfessionalSections
@@ -248,33 +213,33 @@ export function selectProfessionalOfficeBenefits(
 }
 
 function preferEntries(
-  healthBenefitEntries: BcbsProfessionalOfficeEntry[],
-  professionalEntries: BcbsProfessionalOfficeEntry[],
-): BcbsProfessionalOfficeEntry[] {
+  healthBenefitEntries: WaystarProfessionalOfficeEntry[],
+  professionalEntries: WaystarProfessionalOfficeEntry[],
+): WaystarProfessionalOfficeEntry[] {
   return healthBenefitEntries.length > 0 ? healthBenefitEntries : professionalEntries;
 }
 
-function filterCoinsurance(entries: BcbsProfessionalOfficeEntry[]): BcbsProfessionalOfficeEntry[] {
+function filterCoinsurance(entries: WaystarProfessionalOfficeEntry[]): WaystarProfessionalOfficeEntry[] {
   return entries.filter((entry) => {
     const type = normalize(entry.type);
     return type.includes("co insurance") || type.includes("coinsurance");
   });
 }
 
-function filterOutOfPocket(entries: BcbsProfessionalOfficeEntry[]): BcbsProfessionalOfficeEntry[] {
+function filterOutOfPocket(entries: WaystarProfessionalOfficeEntry[]): WaystarProfessionalOfficeEntry[] {
   return entries.filter((entry) => {
     const type = normalize(entry.type);
     return type.includes("out of pocket") || type === "oop";
   });
 }
-function resolveNetwork(sections: BcbsProfessionalOfficeSection[]): "INN" | "OON" | undefined {
+function resolveNetwork(sections: WaystarProfessionalOfficeSection[]): "INN" | "OON" | undefined {
   if (sections.some((section) => normalize(section.network).includes("out of network"))) return "OON";
   if (sections.some((section) => normalize(section.network).includes("in network"))) return "INN";
   return undefined;
 }
 function selectPreferredIndividualNetworkSections(
-  sections?: BcbsProfessionalOfficeSection[],
-): BcbsProfessionalOfficeSection[] {
+  sections?: WaystarProfessionalOfficeSection[],
+): WaystarProfessionalOfficeSection[] {
   const available = (sections ?? []).filter((section) => (section.entries?.length ?? 0) > 0);
   const individual = available.filter((candidate) =>
     normalize(candidate.coverageLevel).includes("individual"),
@@ -308,12 +273,12 @@ function isCopay(value: unknown): boolean {
   return ["copay", "co pay", "copayment", "co payment"].some((name) => type.includes(name));
 }
 
-function isSpecialtyCopay(entry: BcbsProfessionalOfficeEntry): boolean {
+function isSpecialtyCopay(entry: WaystarProfessionalOfficeEntry): boolean {
   return normalize(entry.payerNote).includes("specialist") ||
     hasIncludedProviderSpecialties(entry.includedProviderSpecialties);
 }
 
-function highestValue(entries: BcbsProfessionalOfficeEntry[], unit: "$" | "%"): string | undefined {
+function highestValue(entries: WaystarProfessionalOfficeEntry[], unit: "$" | "%"): string | undefined {
   const values = entries.map((entry) => ({ raw: asText(entry.value), amount: numericValue(entry.value) }))
     .filter((entry): entry is { raw: string; amount: number } => entry.raw !== undefined && entry.amount !== undefined);
   if (values.length === 0) return undefined;
@@ -321,20 +286,20 @@ function highestValue(entries: BcbsProfessionalOfficeEntry[], unit: "$" | "%"): 
   return unit === "%" ? `${formatNumber(highest.amount)}%` : formatMoney(highest.amount);
 }
 
-function annualValue(entries: BcbsProfessionalOfficeEntry[]): number | undefined {
+function annualValue(entries: WaystarProfessionalOfficeEntry[]): number | undefined {
   const annual = entries.filter((entry) => entryQualifier(entry).includes("calendar year"));
   return maximumNumeric(annual.length > 0 ? annual : entries.filter((entry) => !entryQualifier(entry).includes("remaining")));
 }
 
-function remainingValue(entries: BcbsProfessionalOfficeEntry[]): number | undefined {
+function remainingValue(entries: WaystarProfessionalOfficeEntry[]): number | undefined {
   return maximumNumeric(entries.filter((entry) => entryQualifier(entry).includes("remaining")));
 }
 
-function entryQualifier(entry: BcbsProfessionalOfficeEntry): string {
+function entryQualifier(entry: WaystarProfessionalOfficeEntry): string {
   return `${normalize(entry.period)} ${normalize(entry.value)}`.trim();
 }
 
-function maximumNumeric(entries: BcbsProfessionalOfficeEntry[]): number | undefined {
+function maximumNumeric(entries: WaystarProfessionalOfficeEntry[]): number | undefined {
   const values = entries.map((entry) => numericValue(entry.value)).filter((value): value is number => value !== undefined);
   return values.length > 0 ? Math.max(...values) : undefined;
 }
@@ -363,11 +328,22 @@ function normalize(value: unknown): string {
   return (asText(value) ?? "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 }
 
-function asBcbsPayload(payload: unknown): BcbsHealthBenefitPlanCoveragePayload {
+function asWaystarPayload(payload: unknown): WaystarEligibilityPayload {
   if (!payload || typeof payload !== "object") return {};
-  return payload as BcbsHealthBenefitPlanCoveragePayload;
+  return payload as WaystarEligibilityPayload;
 }
 
+function splitPlanDateRange(value?: string): {
+  effectiveDate?: string;
+  terminationDate?: string;
+} {
+  if (!value) return {};
+  const [effectiveDate, terminationDate] = value.split(/\s+to\s+/i, 2).map((part) => part.trim());
+  return {
+    effectiveDate: effectiveDate || undefined,
+    terminationDate: terminationDate || undefined,
+  };
+}
 function normalizeCoverageStatus(value?: string): EligibilityCoverageStatus {
   const normalized = (value ?? "").toLowerCase();
   if (normalized.includes("inactive")) return "inactive";

@@ -1,5 +1,5 @@
 import type { WaystarPayerHandler } from "../types";
-import { parseBlueCrossBlueShieldResult } from "../blue-cross-blue-shield";
+import { parseWaystarEligibilityResult } from "../eligibility-result-parser";
 
 export const aetnaMedicarePpoPayer: WaystarPayerHandler = {
   id: "aetna-medicare-ppo",
@@ -9,7 +9,7 @@ export const aetnaMedicarePpoPayer: WaystarPayerHandler = {
   credentialProject: "FL2",
   requiredFields: ["memberId", "patientFirstName", "patientLastName", "dateOfBirth"],
   parseResult(payload, row) {
-    const result = parseBlueCrossBlueShieldResult(payload, row, "aetna-medicare-ppo");
+    const result = parseWaystarEligibilityResult(payload, row, "aetna-medicare-ppo");
     const coverage = (result.metadata?.subscriberCoverageInformation ?? {}) as {
       planBeginDate?: unknown;
       planEndDate?: unknown;

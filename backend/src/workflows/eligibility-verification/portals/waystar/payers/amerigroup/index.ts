@@ -1,5 +1,5 @@
 import type { WaystarPayerHandler } from "../types";
-import { parseBlueCrossBlueShieldResult } from "../blue-cross-blue-shield";
+import { parseWaystarEligibilityResult } from "../eligibility-result-parser";
 
 export const amerigroupWellpointPayer: WaystarPayerHandler = {
   id: "amerigroup-wellpoint",
@@ -12,6 +12,6 @@ export const amerigroupWellpointPayer: WaystarPayerHandler = {
   ],
   requiredFields: ["memberId", "patientFirstName", "patientLastName", "dateOfBirth"],
   parseResult(payload, row) {
-    return parseBlueCrossBlueShieldResult(payload, row, "amerigroup-wellpoint", true);
+    return parseWaystarEligibilityResult(payload, row, "amerigroup-wellpoint", true);
   },
 };

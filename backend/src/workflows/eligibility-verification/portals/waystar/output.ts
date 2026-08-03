@@ -39,14 +39,18 @@ const LEGACY_OUTPUT_COLUMNS: Array<{
 const BCBS_OUTPUT_COLUMNS = [LEGACY_OUTPUT_COLUMNS[1], LEGACY_OUTPUT_COLUMNS[5], LEGACY_OUTPUT_COLUMNS[6], LEGACY_OUTPUT_COLUMNS[8], LEGACY_OUTPUT_COLUMNS[8], LEGACY_OUTPUT_COLUMNS[0], LEGACY_OUTPUT_COLUMNS[3], LEGACY_OUTPUT_COLUMNS[8]].map((column) => ({ ...column }));
 
 BCBS_OUTPUT_COLUMNS[0].header = "Coverage Status";
-BCBS_OUTPUT_COLUMNS[1].header = "Eff Date";
-BCBS_OUTPUT_COLUMNS[2].header = "End Date";
+BCBS_OUTPUT_COLUMNS[1] = { header: "Eff Date", value: (_row, result) => splitOutputDateRange(result?.effectiveDate).effectiveDate };
+BCBS_OUTPUT_COLUMNS[2] = { header: "End Date", value: (_row, result) => result?.terminationDate || splitOutputDateRange(result?.effectiveDate).endDate || "" };
 BCBS_OUTPUT_COLUMNS[3] = { header: "Other Ins", value: (_row, result) => result?.otherInsurance || "" };
 BCBS_OUTPUT_COLUMNS[4] = { header: "Other Ins Eff Date", value: (_row, result) => result?.otherInsuranceEffectiveDate || "" };
 BCBS_OUTPUT_COLUMNS[5].header = "Relationship to Subscriber";
 BCBS_OUTPUT_COLUMNS[6].header = "Plan Type";
 BCBS_OUTPUT_COLUMNS[7].header = "Bot Insurance Type";
 
+function splitOutputDateRange(value?: string): { effectiveDate: string; endDate: string } {
+  const [effectiveDate = "", endDate = ""] = (value ?? "").split(/\s*\bto\b\s*/i, 2);
+  return { effectiveDate: effectiveDate.trim(), endDate: endDate.trim() };
+}
 function formatOutputValue(value: unknown): unknown {
   if (value === null || value === undefined) return "-";
   if (typeof value === "string" && value.trim() === "") return "-";
@@ -64,7 +68,7 @@ export async function buildWaystarOutputWorkbook(options: {
   const sheet = workbook.worksheets[0];
   if (!sheet) throw new Error("The eligibility workbook does not contain a worksheet.");
 
-  const outputColumns = [...options.results.values()].some((result) => result.payerId.startsWith("blue-cross-blue-shield-") || result.payerId === "baycare-plus-medicare-advantage" || result.payerId === "aetna-medicare-ppo")
+  const outputColumns = [...options.results.values()].some((result) => result.payerId === "bcbs-ppo" || result.payerId === "baycare-plus-medicare-advantage" || result.payerId === "aetna-medicare-ppo" || result.payerId === "united-healthcare-all-states" || result.payerId === "aarp-medicare-complete")
     ? BCBS_OUTPUT_COLUMNS
     : LEGACY_OUTPUT_COLUMNS;
   const outputStartColumn = sheet.columnCount + 1;

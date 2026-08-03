@@ -119,49 +119,42 @@ test("splits space-delimited patient names when separate first and last name col
 
 test("detects flexible payer or insurance column names", () => {
   const payerStateRouting = routeWaystarRowsByPayer([
-    { "Primary Insurance Payer State": "Blue Cross and Blue Shield of Texas" },
+    { "Primary Insurance Payer State": "BCBS PPO" },
   ]);
   const planRouting = routeWaystarRowsByPayer([
     { "Current Insurance Plan": "Medicare Advantage" },
   ]);
 
   assert.equal(payerStateRouting.payerHeader, "Primary Insurance Payer State");
-  assert.equal(payerStateRouting.batches[0].payerId, "blue-cross-blue-shield-texas");
+  assert.equal(payerStateRouting.batches[0].payerId, "bcbs-ppo");
   assert.equal(planRouting.payerHeader, "Current Insurance Plan");
   assert.equal(planRouting.batches[0].payerId, "medicare");
 });
 
-test("routes Blue Cross Blue Shield aliases to the correct Waystar payer option", () => {
+test("routes only BCBS PPO to the dedicated Waystar payer", () => {
   const routing = routeWaystarRowsByPayer([
-    { Payer: "Blue Cross and Blue Shield of Texas" },
-    { Payer: "BCBS Florida" },
-    { Payer: "Florida Blue" },
+    { Payer: "BCBS PPO", "Member ID": "PPO-123" },
+    { Payer: "BCBS Florida", "Member ID": "FL-456" },
   ]);
 
-  assert.deepEqual(
-    routing.batches.map((batch) => [batch.payerId, batch.rows.length]),
-    [
-      ["blue-cross-blue-shield-texas", 1],
-      ["blue-cross-blue-shield-florida", 2],
-    ],
-  );
+  assert.deepEqual(routing.batches.map((batch) => [batch.payerId, batch.rows.length]), [
+    ["bcbs-ppo", 1],
+  ]);
+  assert.deepEqual(routing.unsupportedRows.map((row) => row.insuranceName), ["BCBS Florida"]);
 });
-
 test("groups mixed payer rows so each payer can use its own portal flow", () => {
   const routing = routeWaystarRowsByPayer([
     { "Insurance Name": "Medicare" },
-    { "Insurance Name": "Blue Cross and Blue Shield of Texas" },
+    { "Insurance Name": "BCBS PPO" },
     { "Insurance Name": "ARP Health Plan" },
-    { "Insurance Name": "Blue Cross and Blue Shield of Florida" },
   ]);
 
   assert.deepEqual(
     routing.batches.map((batch) => [batch.payerId, batch.rows.length]),
     [
       ["medicare", 1],
-      ["blue-cross-blue-shield-texas", 1],
+      ["bcbs-ppo", 1],
       ["arp", 1],
-      ["blue-cross-blue-shield-florida", 1],
     ],
   );
 });
@@ -172,13 +165,12 @@ test("does not confuse Primary Ins Subscriber No with the payer column", () => {
   ]), /missing payer column/i);
 });
 
-test("routes BCBS rows using the BCBS_Payer_Mappings workbook sheet", async () => {
+test("maps BCBS PPO to the BCBS Florida portal option", async () => {
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(
     workbook,
     XLSX.utils.json_to_sheet([
-      { "Primary Insurance Name": "Blue Cross and Blue Shield of Texas", "Primary Ins Subscriber No": "TX-123" },
-      { "Primary Insurance Name": "Blue Cross and Blue Shield of Florida", "Primary Ins Subscriber No": "FL-456" },
+      { "Primary Insurance Name": "BCBS PPO", "Primary Ins Subscriber No": "PPO-123" },
     ]),
     "Eligibility",
   );
@@ -186,11 +178,7 @@ test("routes BCBS rows using the BCBS_Payer_Mappings workbook sheet", async () =
     workbook,
     XLSX.utils.json_to_sheet([
       {
-        "INPUT_Insurance payer_state": "Blue Cross and Blue Shield of Texas",
-        "Payer portal": "BCBS Texas(SB900)",
-      },
-      {
-        "INPUT_Insurance payer_state": "Blue Cross and Blue Shield of Florida",
+        "INPUT_Insurance payer_state": "BCBS PPO",
         "Payer portal": "BCBS Florida(SB590)",
       },
     ]),
@@ -203,15 +191,10 @@ test("routes BCBS rows using the BCBS_Payer_Mappings workbook sheet", async () =
   );
   const routing = await readWaystarEligibilityWorkbook(file);
 
-  assert.deepEqual(
-    routing.batches.map((batch) => [batch.payerId, batch.rows.length]),
-    [
-      ["blue-cross-blue-shield-texas", 1],
-      ["blue-cross-blue-shield-florida", 1],
-    ],
-  );
+  assert.deepEqual(routing.batches.map((batch) => [batch.payerId, batch.rows.length]), [
+    ["bcbs-ppo", 1],
+  ]);
 });
-
 test("reports unsupported insurance rows without mixing them into payer batches", () => {
   const routing = routeWaystarRowsByPayer([
     { Payer: "Unknown Health Plan" },
@@ -234,7 +217,7 @@ test("requires a recognized insurance header", () => {
 });
 test("reads Relationship to Subscriber for dependent-patient inquiries", () => {
   const routing = routeWaystarRowsByPayer([{
-    "Primary Insurance Name": "Blue Cross and Blue Shield of Texas",
+    "Primary Insurance Name": "BCBS PPO",
     "Member ID": "SUB-100",
     "Patient First Name": "Dependent",
     "Patient Last Name": "Member",
@@ -317,4 +300,42 @@ test("reads Payer_Mappings from the separate login workbook", async () => {
     [["amerigroup-wellpoint", 2]],
   );
   assert.equal(routing.unsupportedRows.length, 0);
+});
+test("uses Payer_Mappings to distinguish AARP from United Healthcare with the same 87726 id", () => {
+  const rows = [
+    { "Primary Insurance Name": "AARP Medicare Complete", "Primary Ins Subscriber No": "AARP-1" },
+    { "Primary Insurance Name": "United Healthcare of All States", "Primary Ins Subscriber No": "UHC-1" },
+  ];
+  const routing = routeWaystarRowsByPayer(rows, {
+    payerMappings: [
+      {
+        inputInsurancePayerState: "AARP Medicare Complete",
+        payerPortal: "AARP Medicare Advantage Choice Plan (87726)",
+      },
+      {
+        inputInsurancePayerState: "United Healthcare of All States",
+        payerPortal: "United Healthcare(87726)",
+      },
+    ],
+  });
+
+  assert.deepEqual(routing.batches.map((batch) => batch.payerId), [
+    "aarp-medicare-complete",
+    "united-healthcare-all-states",
+  ]);
+});
+
+test("does not bypass an invalid configured payer mapping", () => {
+  const routing = routeWaystarRowsByPayer(
+    [{ "Primary Insurance Name": "AARP Medicare Complete", "Primary Ins Subscriber No": "AARP-1" }],
+    {
+      payerMappings: [{
+        inputInsurancePayerState: "AARP Medicare Complete",
+        payerPortal: "Wrong Unsupported Portal Payer",
+      }],
+    },
+  );
+
+  assert.equal(routing.batches.length, 0);
+  assert.equal(routing.unsupportedRows.length, 1);
 });

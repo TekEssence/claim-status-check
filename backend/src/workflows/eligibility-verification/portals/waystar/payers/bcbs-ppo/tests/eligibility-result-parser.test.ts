@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { parseBlueCrossBlueShieldResult, selectProfessionalOfficeBenefits } from "..";
+import { parseWaystarEligibilityResult, selectProfessionalOfficeBenefits } from "../../eligibility-result-parser";
 
 test("parses inactive Health Benefit Plan Coverage values", () => {
-  const result = parseBlueCrossBlueShieldResult(
+  const result = parseWaystarEligibilityResult(
     {
       healthBenefitPlanCoverage: {
         planType: "Preferred Provider Organization (PPO)",
@@ -17,7 +17,7 @@ test("parses inactive Health Benefit Plan Coverage values", () => {
       originalIndex: 2,
       raw: {},
     },
-    "blue-cross-blue-shield-texas",
+    "bcbs-ppo",
   );
 
   assert.equal(result.coverageStatus, "inactive");
@@ -36,7 +36,7 @@ test("parses inactive Health Benefit Plan Coverage values", () => {
 });
 
 test("extracts BCBS active subscriber and coverage fields", () => {
-  const result = parseBlueCrossBlueShieldResult({
+  const result = parseWaystarEligibilityResult({
     subscriberInformation: {
       patientName: "Jane Doe",
       address: "1 Main St, Austin, TX",
@@ -57,7 +57,7 @@ test("extracts BCBS active subscriber and coverage fields", () => {
       coverageDescription: "incorrect fallback",
       general: { coverageDescription: "BLUE ADVANTAGE PLUS MEDICAL" },
     },
-  }, { originalIndex: 3, raw: {} }, "blue-cross-blue-shield-texas");
+  }, { originalIndex: 3, raw: {} }, "bcbs-ppo");
 
   assert.equal(result.patientName, undefined);
   assert.equal(result.memberId, undefined);
@@ -70,13 +70,13 @@ test("extracts BCBS active subscriber and coverage fields", () => {
 });
 
 test("uses the available Waystar sections when Health Benefit Plan Coverage is absent", () => {
-  const result = parseBlueCrossBlueShieldResult({
+  const result = parseWaystarEligibilityResult({
     overallStatus: "ACTIVE",
     sectionStatuses: [
       { title: "Professional Office Visit", status: "ACTIVE" },
       { title: "Chiropractic", status: "ACTIVE" },
     ],
-  }, { originalIndex: 4, raw: {} }, "blue-cross-blue-shield-texas");
+  }, { originalIndex: 4, raw: {} }, "bcbs-ppo");
 
   assert.equal(result.coverageStatus, "active");
   assert.equal(result.planStatus, "ACTIVE");
@@ -267,15 +267,15 @@ test("leaves the payer-note output blank when selected benefit notes do not say 
   assert.equal(result.specialistPayerNote, undefined);
 });
 test("maps payer failures and subscriber-not-found outcomes to error instead of unknown", () => {
-  const failed = parseBlueCrossBlueShieldResult(
+  const failed = parseWaystarEligibilityResult(
     { overallStatus: "Failed at Payer" },
     { originalIndex: 4, raw: {} },
-    "blue-cross-blue-shield-texas",
+    "bcbs-ppo",
   );
-  const notFound = parseBlueCrossBlueShieldResult(
+  const notFound = parseWaystarEligibilityResult(
     { overallStatus: "Subscriber Not Found" },
     { originalIndex: 5, raw: {} },
-    "blue-cross-blue-shield-texas",
+    "bcbs-ppo",
   );
 
   assert.equal(failed.coverageStatus, "error");
@@ -316,7 +316,7 @@ test("falls back to In Network Health Benefit Plan Coverage deductible and OOP",
   assert.equal(result.outOfPocketMet, "$3,500");
 });
 test("uses dependent Patient Information while retaining the subscriber member ID", () => {
-  const result = parseBlueCrossBlueShieldResult({
+  const result = parseWaystarEligibilityResult({
     overallStatus: "Active Coverage",
     subscriberInformation: {
       patientName: "Subscriber Name",
@@ -329,7 +329,7 @@ test("uses dependent Patient Information while retaining the subscriber member I
       sex: "Female",
       relationshipToSubscriber: "Child",
     },
-  }, { originalIndex: 5, raw: {} }, "blue-cross-blue-shield-texas");
+  }, { originalIndex: 5, raw: {} }, "bcbs-ppo");
 
   assert.equal(result.memberId, undefined);
   assert.equal(result.patientName, undefined);

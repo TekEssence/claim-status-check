@@ -1,6 +1,6 @@
-import { cookies, headers as nextHeaders } from "next/headers";
+﻿import { cookies, headers as nextHeaders } from "next/headers";
 import { betterAuthInstance } from "./better-auth";
-import { getActiveAuthUser, type AuthUser } from "./db";
+import { getActiveAuthUser, isAuthDbConnectionError, type AuthUser } from "./db";
 
 export type AuthSession = AuthUser & {
   exp: number | null;
@@ -17,10 +17,16 @@ function clearBetterAuthCookie(cookieStore: Awaited<ReturnType<typeof cookies>>,
 }
 
 export async function getSessionFromCookies(requestHeaders?: Headers): Promise<AuthSession | null> {
+  const sessionHeaders = requestHeaders ?? new Headers(await nextHeaders());
   try {
-    const authResult = await betterAuthInstance.api.getSession({
-      headers: requestHeaders ?? new Headers(await nextHeaders()),
-    });
+    let authResult;
+    try {
+      authResult = await betterAuthInstance.api.getSession({ headers: sessionHeaders });
+    } catch (error) {
+      if (!isAuthDbConnectionError(error)) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      authResult = await betterAuthInstance.api.getSession({ headers: sessionHeaders });
+    }
 
     if (!authResult?.session || !authResult?.user) {
       return null;
@@ -36,7 +42,8 @@ export async function getSessionFromCookies(requestHeaders?: Headers): Promise<A
       ...activeUser,
       exp: Math.floor(new Date(authResult.session.expiresAt).getTime() / 1000),
     };
-  } catch {
+  } catch (error) {
+    if (isAuthDbConnectionError(error)) throw error;
     return null;
   }
 }

@@ -243,7 +243,7 @@ async function tryWaitVisible(locator: Locator, timeout: number): Promise<boolea
 
 async function readCoverageStatus(page: PortalScope): Promise<"active" | "inactive" | ""> {
   const label = page.locator(SELECTORS.results.memberStatusLabel).filter({ hasText: /^Member Status$/ }).first();
-  if (!await tryWaitVisible(label, 45_000)) return "";
+  if (!await tryWaitVisible(label, 1_500)) return "";
   let container = label.locator("xpath=..");
   for (let depth = 0; depth < 3; depth += 1) {
     const text = await container.innerText().catch(() => "");
@@ -256,7 +256,7 @@ async function readCoverageStatus(page: PortalScope): Promise<"active" | "inacti
 async function readPlanDates(page: PortalScope): Promise<{ effectiveDate: string; endDate: string }> {
   const blank = { effectiveDate: "", endDate: "" };
   const label = page.locator(SELECTORS.results.currentPlanEffectiveDateLabel).first();
-  if (!await tryWaitVisible(label, 15_000)) return blank;
+  if (!await tryWaitVisible(label, 750)) return blank;
   let container = label.locator("xpath=..");
   for (let depth = 0; depth < 3; depth += 1) {
     const text = await container.innerText().catch(() => "");
@@ -274,7 +274,7 @@ async function readOtherInsurance(page: PortalScope): Promise<{
 }> {
   const blank = { otherInsurance: "", otherInsuranceEffectiveDate: "" };
   const heading = page.locator(SELECTORS.results.additionalPayerHeading).first();
-  if (!await tryWaitVisible(heading, 15_000)) return blank;
+  if (!await tryWaitVisible(heading, 750)) return blank;
   let container = heading.locator("xpath=..");
   for (let depth = 0; depth < 4; depth += 1) {
     const text = await container.innerText().catch(() => "");
@@ -295,7 +295,7 @@ async function readOtherInsurance(page: PortalScope): Promise<{
 }
 async function readRelationshipToSubscriber(page: PortalScope): Promise<string> {
   const label = page.locator(SELECTORS.results.relationshipToSubscriberLabel).first();
-  if (!await tryWaitVisible(label, 15_000)) return "";
+  if (!await tryWaitVisible(label, 750)) return "";
   let container = label.locator("xpath=..");
   for (let depth = 0; depth < 3; depth += 1) {
     const lines = (await container.innerText().catch(() => ""))
@@ -310,7 +310,7 @@ async function readRelationshipToSubscriber(page: PortalScope): Promise<string> 
 }
 async function readLabeledResultValue(page: PortalScope, selector: string, labelText: string): Promise<string> {
   const label = page.locator(selector).first();
-  if (!await tryWaitVisible(label, 15_000)) return "";
+  if (!await tryWaitVisible(label, 750)) return "";
   const escapedLabel = labelText.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const valuePattern = new RegExp(`${escapedLabel}\\s*:?\\s*(.+)$`, "im");
   let container = label;
@@ -324,7 +324,7 @@ async function readLabeledResultValue(page: PortalScope, selector: string, label
 }
 async function readSelectedNetwork(page: PortalScope): Promise<string> {
   const label = page.locator(SELECTORS.results.filterByNetworkLabel).first();
-  if (!await tryWaitVisible(label, 15_000)) return "";
+  if (!await tryWaitVisible(label, 750)) return "";
   let container = label.locator("xpath=..");
   for (let depth = 0; depth < 4; depth += 1) {
     const controls = container.locator("button, [role='button'], [role='option']");
@@ -341,9 +341,9 @@ async function readSelectedNetwork(page: PortalScope): Promise<string> {
           const state = `${element.getAttribute("aria-pressed") || ""} ${element.getAttribute("aria-selected") || ""}`;
           return /true/i.test(state) || /(?:^|\s)(?:active|selected|Mui-selected|containedPrimary)(?:\s|$)/i.test(element.className || "");
         }).catch(() => false);
-        if (selected) return text;
+        if (selected) return /^all networks?$/i.test(text) ? "" : text;
       }
-      if (fallback) return fallback;
+      if (fallback) return /^all networks?$/i.test(fallback) ? "" : fallback;
     }
     container = container.locator("xpath=..");
   }
@@ -386,11 +386,19 @@ function benefitRow(section: string, start: RegExp, end?: RegExp): string {
 // read a Family row.
 function individualChunks(section: string): string[] {
   return section
-    .split(/(?=Coverage Level\s*:\s*)/i)
-    .filter((chunk) => /^Coverage Level\s*:\s*Individual\b/i.test(chunk.trim()));
+    .split(/(?=Coverage\s*Level\s*:\s*)/i)
+    .filter((chunk) => /^Coverage\s*Level\s*:\s*Individual\b/i.test(chunk.trim()));
 }
 
 // Portal shows "—" for benefits it has no data for (rule 11/13: leave blank).
+function individualBenefitBlock(text: string, heading: RegExp): string {
+  const section = sectionBetween(text, heading);
+  return sectionBetween(
+    section,
+    /Coverage\s*Level\s*:\s*Individual/i,
+    /Coverage\s*Level\s*:\s*Family|Professional\s*\(Physician\)\s*Visit|Health Benefit Plan Coverage/i,
+  );
+}
 function cleanValue(value: string): string {
   return value === "—" || value === "-" ? "" : value;
 }
@@ -420,30 +428,46 @@ export function parseAvailityBcbsBenefits(resultText: string, memberId: string):
     );
     if (preferredChunk) outOfPocketSource = preferredChunk;
   }
-  const outOfPocketRow = benefitRow(outOfPocketSource, /Out\s+Of\s+Pocket/i);
+  let outOfPocketRow = benefitRow(outOfPocketSource, /Out\s+Of\s+Pocket/i);
+  if (!moneyBeforeCalendarYear(outOfPocketRow)) {
+    outOfPocketRow = individualBenefitBlock(resultText, /Out\s+Of\s+Pocket/i);
+  }
 
   const professional = sectionBetween(
     resultText,
     /Professional\s*\(Physician\)\s*Visit\s*-\s*Office\s*-\s*98/i,
   );
+  // Professional coinsurance/copay must come only from the Professional
+  // Physician section. Health-plan percentages (for example an OOP progress
+  // value such as 17%) are never valid professional coinsurance.
   const individualBlocks = individualChunks(professional);
+  const coinsurancePattern = /(?:^|[^\d])((?:100(?:\.0+)?|(?:\d|[1-9]\d)(?:\.\d+)?))\s*%/i;
+  const copayPattern = /(\$[\d,]+(?:\.\d{1,2})?)\s*(?:\/|per)?\s*(?:Visit|Day)(?:\s*\(s\)|s)?/i;
+  // A professional service row must contain a copay. This excludes progress
+  // percentages from deductible/OOP displays while still allowing a dash for
+  // coinsurance in a valid specialist row.
+  const hasProfessionalValue = (block: string): boolean => copayPattern.test(block);
 
-  // Rule 12: R-prefixed member IDs prioritize a "Preferred Specialist" row.
-  // Rule 11: otherwise, any row containing "Specialist" wins over a plain
-  // Individual row. Falls back to the first Individual row if neither exists.
+  // If multiple Individual professional rows are present, select Specialist;
+  // R-prefixed members prioritize Preferred Specialist. If Specialist is not
+  // present, use the first Individual professional row containing benefits.
   let professionalBenefit = "";
   if (isRMember) {
-    professionalBenefit = individualBlocks.find((block) => /preferred\s+specialist/i.test(block)) || "";
+    professionalBenefit = individualBlocks.find(
+      (block) => /preferred\s*specialist/i.test(block) && hasProfessionalValue(block),
+    ) || "";
   }
   if (!professionalBenefit) {
-    professionalBenefit = individualBlocks.find((block) => /\bspecialist\b/i.test(block)) || "";
+    professionalBenefit = individualBlocks.find(
+      (block) => /specialist\b/i.test(block) && hasProfessionalValue(block),
+    ) || "";
   }
   if (!professionalBenefit) {
-    professionalBenefit = individualBlocks[0] || "";
+    professionalBenefit = individualBlocks.find(hasProfessionalValue) || "";
   }
 
-  const coinsuranceMatch = professionalBenefit.match(/(\d+(?:\.\d+)?)\s*%/);
-  const copayMatch = professionalBenefit.match(/(\$[\d,]+(?:\.\d{1,2})?)\s*\/\s*(?:Visit|Day)\(s\)/i);
+  const coinsuranceMatch = professionalBenefit.match(coinsurancePattern);
+  const copayMatch = professionalBenefit.match(copayPattern);
 
   return {
     coinsurance: cleanValue(coinsuranceMatch ? `${coinsuranceMatch[1]}%` : ""),
@@ -455,6 +479,54 @@ export function parseAvailityBcbsBenefits(resultText: string, memberId: string):
   };
 }
 
+async function readProfessionalTableBenefits(
+  scope: PortalScope,
+  memberId: string,
+): Promise<Pick<BenefitValues, "coinsurance" | "copay"> | null> {
+  const rows = await scope.evaluate(() => {
+    const extracted: Array<{ text: string; coinsurance: string; copay: string }> = [];
+    for (const table of Array.from(document.querySelectorAll("table"))) {
+      const headers = Array.from(table.querySelectorAll("th")).map((cell) =>
+        (cell.textContent || "").replace(/\s+/g, " ").trim()
+      );
+      const coinsuranceIndex = headers.findIndex((header) => /^Co-?Insurance$/i.test(header));
+      const copayIndex = headers.findIndex((header) => /^Co-?Payment$/i.test(header));
+      if (coinsuranceIndex < 0 || copayIndex < 0) continue;
+
+      for (const row of Array.from(table.querySelectorAll("tbody tr"))) {
+        const cells = Array.from(row.querySelectorAll(":scope > td"));
+        if (cells.length <= Math.max(coinsuranceIndex, copayIndex)) continue;
+        extracted.push({
+          text: (row.textContent || "").replace(/\s+/g, " ").trim(),
+          coinsurance: (cells[coinsuranceIndex]?.textContent || "").replace(/\s+/g, " ").trim(),
+          copay: (cells[copayIndex]?.textContent || "").replace(/\s+/g, " ").trim(),
+        });
+      }
+    }
+    return extracted;
+  }).catch(() => [] as Array<{ text: string; coinsurance: string; copay: string }>);
+
+  const individual = rows.filter(
+    (row) => /Coverage\s*Level\s*:?\s*Individual/i.test(row.text) && /\$[\d,]+(?:\.\d{1,2})?/.test(row.copay),
+  );
+  if (!individual.length) return null;
+
+  const isRMember = /^R/i.test(memberId.trim());
+  const selected = (
+    isRMember
+      ? individual.find((row) => /preferred\s*specialist/i.test(row.text))
+      : undefined
+  ) || individual.find((row) => /specialist/i.test(row.text)) || individual[0];
+
+  const coinsurance = selected.coinsurance.match(
+    /(?:^|[^\d])((?:100(?:\.0+)?|(?:\d|[1-9]\d)(?:\.\d+)?))\s*%/i,
+  )?.[1];
+  const copay = selected.copay.match(/(\$[\d,]+(?:\.\d{1,2})?)/)?.[1];
+  return {
+    coinsurance: coinsurance ? `${coinsurance}%` : "",
+    copay: copay || "",
+  };
+}
 async function readPrimaryCareProvider(page: PortalScope): Promise<string> {
   const heading = page.getByText("Primary Care Provider", { exact: true }).first();
   if (!await heading.isVisible().catch(() => false)) return "";
@@ -470,6 +542,95 @@ async function readPrimaryCareProvider(page: PortalScope): Promise<string> {
     container = container.locator("xpath=..");
   }
   return "";
+}
+type SnapshotBasics = {
+  coverageStatus: string;
+  effectiveDate: string;
+  endDate: string;
+  relationship: string;
+  insuranceType: string;
+  planType: string;
+};
+
+export function extractAvailityPortalError(text: string): string {
+  const connectionProblem = text.match(
+    /Availity\s+is\s+experiencing\s+connection\s+problems\s+with\s+the\s+health\s+plan[\s\S]*?(?=Date\s+of\s+Service|$)/i,
+  )?.[0]?.replace(/\s+/g, " ").trim();
+  if (!connectionProblem) return "";
+
+  const transactionId = text.match(/Transaction\s*ID\s*:?\s*([A-Za-z0-9-]+)/i)?.[1];
+  const transactionTime = text.match(
+    /Transaction\s*Time\s*:?\s*([^\r\n]+?)(?=\s+Customer\s*ID|$)/i,
+  )?.[1]?.trim();
+  const details = [
+    transactionId ? `Transaction ID: ${transactionId}` : "",
+    transactionTime ? `Transaction Time: ${transactionTime}` : "",
+  ].filter(Boolean).join("; ");
+  return details ? `${connectionProblem} (${details})` : connectionProblem;
+}
+function hasUsableEligibilityResult(text: string): boolean {
+  return /Member\s*Status/i.test(text)
+    && /Health\s*Benefit\s*Plan\s*Coverage|Professional\s*\(Physician\)\s*Visit/i.test(text);
+}
+
+async function revealEligibilityBenefits(scope: PortalScope): Promise<void> {
+  await scope.evaluate(() => {
+    for (const element of Array.from(document.querySelectorAll<HTMLElement>("[aria-expanded='false']"))) {
+      if (/Health\s*Benefit\s*Plan\s*Coverage|Professional\s*\(Physician\)\s*Visit/i.test(element.innerText || "")) {
+        element.click();
+      }
+    }
+    const scrollingElement = document.scrollingElement;
+    if (scrollingElement) scrollingElement.scrollTop = scrollingElement.scrollHeight;
+  }).catch(() => {});
+}
+
+async function readStableResultText(scope: PortalScope, timeout = 25_000): Promise<string> {
+  const body = scope.locator("body");
+  const deadline = Date.now() + timeout;
+  let previous = "";
+  let latest = "";
+  let stableReadyReads = 0;
+  let attempts = 0;
+  do {
+    attempts += 1;
+    if (attempts === 1 || attempts % 4 === 0) await revealEligibilityBenefits(scope);
+    const visible = await body.innerText({ timeout: 1_500 }).catch(() => "");
+    const complete = await body.textContent({ timeout: 1_500 }).catch(() => "");
+    const current = `${visible}\n${complete || ""}`;
+    const portalError = extractAvailityPortalError(current);
+    if (portalError) return current;
+    const ready = hasUsableEligibilityResult(current);
+
+    if (ready && current === previous) stableReadyReads += 1;
+    else stableReadyReads = 0;
+    if (current) latest = current;
+    previous = current;
+    if (stableReadyReads >= 2) return current;
+    await pause(500);
+  } while (Date.now() < deadline);
+  return latest;
+}
+
+export function parseAvailitySnapshotBasics(text: string): SnapshotBasics {
+  const date = "([A-Za-z]{3,9}\\s+\\d{1,2},\\s*\\d{4})";
+  const planRange = text.match(new RegExp(`Current\\s*Plan\\s*Effective\\s*Date\\s*:?\\s*${date}\\s*-\\s*${date}`, "i"));
+  const eligibilityStart = text.match(new RegExp(`Eligibility\\s*Start\\s*Date\\s*:?\\s*${date}`, "i"));
+  const eligibilityEnd = text.match(new RegExp(`Eligibility\\s*End\\s*Date\\s*:?\\s*${date}`, "i"));
+  const coverage = text.match(/Member\s*Status\s*:?\s*(Active|Inactive)\b/i)?.[1] || "";
+  const relationship = text.match(
+    /Relationship\s*to\s*Subscriber\s*:?\s*(Self|Spouse|Child|Dependent|Employee|Other)\b/i,
+  )?.[1] || "";
+  const insuranceType = text.match(/^\s*Insurance\s*Type\s*:\s*(.+)$/im)?.[1]?.trim() || "";
+  const planType = text.match(/^\s*Plan\s*\/\s*Product\s*:\s*(.+)$/im)?.[1]?.trim() || "";
+  return {
+    coverageStatus: coverage,
+    effectiveDate: planRange?.[1] || eligibilityStart?.[1] || "",
+    endDate: planRange?.[2] || eligibilityEnd?.[1] || "",
+    relationship,
+    insuranceType,
+    planType,
+  };
 }
 async function findResultScope(rootPage: Page, timeout: number): Promise<PortalScope | null> {
   const markers = [
@@ -506,7 +667,7 @@ function blankOutput(): Record<string, string> {
   return Object.fromEntries([
     "Coverage Status", "Eff Date", "End Date", "Other Ins", "Other Ins Eff Date",
     "Relationship to Subscriber", "Plan Type", "Bot Insurance Type", "Network",
-    "Coinsurance", "Copay", "Deductible", "Deductible Met", "Out of Pocket", "Out of Pocket Met",
+    "Coinsurance", "Copay", "Deductible", "Deductible Met", "Out of Pocket", "Out of Pocket Met", "Error",
   ].map((header) => [header, ""]));
 }
 
@@ -560,19 +721,38 @@ export async function runBcbsAvailityEligibilityWorkflow({ page, inputFile, cont
       const resultScope = await findResultScope(page, 60_000);
       if (!resultScope) throw new Error("No eligibility result appeared in any open page or iframe after Submit.");
       portal = resultScope;
+      await context.log({ level: "info", message: `Row ${excelRow}: response opened; extracting available fields.`, eventName: "eligibility_availity_result_opened", rowIndex: excelRow });
 
-      const coverageStatus = await readCoverageStatus(portal);
-      const { effectiveDate, endDate } = await readPlanDates(portal);
+
+      const resultText = await readStableResultText(portal);
+      const portalError = extractAvailityPortalError(resultText);
+      if (portalError) {
+        throw new Error(`Availity health-plan connection error: ${portalError} Skipping this claim.`);
+      }
+      if (!hasUsableEligibilityResult(resultText)) {
+        throw new Error("The Availity response did not finish loading Member Status and benefit details within 25 seconds.");
+      }
+      const snapshot = parseAvailitySnapshotBasics(resultText);
+      const locatedCoverageStatus = await readCoverageStatus(portal);
+      const locatedDates = await readPlanDates(portal);
       let { otherInsurance, otherInsuranceEffectiveDate } = await readOtherInsurance(portal);
-      const relationship = await readRelationshipToSubscriber(portal);
-      const insuranceType = await readLabeledResultValue(portal, SELECTORS.results.insuranceTypeLabel, "Insurance Type");
-      const planType = await readLabeledResultValue(portal, SELECTORS.results.planProductLabel, "Plan / Product");
+      const relationship = await readRelationshipToSubscriber(portal) || snapshot.relationship;
+      const insuranceType = await readLabeledResultValue(portal, SELECTORS.results.insuranceTypeLabel, "Insurance Type") || snapshot.insuranceType;
+      const planType = await readLabeledResultValue(portal, SELECTORS.results.planProductLabel, "Plan / Product") || snapshot.planType;
+      const coverageStatus = locatedCoverageStatus || snapshot.coverageStatus.toLowerCase();
+      const effectiveDate = locatedDates.effectiveDate || snapshot.effectiveDate;
+      const endDate = locatedDates.endDate || snapshot.endDate;
       const network = await readSelectedNetwork(portal);
       if (/\bhmo\b/i.test(insuranceType) && !otherInsurance) {
         otherInsurance = await readPrimaryCareProvider(portal);
         otherInsuranceEffectiveDate = "";
       }
-      const benefits = parseAvailityBcbsBenefits(await portal.locator("body").innerText(), memberId);
+      const benefits = parseAvailityBcbsBenefits(resultText, memberId);
+      const tableBenefits = await readProfessionalTableBenefits(portal, memberId);
+      if (tableBenefits) {
+        benefits.coinsurance = tableBenefits.coinsurance;
+        benefits.copay = tableBenefits.copay;
+      }
       const result = {
         "Coverage Status": coverageStatus ? coverageStatus[0].toUpperCase() + coverageStatus.slice(1) : "",
         "Eff Date": effectiveDate,
@@ -589,15 +769,21 @@ export async function runBcbsAvailityEligibilityWorkflow({ page, inputFile, cont
         "Deductible Met": benefits.deductibleMet,
         "Out of Pocket": benefits.outOfPocket,
         "Out of Pocket Met": benefits.outOfPocketMet,
+        Error: "",
       };
       outputRows.push({ ...row, ...result });
       await context.emit({ type: "eligibility_availity_result", update: result, rowIndex: excelRow });
-      await context.log({ level: "info", message: `Row ${excelRow}: eligibility data extracted.`, eventName: "eligibility_availity_row_complete", rowIndex: excelRow });
+      await context.log({
+        level: "info",
+        message: `Row ${excelRow}: benefits extracted (Coinsurance: ${benefits.coinsurance || "blank"}; Copay: ${benefits.copay || "blank"}; Deductible: ${benefits.deductible || "blank"}; Deductible Met: ${benefits.deductibleMet || "blank"}; Out of Pocket: ${benefits.outOfPocket || "blank"}; Out of Pocket Met: ${benefits.outOfPocketMet || "blank"}).`,
+        eventName: "eligibility_availity_row_complete",
+        rowIndex: excelRow,
+      });
       previousFailed = false;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       errors.push(`Row ${excelRow}: ${message}`);
-      outputRows.push({ ...row, ...blankOutput() });
+      outputRows.push({ ...row, ...blankOutput(), Error: message });
       await context.log({ level: "error", message: `Row ${excelRow}: ${message}`, eventName: "eligibility_availity_row_failed", rowIndex: excelRow });
       await emitRowScreenshot(context, page, index);
       previousFailed = true;

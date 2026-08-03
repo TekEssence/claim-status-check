@@ -37,7 +37,7 @@ test("creates a Waystar output workbook with verified inputs, results, and row e
     results: new Map([
       [2, {
         rowIndex: 2,
-        payerId: "blue-cross-blue-shield-texas",
+        payerId: "bcbs-ppo",
         coverageStatus: "active",
         planName: "PPO",
         relationshipToSubscriber: "Spouse",

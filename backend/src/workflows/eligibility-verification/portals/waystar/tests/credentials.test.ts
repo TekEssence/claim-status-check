@@ -59,34 +59,34 @@ test("selects the credential row matching the routed payer", async () => {
   const profiles = await readWaystarCredentialProfiles(workbookFile({
     credentialsRows: [
       { URL: "https://waystar.example.com", "User Name": "med-user", Password: "med-pass", Portal: "Waystar", Payer: "Medicare" },
-      { URL: "https://waystar.example.com", "User Name": "bcbs-user", Password: "bcbs-pass", Portal: "Waystar", Payer: "Blue Cross Blue Shield Texas" },
+      { URL: "https://waystar.example.com", "User Name": "bcbs-user", Password: "bcbs-pass", Portal: "Waystar", Payer: "BCBS PPO" },
     ],
   }));
 
   const selected = findWaystarCredentialsForPayer(profiles, {
-    id: "blue-cross-blue-shield-texas",
-    name: "Blue Cross Blue Shield Texas",
-    portalPayerName: "BCBS Texas(SB900)",
-    insuranceNameAliases: ["bcbs texas", "bcbstx"],
+    id: "bcbs-ppo",
+    name: "BCBS PPO",
+    portalPayerName: "BCBS Florida (SB590)",
+    insuranceNameAliases: ["bcbs ppo"],
   });
 
   assert.equal(selected?.username, "bcbs-user");
-  assert.equal(selected?.payer, "Blue Cross Blue Shield Texas");
+  assert.equal(selected?.payer, "BCBS PPO");
 });
 
 test("does not silently use another payer credential row", async () => {
   const profiles = await readWaystarCredentialProfiles(workbookFile({
     credentialsRows: [
       { URL: "https://waystar.example.com", "User Name": "med-user", Password: "med-pass", Portal: "Waystar", Payer: "Medicare" },
-      { URL: "https://waystar.example.com", "User Name": "fl-user", Password: "fl-pass", Portal: "Waystar", Payer: "BCBS Florida" },
+      { URL: "https://waystar.example.com", "User Name": "fl-user", Password: "fl-pass", Portal: "Waystar", Payer: "BCBS Texas" },
     ],
   }));
 
   const selected = findWaystarCredentialsForPayer(profiles, {
-    id: "blue-cross-blue-shield-texas",
-    name: "Blue Cross Blue Shield Texas",
-    portalPayerName: "BCBS Texas(SB900)",
-    insuranceNameAliases: ["bcbs texas", "bcbstx"],
+    id: "bcbs-ppo",
+    name: "BCBS PPO",
+    portalPayerName: "BCBS Florida (SB590)",
+    insuranceNameAliases: ["bcbs ppo"],
   });
 
   assert.equal(selected, null);

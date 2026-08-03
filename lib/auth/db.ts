@@ -1,6 +1,5 @@
-import { randomUUID } from "node:crypto";
 import { and, eq, or } from "drizzle-orm";
-import { getDb, isRetryableDbError, runDbWithRetry } from "@/db";
+import { isRetryableDbError, runDbWithRetry } from "@/db";
 import { authAccounts, authUsers } from "@/db/schema/better-auth";
 import { hashPassword, verifyPassword } from "./password";
 
@@ -30,19 +29,7 @@ type AuthUserRow = typeof authUsers.$inferSelect;
 type AuthAccountRow = typeof authAccounts.$inferSelect;
 
 export function isAuthDbConnectionError(error: unknown): boolean {
-  const code = typeof error === "object" && error !== null && "code" in error ? String((error as { code?: unknown }).code ?? "") : "";
-  const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
-  const cause = error instanceof Error && error.cause instanceof Error ? error.cause.message.toLowerCase() : "";
-
-  return (
-    isRetryableDbError(error) ||
-    ["ECONNRESET", "ETIMEDOUT", "ECONNREFUSED", "57P01"].includes(code) ||
-    message.includes("connection timeout") ||
-    message.includes("connection terminated") ||
-    message.includes("terminating connection") ||
-    cause.includes("connection terminated") ||
-    cause.includes("connection timeout")
-  );
+  return isRetryableDbError(error);
 }
 
 function normalizeLogin(login: string): string {
