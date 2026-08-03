@@ -13,10 +13,7 @@ test("routes a mixed workbook to payer batches using Primary Insurance Name", ()
       "Primary Insurance Name": "Traditional Medicare Part B",
       "Member ID": "MED-1",
     },
-    {
-      "Primary Insurance Name": "ARP Health Plan",
-      "Member ID": "ARP-1",
-    },
+
     {
       "Primary Insurance Name": "Medicare",
       "Member ID": "MED-2",
@@ -24,23 +21,23 @@ test("routes a mixed workbook to payer batches using Primary Insurance Name", ()
   ]);
 
   assert.equal(routing.payerHeader, "Primary Insurance Name");
-  assert.equal(routing.totalRows, 3);
+  assert.equal(routing.totalRows, 2);
   assert.deepEqual(
     routing.batches.map((batch) => [batch.payerId, batch.rows.length]),
-    [["medicare", 2], ["arp", 1]],
+    [["medicare", 2]],
   );
   assert.deepEqual(
     routing.batches[0].rows.map((row) => row.originalIndex),
-    [2, 4],
+    [2, 3],
   );
 });
 
 test("accepts normalized payer and insurance name header variants", () => {
   const payerRouting = routeWaystarRowsByPayer([{ PAYER: "MEDICARE ADVANTAGE" }]);
-  const insuranceRouting = routeWaystarRowsByPayer([{ "Insurance-Name": "ARP" }]);
+  const insuranceRouting = routeWaystarRowsByPayer([{ "Insurance-Name": "Medicare" }]);
 
   assert.equal(payerRouting.batches[0].payerId, "medicare");
-  assert.equal(insuranceRouting.batches[0].payerId, "arp");
+  assert.equal(insuranceRouting.batches[0].payerId, "medicare");
 });
 
 test("reads abbreviated patient and subscriber headers from the workbook", () => {
@@ -131,22 +128,39 @@ test("detects flexible payer or insurance column names", () => {
   assert.equal(planRouting.batches[0].payerId, "medicare");
 });
 
-test("routes only BCBS PPO to the dedicated Waystar payer", () => {
+test("routes BCBS names through the single BCBS PPO Waystar payer", () => {
   const routing = routeWaystarRowsByPayer([
     { Payer: "BCBS PPO", "Member ID": "PPO-123" },
     { Payer: "BCBS Florida", "Member ID": "FL-456" },
   ]);
 
   assert.deepEqual(routing.batches.map((batch) => [batch.payerId, batch.rows.length]), [
-    ["bcbs-ppo", 1],
+    ["bcbs-ppo", 2],
   ]);
-  assert.deepEqual(routing.unsupportedRows.map((row) => row.insuranceName), ["BCBS Florida"]);
+  assert.equal(routing.unsupportedRows.length, 0);
+});
+test("routes every BCBS PPO input alias through the same payer implementation", () => {
+  const aliases = [
+    "Anthem BCBS",
+    "Florida Blue Options",
+    "Florida Blue Medicare/PPO",
+    "BCBS/of All States/Commercial/Federal",
+    "BCBS",
+    "BCBS MI- MCR Plus PPO",
+  ];
+  const routing = routeWaystarRowsByPayer(
+    aliases.map((payer, index) => ({ Payer: payer, "Member ID": `PPO-${index + 1}` })),
+  );
+
+  assert.deepEqual(routing.batches.map((batch) => [batch.payerId, batch.payerName, batch.rows.length]), [
+    ["bcbs-ppo", "BCBS PPO", aliases.length],
+  ]);
+  assert.equal(routing.unsupportedRows.length, 0);
 });
 test("groups mixed payer rows so each payer can use its own portal flow", () => {
   const routing = routeWaystarRowsByPayer([
     { "Insurance Name": "Medicare" },
     { "Insurance Name": "BCBS PPO" },
-    { "Insurance Name": "ARP Health Plan" },
   ]);
 
   assert.deepEqual(
@@ -154,11 +168,38 @@ test("groups mixed payer rows so each payer can use its own portal flow", () => 
     [
       ["medicare", 1],
       ["bcbs-ppo", 1],
-      ["arp", 1],
     ],
   );
 });
 
+test("routes Cigna Open Access Plus independently from BCBS PPO", () => {
+  const routing = routeWaystarRowsByPayer([
+    { Payer: "Cigna Open Access Plus", "Member ID": "CIGNA-1" },
+    { Payer: "BCBS PPO", "Member ID": "BCBS-1" },
+  ]);
+
+  assert.deepEqual(routing.batches.map((batch) => [batch.payerId, batch.payerName]), [
+    ["cigna-open-access-plus", "Cigna Open Access Plus"],
+    ["bcbs-ppo", "BCBS PPO"],
+  ]);
+});
+test("routes every Cigna alias through the same Open Access Plus implementation", () => {
+  const aliases = [
+    "Cigna",
+    "Cigna Baycare Exclusive Network",
+    "Cigna BayCare Share",
+    "Cigna PPO",
+    "Cigna BayCare Premium",
+  ];
+  const routing = routeWaystarRowsByPayer(
+    aliases.map((payer, index) => ({ Payer: payer, "Member ID": `CIGNA-${index + 1}` })),
+  );
+
+  assert.deepEqual(routing.batches.map((batch) => [batch.payerId, batch.payerName, batch.rows.length]), [
+    ["cigna-open-access-plus", "Cigna Open Access Plus", aliases.length],
+  ]);
+  assert.equal(routing.unsupportedRows.length, 0);
+});
 test("does not confuse Primary Ins Subscriber No with the payer column", () => {
   assert.throws(() => routeWaystarRowsByPayer([
     { "Primary Ins Subscriber No": "SUB-123" },

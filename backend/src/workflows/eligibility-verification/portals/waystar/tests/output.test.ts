@@ -63,5 +63,6 @@ test("creates a Waystar output workbook with verified inputs, results, and row e
   const rows = XLSX.utils.sheet_to_json<Record<string, string>>(workbook.Sheets[workbook.SheetNames[0]], { defval: "" });
   assert.equal(rows[0]["Coverage Status"], "active");
   assert.equal(rows[0]["Relationship to Subscriber"], "Spouse");
+  assert.equal(rows[1]["Relationship to Subscriber"], "Self");
   assert.equal("Bot Network" in rows[0], false);
   assert.equal("Bot Error" in rows[0], false);});

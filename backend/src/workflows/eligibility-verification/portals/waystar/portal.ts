@@ -886,6 +886,18 @@ async function fillVerifiedText(page: Page, selector: string, value: string, lab
     matches = compareAsDate ? waystarDatesMatch(actualValue, value) : actualValue.trim() === value.trim();
   }
   if (!matches) {
+    await input.evaluate((element, expectedValue) => {
+      const field = element as HTMLInputElement;
+      const valueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+      valueSetter?.call(field, expectedValue);
+      field.dispatchEvent(new Event("input", { bubbles: true }));
+      field.dispatchEvent(new Event("change", { bubbles: true }));
+    }, value);
+    await page.waitForTimeout(250);
+    actualValue = await input.inputValue().catch(() => "");
+    matches = compareAsDate ? waystarDatesMatch(actualValue, value) : actualValue.trim() === value.trim();
+  }
+  if (!matches) {
     throw new Error(`Waystar ${label} did not fill correctly. Expected ${value}, found ${actualValue || "blank"}.`);
   }
 }

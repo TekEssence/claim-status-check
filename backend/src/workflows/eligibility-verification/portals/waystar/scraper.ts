@@ -146,6 +146,7 @@ export function createWaystarRunner(): AutomationRunner<EligibilityRunInput> {
             let batchSuccessCount = 0;
             const timeoutRetryCounts = new Map<number, number>();
             const sessionRetryCounts = new Map<number, number>();
+            const fieldRetryCounts = new Map<number, number>();
             for (let rowPosition = 0; rowPosition < batch.rows.length; rowPosition += 1) {
               const row = batch.rows[rowPosition];
               if (context.isCancelled?.()) {
@@ -165,7 +166,7 @@ export function createWaystarRunner(): AutomationRunner<EligibilityRunInput> {
                   payerName: payer.portalPayerName,
                   row,
                 });
-                let result = payer.parseResult(payload, row);
+                let result = applyWaystarResultDefaults(payer.parseResult(payload, row), row);
                 if (isFailedAtPayerResult(result)) {
                   await context.log({
                     level: "warn",
@@ -180,7 +181,7 @@ export function createWaystarRunner(): AutomationRunner<EligibilityRunInput> {
                     payerName: payer.portalPayerName,
                     row,
                   });
-                  result = payer.parseResult(payload, row);
+                  result = applyWaystarResultDefaults(payer.parseResult(payload, row), row);
                 }
                 results.set(row.originalIndex, result);
                 const extraction = describeEligibilityExtraction(result);
@@ -228,9 +229,23 @@ export function createWaystarRunner(): AutomationRunner<EligibilityRunInput> {
                     message = `${message} Automatic Waystar re-login failed: ${recoveryMessage}`;
                   }
                 }
+                const fieldRetries = fieldRetryCounts.get(row.originalIndex) ?? 0;
+                if (isWaystarInquiryFieldError(message) && fieldRetries < 1) {
+                  fieldRetryCounts.set(row.originalIndex, fieldRetries + 1);
+                  await closeWaystarInquiryWindows(page);
+                  batch.rows.push(row);
+                  await context.log({
+                    level: "warn",
+                    message: `${payer.name} eligibility row ${row.originalIndex} had a field reset by Waystar. Reopening a clean inquiry window and deferring the row for one retry.`,
+                    rowIndex: row.originalIndex,
+                    eventName: "eligibility_row_deferred_field_reset",
+                  });
+                  continue;
+                }
                 const timeoutRetries = timeoutRetryCounts.get(row.originalIndex) ?? 0;
                 if (isWaystarInquiryTimeout(message) && timeoutRetries < 1) {
                   timeoutRetryCounts.set(row.originalIndex, timeoutRetries + 1);
+                  await closeWaystarInquiryWindows(page);
                   batch.rows.push(row);
                   await context.log({
                     level: "warn",
@@ -404,7 +419,7 @@ export function describeEligibilityExtraction(result: EligibilityResult): {
   extracted: string[];
   missing: string[];
 } {
-  if ((result.payerId === "baycare-plus-medicare-advantage" || result.payerId === "aetna-medicare-ppo" || result.payerId === "united-healthcare-all-states" || result.payerId === "aarp-medicare-complete")) {
+  if ((result.payerId === "bcbs-ppo" || result.payerId === "cigna-open-access-plus" || result.payerId === "baycare-plus-medicare-advantage" || result.payerId === "aetna-medicare-ppo" || result.payerId === "united-healthcare-all-states" || result.payerId === "aarp-medicare-complete")) {
     const fields = [
       { label: "Coverage Status", value: result.coverageStatus !== "unknown" && result.coverageStatus !== "error", required: true },
       { label: "Eff Date", value: Boolean(result.effectiveDate), required: false },
@@ -439,20 +454,38 @@ for (const field of ELIGIBILITY_RESULT_FIELDS) {
   return { extracted, missing };
 }
 
+export function applyWaystarResultDefaults(
+  result: EligibilityResult,
+  row: EligibilityInputRow,
+): EligibilityResult {
+  return {
+    ...result,
+    relationshipToSubscriber:
+      result.relationshipToSubscriber || row.relationshipToSubscriber || "Self",
+  };
+}
 function isFailedAtPayerResult(result: EligibilityResult): boolean {
   return String(result.planStatus || "").toLowerCase().includes("failed at payer");
+}
+function isWaystarInquiryFieldError(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return normalized.includes("did not fill correctly") ||
+    normalized.includes("inquiry fields were not present on the page before submit");
 }
 function isWaystarSessionLoginError(message: string): boolean {
   return message.toLowerCase().includes("waystar session returned to the login page");
 }
 
+async function closeWaystarInquiryWindows(page: Page): Promise<void> {
+  const secondaryPages = page.context().pages().filter((candidate) => candidate !== page && !candidate.isClosed());
+  await Promise.all(secondaryPages.map((candidate) => candidate.close().catch(() => {})));
+}
 async function recoverWaystarSession(page: Page, credentials: Parameters<typeof loginToWaystar>[1]): Promise<void> {
   if (page.isClosed()) {
     throw new Error("The main Waystar page was closed.");
   }
 
-  const secondaryPages = page.context().pages().filter((candidate) => candidate !== page && !candidate.isClosed());
-  await Promise.all(secondaryPages.map((candidate) => candidate.close().catch(() => {})));
+  await closeWaystarInquiryWindows(page);
   await loginToWaystar(page, credentials);
 }
 function isWaystarInquiryTimeout(message: string): boolean {

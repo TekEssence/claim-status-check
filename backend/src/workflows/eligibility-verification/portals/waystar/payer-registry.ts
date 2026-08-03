@@ -1,23 +1,23 @@
 import { UnknownPortalError } from "../../../../core/errors";
-import { arpPayer } from "./payers/arp";
 import { aetnaMedicarePpoPayer } from "./payers/aetna-medicare-ppo";
 import { aarpMedicareCompletePayer } from "./payers/aarp-medicare-complete";
 import { unitedHealthcareAllStatesPayer } from "./payers/united-healthcare-all-states";
 import { amerigroupWellpointPayer } from "./payers/amerigroup";
 import { bayCarePlusMedicareAdvantagePayer } from "./payers/baycare-plus-medicare-advantage";
 import { bcbsPpoPayer } from "./payers/bcbs-ppo";
+import { cignaOpenAccessPlusPayer } from "./payers/cigna-open-access-plus";
 import { medicarePayer } from "./payers/medicare";
 import type { WaystarPayerHandler } from "./payers/types";
 
 export const waystarPayerRegistry = {
   medicare: medicarePayer,
-  arp: arpPayer,
   "aetna-medicare-ppo": aetnaMedicarePpoPayer,
   "aarp-medicare-complete": aarpMedicareCompletePayer,
   "united-healthcare-all-states": unitedHealthcareAllStatesPayer,
   "amerigroup-wellpoint": amerigroupWellpointPayer,
   "baycare-plus-medicare-advantage": bayCarePlusMedicareAdvantagePayer,
   "bcbs-ppo": bcbsPpoPayer,
+  "cigna-open-access-plus": cignaOpenAccessPlusPayer,
 } satisfies Record<string, WaystarPayerHandler>;
 
 export function getWaystarPayer(payerId: string): WaystarPayerHandler {
