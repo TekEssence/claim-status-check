@@ -8,6 +8,9 @@ const normalize = (value: unknown) => String(value ?? "").trim();
 const navigationReadyTimeout = Number(
   process.env.PORTAL_AVAILITY_ELIGIBILITY_NAVIGATION_READY_TIMEOUT_MS || 120_000,
 );
+const resultReadyTimeout = Number(
+  process.env.PORTAL_AVAILITY_ELIGIBILITY_RESULT_READY_TIMEOUT_MS || 60_000,
+);
 
 type PortalScope = Page | Frame;
 
@@ -359,7 +362,7 @@ type BenefitValues = {
 };
 
 function moneyBeforeCalendarYear(text: string): string {
-  return text.match(/(\$[\d,]+(?:\.\d{1,2})?)\s*\/\s*Calendar\s+Year(?:\(s\)|s)?/i)?.[1] || "";
+  return text.match(/(\$[\d,]+(?:\.\d{1,2})?)\s*\/\s*(?:Calendar|Service)\s+Year(?:\(s\)|s)?/i)?.[1] || "";
 }
 
 function remainingMoney(text: string): string {
@@ -443,10 +446,11 @@ export function parseAvailityBcbsBenefits(resultText: string, memberId: string):
   const individualBlocks = individualChunks(professional);
   const coinsurancePattern = /(?:^|[^\d])((?:100(?:\.0+)?|(?:\d|[1-9]\d)(?:\.\d+)?))\s*%/i;
   const copayPattern = /(\$[\d,]+(?:\.\d{1,2})?)\s*(?:\/|per)?\s*(?:Visit|Day)(?:\s*\(s\)|s)?/i;
-  // A professional service row must contain a copay. This excludes progress
-  // percentages from deductible/OOP displays while still allowing a dash for
-  // coinsurance in a valid specialist row.
-  const hasProfessionalValue = (block: string): boolean => copayPattern.test(block);
+  // The Professional section may provide coinsurance without a copay (the
+  // portal displays a dash), or copay without coinsurance. Either value makes
+  // the Individual professional row eligible for selection.
+  const hasProfessionalValue = (block: string): boolean =>
+    coinsurancePattern.test(block) || copayPattern.test(block);
 
   // If multiple Individual professional rows are present, select Specialist;
   // R-prefixed members prioritize Preferred Specialist. If Specialist is not
@@ -462,6 +466,7 @@ export function parseAvailityBcbsBenefits(resultText: string, memberId: string):
       (block) => /specialist\b/i.test(block) && hasProfessionalValue(block),
     ) || "";
   }
+
   if (!professionalBenefit) {
     professionalBenefit = individualBlocks.find(hasProfessionalValue) || "";
   }
@@ -484,30 +489,62 @@ async function readProfessionalTableBenefits(
   memberId: string,
 ): Promise<Pick<BenefitValues, "coinsurance" | "copay"> | null> {
   const rows = await scope.evaluate(() => {
-    const extracted: Array<{ text: string; coinsurance: string; copay: string }> = [];
-    for (const table of Array.from(document.querySelectorAll("table"))) {
-      const headers = Array.from(table.querySelectorAll("th")).map((cell) =>
-        (cell.textContent || "").replace(/\s+/g, " ").trim()
+    const normalize = (value: string | null | undefined) =>
+      (value || "").replace(/\s+/g, " ").trim();
+    const professionalHeading = /Professional\s*\(Physician\)\s*Visit\s*-\s*Office\s*-\s*98/i;
+    const allElements = Array.from(document.querySelectorAll<HTMLElement>("body *"));
+    const headings = allElements.filter((element) => {
+      const text = normalize(element.textContent);
+      if (!professionalHeading.test(text)) return false;
+      return !Array.from(element.children).some((child) =>
+        professionalHeading.test(normalize(child.textContent))
       );
-      const coinsuranceIndex = headers.findIndex((header) => /^Co\s*-?\s*Insurance$/i.test(header));
-      const copayIndex = headers.findIndex((header) => /^Co\s*-?\s*Payment$/i.test(header));
-      if (coinsuranceIndex < 0 || copayIndex < 0) continue;
+    });
 
-      for (const row of Array.from(table.querySelectorAll("tbody tr"))) {
-        const cells = Array.from(row.querySelectorAll(":scope > td"));
+    let section: HTMLElement | null = null;
+    for (const heading of headings) {
+      let candidate: HTMLElement | null = heading;
+      for (let depth = 0; candidate && depth < 8; depth += 1, candidate = candidate.parentElement) {
+        const table = candidate.querySelector("table");
+        const headerText = normalize(table?.querySelector("thead")?.textContent || table?.textContent);
+        if (/Co\s*-?\s*Insurance/i.test(headerText) && /Co\s*-?\s*Payment/i.test(headerText)) {
+          if (!section || normalize(candidate.textContent).length < normalize(section.textContent).length) {
+            section = candidate;
+          }
+          break;
+        }
+      }
+    }
+
+    if (!section) return [] as Array<{ text: string; coinsurance: string; copay: string }>;
+
+    const extracted: Array<{ text: string; coinsurance: string; copay: string }> = [];
+    for (const table of Array.from(section.querySelectorAll("table"))) {
+      const headers = Array.from(table.querySelectorAll<HTMLTableCellElement>("thead th, th"));
+      const coinsuranceHeader = headers.find((header) =>
+        /^Co\s*-?\s*Insurance$/i.test(normalize(header.textContent))
+      );
+      const copayHeader = headers.find((header) =>
+        /^Co\s*-?\s*Payment$/i.test(normalize(header.textContent))
+      );
+      if (!coinsuranceHeader || !copayHeader) continue;
+
+      const coinsuranceIndex = coinsuranceHeader.cellIndex;
+      const copayIndex = copayHeader.cellIndex;
+      for (const row of Array.from(table.querySelectorAll<HTMLTableRowElement>("tbody tr"))) {
+        const cells = Array.from(row.cells);
         extracted.push({
-          text: (row.textContent || "").replace(/\s+/g, " ").trim(),
-          coinsurance: (cells[coinsuranceIndex]?.textContent || "").replace(/\s+/g, " ").trim(),
-          copay: (cells[copayIndex]?.textContent || "").replace(/\s+/g, " ").trim(),
+          text: normalize(row.textContent),
+          coinsurance: normalize(cells[coinsuranceIndex]?.textContent),
+          copay: normalize(cells[copayIndex]?.textContent),
         });
       }
     }
     return extracted;
   }).catch(() => [] as Array<{ text: string; coinsurance: string; copay: string }>);
 
-  const individual = rows.filter(
-    (row) => /Coverage\s*Level\s*:?\s*Individual/i.test(row.text)
-      && /\$[\d,]+(?:\.\d{1,2})?/.test(`${row.copay} ${row.text}`),
+  const individual = rows.filter((row) =>
+    /Coverage\s*Level\s*:?\s*Individual/i.test(row.text)
   );
   if (!individual.length) return null;
 
@@ -518,76 +555,14 @@ async function readProfessionalTableBenefits(
       : undefined
   ) || individual.find((row) => /specialist/i.test(row.text)) || individual[0];
 
-  const coinsurance = selected.text.match(
+  const coinsurance = selected.coinsurance.match(
     /(?:^|[^\d])((?:100(?:\.0+)?|(?:\d|[1-9]\d)(?:\.\d+)?))\s*%/i,
   )?.[1];
-  const copay = selected.text.match(/(\$[\d,]+(?:\.\d{1,2})?)/)?.[1];
+  const copay = selected.copay.match(/(\$[\d,]+(?:\.\d{1,2})?)/)?.[1];
   return {
     coinsurance: coinsurance ? `${coinsurance}%` : "",
     copay: copay || "",
   };
-}
-async function readSpecialistBenefitsByPosition(
-  scope: PortalScope,
-  memberId: string,
-): Promise<Pick<BenefitValues, "coinsurance" | "copay"> | null> {
-  const isRMember = /^R/i.test(memberId.trim());
-  return scope.evaluate((preferPreferred: boolean) => {
-    const normalized = (element: Element) => (element.textContent || "").replace(/\s+/g, " ").trim();
-    const visibleRect = (element: Element) => {
-      const rect = element.getBoundingClientRect();
-      return rect.width > 0 && rect.height > 0 ? rect : null;
-    };
-    const elements = Array.from(document.querySelectorAll("th, td, li, span, p, div"));
-    const coinHeader = elements.find((element) => /^Co\s*-?\s*Insurance$/i.test(normalized(element)));
-    const copayHeader = elements.find((element) => /^Co\s*-?\s*Payment$/i.test(normalized(element)));
-    const coinRect = coinHeader ? visibleRect(coinHeader) : null;
-    const copayRect = copayHeader ? visibleRect(copayHeader) : null;
-    if (!coinRect || !copayRect) return null;
-
-    const specialistCandidates = elements
-      .map((element) => ({ element, text: normalized(element), rect: visibleRect(element) }))
-      .filter((candidate) => candidate.rect && candidate.text.length <= 180)
-      .filter((candidate) => (
-        preferPreferred
-          ? /preferred\s*specialist/i.test(candidate.text)
-          : /(?:^|[;•]\s*)specialist(?:\b|;)/i.test(candidate.text)
-      ))
-      .sort((left, right) => {
-        const leftArea = (left.rect?.width || 0) * (left.rect?.height || 0);
-        const rightArea = (right.rect?.width || 0) * (right.rect?.height || 0);
-        return leftArea - rightArea;
-      });
-    const specialist = specialistCandidates[0];
-    if (!specialist?.rect) return null;
-    const specialistY = specialist.rect.top + specialist.rect.height / 2;
-
-    const nearestValue = (columnRect: DOMRect, pattern: RegExp): string => {
-      const matches = elements
-        .map((element) => ({ text: normalized(element), rect: visibleRect(element) }))
-        .filter((candidate) => candidate.rect && pattern.test(candidate.text))
-        .filter((candidate) => {
-          const centerX = (candidate.rect?.left || 0) + (candidate.rect?.width || 0) / 2;
-          const centerY = (candidate.rect?.top || 0) + (candidate.rect?.height || 0) / 2;
-          return centerX >= columnRect.left - 20
-            && centerX <= columnRect.right + 20
-            && Math.abs(centerY - specialistY) <= 220;
-        })
-        .sort((left, right) => {
-          const leftY = (left.rect?.top || 0) + (left.rect?.height || 0) / 2;
-          const rightY = (right.rect?.top || 0) + (right.rect?.height || 0) / 2;
-          return Math.abs(leftY - specialistY) - Math.abs(rightY - specialistY);
-        });
-      return matches[0]?.text || "";
-    };
-
-    const coinText = nearestValue(coinRect, /^(?:100(?:\.0+)?|(?:\d|[1-9]\d)(?:\.\d+)?)\s*%$/);
-    const copayText = nearestValue(copayRect, /^\$[\d,]+(?:\.\d{1,2})?(?:\s*\/.*)?$/);
-    const coinsurance = coinText.match(/((?:100(?:\.0+)?|(?:\d|[1-9]\d)(?:\.\d+)?))\s*%/)?.[1];
-    const copay = copayText.match(/(\$[\d,]+(?:\.\d{1,2})?)/)?.[1];
-    if (!coinsurance && !copay) return null;
-    return { coinsurance: coinsurance ? `${coinsurance}%` : "", copay: copay || "" };
-  }, isRMember).catch(() => null);
 }
 async function readPrimaryCareProvider(page: PortalScope): Promise<string> {
   const heading = page.getByText("Primary Care Provider", { exact: true }).first();
@@ -615,6 +590,13 @@ type SnapshotBasics = {
 };
 
 export function extractAvailityPortalError(text: string): string {
+  const submissionError = text.match(
+    /Submission\s+Error\s+([\s\S]*?Blue\s+Cross\s+Medicare\s+Advantage\.?)/i,
+  );
+  if (submissionError) {
+    return `Submission Error: ${submissionError[1].replace(/\s+/g, " ").trim()}`;
+  }
+
   const connectionProblem = text.match(
     /Availity\s+is\s+experiencing\s+connection\s+problems\s+with\s+the\s+health\s+plan[\s\S]*?(?=Date\s+of\s+Service|$)/i,
   )?.[0]?.replace(/\s+/g, " ").trim();
@@ -647,7 +629,7 @@ async function revealEligibilityBenefits(scope: PortalScope): Promise<void> {
   }).catch(() => {});
 }
 
-async function readStableResultText(scope: PortalScope, timeout = 25_000): Promise<string> {
+async function readStableResultText(scope: PortalScope, timeout = resultReadyTimeout): Promise<string> {
   const body = scope.locator("body");
   const deadline = Date.now() + timeout;
   let previous = "";
@@ -789,10 +771,10 @@ export async function runBcbsAvailityEligibilityWorkflow({ page, inputFile, cont
       const resultText = await readStableResultText(portal);
       const portalError = extractAvailityPortalError(resultText);
       if (portalError) {
-        throw new Error(`Availity health-plan connection error: ${portalError} Skipping this claim.`);
+        throw new Error(`${portalError} Skipping this claim.`);
       }
       if (!hasUsableEligibilityResult(resultText)) {
-        throw new Error("The Availity response did not finish loading Member Status and benefit details within 25 seconds.");
+        throw new Error(`The Availity response did not finish loading Member Status and benefit details within ${Math.round(resultReadyTimeout / 1000)} seconds.`);
       }
       const snapshot = parseAvailitySnapshotBasics(resultText);
       const locatedCoverageStatus = await readCoverageStatus(portal);
@@ -811,21 +793,9 @@ export async function runBcbsAvailityEligibilityWorkflow({ page, inputFile, cont
       }
       const benefits = parseAvailityBcbsBenefits(resultText, memberId);
       const tableBenefits = await readProfessionalTableBenefits(portal, memberId);
-      if (tableBenefits?.coinsurance && (!benefits.coinsurance || tableBenefits.coinsurance === benefits.coinsurance)) {
-        benefits.coinsurance = tableBenefits.coinsurance;
-      }
-      if (tableBenefits?.copay && (!benefits.copay || tableBenefits.copay === benefits.copay)) {
-        benefits.copay = tableBenefits.copay;
-      }
-      // Positional recovery is used only for a missing non-R coinsurance value.
-      // Copay remains sourced from the selected table row, and R-members retain
-      // the Preferred Specialist row values without positional guessing.
-      if (!/^R/i.test(memberId.trim()) && !benefits.coinsurance) {
-        const positionedSpecialistBenefits = await readSpecialistBenefitsByPosition(portal, memberId);
-        if (positionedSpecialistBenefits?.coinsurance) {
-          benefits.coinsurance = positionedSpecialistBenefits.coinsurance;
-        }
-      }
+      if (tableBenefits?.coinsurance) benefits.coinsurance = tableBenefits.coinsurance;
+      if (tableBenefits?.copay) benefits.copay = tableBenefits.copay;
+
       const result = {
         "Coverage Status": coverageStatus ? coverageStatus[0].toUpperCase() + coverageStatus.slice(1) : "",
         "Eff Date": effectiveDate,

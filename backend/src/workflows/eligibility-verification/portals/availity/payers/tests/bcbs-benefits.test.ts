@@ -222,3 +222,44 @@ test("recognizes an Availity health-plan connection error", () => {
   assert.match(error, /Transaction ID: 77248706231/);
   assert.match(error, /Transaction Time: Aug 3, 1:51 AM/);
 });
+test("extracts Individual Service Year out-of-pocket values", () => {
+  const result = parseAvailityBcbsBenefits(`
+    Health Benefit Plan Coverage - 30
+    Out Of Pocket
+    Information / Details
+    Individual
+    Family
+    In Network
+    Place of Service: Office
+    $5,000 / Service Year(s)
+    $3,002.23 Remaining
+    -$1,997.77 Year to Date
+    $10,000 / Service Year(s)
+    $8,002.23 Remaining
+    Professional (Physician) Visit - Office - 98
+  `, "ABC123");
+  assert.equal(result.outOfPocket, "$5,000");
+  assert.equal(result.outOfPocketMet, "$3,002.23");
+});
+test("extracts professional coinsurance when copay is a dash", () => {
+  const result = parseAvailityBcbsBenefits(`
+    Professional (Physician) Visit - Office - 98
+    Coverage Level: Individual
+    30% / Calendar Year(s)
+    —
+    OFFICE VISIT - PROFESSIONAL
+  `, "ABC123");
+  assert.equal(result.coinsurance, "30%");
+  assert.equal(result.copay, "");
+});
+test("captures an Availity submission error for the Excel Error column", () => {
+  const error = extractAvailityPortalError(`
+    Submission Error
+    Your request was invalid. Subscriber IDs cannot include an alpha-prefix that begins with JLX, JYN, XOD, XOJ, YDJ, YDL, YDV, YID, YIJ, YUB, YUW, YUX, ZGD, ZGJ, or ZZT.
+    To submit an inquiry with one of these alpha-prefixes, please submit the inquiry through Blue Cross Medicare Advantage.
+  `);
+  assert.equal(
+    error,
+    "Submission Error: Your request was invalid. Subscriber IDs cannot include an alpha-prefix that begins with JLX, JYN, XOD, XOJ, YDJ, YDL, YDV, YID, YIJ, YUB, YUW, YUX, ZGD, ZGJ, or ZZT. To submit an inquiry with one of these alpha-prefixes, please submit the inquiry through Blue Cross Medicare Advantage.",
+  );
+});
