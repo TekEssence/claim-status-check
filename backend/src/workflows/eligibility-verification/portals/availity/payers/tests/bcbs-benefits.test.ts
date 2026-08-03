@@ -1,4 +1,4 @@
-import assert from "node:assert/strict";
+﻿import assert from "node:assert/strict";
 import test from "node:test";
 import { extractAvailityPortalError, normalizeAvailityDob, parseAvailityBcbsBenefits, parseAvailitySnapshotBasics } from "../bcbs/workflow";
 
@@ -20,7 +20,7 @@ test("reads Individual calendar-year and remaining values and ignores family/YTD
     Professional (Physician) Visit - Office - 98
     Coverage Level: Individual
     PREFERRED SPECIALIST
-    —
+    â€”
     $40 / Visit(s)
     Coverage Level: Family
     50%
@@ -110,7 +110,7 @@ test("extracts coinsurance and copay from the Individual SPECIALIST row", () => 
     SPECIALIST
     In Network
     Coverage Level: Individual
-    �
+    —
     $35 / Visit(s)
     INCLUSIONS FAMILY
   `, "ABC123");
@@ -126,14 +126,14 @@ test("selects the Preferred Specialist row for an R-prefixed member", () => {
     Preferred
     Plan / Product: STANDARD
     Coverage Level: Individual
-    �
+    —
     $30 / Visit(s)
     PREFERRED PRIMARY CARE AND OTHER HEALTH CARE PROFESSIONAL;
     TELEMEDICINE EXCEPT WHEN PREVENTIVE
     Preferred
     Plan / Product: STANDARD
     Coverage Level: Individual
-    �
+    —
     $40 / Visit(s)
     PREFERRED SPECIALIST; TELEMEDICINE EXCEPT WHEN PREVENTIVE
   `, "R123456");
