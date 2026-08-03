@@ -1,5 +1,6 @@
 import { UnknownPortalError } from "../../../../core/errors";
 import { aetnaMedicarePpoPayer } from "./payers/aetna-medicare-ppo";
+import { aetnaPayer } from "./payers/aetna";
 import { aarpMedicareCompletePayer } from "./payers/aarp-medicare-complete";
 import { unitedHealthcareAllStatesPayer } from "./payers/united-healthcare-all-states";
 import { amerigroupWellpointPayer } from "./payers/amerigroup";
@@ -12,6 +13,7 @@ import type { WaystarPayerHandler } from "./payers/types";
 export const waystarPayerRegistry = {
   medicare: medicarePayer,
   "aetna-medicare-ppo": aetnaMedicarePpoPayer,
+  aetna: aetnaPayer,
   "aarp-medicare-complete": aarpMedicareCompletePayer,
   "united-healthcare-all-states": unitedHealthcareAllStatesPayer,
   "amerigroup-wellpoint": amerigroupWellpointPayer,

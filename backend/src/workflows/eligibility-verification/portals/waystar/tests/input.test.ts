@@ -200,6 +200,27 @@ test("routes every Cigna alias through the same Open Access Plus implementation"
   ]);
   assert.equal(routing.unsupportedRows.length, 0);
 });
+test("routes AETNA separately from Aetna Medicare PPO", () => {
+  const routing = routeWaystarRowsByPayer([
+    { Payer: "AETNA", "Member ID": "AETNA-1" },
+    { Payer: "Aetna Medicare PPO", "Member ID": "AETNA-MA-1" },
+  ]);
+
+  assert.deepEqual(routing.batches.map((batch) => [batch.payerId, batch.payerName]), [
+    ["aetna", "AETNA"],
+    ["aetna-medicare-ppo", "Aetna Medicare PPO"],
+  ]);
+});
+test("routes AETNA INSURANCE through the existing AETNA implementation", () => {
+  const routing = routeWaystarRowsByPayer([
+    { Payer: "AETNA INSURANCE", "Member ID": "AETNA-INS-1" },
+  ]);
+
+  assert.deepEqual(routing.batches.map((batch) => [batch.payerId, batch.payerName]), [
+    ["aetna", "AETNA"],
+  ]);
+  assert.equal(routing.unsupportedRows.length, 0);
+});
 test("does not confuse Primary Ins Subscriber No with the payer column", () => {
   assert.throws(() => routeWaystarRowsByPayer([
     { "Primary Ins Subscriber No": "SUB-123" },
