@@ -21,7 +21,8 @@ type ZelisPaymentRow = {
   row: Locator;
   paymentDate: string;
   paymentId: string;
-  hasCapturedCheckmark: boolean;
+  method: string;
+  downloadedDate: string;
 };
 
 function requireFile(formData: FormData, key: string, label: string): File {
@@ -238,12 +239,15 @@ async function readPaymentRows(page: Page): Promise<ZelisPaymentRow[]> {
     if (!paymentId) continue;
     const cells = row.locator("td[role='gridcell'], td");
     const paymentDate = (await cells.nth(1).innerText().catch(() => "")).trim();
-    const downloadLink = row.locator("a.downloadPaymentLink").filter({ hasText: /^Download$/i }).first();
-    const downloadClass = (await downloadLink.getAttribute("class").catch(() => "")) ?? "";
-    const hasCapturedCheckmark = /\bdownloadSelected\b/.test(downloadClass);
-    result.push({ row, paymentDate, paymentId, hasCapturedCheckmark });
+    const method = (await cells.nth(2).innerText().catch(() => "")).replace(/\s+/g, " ").trim();
+    const downloadedDate = (await cells.nth(11).innerText().catch(() => "")).trim();
+    result.push({ row, paymentDate, paymentId, method, downloadedDate });
   }
   return result;
+}
+
+function shouldCapturePaymentScreenshot(payment: ZelisPaymentRow): boolean {
+  return /virtual\s*card/i.test(payment.method);
 }
 
 async function saveZelisDownload(page: Page, payment: ZelisPaymentRow, outputFolder: string): Promise<string> {
@@ -348,7 +352,7 @@ export async function runZelisJob(input: RunInput, context: AutomationContext): 
     await openPaymentPage(page, context);
     await context.log({
       level: "info",
-      message: "Processing Zelis payments from the default All filter. Rows with a green checkmark will be skipped.",
+      message: "Processing Zelis payments from the default All filter. Rows with a Downloaded date will be skipped.",
       eventName: "payment_eob_zelis_all_filter_processing",
     });
 
@@ -368,7 +372,7 @@ export async function runZelisJob(input: RunInput, context: AutomationContext): 
             await context.emit({ type: "cancelled", message: "Zelis Payment EOB download cancelled." });
             break;
           }
-          if (payment.hasCapturedCheckmark) {
+          if (payment.downloadedDate) {
             comparisonRows.push({
               checkNumber: payment.paymentId,
               checkDate: payment.paymentDate,
@@ -376,7 +380,7 @@ export async function runZelisJob(input: RunInput, context: AutomationContext): 
               searchResult: "Skipped",
               pdfStatus: "Skipped",
               filename: "",
-              message: "Green checkmark present; skipped.",
+              message: `Downloaded column already has value "${payment.downloadedDate}"; skipped.`,
             });
             completed += 1;
             await context.emit({ type: "progress", completed, total: Math.max(completed, 1) });
@@ -384,19 +388,23 @@ export async function runZelisJob(input: RunInput, context: AutomationContext): 
           }
 
           try {
-            await context.log({ level: "info", message: `Processing Zelis Payment ID ${payment.paymentId}.`, eventName: "payment_eob_zelis_payment_process" });
+            await context.log({ level: "info", message: `Processing Zelis Payment ID ${payment.paymentId}; Downloaded column is blank.`, eventName: "payment_eob_zelis_payment_process" });
             const downloadFilename = await saveZelisDownload(page, payment, outputPdfFolder);
-            const screenshotFilename = await capturePaymentPopupScreenshot(page, payment, screenshotFolder);
+            const screenshotFilename = shouldCapturePaymentScreenshot(payment)
+              ? await capturePaymentPopupScreenshot(page, payment, screenshotFolder)
+              : "";
             pendingPaymentCount += 1;
-            generatedFileCount += 2;
+            generatedFileCount += screenshotFilename ? 2 : 1;
             comparisonRows.push({
               checkNumber: payment.paymentId,
               checkDate: payment.paymentDate,
               comparison: "Unique",
               searchResult: "Found",
               pdfStatus: "Downloaded",
-              filename: `${downloadFilename}; ${screenshotFilename}`,
-              message: "Downloaded payment file and captured Payment ID popup screenshot.",
+              filename: [downloadFilename, screenshotFilename].filter(Boolean).join("; "),
+              message: screenshotFilename
+                ? "Downloaded payment file and captured Virtual Card Payment ID popup screenshot."
+                : `Downloaded payment file. Method "${payment.method}" does not require a Payment ID screenshot.`,
             });
           } catch (error) {
             comparisonRows.push({
@@ -419,7 +427,7 @@ export async function runZelisJob(input: RunInput, context: AutomationContext): 
     if (comparisonRows.length > 0 && pendingPaymentCount === 0 && comparisonRows.every((row) => row.pdfStatus === "Skipped")) {
       await context.log({
         level: "info",
-        message: "No pending payments found. All visible rows already have green tick.",
+        message: "No pending payments found. All visible rows already have a Downloaded date.",
         eventName: "payment_eob_zelis_no_pending_green_tick",
       });
     }
