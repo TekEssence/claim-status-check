@@ -93,6 +93,8 @@ const CLAIM_SEARCH_DATE_SELECTOR = "input[placeholder*='MM/DD/YYYY']:visible";
 const CLAIM_SEARCH_ACTION_SELECTOR = "button:has-text('Search'):visible, button:has-text('Clear all'):visible";
 const CLAIM_SEARCH_READY_TIMEOUT_MS = 45000;
 const FAST_CLAIM_SEARCH_READY_TIMEOUT_MS = 1500;
+const CLEAR_FORM_CLICK_TIMEOUT_MS = 2000;
+const CLEAR_FORM_READY_TIMEOUT_MS = 1000;
 const INITIAL_FEEDBACK_DISMISS_CHECKED = new WeakSet<Page>();
 const CLAIM_DETAILS_PAGE_SIGNALS = [
   "text=/Claim details/i",
@@ -1251,8 +1253,14 @@ async function dismissClaimSearchOverlays(page: Page): Promise<void> {
 async function clearClaimSearchFormIfVisible(page: Page): Promise<boolean> {
   const clearButton = page.locator("button:has-text('Clear all')").first();
   if (!(await clearButton.isVisible({ timeout: 500 }).catch(() => false))) return false;
-  await clearButton.click();
-  await fastClaimSearchReady(page);
+  const clicked = await clearButton.click({ timeout: CLEAR_FORM_CLICK_TIMEOUT_MS })
+    .then(() => true)
+    .catch(async () => {
+      await page.keyboard.press("Escape").catch(() => {});
+      return false;
+    });
+  if (!clicked) return false;
+  await fastClaimSearchReady(page, CLEAR_FORM_READY_TIMEOUT_MS);
   return true;
 }
 
@@ -1403,6 +1411,7 @@ async function searchClaimRow(page: Page, row: OptumProInputRow, stageLog: Stage
   await timingLog("fillPatient", fillPatientStartedAt);
   checkCancellation?.();
   if (!selectedPatient) {
+    await stageLog("info", "claim-search", `No patient dropdown match found for row ${row.rowNumber}; skipping claim search for this row.`);
     await page.keyboard.press("Escape").catch(() => {});
     return emptyClaimResult(row, {
       resultSummary: "No patient found",
