@@ -1,13 +1,11 @@
 import { UnknownPortalError } from "../../core/errors";
 import type { AutomationRunner } from "../types";
 import { createAvailityRemittanceRunner } from "./portals/availity-remittance/scraper";
-import { createEchoRemittanceRunner } from "./portals/echo-remittance/scraper";
 import { createInstamedRemittanceRunner } from "./portals/instamed-remittance/scraper";
 import { createZelisRunner } from "./portals/zelis/scraper";
 
 export const paymentEobPortalRegistry = {
   "availity-remittance": createAvailityRemittanceRunner,
-  "echo-remittance": createEchoRemittanceRunner,
   "instamed-remittance": createInstamedRemittanceRunner,
   zelis: createZelisRunner,
 } satisfies Record<string, () => AutomationRunner>;
