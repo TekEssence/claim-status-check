@@ -16,9 +16,10 @@ type Props = {
 export function AvailityInputForm(props: Props) {
   return (
     <form onSubmit={props.onSubmit} className="space-y-5">
+
       <div className="grid gap-4 lg:grid-cols-2">
         <PortalUploadCard mode="file" accept=".xlsx,.xls" acceptedFormats=".xlsx, .xls" description="Upload credentials with Project TPM, Portal Availity, Link, Username, Password, and Secret Key." fileName={props.credentialFile?.name} icon={KeyRound} inputId="availityEligibilityCredentials" onFileSelect={props.onCredentialFileChange} sizeHint="25 MB" title="Upload Availity Login File" />
-        <PortalUploadCard mode="file" accept=".xlsx,.xls" acceptedFormats=".xlsx, .xls" description="Upload the BCBS member eligibility workbook for processing through Availity." fileName={props.inputFile?.name} icon={FileSpreadsheet} inputId="availityEligibilityInput" onFileSelect={props.onInputFileChange} sizeHint="25 MB" title="Upload BCBS Eligibility File" />
+        <PortalUploadCard mode="file" accept=".xlsx,.xls" acceptedFormats=".xlsx, .xls" description="Upload the member eligibility workbook containing the payer name used for automatic routing." fileName={props.inputFile?.name} icon={FileSpreadsheet} inputId="availityEligibilityInput" onFileSelect={props.onInputFileChange} sizeHint="25 MB" title="Upload Eligibility File" />
       </div>
       <div className="flex flex-wrap gap-3">
         <button type="submit" disabled={!props.canStart} className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50">

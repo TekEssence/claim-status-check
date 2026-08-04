@@ -7,7 +7,7 @@ import pyotp
 from google.protobuf import descriptor_pb2, descriptor_pool, message_factory
  
  
-DATA_VALUE = ""
+DATA_VALUE = "ClwKQG562GHB3RBLFZgRbuXI%2B%2BmQqVVvD4vGsd1bayDzpcDwsCxjO0rstXygdGy1Hl8DtOsqZZTia8DNm8M0YcBwq%2FoSEkF2YWlsaXR5Ok1JTExFUlRQQyABKAEwAhABGAEgACjpr7HL%2F%2F%2F%2F%2F%2F8B"
 def build_payload_class():
     file_desc = descriptor_pb2.FileDescriptorProto()
     file_desc.name = "migration.proto"

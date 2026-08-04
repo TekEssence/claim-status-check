@@ -2,5 +2,5 @@ export const availityEligibilityFrontendPortalConfig = {
   id: "availity",
   name: "Availity",
   description: "Eligibility verification through the Availity portal.",
-  supportedPayers: ["BCBS"],
+  supportedPayers: ["BCBS", "Van Lang IPA"],
 } as const;

@@ -3,6 +3,7 @@ import type { EligibilityRunInput } from "../../types";
 import { authenticateAvailityEligibility } from "./authentication";
 import { launchAvailityEligibilityBrowser } from "./browser";
 import { readAvailityEligibilityCredentials } from "./credentials";
+import { readAvailityEligibilityInputPayer } from "./input-routing";
 import { getAvailityEligibilityPayer } from "./payers/registry";
 
 function requireFile(formData: FormData, key: string, label: string): File {
@@ -24,7 +25,8 @@ export function createAvailityEligibilityRunner(): AutomationRunner<EligibilityR
       };
     },
     async run(input, context) {
-      const payer = getAvailityEligibilityPayer("bcbs");
+      const payerId = await readAvailityEligibilityInputPayer(input.inputFile);
+      const payer = getAvailityEligibilityPayer(payerId);
       const credentials = await readAvailityEligibilityCredentials(input.credentialFile);
       const log = async (message: string) => context.log({
         level: "info",
@@ -45,7 +47,7 @@ export function createAvailityEligibilityRunner(): AutomationRunner<EligibilityR
           message: "Availity eligibility login and MFA authentication completed.",
           eventName: "eligibility_availity_login_complete",
         });
-        stage = "Patient Registration > Eligibility and Benefits Inquiry > BCBS processing";
+        stage = `Patient Registration > Eligibility and Benefits Inquiry > ${payer.name} processing`;
         await payer.run({ page, inputFile: input.inputFile, context });
         stage = "completed";
       } catch (error) {
@@ -58,7 +60,7 @@ export function createAvailityEligibilityRunner(): AutomationRunner<EligibilityR
           `Job ID: ${context.jobId}`,
           `Workflow: Eligibility Verification`,
           `Portal: Availity`,
-          `Payer: BCBS`,
+          `Payer: ${payer.name}`,
           `Failed stage: ${stage}`,
           `Page URL: ${page.url() || "Unavailable"}`,
           `Page title: ${title || "Unavailable"}`,

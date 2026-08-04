@@ -8,3 +8,10 @@ test("Availity eligibility resolves BCBS through its payer registry", () => {
   assert.equal(payer.id, "bcbs");
   assert.equal(payer.name, "Blue Cross Blue Shield");
 });
+
+test("Availity eligibility resolves Van Lang IPA independently", () => {
+  const payer = getAvailityEligibilityPayer("van-lang-ipa");
+
+  assert.equal(payer.id, "van-lang-ipa");
+  assert.equal(payer.name, "Van Lang IPA");
+});
