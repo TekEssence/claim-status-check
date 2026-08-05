@@ -6,6 +6,8 @@ import type { AvailityEligibilityPayerHandler } from "./types";
 export const availityEligibilityPayerRegistry = {
   bcbs: bcbsAvailityEligibilityPayer,
   "van-lang-ipa": vanLangIpaAvailityEligibilityPayer,
+  amerigroup: vanLangIpaAvailityEligibilityPayer,
+  wellpoint: vanLangIpaAvailityEligibilityPayer,
 } satisfies Record<string, AvailityEligibilityPayerHandler>;
 
 export function getAvailityEligibilityPayer(

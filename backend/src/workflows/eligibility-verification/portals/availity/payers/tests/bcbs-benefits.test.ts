@@ -1,6 +1,6 @@
-﻿import assert from "node:assert/strict";
+import assert from "node:assert/strict";
 import test from "node:test";
-import { extractAvailityPortalError, normalizeAvailityDob, parseAvailityBcbsBenefits, parseAvailitySnapshotBasics } from "../bcbs/workflow";
+import { extractAvailityPortalError, hasUsableEligibilityResult, normalizeAvailityDob, parseAvailityBcbsBenefits, parseAvailitySnapshotBasics } from "../bcbs/workflow";
 
 test("reads Individual calendar-year and remaining values and ignores family/YTD", () => {
   const result = parseAvailityBcbsBenefits(`
@@ -262,4 +262,15 @@ test("captures an Availity submission error for the Excel Error column", () => {
     error,
     "Submission Error: Your request was invalid. Subscriber IDs cannot include an alpha-prefix that begins with JLX, JYN, XOD, XOJ, YDJ, YDL, YDV, YID, YIJ, YUB, YUW, YUX, ZGD, ZGJ, or ZZT. To submit an inquiry with one of these alpha-prefixes, please submit the inquiry through Blue Cross Medicare Advantage.",
   );
+});
+test("accepts a stable active BCBS response when optional benefits are absent", () => {
+  assert.equal(hasUsableEligibilityResult("Member Status Active"), true);
+});
+
+test("accepts a stable inactive BCBS response when optional benefits are absent", () => {
+  assert.equal(hasUsableEligibilityResult("Member Status: Inactive"), true);
+});
+
+test("does not accept a BCBS response before coverage status appears", () => {
+  assert.equal(hasUsableEligibilityResult("Health Benefit Plan Coverage - 30"), false);
 });

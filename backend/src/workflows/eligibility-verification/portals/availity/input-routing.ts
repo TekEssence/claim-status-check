@@ -1,6 +1,19 @@
 import * as XLSX from "xlsx";
 
-export type AvailityEligibilityPayerId = "bcbs" | "van-lang-ipa";
+export type AvailityEligibilityPayerId =
+  | "bcbs"
+  | "van-lang-ipa"
+  | "amerigroup"
+  | "wellpoint";
+
+export const AVAILITY_ORIGINAL_ROW_FIELD = "__AvailityOriginalRow";
+
+export type AvailityEligibilityPayerBatch = {
+  payerId: AvailityEligibilityPayerId;
+  inputFile: File;
+  rowCount: number;
+  originalRowNumbers: number[];
+};
 
 function normalize(value: unknown): string {
   return String(value ?? "").trim();
@@ -37,30 +50,63 @@ export function resolveAvailityEligibilityInputPayer(payerName: string): Availit
     || normalized.includes("blueshield")
   ) return "bcbs";
   if (normalized.includes("vanlang")) return "van-lang-ipa";
+  if (normalized.includes("amerigroup")) return "amerigroup";
+  if (normalized.includes("wellpoint")) return "wellpoint";
   throw new Error(
-    `Unsupported Availity eligibility payer "${payerName}" in the input workbook. Expected Blue Cross Blue Shield or Van Lang IPA.`,
+    `Unsupported Availity eligibility payer "${payerName}" in the input workbook. Expected Blue Cross Blue Shield, Van Lang IPA, Amerigroup, or Wellpoint.`,
   );
 }
 
-export async function readAvailityEligibilityInputPayer(
+export async function readAvailityEligibilityInputPayers(
   inputFile: File,
-): Promise<AvailityEligibilityPayerId> {
+): Promise<AvailityEligibilityPayerBatch[]> {
   const workbook = XLSX.read(await inputFile.arrayBuffer(), { type: "array" });
   const sheet = workbook.Sheets[workbook.SheetNames[0]];
   if (!sheet) throw new Error("The Availity eligibility input workbook does not contain a worksheet.");
   const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: "", raw: false });
   if (!rows.length) throw new Error("The Availity eligibility input workbook is empty.");
 
-  const payerNames = rows.map(findPayerName).filter(Boolean);
-  if (!payerNames.length) {
-    throw new Error(
-      `Missing payer name in the Availity eligibility input workbook. Add one of these columns: ${PAYER_HEADERS.join(", ")}.`,
-    );
+  const grouped = new Map<AvailityEligibilityPayerId, Record<string, unknown>[]>();
+  for (const [index, row] of rows.entries()) {
+    const payerName = findPayerName(row);
+    if (!payerName) {
+      throw new Error(
+        `Missing payer name in row ${index + 2}. Add one of these columns: ${PAYER_HEADERS.join(", ")}.`,
+      );
+    }
+    const payerId = resolveAvailityEligibilityInputPayer(payerName);
+    const payerRows = grouped.get(payerId) ?? [];
+    payerRows.push({ ...row, [AVAILITY_ORIGINAL_ROW_FIELD]: index + 2 });
+    grouped.set(payerId, payerRows);
   }
 
-  const payerIds = new Set(payerNames.map(resolveAvailityEligibilityInputPayer));
-  if (payerIds.size > 1) {
-    throw new Error("The Availity eligibility input workbook contains both BCBS and Van Lang IPA rows. Upload one payer per run.");
+  return Array.from(grouped, ([payerId, payerRows]) => {
+    const payerWorkbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(
+      payerWorkbook,
+      XLSX.utils.json_to_sheet(payerRows),
+      workbook.SheetNames[0] || "Eligibility",
+    );
+    const buffer = XLSX.write(payerWorkbook, { type: "buffer", bookType: "xlsx" }) as Buffer;
+    const bytes = new Uint8Array(buffer.byteLength);
+    bytes.set(buffer);
+    return {
+      payerId,
+      rowCount: payerRows.length,
+      originalRowNumbers: payerRows.map((row) => Number(row[AVAILITY_ORIGINAL_ROW_FIELD])),
+      inputFile: new File([bytes], `${payerId}-${inputFile.name}`, {
+        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      }),
+    };
+  });
+}
+
+export async function readAvailityEligibilityInputPayer(
+  inputFile: File,
+): Promise<AvailityEligibilityPayerId> {
+  const batches = await readAvailityEligibilityInputPayers(inputFile);
+  if (batches.length !== 1) {
+    throw new Error("The Availity eligibility input workbook contains multiple payers.");
   }
-  return [...payerIds][0];
+  return batches[0].payerId;
 }

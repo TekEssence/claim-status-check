@@ -15,3 +15,10 @@ test("Availity eligibility resolves Van Lang IPA independently", () => {
   assert.equal(payer.id, "van-lang-ipa");
   assert.equal(payer.name, "Van Lang IPA");
 });
+
+test("Amerigroup and Wellpoint reuse the Van Lang IPA handler", () => {
+  const vanLangIpa = getAvailityEligibilityPayer("van-lang-ipa");
+
+  assert.strictEqual(getAvailityEligibilityPayer("amerigroup"), vanLangIpa);
+  assert.strictEqual(getAvailityEligibilityPayer("wellpoint"), vanLangIpa);
+});

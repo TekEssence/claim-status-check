@@ -200,10 +200,12 @@ export function EligibilityPage() {
 
   async function cancel() {
     if (!jobId) return;
-    await cancelAutomationJob(jobId).catch((error) => {
+    try {
+      await cancelAutomationJob(jobId);
+      setStatus("Cancellation requested. Finalizing and downloading the partial workbook...");
+    } catch (error) {
       setStatus(error instanceof Error ? error.message : "Unable to cancel.");
-    });
-    setIsRunning(false);
+    }
   }
 
   async function logout() {

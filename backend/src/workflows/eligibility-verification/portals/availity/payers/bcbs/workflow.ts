@@ -1,4 +1,4 @@
-﻿import * as XLSX from "xlsx";
+import * as XLSX from "xlsx";
 import type { Frame, Locator, Page } from "playwright-core";
 import type { AvailityEligibilityPayerWorkflowInput } from "../types";
 import { BCBS_AVAILITY_ELIGIBILITY_SELECTORS as SELECTORS } from "./selectors";
@@ -21,7 +21,13 @@ function findValue(row: Record<string, unknown>, aliases: string[]): string {
 }
 
 async function enterText(locator: Locator, value: string): Promise<void> {
-  await locator.click();
+  try {
+    await locator.click({ timeout: 5_000 });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!/intercepts pointer events/i.test(message)) throw error;
+    await locator.focus();
+  }
   await locator.fill("");
   await locator.pressSequentially(value, { delay: 80 });
   await pause(350);
@@ -37,6 +43,36 @@ async function chooseAutocompleteInput(page: PortalScope, input: Locator, value:
 
 async function chooseAutocomplete(page: PortalScope, selector: string, value: string): Promise<void> {
   await chooseAutocompleteInput(page, page.locator(selector).first(), value);
+}
+
+async function providerSelectionIsPresent(
+  page: PortalScope,
+  providerName: string,
+): Promise<boolean> {
+  const provider = page.locator(SELECTORS.payerSelection.provider).first();
+  if (!await provider.isVisible().catch(() => false)) return false;
+  const selectedText = [
+    await provider.inputValue().catch(() => ""),
+    await provider.getAttribute("value").catch(() => ""),
+    await provider.getAttribute("aria-valuetext").catch(() => ""),
+    await provider.locator("xpath=..").innerText().catch(() => ""),
+  ].join(" ").toLowerCase();
+  return providerName
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean)
+    .every((part) => selectedText.includes(part));
+}
+
+async function ensureProviderSelected(
+  page: PortalScope,
+  providerName: string,
+): Promise<void> {
+  if (await providerSelectionIsPresent(page, providerName)) return;
+  await chooseAutocomplete(page, SELECTORS.payerSelection.provider, providerName);
+  if (!await providerSelectionIsPresent(page, providerName)) {
+    throw new Error(`Provider selection did not retain "${providerName}".`);
+  }
 }
 
 async function chooseProviderType(page: PortalScope, value: string): Promise<void> {
@@ -93,7 +129,16 @@ async function findVisibleScope(rootPage: Page, selector: string, timeout: numbe
   return null;
 }
 
-async function openInquiry(rootPage: Page): Promise<PortalScope> {
+async function openInquiry(rootPage: Page, attempt = 1): Promise<PortalScope> {
+  const existingForm = await findVisibleScope(rootPage, SELECTORS.payerSelection.payer, 3_000);
+  if (existingForm) return existingForm;
+
+  const existingNewRequest = await findVisibleScope(rootPage, SELECTORS.results.newRequest, 3_000);
+  if (existingNewRequest && await clickFirstVisible(existingNewRequest, SELECTORS.results.newRequest)) {
+    const reopenedForm = await findVisibleScope(rootPage, SELECTORS.payerSelection.payer, 60_000);
+    if (reopenedForm) return reopenedForm;
+  }
+
   const patientScope = await findVisibleScope(
     rootPage,
     SELECTORS.navigation.patientRegistration,
@@ -115,11 +160,27 @@ async function openInquiry(rootPage: Page): Promise<PortalScope> {
     throw new Error("Eligibility and Benefits Inquiry was visible in the Patient Registration dropdown but could not be clicked.");
   }
 
-  const formScope = await findVisibleScope(rootPage, SELECTORS.payerSelection.payer, 30_000);
-  if (!formScope) {
-    throw new Error("Eligibility and Benefits Inquiry was clicked, but the payer field did not open in any page or iframe.");
+  const formScope = await findVisibleScope(rootPage, SELECTORS.payerSelection.payer, 60_000);
+  if (formScope) return formScope;
+
+  if (attempt < 3) {
+    const launcherPages = rootPage.context().pages().filter(
+      (page) => !page.isClosed() && /loadApp|web\/eligibility/i.test(page.url()),
+    );
+    await Promise.all(launcherPages.map(async (page) => {
+      await page.reload({ waitUntil: "domcontentloaded", timeout: 45_000 }).catch(() => {});
+      await page.waitForLoadState("networkidle", { timeout: 15_000 }).catch(() => {});
+    }));
+    const reloadedForm = await findVisibleScope(rootPage, SELECTORS.payerSelection.payer, 60_000);
+    if (reloadedForm) return reloadedForm;
+    await pause(2_000);
+    return openInquiry(rootPage, attempt + 1);
   }
-  return formScope;
+
+  const locations = currentAvailityScopes(rootPage).map((candidate) => candidate.url()).join(" | ");
+  throw new Error(
+    `Eligibility and Benefits Inquiry did not finish opening after 3 attempts. Inspected: ${locations || rootPage.url()}.`,
+  );
 }
 export function normalizeAvailityDob(value: string): { month: string; day: string; year: string; formatted: string } {
   const text = value.trim();
@@ -612,9 +673,8 @@ export function extractAvailityPortalError(text: string): string {
   ].filter(Boolean).join("; ");
   return details ? `${connectionProblem} (${details})` : connectionProblem;
 }
-function hasUsableEligibilityResult(text: string): boolean {
-  return /Member\s*Status/i.test(text)
-    && /Health\s*Benefit\s*Plan\s*Coverage|Professional\s*\(Physician\)\s*Visit/i.test(text);
+export function hasUsableEligibilityResult(text: string): boolean {
+  return /Member\s*Status\s*:?\s*(?:Active|Inactive)\b/i.test(text);
 }
 
 async function revealEligibilityBenefits(scope: PortalScope): Promise<void> {
@@ -748,7 +808,7 @@ export async function runBcbsAvailityEligibilityWorkflow({ page, inputFile, cont
 
       await context.log({ level: "info", message: `Row ${excelRow}: entering patient eligibility data.`, eventName: "eligibility_availity_row_started", rowIndex: excelRow });
       await chooseAutocomplete(portal, SELECTORS.payerSelection.payer, findValue(row, ["Payer Portal", "Payer Code"]) || "BCBSTX");
-      await chooseAutocomplete(portal, SELECTORS.payerSelection.provider, "DAO, THUAN DUC");
+      await ensureProviderSelected(portal, "DAO, THUAN DUC");
       await chooseProviderType(portal, findValue(row, ["Provider Type"]) || "Professional");
       await enterText(portal.locator(SELECTORS.inquiryForm.memberId).first(), memberId);
       await enterDob(portal, dob);
@@ -774,7 +834,7 @@ export async function runBcbsAvailityEligibilityWorkflow({ page, inputFile, cont
         throw new Error(`${portalError} Skipping this claim.`);
       }
       if (!hasUsableEligibilityResult(resultText)) {
-        throw new Error(`The Availity response did not finish loading Member Status and benefit details within ${Math.round(resultReadyTimeout / 1000)} seconds.`);
+        throw new Error(`The Availity response did not finish loading an Active or Inactive Member Status within ${Math.round(resultReadyTimeout / 1000)} seconds.`);
       }
       const snapshot = parseAvailitySnapshotBasics(resultText);
       const locatedCoverageStatus = await readCoverageStatus(portal);

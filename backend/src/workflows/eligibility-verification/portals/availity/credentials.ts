@@ -1,6 +1,7 @@
 import ExcelJS from "exceljs";
 
 export type AvailityEligibilityCredentials = {
+  payer?: string;
   loginUrl: string;
   username: string;
   password: string;
@@ -31,9 +32,9 @@ function findValue(row: Record<string, string>, aliases: string[]): string {
   return "";
 }
 
-export async function readAvailityEligibilityCredentials(
+export async function readAvailityEligibilityCredentialProfiles(
   credentialFile: File,
-): Promise<AvailityEligibilityCredentials> {
+): Promise<AvailityEligibilityCredentials[]> {
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(await credentialFile.arrayBuffer());
   const worksheet = workbook.worksheets[0];
@@ -44,6 +45,7 @@ export async function readAvailityEligibilityCredentials(
     headers[column] = asText(cell.value);
   });
 
+  const profiles: AvailityEligibilityCredentials[] = [];
   for (let rowNumber = 2; rowNumber <= worksheet.rowCount; rowNumber += 1) {
     const worksheetRow = worksheet.getRow(rowNumber);
     const row: Record<string, string> = {};
@@ -56,28 +58,54 @@ export async function readAvailityEligibilityCredentials(
     if (
       project.toLowerCase() !== AVAILITY_ELIGIBILITY_PROJECT
       || portal.toLowerCase() !== AVAILITY_ELIGIBILITY_PORTAL
-    ) {
-      continue;
-    }
+    ) continue;
 
     const rawLoginUrl = findValue(row, ["Link", "URL", "Login URL", "Portal Link", "LOGIN_URL_AVA"]);
     const username = findValue(row, ["Username", "User Name", "User ID", "USERNAME_AVA1"]);
     const password = findValue(row, ["Password", "PASSWORD_AVA1"]);
     const totpSecret = findValue(row, ["Secret Key", "Secret", "TOTP Secret", "TOTP_SECRET"]);
     const successUrlFragment = findValue(row, ["Success URL Fragment", "SUCCESS_URL_FRAGMENT"]);
+    const payer = findValue(row, ["Payer", "Payer Name", "Insurance", "Insurance Name"]);
 
     if (rawLoginUrl && username && password && totpSecret) {
-      return {
+      profiles.push({
+        payer: payer || undefined,
         loginUrl: rawLoginUrl.startsWith("http") ? rawLoginUrl : `https://${rawLoginUrl}`,
         username,
         password,
         totpSecret,
         successUrlFragment,
-      };
+      });
     }
   }
 
+  if (profiles.length) return profiles;
   throw new Error(
     "Missing TPM Availity login details. The credential workbook must contain a row with Project TPM, Portal Availity, Link, Username, Password, and Secret Key.",
   );
+}
+
+export function findAvailityEligibilityCredentialsForPayer(
+  profiles: AvailityEligibilityCredentials[],
+  payerId: string,
+  payerName: string,
+): AvailityEligibilityCredentials | null {
+  const candidates = [payerId, payerName].map(normalizeAlias);
+  const exact = profiles.find((profile) => {
+    const payer = normalizeAlias(profile.payer);
+    return payer && candidates.some(
+      (candidate) => payer === candidate || payer.includes(candidate) || candidate.includes(payer),
+    );
+  });
+  if (exact) return exact;
+
+  const shared = profiles.filter((profile) => !profile.payer);
+  if (shared.length === 1) return shared[0];
+  return profiles.length === 1 ? profiles[0] : null;
+}
+
+export async function readAvailityEligibilityCredentials(
+  credentialFile: File,
+): Promise<AvailityEligibilityCredentials> {
+  return (await readAvailityEligibilityCredentialProfiles(credentialFile))[0];
 }
