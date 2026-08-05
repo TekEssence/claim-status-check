@@ -643,8 +643,8 @@ async function writeWorkbookToClaimFile(claimFileHandle: FileSystemFileHandle, e
 export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: PortalId | null }) {
   const router = useRouter();
   const pathname = usePathname();
-  const [authUser, setAuthUser] = useState<AuthUser | null>(() => readCachedAuthUser());
-  const [authLoading, setAuthLoading] = useState(() => readCachedAuthUser() === null);
+  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
   const [authUsername, setAuthUsername] = useState("");
   const [authPassword, setAuthPassword] = useState("");
   const [authConfirmPassword, setAuthConfirmPassword] = useState("");
@@ -731,7 +731,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
   });
 
   const isProtectedRoute = pathname !== "/";
-  const effectivePortalId = forcedPortalId ?? selectedPortalId;
+  const effectivePortalId = forcedPortalId ?? (pathname === "/claim-status" ? null : selectedPortalId);
   const availablePortals = useMemo(
     () => claimStatusPortalRegistry,
     [],
@@ -970,10 +970,14 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     "Completed",
   ];
 
-  function navigateToPortalRoute(portalId: PortalId) {
+  function navigateToPortalRoute(portalId: PortalId, replace = false) {
     const targetRoute = PORTAL_ROUTE_MAP[portalId];
     if (pathname !== targetRoute) {
-      router.replace(targetRoute);
+      if (replace) {
+        router.replace(targetRoute);
+      } else {
+        router.push(targetRoute);
+      }
     }
   }
 
@@ -1044,6 +1048,8 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
         const currentJob = await getCurrentScrapeJob();
         if (cancelled || !currentJob) return;
         if (!canRestoreCurrentJob(currentJob)) return;
+        if (pathname === "/claim-status") return;
+        if (forcedPortalId && currentJob.portalId !== forcedPortalId) return;
 
         setErrorScreenshots(
           (currentJob.artifacts ?? [])
@@ -1073,7 +1079,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
         setIsProcessing(true);
         setActiveJobId(currentJob.jobId);
         setSelectedPortalId(currentJob.portalId as PortalId);
-        navigateToPortalRoute(currentJob.portalId as PortalId);
+        navigateToPortalRoute(currentJob.portalId as PortalId, true);
         setActiveView("portal-selection");
 
         if (currentJob.portalId === "iehp") {
@@ -1144,7 +1150,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     return () => {
       cancelled = true;
     };
-  }, [authUser]);
+  }, [authUser, forcedPortalId, pathname]);
 
   useEffect(() => {
     if (!authUser) {
@@ -1187,7 +1193,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
       const storedPortalId = window.localStorage.getItem(SELECTED_PORTAL_STORAGE_KEY);
       if (storedPortalId && isPortalId(storedPortalId)) {
         setSelectedPortalId(storedPortalId);
-        navigateToPortalRoute(storedPortalId);
+        navigateToPortalRoute(storedPortalId, true);
       }
     } catch {
       // Ignore storage failures.
@@ -1280,7 +1286,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
         // Ignore storage failures.
       }
       markSkipJobRestoreOnce();
-      router.push("/claim-status");
+      window.location.replace("/claim-status");
       return;
     }
     setSelectedPortalId(null);

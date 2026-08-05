@@ -297,7 +297,7 @@ export function EligibilityPage() {
                   <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_19rem] lg:items-center">
                     <div className="max-w-xl">
                       <div className="flex items-center gap-3">
-                        <span className="flex h-12 w-12 items-center justify-center rounded-[1rem] bg-blue-50 text-sm font-semibold text-blue-700 shadow-inner">{portal.id === "availity" ? "AV" : "WS"}</span>
+                        <span className="flex h-12 w-12 items-center justify-center rounded-[1rem] bg-blue-50 text-sm font-semibold text-blue-700 shadow-inner">{portal.id === "availity" ? "AV" : portal.id === "uhc" ? "UHC" : "WS"}</span>
                         <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-1 text-[0.72rem] font-semibold text-emerald-600"><span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />Ready</span>
                       </div>
                       <h1 className="mt-4 text-[1.8rem] font-semibold tracking-[-0.05em] text-slate-950">{heading}</h1>
@@ -325,9 +325,22 @@ export function EligibilityPage() {
 
                 <div className="mt-5 rounded-[1.7rem] border border-sky-100 bg-white/92 p-5 shadow-[0_16px_38px_rgba(148,163,184,0.12)]">
                   <p className="mb-5 text-[0.7rem] font-semibold uppercase tracking-[0.22em] text-sky-600">Portal Workflow</p>
-                  {portal.id === "availity" ? <AvailityInputForm inputFile={inputFile} credentialFile={credentialFile} isRunning={isRunning} canStart={canStart} onInputFileChange={setInputFile} onCredentialFileChange={setCredentialFile} onSubmit={start} onCancel={cancel} /> : <WaystarInputForm inputFile={inputFile} credentialFile={credentialFile} isRunning={isRunning} canStart={canStart} onInputFileChange={setInputFile} onCredentialFileChange={setCredentialFile} onSubmit={start} onCancel={cancel} />}
+                  {portal.id === "uhc" ? (
+                    <div>
+                      <h2 className="font-semibold text-slate-900">Payers</h2>
+                      <div className="mt-4 max-w-md rounded-[1.2rem] border border-sky-100 bg-blue-50/60 p-5">
+                        <div className="flex items-center gap-3">
+                          <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-white text-blue-700 shadow-sm"><Building2 className="h-5 w-5" /></span>
+                          <div>
+                            <p className="font-semibold text-slate-950">UHC/Wellmed</p>
+                            <p className="mt-1 text-sm text-slate-600">UHC eligibility payer</p>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ) : portal.id === "availity" ? <AvailityInputForm inputFile={inputFile} credentialFile={credentialFile} isRunning={isRunning} canStart={canStart} onInputFileChange={setInputFile} onCredentialFileChange={setCredentialFile} onSubmit={start} onCancel={cancel} /> : <WaystarInputForm inputFile={inputFile} credentialFile={credentialFile} isRunning={isRunning} canStart={canStart} onInputFileChange={setInputFile} onCredentialFileChange={setCredentialFile} onSubmit={start} onCancel={cancel} />}
                 </div>
-                <div className="mt-5"><WaystarResultView status={status} logs={logs} errorScreenshots={errorScreenshots} progress={progress} downloads={downloads} resultRows={resultRows} onDownload={downloadBase64File} /></div>
+                {portal.id !== "uhc" && <div className="mt-5"><WaystarResultView status={status} logs={logs} errorScreenshots={errorScreenshots} progress={progress} downloads={downloads} resultRows={resultRows} onDownload={downloadBase64File} /></div>}
               </>
             )}
           </section>
