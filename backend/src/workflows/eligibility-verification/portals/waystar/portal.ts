@@ -1052,7 +1052,7 @@ async function waitForWaystarEligibilityOutcome(
     }, {
       overallStatusSelector: sanitizeDomSelector(WAYSTAR_SELECTORS.inquiry.activeCoverage),
       sectionStatusSelector: sanitizeDomSelector(WAYSTAR_SELECTORS.inquiry.sectionStatus),
-    }).catch(() => "waiting");
+    }).catch(() => "waiting") as "response" | "timeout" | "login" | "waiting";
 
     if (state !== "waiting") return state;
     await page.waitForTimeout(1000);

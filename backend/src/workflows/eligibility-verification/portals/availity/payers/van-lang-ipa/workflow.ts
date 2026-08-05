@@ -129,7 +129,7 @@ async function clickFirstVisible(scope: PortalScope, selector: string): Promise<
     if (!/intercepts pointer events|ClickCaptureShade/i.test(message)) throw error;
     await candidate.evaluate((element) => {
       const actionable = element.closest<HTMLElement>("a, button, [role='menuitem']") || element;
-      actionable.click();
+      (actionable as HTMLElement).click();
     });
   }
   await pause(750);
