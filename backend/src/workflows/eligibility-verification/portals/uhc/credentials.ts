@@ -22,7 +22,9 @@ function normalize(value: unknown): string {
 function findValue(row: Record<string, string>, aliases: string[]): string {
   const wanted = new Set(aliases.map(normalize));
   for (const [key, value] of Object.entries(row)) {
-    if (wanted.has(normalize(key)) && value) return value.trim();
+    if (wanted.has(normalize(key)) && value) {
+      return value.replace(/[​-‍﻿]/g, "").trim();
+    }
   }
   return "";
 }

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { extractAvailityPortalError, hasUsableEligibilityResult, normalizeAvailityDob, parseAvailityBcbsBenefits, parseAvailitySnapshotBasics } from "../bcbs/workflow";
 
-test("reads Individual calendar-year and remaining values and ignores family/YTD", () => {
+test("reads Individual calendar-year and Year to Date values and ignores family/remaining", () => {
   const result = parseAvailityBcbsBenefits(`
     Health Benefit Plan Coverage - 30
     Annual Deductible
@@ -30,9 +30,9 @@ test("reads Individual calendar-year and remaining values and ignores family/YTD
     coinsurance: "",
     copay: "$40",
     deductible: "$350",
-    deductibleMet: "$0",
+    deductibleMet: "$350",
     outOfPocket: "$6,000",
-    outOfPocketMet: "$0",
+    outOfPocketMet: "$6,000",
   });
 });
 
@@ -93,7 +93,7 @@ test("extracts row 3 professional values and Individual Out of Pocket when headi
   assert.equal(result.coinsurance, "0%");
   assert.equal(result.copay, "$40");
   assert.equal(result.outOfPocket, "$8,300");
-  assert.equal(result.outOfPocketMet, "$7,396.99");
+  assert.equal(result.outOfPocketMet, "");
 });
 test("extracts coinsurance and copay from the Individual SPECIALIST row", () => {
   const result = parseAvailityBcbsBenefits(`
@@ -239,7 +239,7 @@ test("extracts Individual Service Year out-of-pocket values", () => {
     Professional (Physician) Visit - Office - 98
   `, "ABC123");
   assert.equal(result.outOfPocket, "$5,000");
-  assert.equal(result.outOfPocketMet, "$3,002.23");
+  assert.equal(result.outOfPocketMet, "$1,997.77");
 });
 test("extracts professional coinsurance when copay is a dash", () => {
   const result = parseAvailityBcbsBenefits(`
@@ -273,4 +273,15 @@ test("accepts a stable inactive BCBS response when optional benefits are absent"
 
 test("does not accept a BCBS response before coverage status appears", () => {
   assert.equal(hasUsableEligibilityResult("Health Benefit Plan Coverage - 30"), false);
+});
+test("accepts and parses BCBS Active Coverage without a Member Status label", () => {
+  const text = "Health Benefit Plan Coverage - 30 Active Coverage";
+  assert.equal(hasUsableEligibilityResult(text), true);
+  assert.equal(parseAvailitySnapshotBasics(text).coverageStatus, "Active");
+});
+
+test("accepts and parses BCBS Inactive Coverage without a Member Status label", () => {
+  const text = "Health Benefit Plan Coverage - 30 Inactive Coverage";
+  assert.equal(hasUsableEligibilityResult(text), true);
+  assert.equal(parseAvailitySnapshotBasics(text).coverageStatus, "Inactive");
 });

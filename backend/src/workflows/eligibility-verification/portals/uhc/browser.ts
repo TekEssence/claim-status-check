@@ -1,11 +1,18 @@
 import chromium from "@sparticuz/chromium";
-import { chromium as playwright, type BrowserContext, type LaunchOptions } from "playwright-core";
+import { chromium as playwright, type BrowserContext } from "playwright-core";
 import { getAutomationRuntimeConfig } from "@/backend/src/core/runtime-config";
 
 export type UhcEligibilityBrowserSession = {
   browser: Awaited<ReturnType<typeof playwright.launch>>;
   context: BrowserContext;
 };
+
+const OPTUM_STYLE_CHROMIUM_ARGS = [
+  "--disable-blink-features=AutomationControlled",
+  "--use-gl=desktop",
+  "--enable-webgl",
+];
+const MAC_CHROME_122_USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
 
 function parseBoolean(value: string | undefined, fallback: boolean): boolean {
   const normalized = String(value ?? "").trim().toLowerCase();
@@ -15,38 +22,44 @@ function parseBoolean(value: string | undefined, fallback: boolean): boolean {
 }
 
 function summarize(error: unknown): string {
-  return (error instanceof Error ? error.message : String(error)).split(/\r?\n/)[0];
+  const message = error instanceof Error ? error.message : String(error);
+  return message.split(String.fromCharCode(10))[0].trim();
 }
 
 export async function launchUhcEligibilityBrowser(
   log: (message: string) => Promise<void>,
 ): Promise<UhcEligibilityBrowserSession> {
   const runtime = getAutomationRuntimeConfig();
+  const contextOptions = {
+    acceptDownloads: true,
+    viewport: { width: 1280, height: 800 },
+    ...(parseBoolean(process.env.PORTAL_UHC_ELIGIBILITY_CUSTOM_USER_AGENT, false)
+      ? { userAgent: process.env.PORTAL_UHC_ELIGIBILITY_USER_AGENT?.trim() || MAC_CHROME_122_USER_AGENT }
+      : {}),
+  };
+
   if (runtime.environment === "vercel") {
-    const browser = await playwright.launch({ args: chromium.args, executablePath: await chromium.executablePath(), headless: true });
-    return { browser, context: await browser.newContext({ acceptDownloads: true, viewport: { width: 1600, height: 1000 } }) };
+    await log("Launching UHC eligibility with the Optum Pro production Chromium configuration.");
+    const browser = await playwright.launch({
+      args: Array.from(new Set([...chromium.args, ...OPTUM_STYLE_CHROMIUM_ARGS])),
+      executablePath: await chromium.executablePath(),
+      headless: true,
+    });
+    return { browser, context: await browser.newContext(contextOptions) };
   }
 
   const headless = parseBoolean(process.env.PORTAL_UHC_ELIGIBILITY_HEADLESS, runtime.headless);
   const executablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || "";
-  const attempts: Array<{ label: string; options: LaunchOptions }> = [];
-  if (executablePath) attempts.push({ label: "configured executable", options: { executablePath, headless } });
-  attempts.push(
-    { label: "Playwright Chromium", options: { headless } },
-    { label: "Google Chrome", options: { channel: "chrome", headless } },
-    { label: "Microsoft Edge", options: { channel: "msedge", headless } },
-  );
+  await log(`Launching UHC eligibility with the Optum Pro Chromium configuration in ${headless ? "headless" : "headed"} mode.`);
 
-  let lastError: unknown;
-  for (const attempt of attempts) {
-    try {
-      await log(`Launching UHC eligibility browser using ${attempt.label}.`);
-      const browser = await playwright.launch(attempt.options);
-      return { browser, context: await browser.newContext({ acceptDownloads: true, viewport: { width: 1600, height: 1000 } }) };
-    } catch (error) {
-      lastError = error;
-      await log(`UHC eligibility browser launch failed for ${attempt.label}: ${summarize(error)}`);
-    }
+  try {
+    const browser = await playwright.launch({
+      headless,
+      args: OPTUM_STYLE_CHROMIUM_ARGS,
+      ...(executablePath ? { executablePath } : { channel: "chromium" as const }),
+    });
+    return { browser, context: await browser.newContext(contextOptions) };
+  } catch (error) {
+    throw new Error(`UHC eligibility browser could not start: ${summarize(error)}`);
   }
-  throw new Error(`UHC eligibility browser could not start: ${summarize(lastError)}`);
 }

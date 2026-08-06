@@ -52,7 +52,7 @@ function buildMergedOutput(options: {
   originalRows: Record<string, unknown>[];
   completedRows: Record<string, unknown>[];
   rowUpdates: Map<number, Record<string, unknown>>;
-  cancelled: boolean;
+  unprocessedError?: string;
 }): Buffer {
   const completedByRow = new Map<number, Record<string, unknown>>();
   for (const row of options.completedRows) {
@@ -64,8 +64,8 @@ function buildMergedOutput(options: {
     const completed = completedByRow.get(rowNumber);
     const update = options.rowUpdates.get(rowNumber);
     const row = { ...(completed ?? original), ...(update ?? {}) };
-    if (options.cancelled && !completed && !update) {
-      row.Error = "Cancelled - not processed";
+    if (options.unprocessedError && !completed && !update) {
+      row.Error = options.unprocessedError;
     }
     delete row[AVAILITY_ORIGINAL_ROW_FIELD];
     return row;
@@ -114,13 +114,13 @@ export function createAvailityEligibilityRunner(): AutomationRunner<EligibilityR
       let completedRows = 0;
       let finalOutputEmitted = false;
 
-      const emitFinalOutput = async (cancelled: boolean) => {
+      const emitFinalOutput = async (unprocessedError?: string) => {
         if (finalOutputEmitted) return;
         const output = buildMergedOutput({
           originalRows,
           completedRows: mergedOutputRows,
           rowUpdates,
-          cancelled,
+          unprocessedError,
         });
         await context.emit({
           type: "file_download",
@@ -252,7 +252,7 @@ export function createAvailityEligibilityRunner(): AutomationRunner<EligibilityR
         if (!mergedOutputRows.length && !rowUpdates.size) {
           throw new Error("No Availity eligibility output rows were produced.");
         }
-        await emitFinalOutput(false);
+        await emitFinalOutput();
         await context.log({
           level: "info",
           message: `Created one combined Availity eligibility output workbook with ${mergedOutputRows.length} row(s).`,
@@ -261,7 +261,7 @@ export function createAvailityEligibilityRunner(): AutomationRunner<EligibilityR
         stage = "completed";
       } catch (error) {
         if (error instanceof AvailityCancellation || context.isCancelled?.()) {
-          await emitFinalOutput(true);
+          await emitFinalOutput("Cancelled - not processed");
           await context.log({
             level: "warn",
             message: `Availity eligibility was cancelled. Created a partial workbook with ${rowUpdates.size} processed row(s).`,
@@ -270,6 +270,7 @@ export function createAvailityEligibilityRunner(): AutomationRunner<EligibilityR
           return;
         }
         const message = error instanceof Error ? error.message : String(error);
+        await emitFinalOutput(`Not processed because the run failed: ${message}`).catch(() => {});
         const stack = error instanceof Error ? error.stack || "Stack trace unavailable." : "Stack trace unavailable.";
         const page = session?.context.pages().find((candidate) => !candidate.isClosed());
         const title = page ? await page.title().catch(() => "Unavailable") : "Unavailable";

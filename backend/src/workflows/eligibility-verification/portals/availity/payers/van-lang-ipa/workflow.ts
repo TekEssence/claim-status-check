@@ -427,8 +427,8 @@ function moneyBeforeCalendarYear(text: string): string {
   return text.match(/(\$[\d,]+(?:\.\d{1,2})?)\s*\/\s*(?:Calendar|Service)\s+Year(?:\(s\)|s)?/i)?.[1] || "";
 }
 
-function remainingMoney(text: string): string {
-  return text.match(/(\$[\d,]+(?:\.\d{1,2})?)\s*Remaining/i)?.[1] || "";
+function yearToDateMoney(text: string): string {
+  return text.match(/-?\s*(\$[\d,]+(?:\.[\d]{1,2})?)\s*Year\s+to\s+Date/i)?.[1] || "";
 }
 
 function sectionBetween(text: string, start: RegExp, end?: RegExp): string {
@@ -479,7 +479,7 @@ export function parseAvailityVanLangIpaBenefits(resultText: string, memberId: st
   const healthChunks = individualChunks(health);
   const healthIndividualAll = healthChunks.length ? healthChunks.join("\n") : health;
 
-  // Deductible (rule 12): use the Individual Calendar Year/Remaining amounts
+  // Deductible (rule 12): use the Individual Calendar Year/Year to Date amounts
   // regardless of network â€” no network filtering here on purpose.
   const deductibleRow = benefitRow(healthIndividualAll, /Annual\s+Deductible/i, /Out\s+Of\s+Pocket/i);
 
@@ -540,9 +540,9 @@ export function parseAvailityVanLangIpaBenefits(resultText: string, memberId: st
     coinsurance: cleanValue(coinsuranceMatch ? `${coinsuranceMatch[1]}%` : ""),
     copay: cleanValue(copayMatch?.[1] || ""),
     deductible: cleanValue(moneyBeforeCalendarYear(deductibleRow)),
-    deductibleMet: cleanValue(remainingMoney(deductibleRow)),
+    deductibleMet: cleanValue(yearToDateMoney(deductibleRow)),
     outOfPocket: cleanValue(moneyBeforeCalendarYear(outOfPocketRow)),
-    outOfPocketMet: cleanValue(remainingMoney(outOfPocketRow)),
+    outOfPocketMet: cleanValue(yearToDateMoney(outOfPocketRow)),
   };
 }
 

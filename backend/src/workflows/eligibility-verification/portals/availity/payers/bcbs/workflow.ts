@@ -426,8 +426,8 @@ function moneyBeforeCalendarYear(text: string): string {
   return text.match(/(\$[\d,]+(?:\.\d{1,2})?)\s*\/\s*(?:Calendar|Service)\s+Year(?:\(s\)|s)?/i)?.[1] || "";
 }
 
-function remainingMoney(text: string): string {
-  return text.match(/(\$[\d,]+(?:\.\d{1,2})?)\s*Remaining/i)?.[1] || "";
+function yearToDateMoney(text: string): string {
+  return text.match(/-?\s*(\$[\d,]+(?:\.[\d]{1,2})?)\s*Year\s+to\s+Date/i)?.[1] || "";
 }
 
 function sectionBetween(text: string, start: RegExp, end?: RegExp): string {
@@ -539,9 +539,9 @@ export function parseAvailityBcbsBenefits(resultText: string, memberId: string):
     coinsurance: cleanValue(coinsuranceMatch ? `${coinsuranceMatch[1]}%` : ""),
     copay: cleanValue(copayMatch?.[1] || ""),
     deductible: cleanValue(moneyBeforeCalendarYear(deductibleRow)),
-    deductibleMet: cleanValue(remainingMoney(deductibleRow)),
+    deductibleMet: cleanValue(yearToDateMoney(deductibleRow)),
     outOfPocket: cleanValue(moneyBeforeCalendarYear(outOfPocketRow)),
-    outOfPocketMet: cleanValue(remainingMoney(outOfPocketRow)),
+    outOfPocketMet: cleanValue(yearToDateMoney(outOfPocketRow)),
   };
 }
 
@@ -674,7 +674,7 @@ export function extractAvailityPortalError(text: string): string {
   return details ? `${connectionProblem} (${details})` : connectionProblem;
 }
 export function hasUsableEligibilityResult(text: string): boolean {
-  return /Member\s*Status\s*:?\s*(?:Active|Inactive)\b/i.test(text);
+  return /Member\s*Status\s*:?\s*(?:Active|Inactive)\b|(?:Active|Inactive)\s+Coverage\b/i.test(text);
 }
 
 async function revealEligibilityBenefits(scope: PortalScope): Promise<void> {
@@ -721,7 +721,9 @@ export function parseAvailitySnapshotBasics(text: string): SnapshotBasics {
   const planRange = text.match(new RegExp(`Current\\s*Plan\\s*Effective\\s*Date\\s*:?\\s*${date}\\s*-\\s*${date}`, "i"));
   const eligibilityStart = text.match(new RegExp(`Eligibility\\s*Start\\s*Date\\s*:?\\s*${date}`, "i"));
   const eligibilityEnd = text.match(new RegExp(`Eligibility\\s*End\\s*Date\\s*:?\\s*${date}`, "i"));
-  const coverage = text.match(/Member\s*Status\s*:?\s*(Active|Inactive)\b/i)?.[1] || "";
+  const coverage = text.match(/Member\s*Status\s*:?\s*(Active|Inactive)\b/i)?.[1]
+    || text.match(/\b(Active|Inactive)\s+Coverage\b/i)?.[1]
+    || "";
   const relationship = text.match(
     /Relationship\s*to\s*Subscriber\s*:?\s*(Self|Spouse|Child|Dependent|Employee|Other)\b/i,
   )?.[1] || "";

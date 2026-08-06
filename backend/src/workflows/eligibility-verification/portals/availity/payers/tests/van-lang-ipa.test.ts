@@ -27,7 +27,7 @@ test("uses the Services Restricted to Following Provider name as Van Lang other 
 test("leaves Van Lang restricted provider blank when that section is absent", () => {
   assert.equal(parseRestrictedProviderName("No additional payer information provided."), "");
 });
-test("extracts Van Lang out-of-pocket calendar-year and remaining amounts", () => {
+test("extracts Van Lang out-of-pocket calendar-year and year-to-date amounts", () => {
   const result = parseAvailityVanLangIpaBenefits(`
     Plan Maximums and Deductibles
     FILTER BY NETWORK
@@ -47,7 +47,7 @@ test("extracts Van Lang out-of-pocket calendar-year and remaining amounts", () =
   `, "ABC123");
 
   assert.equal(result.outOfPocket, "$3,400");
-  assert.equal(result.outOfPocketMet, "$3,189.10");
+  assert.equal(result.outOfPocketMet, "$210.90");
 });
 test("selects coinsurance and copayment from the Van Lang specialist row", () => {
   const result = parseAvailityVanLangIpaBenefits(`
@@ -88,4 +88,26 @@ test("recognizes a loaded Wellpoint result that uses Active Coverage instead of 
   `;
   assert.equal(hasUsableVanLangEligibilityResult(text), true);
   assert.equal(parseAvailitySnapshotBasics(text).coverageStatus, "Active");
+});
+
+test("uses Year to Date for Van Lang deductible met and out-of-pocket met", () => {
+  const result = parseAvailityVanLangIpaBenefits(`
+    Health Benefit Plan Coverage - 30
+    Coverage Level: Individual
+    Annual Deductible
+    In Network
+    $650 / Calendar Year(s)
+    $0 Remaining
+    -$650 Year to Date
+    Out Of Pocket
+    In Network
+    $7,000 / Calendar Year(s)
+    $5,821.42 Remaining
+    -$1,178.58 Year to Date
+  `, "ABC123");
+
+  assert.equal(result.deductible, "$650");
+  assert.equal(result.deductibleMet, "$650");
+  assert.equal(result.outOfPocket, "$7,000");
+  assert.equal(result.outOfPocketMet, "$1,178.58");
 });

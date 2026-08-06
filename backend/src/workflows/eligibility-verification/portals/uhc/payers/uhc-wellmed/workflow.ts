@@ -1,6 +1,7 @@
 import ExcelJS from "exceljs";
-import type { Page } from "playwright-core";
+import type { Locator, Page } from "playwright-core";
 import type { AutomationContext } from "../../../../../types";
+import { applyUhcResultLayout } from "./result-parser";
 
 export const UHC_OUTPUT_HEADERS = [
   "Coverage Status",
@@ -70,8 +71,8 @@ function labeledValue(text: string, aliases: string[]): string {
     const normalizedLine = normalizeLabel(line);
     for (const alias of normalizedAliases) {
       if (normalizedLine === alias) return lines[index + 1] ?? "";
-      if (normalizedLine.startsWith(`${alias} `) && /[:–—]/.test(line)) {
-        return line.replace(/^[^:–—]+[:–—]\s*/, "").trim();
+      if (normalizedLine.startsWith(`${alias} `) && /[:-]/.test(line)) {
+        return line.replace(/^[^:-]+[:-]\s*/, "").trim();
       }
     }
   }
@@ -82,9 +83,9 @@ export function parseUhcEligibilityResultText(text: string): UhcEligibilityOutpu
   const output = outputTemplate();
   for (const header of UHC_OUTPUT_HEADERS) output[header] = labeledValue(text, LABELS[header]);
 
-  const status = text.match(/\b(?:coverage|member)\s+status\s*[:–—-]?\s*(active|inactive)\b/i)?.[1];
+  const status = text.match(/\b(?:coverage|member)\s+status\s*[:-]?\s*(active|inactive)\b/i)?.[1];
   if (status) output["Coverage Status"] = status[0].toUpperCase() + status.slice(1).toLowerCase();
-  return output;
+  return applyUhcResultLayout(text, output);
 }
 
 function cellText(value: ExcelJS.CellValue): string {
@@ -113,8 +114,39 @@ function readInputRows(sheet: ExcelJS.Worksheet): UhcInputRow[] {
   sheet.getRow(1).eachCell({ includeEmpty: false }, (cell, column) => {
     headers.set(normalizedHeader(cellText(cell.value)), column);
   });
-  const memberColumn = findColumn(headers, ["Member ID", "Subscriber ID", "Primary Ins Subscriber No", "ID"]);
-  const dobColumn = findColumn(headers, ["Date of Birth", "DOB", "Patient DOB", "Birthdate"]);
+  const memberColumn = findColumn(headers, [
+    "Member ID",
+    "Member Id",
+    "Member is",
+    "Member Number",
+    "Member No",
+    "Subscriber ID",
+    "Subscriber Id",
+    "Subscriber No",
+    "Subscriber Number",
+    "Primary Ins Subscriber ID",
+    "Primary Ins Subscriber No",
+    "Primary Insurance Subscriber ID",
+    "Primary Insurance Subscriber No",
+    "Patient ID",
+    "Patient Id",
+    "ID",
+    "Id",
+  ]);
+  const dobColumn = findColumn(headers, [
+    "DOB",
+    "Date of Birth",
+    "Birth Date",
+    "Birthdate",
+    "Patient DOB",
+    "Patient Date of Birth",
+    "Patient Birth Date",
+    "Patient Birthdate",
+    "Member DOB",
+    "Member Date of Birth",
+    "Subscriber DOB",
+    "Subscriber Date of Birth",
+  ]);
   if (!memberColumn || !dobColumn) throw new Error("UHC eligibility workbook requires Member ID and Date of Birth/DOB columns.");
 
   const rows: UhcInputRow[] = [];
@@ -135,26 +167,245 @@ function formatDob(value: string): string {
 }
 
 async function enterSearch(page: Page, row: UhcInputRow): Promise<void> {
-  const member = page.locator(SELECTORS.memberId).first();
-  const dob = page.locator(SELECTORS.dateOfBirth).first();
-  await member.waitFor({ state: "visible" });
-  await member.fill(row.memberId);
-  await dob.fill(formatDob(row.dateOfBirth));
-  await page.locator(SELECTORS.submit).click();
+  const member = await firstVisibleLocator(page, SELECTORS.memberId, 30_000, "Member ID field");
+  const dob = await firstVisibleLocator(page, SELECTORS.dateOfBirth, 30_000, "date of birth field");
+  await typeSearchValue(page, member, row.memberId, 120);
+  await typeSearchValue(page, dob, formatDob(row.dateOfBirth), 140);
+  await dob.press("Tab");
+  await page.waitForTimeout(800);
+  const submit = await firstVisibleLocator(page, SELECTORS.submit, 30_000, "eligibility search button");
+  await submit.click();
+  await page.waitForTimeout(1_000);
 }
 
-async function waitForResultText(page: Page): Promise<string> {
-  await page.locator(SELECTORS.newSearch).waitFor({ state: "visible", timeout: 60_000 });
-  let previous = "";
-  for (let attempt = 0; attempt < 12; attempt += 1) {
-    const current = await page.locator("body").innerText();
-    if (current === previous && /coverage|member status|plan type/i.test(current)) return current;
-    previous = current;
-    await page.waitForTimeout(500);
+async function firstVisibleLocator(
+  page: Page,
+  selector: string,
+  timeout: number,
+  label: string,
+): Promise<Locator> {
+  const deadline = Date.now() + timeout;
+  const candidates = page.locator(selector);
+  while (Date.now() < deadline) {
+    const count = await candidates.count();
+    for (let index = 0; index < count; index += 1) {
+      const candidate = candidates.nth(index);
+      if (await candidate.isVisible().catch(() => false)) return candidate;
+    }
+    await page.waitForTimeout(250);
   }
-  return previous;
+  throw new Error(`A visible UHC ${label} was not found.`);
+}
+async function typeSearchValue(page: Page, field: Locator, value: string, delay: number): Promise<void> {
+  await field.waitFor({ state: "visible" });
+  await field.click();
+  await page.waitForTimeout(500);
+  await field.press("Control+A");
+  await page.waitForTimeout(250);
+  await field.press("Backspace");
+  await page.waitForTimeout(300);
+  await field.pressSequentially(value, { delay });
+  await page.waitForTimeout(700);
 }
 
+async function ancestorTextContaining(
+  locator: Locator,
+  required: RegExp[],
+  maxDepth = 8,
+): Promise<string> {
+  if (await locator.count().catch(() => 0) === 0) return "";
+  await locator.scrollIntoViewIfNeeded().catch(() => {});
+  await locator.page().waitForTimeout(500);
+
+  let current = locator;
+  for (let depth = 0; depth <= maxDepth; depth += 1) {
+    const text = await current.innerText({ timeout: 1_000 }).catch(() => "");
+    if (required.every((pattern) => pattern.test(text))) return text;
+    current = current.locator("xpath=..");
+  }
+  return "";
+}
+
+async function optionalVisibleText(page: Page, locator: Locator): Promise<string> {
+  if (await locator.count().catch(() => 0) === 0) return "";
+  await locator.scrollIntoViewIfNeeded().catch(() => {});
+  await page.waitForTimeout(500);
+  return locator.innerText({ timeout: 2_000 }).catch(() => "");
+}
+
+async function textAroundAnyLabel(
+  page: Page,
+  candidates: Locator,
+  required: RegExp[],
+  maxDepth = 7,
+): Promise<string> {
+  const count = await candidates.count().catch(() => 0);
+  for (let index = 0; index < count; index += 1) {
+    const candidate = candidates.nth(index);
+    await candidate.scrollIntoViewIfNeeded().catch(() => {});
+    await page.waitForTimeout(600);
+    const text = await ancestorTextContaining(candidate, required, maxDepth);
+    if (text) return text;
+  }
+  return "";
+}
+
+async function controlledSectionText(page: Page, trigger: Locator): Promise<string> {
+  if (await trigger.count().catch(() => 0) === 0) return "";
+  await trigger.scrollIntoViewIfNeeded().catch(() => {});
+  await page.waitForTimeout(800);
+
+  const expanded = await trigger.getAttribute("aria-expanded", { timeout: 2_000 }).catch(() => null);
+  if (expanded === "false") {
+    await trigger.click();
+    await page.waitForTimeout(1_800);
+  }
+
+  const parts: string[] = [];
+  const controls = await trigger.getAttribute("aria-controls", { timeout: 2_000 }).catch(() => null);
+  if (controls) {
+    const controlled = page.locator('[id="' + controls + '"]').first();
+    await controlled.scrollIntoViewIfNeeded().catch(() => {});
+    await page.waitForTimeout(800);
+    const text = await controlled.innerText({ timeout: 3_000 }).catch(() => "");
+    if (text) parts.push(text);
+  }
+
+  const network = await textAroundAnyLabel(
+    page,
+    page.getByText(/Network Status/i),
+    [/Network Status/i, /In-Network|Out-of-Network|In Network|Out of Network/i],
+  );
+  if (network) parts.push(network);
+
+  const deductible = await textAroundAnyLabel(
+    page,
+    page.getByText(/Plan Deductible Per Calendar Year/i),
+    [/Plan Deductible Per Calendar Year/i, /\$/i],
+  );
+  if (deductible) parts.push(deductible);
+
+  const outOfPocket = await textAroundAnyLabel(
+    page,
+    page.getByText(/Out-of-Pocket Maximum Per Calendar Year/i),
+    [/Out-of-Pocket Maximum Per Calendar Year/i, /\$/i],
+  );
+  if (outOfPocket) parts.push(outOfPocket);
+
+  if (!parts.length) {
+    const fallback = await ancestorTextContaining(trigger, [/Deductibles & Maximums/i, /Deductible|Out-of-Pocket/i]);
+    if (fallback) parts.push(fallback);
+  }
+  return [...new Set(parts)].join(String.fromCharCode(10));
+}
+async function readScopedUhcResultText(page: Page): Promise<string> {
+  const policyLocator = page.locator("ul").filter({ hasText: /Policy Selected:/i }).first();
+  const policy = await optionalVisibleText(page, policyLocator);
+
+  const unitedHealthcareHeading = page.locator("h3").filter({ hasText: /^UNITEDHEALTHCARE$/i }).first();
+  const plan = await ancestorTextContaining(unitedHealthcareHeading, [/Plan Name/i, /Plan Type/i]);
+
+  const coordinationLocator = page.locator("[data-testid='vendor-coverage-abyss-grid-col']").first();
+  const coordination = await optionalVisibleText(page, coordinationLocator);
+
+  const deductibleTrigger = page.locator("button").filter({ hasText: /Deductibles & Maximums/i }).first();
+  const deductibles = await controlledSectionText(page, deductibleTrigger);
+
+  const popularHeading = page.getByText("POPULAR SERVICES COVERAGE", { exact: true }).first();
+  if (await popularHeading.count().catch(() => 0)) {
+    await popularHeading.scrollIntoViewIfNeeded().catch(() => {});
+    await page.waitForTimeout(600);
+    const popularTrigger = popularHeading.locator("xpath=ancestor::button[1]");
+    if (await popularTrigger.count().catch(() => 0)) {
+      const expanded = await popularTrigger.getAttribute("aria-expanded", { timeout: 1_000 }).catch(() => null);
+      if (expanded === "false") {
+        await popularTrigger.click();
+        await page.waitForTimeout(1_000);
+      }
+    }
+  }
+  const popular = await ancestorTextContaining(popularHeading, [/Specialist Visit/i, /Copay/i, /Coinsurance/i], 10);
+
+  return [
+    policy,
+    "UNITEDHEALTHCARE",
+    plan,
+    "Coordination of Benefits",
+    coordination,
+    "Deductibles & Maximums",
+    deductibles,
+    "POPULAR SERVICES COVERAGE",
+    popular,
+  ].filter(Boolean).join(String.fromCharCode(10));
+}
+
+async function visibleNewSearchButton(page: Page, timeout = 60_000): Promise<Locator> {
+  const deadline = Date.now() + timeout;
+  const candidates = page.locator(SELECTORS.newSearch).filter({ hasText: /New Search/i });
+  while (Date.now() < deadline) {
+    const count = await candidates.count();
+    for (let index = 0; index < count; index += 1) {
+      const candidate = candidates.nth(index);
+      if (await candidate.isVisible().catch(() => false)) return candidate;
+    }
+    await page.waitForTimeout(250);
+  }
+  throw new Error("A visible UHC New Search button was not found after the eligibility response.");
+}
+
+async function hasVisibleSearchForm(page: Page): Promise<boolean> {
+  const candidates = page.locator(SELECTORS.memberId);
+  const count = await candidates.count();
+  for (let index = 0; index < count; index += 1) {
+    if (await candidates.nth(index).isVisible().catch(() => false)) return true;
+  }
+  return false;
+}
+
+async function openNewSearchForm(page: Page): Promise<void> {
+  await (await visibleNewSearchButton(page)).click();
+  await firstVisibleLocator(page, SELECTORS.memberId, 30_000, "Member ID field");
+  await firstVisibleLocator(page, SELECTORS.dateOfBirth, 30_000, "date of birth field");
+  await page.waitForTimeout(1_000);
+}
+
+async function waitForFreshResult(page: Page, timeout = 60_000): Promise<void> {
+  const deadline = Date.now() + timeout;
+  const policyBanner = page.locator("ul").filter({ hasText: /Policy Selected:/i });
+  let previous = "";
+  let stableReads = 0;
+
+  while (Date.now() < deadline) {
+    const formVisible = await hasVisibleSearchForm(page);
+    let policyVisible = false;
+    const policyCount = await policyBanner.count();
+    for (let index = 0; index < policyCount; index += 1) {
+      if (await policyBanner.nth(index).isVisible().catch(() => false)) {
+        policyVisible = true;
+        break;
+      }
+    }
+
+    if (!formVisible && policyVisible) {
+      const current = await page.locator("body").innerText();
+      stableReads = current === previous ? stableReads + 1 : 0;
+      previous = current;
+      if (stableReads >= 2) {
+        await visibleNewSearchButton(page, 5_000);
+        return;
+      }
+    } else {
+      previous = "";
+      stableReads = 0;
+    }
+    await page.waitForTimeout(750);
+  }
+  throw new Error("The UHC search form did not transition to a stable eligibility result page.");
+}
+
+function extractedFieldCount(result: Record<string, string>): number {
+  return UHC_OUTPUT_HEADERS.filter((header) => Boolean(result[header]?.trim())).length;
+}
 function addOutputColumns(sheet: ExcelJS.Worksheet): number {
   const start = sheet.columnCount + 1;
   UHC_OUTPUT_HEADERS.forEach((header, offset) => {
@@ -186,11 +437,26 @@ export async function runUhcWellmedEligibilityWorkflow(options: {
     const row = rows[index];
     let result = outputTemplate();
     try {
-      if (index > 0) {
-        await options.page.locator(SELECTORS.newSearch).click();
-      }
+      await options.context.log({
+        level: "info",
+        message: `Processing UHC row ${row.worksheetRow}.`,
+        rowIndex: row.worksheetRow,
+        eventName: "eligibility_uhc_row_started",
+      });
+      if (index > 0) await openNewSearchForm(options.page);
       await enterSearch(options.page, row);
-      result = parseUhcEligibilityResultText(await waitForResultText(options.page));
+      await waitForFreshResult(options.page);
+      result = parseUhcEligibilityResultText(await readScopedUhcResultText(options.page));
+      const extracted = extractedFieldCount(result);
+      if (extracted === 0) {
+        throw new Error("The result page loaded, but none of the requested UHC fields could be extracted.");
+      }
+      await options.context.log({
+        level: "info",
+        message: `Extracted ${extracted} of ${UHC_OUTPUT_HEADERS.length} UHC fields for row ${row.worksheetRow}.`,
+        rowIndex: row.worksheetRow,
+        eventName: "eligibility_uhc_row_extracted",
+      });
       await options.context.emit({ type: "eligibility_uhc_result", rowIndex: row.worksheetRow, update: result });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
