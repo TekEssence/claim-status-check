@@ -294,7 +294,7 @@ const PORTAL_WORKSPACE_META: Record<
     processingDescription: "Blue Shield requests are validated by group, encrypted during upload, and processed with checkpoint-aware automation.",
   },
   availity: {
-    heroDescription: "Upload your Availity login workbook and claim workbook to process Aetna, Anthem-CA, Blue Cross Blue Shield, Wellpoint, Wellcare, Humana, Health Net, Molina, and TRIWEST-TRICARE claim status checks.",
+    heroDescription: "Upload your Availity login workbook and claim workbook to process Aetna, Anthem-CA, Blue Cross Blue Shield, Wellpoint, Wellcare, Humana, Central Health Medicare Plan, Health Net, Molina, Providence Health Plan, Scan Health, TRIWEST-TRICARE, and TRIWEST-VA CCN claim status checks.",
     processingDescription: "Availity requests stream live status over SSE and automatically download the completed output workbook.",
   },
   "optum-pro": {

@@ -1,0 +1,575 @@
+"use strict";
+
+const logger = require("../../../../legacy/utils/logger");
+const { humanDelay, withRetry } = require("../../../../legacy/utils/browser");
+const { getClaimStatusFrame } = require("../../../../legacy/pages/navigation.page");
+const { PROVIDERS } = require("../../../../legacy/pages/claim-status-member.page");
+const { waitForSearchResultsToSettle, normalizeMoney, normalizeDateText } = require("../../../../legacy/pages/results.page");
+const { renderClaimSummary, renderFailedSummary } = require("../../../../legacy/services/summary-renderer");
+const { normalizeStatus } = require("../../../../legacy/services/status-normalizer");
+const {
+  extractInProcess,
+  extractWellcareDenied: extractCentralHealthMedicarePlanDenied,
+  extractWellcarePaid: extractCentralHealthMedicarePlanPaid,
+  returnToResults,
+  waitForClaimDetailPage
+} = require("../../../../legacy/pages/claim-detail.page");
+
+const SELECTORS = {
+  serviceDateTab: "button[role='tab']:has-text('Service Dates'), a[role='button']:has-text('Service Dates')",
+  providerTaxId: "input#providerTaxId",
+  searchButton: "button#submit-byServiceDates[type='submit']",
+  searchResultsHeading: "h5:has-text('Search Results')",
+  tableRows: "tbody tr",
+  noResultsMessage: "li:has-text('The payer could not find any results based on your search')"
+};
+
+function normalizeMemberId(value) {
+  return String(value || "").replace(/[^a-z0-9]/gi, "").toUpperCase();
+}
+
+function hasUsableValue(value) {
+  const cleaned = String(value || "").trim();
+  return Boolean(cleaned) && !/^(#N\/?A|N\/?A|NA|NULL|NONE|-|--|NIL)$/i.test(cleaned);
+}
+
+function normalizePatientName(value) {
+  return String(value || "").replace(/[^a-z0-9]/gi, "").toUpperCase();
+}
+
+function normalizePatientNameWithoutInitial(value) {
+  const cleaned = String(value || "").replace(/\s+/g, " ").trim();
+  return normalizePatientName(cleaned.replace(/\b[A-Z]\.?$/i, ""));
+}
+
+function extractProviderTaxId(providerText) {
+  const parts = String(providerText || "")
+    .split(/\s+-\s+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  return parts.reverse().find((part) => /^\d{9}$/.test(part)) || "";
+}
+
+async function selectAutocompleteOption(scope, inputLocator, value) {
+  await inputLocator.click({ force: true });
+  await inputLocator.press(process.platform === "darwin" ? "Meta+A" : "Control+A").catch(() => {});
+  await inputLocator.press("Backspace").catch(() => {});
+  await inputLocator.fill(String(value || ""));
+  await humanDelay(500, 1000);
+
+  const option = scope.getByText(value, { exact: true }).last();
+  if (await option.isVisible({ timeout: 3000 }).catch(() => false)) {
+    await option.click();
+  } else {
+    await inputLocator.press("Enter");
+  }
+}
+
+async function fillProviderTaxId(frame, taxId) {
+  if (!taxId) {
+    throw new Error("Central Health Medicare Plan provider Tax ID could not be extracted from selected provider value.");
+  }
+
+  const taxIdInput = frame.locator(SELECTORS.providerTaxId).first();
+  await taxIdInput.waitFor({ state: "visible", timeout: 10000 });
+  await taxIdInput.click({ force: true });
+  await taxIdInput.press(process.platform === "darwin" ? "Meta+A" : "Control+A").catch(() => {});
+  await taxIdInput.press("Backspace").catch(() => {});
+  await taxIdInput.fill(taxId);
+  await humanDelay(400, 800);
+
+  const exactOption = frame.getByText(taxId, { exact: true }).last();
+  if (await exactOption.isVisible({ timeout: 2000 }).catch(() => false)) {
+    await exactOption.click();
+  } else {
+    await taxIdInput.press("Enter").catch(() => {});
+  }
+
+  await frame.waitForFunction(
+    (expectedTaxId) => {
+      const input = document.querySelector("input#providerTaxId");
+      return input && input.value && input.value.trim() === expectedTaxId;
+    },
+    taxId,
+    { timeout: 5000 }
+  );
+}
+
+async function selectServiceDateTab(page) {
+  await withRetry(
+    "Selecting Central Health Medicare Plan Service Dates tab",
+    async () => {
+      const frame = await getClaimStatusFrame(page);
+      const tab = frame.locator(SELECTORS.serviceDateTab).first();
+      await tab.waitFor({ state: "visible", timeout: 10000 });
+      await tab.click({ force: true });
+      await humanDelay(500, 900);
+    },
+    { retries: 1, retryDelayMs: 1000 }
+  );
+}
+
+async function selectProvider(page, providerName) {
+  await withRetry(
+    `Selecting Central Health Medicare Plan provider ${providerName}`,
+    async () => {
+      const frame = await getClaimStatusFrame(page);
+      const providerLabel = frame.getByText("Select a Provider", { exact: true }).first();
+      const providerInput = providerLabel.locator("xpath=ancestor::*[self::div or self::label][1]/following::input[@role='combobox'][1]");
+      await providerInput.waitFor({ state: "visible", timeout: 15000 });
+      await selectAutocompleteOption(frame, providerInput, providerName);
+
+      const selectedProviderText = await providerInput.inputValue({ timeout: 3000 }).catch(() => providerName);
+      const providerTaxId = extractProviderTaxId(selectedProviderText || providerName);
+      logger.info(`Central Health Medicare Plan provider Tax ID extracted as "${providerTaxId || "blank"}" from provider value "${selectedProviderText || providerName}".`);
+      await fillProviderTaxId(frame, providerTaxId);
+    },
+    { retries: 2, retryDelayMs: 1200 }
+  );
+}
+
+async function getMuiDateBoxText(dateBox) {
+  return dateBox.innerText({ timeout: 1000 })
+    .then((text) => text.replace(/\s+/g, "").trim())
+    .catch(() => "");
+}
+
+async function fillMuiDateSegments(scope, container, normalizedValue) {
+  const [month, day, year] = normalizedValue.split("/");
+  const keyboard = scope.page().keyboard;
+  const segments = [
+    { label: "Month", value: month },
+    { label: "Day", value: day },
+    { label: "Year", value: year }
+  ];
+
+  for (const segment of segments) {
+    const segmentLocator = container.locator(`[contenteditable='true'][aria-label='${segment.label}']`).first();
+    await segmentLocator.waitFor({ state: "visible", timeout: 5000 });
+    await segmentLocator.click({ force: true });
+    await keyboard.press(process.platform === "darwin" ? "Meta+A" : "Control+A");
+    await keyboard.type(segment.value);
+    await humanDelay(100, 200);
+  }
+
+  await keyboard.press("Tab");
+}
+
+async function fillDateByLabel(scope, labelText, value) {
+  const normalizedValue = String(value || "").trim();
+  if (!/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(normalizedValue)) {
+    throw new Error(`Invalid date format for ${labelText}: "${normalizedValue}". Expected MM/DD/YYYY.`);
+  }
+
+  const label = scope.locator("label").filter({ hasText: labelText }).first();
+  await label.waitFor({ state: "visible", timeout: 15000 });
+
+  const container = label.locator(
+    "xpath=ancestor::*[contains(@class,'MuiFormControl-root') or contains(@class,'MuiTextField-root') or contains(@class,'form-group')][1]"
+  );
+  const dateBox = container.locator("[contenteditable='false']").first();
+
+  if (await dateBox.isVisible({ timeout: 5000 }).catch(() => false)) {
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      await dateBox.click({ force: true });
+      const keyboard = scope.page().keyboard;
+      await keyboard.press(process.platform === "darwin" ? "Meta+A" : "Control+A");
+      await keyboard.type(normalizedValue);
+      await keyboard.press("Tab");
+      await humanDelay(200, 400);
+
+      const dateText = await getMuiDateBoxText(dateBox);
+      if (dateText === normalizedValue) {
+        return;
+      }
+
+      logger.warn(`${labelText} did not fill completely on attempt ${attempt}: expected="${normalizedValue}", actual="${dateText}". Filling date segments directly.`);
+      await fillMuiDateSegments(scope, container, normalizedValue);
+      if (await getMuiDateBoxText(dateBox) === normalizedValue) {
+        return;
+      }
+    }
+
+    throw new Error(`${labelText} was not set correctly. Expected "${normalizedValue}", found "${await getMuiDateBoxText(dateBox)}".`);
+  }
+
+  const visibleInput = container.locator("input:not([aria-hidden='true']):visible").first();
+  await visibleInput.waitFor({ state: "visible", timeout: 15000 });
+  await visibleInput.click({ force: true });
+  await visibleInput.fill("");
+  await visibleInput.pressSequentially(normalizedValue);
+  await visibleInput.press("Tab");
+}
+
+async function fillServiceDateSearchForm(page, rowData) {
+  const frame = await getClaimStatusFrame(page);
+  await fillDateByLabel(frame, "Service From Date", rowData["Service Date"]);
+  await humanDelay(300, 700);
+  await fillDateByLabel(frame, "Service To Date", rowData["Service Date"]);
+}
+
+async function submitServiceDateSearch(page) {
+  async function resultIndicatorAppeared(timeoutMs) {
+    const deadline = Date.now() + timeoutMs;
+
+    while (Date.now() < deadline) {
+      const frame = await getClaimStatusFrame(page);
+      const headingVisible = await frame.locator(SELECTORS.searchResultsHeading).first().isVisible({ timeout: 500 }).catch(() => false);
+      const resultRowsVisible = await frame.locator(SELECTORS.tableRows).first().isVisible({ timeout: 500 }).catch(() => false);
+      const noResultsVisible = await frame.locator(SELECTORS.noResultsMessage).first().isVisible({ timeout: 500 }).catch(() => false);
+
+      if (headingVisible || resultRowsVisible || noResultsVisible) {
+        return true;
+      }
+
+      await humanDelay(800, 1200);
+    }
+
+    return false;
+  }
+
+  await withRetry(
+    "Submitting Central Health Medicare Plan Service Dates search",
+    async () => {
+      for (let attempt = 1; attempt <= 3; attempt += 1) {
+        const frame = await getClaimStatusFrame(page);
+        const searchButton = frame.locator(SELECTORS.searchButton).first();
+        await searchButton.waitFor({ state: "visible", timeout: 15000 });
+        await searchButton.scrollIntoViewIfNeeded().catch(() => {});
+        await searchButton.click({ force: attempt > 1 });
+        logger.info(`Central Health Medicare Plan Service Dates Search clicked (attempt ${attempt}/3). Waiting for portal response.`);
+        await humanDelay(1500, 2500);
+
+        if (await resultIndicatorAppeared(5000)) {
+          logger.info(`Central Health Medicare Plan Service Dates search response appeared after submit attempt ${attempt}.`);
+          return;
+        }
+
+        if (attempt < 3) {
+          logger.warn(`Central Health Medicare Plan Service Dates search results did not appear within 5 seconds after submit attempt ${attempt}. Re-clicking Search.`);
+        }
+      }
+
+      throw new Error("Central Health Medicare Plan Service Dates Search did not produce results, no-results message, or validation response after 3 attempts.");
+    },
+    { retries: 1, retryDelayMs: 1200 }
+  );
+}
+
+async function readColumnHeaders(frame) {
+  const headers = await frame.locator("thead th").evaluateAll((nodes) => nodes.map((node) => node.textContent || "")).catch(() => []);
+  return headers.map((header) => header.replace(/\s+/g, " ").trim().toLowerCase());
+}
+
+function cellByHeader(cells, headers, headerName) {
+  const target = String(headerName || "").toLowerCase();
+  const index = headers.findIndex((header) => header === target || header.includes(target));
+  return index >= 0 ? cells[index] || "" : "";
+}
+
+function cellByAnyHeader(cells, headers, headerNames) {
+  for (const headerName of headerNames) {
+    const value = cellByHeader(cells, headers, headerName);
+    if (value) {
+      return value;
+    }
+  }
+
+  return "";
+}
+
+function parseDateValue(value) {
+  const normalized = normalizeDateText(value);
+  const [month, day, year] = normalized.split("/").map((part) => Number(part));
+  if (!month || !day || !year) {
+    return null;
+  }
+
+  const date = new Date(year, month - 1, day);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+async function getCentralHealthMedicarePlanServiceDateRows(page) {
+  const frame = await getClaimStatusFrame(page);
+  const headers = await readColumnHeaders(frame);
+  const rows = frame.locator(SELECTORS.tableRows);
+  const count = await rows.count();
+  const results = [];
+
+  for (let index = 0; index < count; index += 1) {
+    const row = rows.nth(index);
+    const cells = await row.locator("td").evaluateAll((nodes) => nodes.map((node) => node.textContent || "")).catch(() => []);
+    const normalizedCells = cells.map((cell) => cell.replace(/\s+/g, " ").trim());
+    if (normalizedCells.length < 2) {
+      continue;
+    }
+
+    const statusText = await row.locator(".badge").first().innerText({ timeout: 1000 }).catch(() => cellByHeader(normalizedCells, headers, "status"));
+    const finalizedDate = cellByHeader(normalizedCells, headers, "finalized date");
+    results.push({
+      index,
+      row,
+      cells: normalizedCells,
+      serviceDate: normalizeDateText(cellByHeader(normalizedCells, headers, "service dates")),
+      billedAmount: cellByHeader(normalizedCells, headers, "billed amount"),
+      claimNumber: cellByHeader(normalizedCells, headers, "claim number"),
+      memberId: cellByAnyHeader(normalizedCells, headers, ["member id", "patient member id"]),
+      patientName: cellByAnyHeader(normalizedCells, headers, ["patient name", "member name", "patient", "member"]),
+      finalizedDate: normalizeDateText(finalizedDate),
+      finalizedDateValue: parseDateValue(finalizedDate),
+      status: normalizeStatus(statusText)
+    });
+  }
+
+  return results;
+}
+
+function selectCentralHealthMedicarePlanMatchedRows(matchedRows, sourceTab) {
+  if (matchedRows.length <= 1) {
+    return {
+      selectedRows: matchedRows[0] ? [matchedRows[0]] : [],
+      notes: ""
+    };
+  }
+
+  const rowsWithFinalizedDate = matchedRows.filter((matchedRow) => matchedRow.finalizedDateValue);
+  if (!rowsWithFinalizedDate.length) {
+    const message = `${matchedRows.length} ${sourceTab} rows matched Service Date + Billed Amount + Member ID and all had blank Finalized Date. Extracting all matching rows.`;
+    return {
+      selectedRows: matchedRows,
+      notes: message
+    };
+  }
+
+  rowsWithFinalizedDate.sort((a, b) => b.finalizedDateValue.getTime() - a.finalizedDateValue.getTime());
+  const selectedRow = rowsWithFinalizedDate[0];
+  return {
+    selectedRows: [selectedRow],
+    notes: `${matchedRows.length} ${sourceTab} rows matched Service Date + Billed Amount + Member ID. Selected latest finalized date ${selectedRow.finalizedDate} for claim ${selectedRow.claimNumber || "blank"}.`
+  };
+}
+
+async function extractCentralHealthMedicarePlanMatchedRow(page, matchedRow, sourceTab) {
+  logger.info(
+    `Preparing to extract Central Health Medicare Plan matched row: claim="${matchedRow.claimNumber}", status="${matchedRow.status.display}", service_date="${matchedRow.serviceDate}", billed="${matchedRow.billedAmount}", member_id="${matchedRow.memberId}"`
+  );
+
+  if (matchedRow.status.type === "unsupported") {
+    return {
+      type: "unsupported",
+      claimNumber: matchedRow.claimNumber,
+      claimStatus: matchedRow.status.display
+    };
+  }
+
+  await matchedRow.row.click();
+  logger.info(`Clicked Central Health Medicare Plan matched result row for claim ${matchedRow.claimNumber}. Waiting for detail page.`);
+  await page.waitForLoadState("domcontentloaded").catch(() => {});
+  await waitForClaimDetailPage(page);
+  logger.success(`Central Health Medicare Plan detail page loaded for claim ${matchedRow.claimNumber}`);
+
+  if (matchedRow.status.type === "in_process") {
+    const extracted = await extractInProcess(page, matchedRow.status.display);
+    extracted.claimNumber = extracted.claimNumber || matchedRow.claimNumber;
+    return extracted;
+  }
+
+  if (matchedRow.status.type === "paid") {
+    const extracted = await extractCentralHealthMedicarePlanPaid(page, matchedRow.status.display);
+    extracted.claimNumber = extracted.claimNumber || matchedRow.claimNumber;
+    return extracted;
+  }
+
+  if (matchedRow.status.type === "denied") {
+    const extracted = await extractCentralHealthMedicarePlanDenied(page, matchedRow.status.display);
+    extracted.claimNumber = extracted.claimNumber || matchedRow.claimNumber;
+    return extracted;
+  }
+
+  return {
+    type: "unsupported",
+    claimNumber: matchedRow.claimNumber,
+    claimStatus: matchedRow.status.display
+  };
+}
+
+async function processCentralHealthMedicarePlanServiceDateResults(page, row, provider, resultSummary, options = {}) {
+  const sourceTab = "Service Dates";
+  const resultRows = await getCentralHealthMedicarePlanServiceDateRows(page);
+  const inputDate = normalizeDateText(row.data["Service Date"]);
+  const inputCharge = normalizeMoney(row.data.Charges);
+  const inputMemberId = hasUsableValue(row.data["Subscriber No"]) ? normalizeMemberId(row.data["Subscriber No"]) : "";
+  const inputPatientName = hasUsableValue(row.data["Patient Name"]) ? normalizePatientName(row.data["Patient Name"]) : "";
+  const inputPatientNameWithoutInitial = hasUsableValue(row.data["Patient Name"]) ? normalizePatientNameWithoutInitial(row.data["Patient Name"]) : "";
+  const shouldMatchMemberId = options.projectId !== "medrevenu" || Boolean(inputMemberId);
+  const shouldMatchPatientName = options.projectId === "medrevenu" && !inputMemberId && Boolean(inputPatientName);
+  let matchLabel = shouldMatchMemberId
+    ? "Service Date + Billed Amount + Member ID"
+    : shouldMatchPatientName
+      ? "Service Date + Billed Amount + Patient Name"
+      : "Service Date + Billed Amount";
+
+  resultRows.forEach((result) => {
+    logger.info(
+      `Parsed Central Health Medicare Plan Service Dates row ${result.index + 1}: service_date="${result.serviceDate}", billed="${result.billedAmount}", normalized_billed="${normalizeMoney(result.billedAmount)}", member_id="${result.memberId}", patient_name="${result.patientName}", finalized_date="${result.finalizedDate}", claim="${result.claimNumber}", status="${result.status.display}"`
+    );
+  });
+
+  let matchedRows = resultRows.filter((result) => {
+    return result.serviceDate === inputDate
+      && normalizeMoney(result.billedAmount) === inputCharge
+      && (!shouldMatchMemberId || normalizeMemberId(result.memberId) === inputMemberId)
+      && (!shouldMatchPatientName || normalizePatientName(result.patientName) === inputPatientName);
+  });
+
+  if (matchedRows.length === 0 && options.projectId === "medrevenu" && inputMemberId && inputPatientName) {
+    logger.info("No Central Health Medicare Plan Service Dates rows matched Medrevenu Member ID. Falling back to Patient Name match.");
+    matchedRows = resultRows.filter((result) => {
+      return result.serviceDate === inputDate
+        && normalizeMoney(result.billedAmount) === inputCharge
+        && normalizePatientName(result.patientName) === inputPatientName;
+    });
+    matchLabel = "Service Date + Billed Amount + Patient Name";
+  }
+
+  if (matchedRows.length === 0 && options.projectId === "medrevenu" && inputPatientNameWithoutInitial) {
+    logger.info("No Central Health Medicare Plan Service Dates rows matched exact Medrevenu Patient Name. Falling back to Patient Name without trailing initial.");
+    matchedRows = resultRows.filter((result) => {
+      return result.serviceDate === inputDate
+        && normalizeMoney(result.billedAmount) === inputCharge
+        && normalizePatientNameWithoutInitial(result.patientName) === inputPatientNameWithoutInitial;
+    });
+    matchLabel = "Service Date + Billed Amount + Patient Name without initial";
+  }
+
+  logger.info(`Matched ${matchedRows.length} Central Health Medicare Plan Service Dates result row(s) by ${matchLabel}`);
+
+  if (matchedRows.length === 0) {
+    const returnedRowsSummary = resultRows.slice(0, 5).map((result, index) => {
+      return `returned row ${index + 1}: service_date=${result.serviceDate || "blank"}, billed=${result.billedAmount || "blank"}, member_id=${result.memberId || "blank"}, patient_name=${result.patientName || "blank"}, finalized_date=${result.finalizedDate || "blank"}, claim=${result.claimNumber || "blank"}, status=${result.status.display || "blank"}`;
+    }).join("; ");
+    const returnedCount = resultSummary.total ?? (resultRows.length || "unknown");
+    const matchCriteria = matchLabel === "Service Date + Billed Amount + Member ID"
+      ? `Service Date ${row.data["Service Date"]}, Charges ${row.data.Charges}, and Member ID ${row.data["Subscriber No"]}`
+      : matchLabel === "Service Date + Billed Amount + Patient Name" || matchLabel === "Service Date + Billed Amount + Patient Name without initial"
+        ? `Service Date ${row.data["Service Date"]}, Charges ${row.data.Charges}, and Patient Name ${row.data["Patient Name"]}`
+        : `Service Date ${row.data["Service Date"]} and Charges ${row.data.Charges}`;
+    const mismatchReason = `Portal returned ${returnedCount} rows in ${sourceTab} for provider ${provider}, but none matched input ${matchCriteria}. ${returnedRowsSummary}`;
+    return {
+      status: "failed",
+      summaries: [renderFailedSummary(mismatchReason)],
+      matchCount: 0,
+      provider,
+      sourceTab,
+      notes: mismatchReason
+    };
+  }
+
+  const selection = selectCentralHealthMedicarePlanMatchedRows(matchedRows, sourceTab);
+  if (selection.notes) {
+    logger.info(selection.notes);
+  }
+
+  if (!selection.selectedRows.length) {
+    return {
+      status: "failed",
+      summaries: [renderFailedSummary(selection.notes)],
+      matchCount: matchedRows.length,
+      provider,
+      sourceTab,
+      notes: selection.notes
+    };
+  }
+
+  const summaries = [];
+  const details = [];
+  for (let index = 0; index < selection.selectedRows.length; index += 1) {
+    const matchedRow = selection.selectedRows[index];
+    const extracted = await extractCentralHealthMedicarePlanMatchedRow(page, matchedRow, sourceTab);
+    const summaryContext = {
+      ...extracted,
+      payerName: row.data["Payer Name"] || "",
+      serviceDate: matchedRow.serviceDate || "",
+      finalizedDate: matchedRow.finalizedDate || "",
+      claimNumber: extracted.claimNumber || matchedRow.claimNumber || "",
+      claimStatus: extracted.claimStatus || matchedRow.status.display || ""
+    };
+    details.push(summaryContext);
+    summaries.push(renderClaimSummary(summaryContext));
+
+    if (extracted.type !== "unsupported") {
+      await returnToResults(page);
+    }
+  }
+
+  return {
+    status: "success",
+    summaries: [summaries.join("\n\n")],
+    details,
+    matchCount: matchedRows.length,
+    provider,
+    sourceTab,
+    notes: selection.notes || ""
+  };
+}
+
+async function searchCentralHealthMedicarePlanServiceDatesWithProvider(page, providerName, rowData) {
+  logger.info(`Central Health Medicare Plan Service Dates provider attempt: ${providerName}`);
+  await selectServiceDateTab(page);
+  await selectProvider(page, providerName);
+  await fillServiceDateSearchForm(page, rowData);
+  await submitServiceDateSearch(page);
+}
+
+async function processClaim(page, row, options = {}) {
+  logger.info("Using Central Health Medicare Plan workflow: Service Dates tab only.");
+  const providerOrder = Array.isArray(options.providerOrder) && options.providerOrder.length
+    ? options.providerOrder
+    : PROVIDERS;
+
+  let lastProviderFailure = "";
+  for (const provider of providerOrder) {
+    await searchCentralHealthMedicarePlanServiceDatesWithProvider(page, provider, row.data);
+
+    logger.info(`Waiting up to 5 seconds for ${provider} Central Health Medicare Plan Service Dates results to settle`);
+    const resultSummary = await waitForSearchResultsToSettle(page, 5000);
+    logger.info(
+      `Central Health Medicare Plan Service Dates provider ${provider} result summary: heading="${resultSummary.headingText || "not found"}", total=${resultSummary.total ?? "unknown"}, rows=${resultSummary.resultRowCount ?? "unknown"}, no_results_message=${resultSummary.noResultsMessageVisible}, alert="${resultSummary.portalAlertMessage || ""}"`
+    );
+
+    const resultRows = await getCentralHealthMedicarePlanServiceDateRows(page);
+    if (resultSummary.hasPortalAlert && resultRows.length === 0) {
+      logger.warn(`Central Health Medicare Plan Service Dates provider ${provider} returned portal alert without claim rows: ${resultSummary.portalAlertMessage}`);
+      lastProviderFailure = `Provider ${provider}: ${resultSummary.portalAlertMessage}`;
+      continue;
+    }
+
+    if (resultRows.length === 0) {
+      logger.warn(`Central Health Medicare Plan Service Dates provider ${provider} returned no claim rows. Trying next provider if available.`);
+      lastProviderFailure = `Provider ${provider}: no claim rows returned.`;
+      continue;
+    }
+
+    return processCentralHealthMedicarePlanServiceDateResults(page, row, provider, resultSummary, options);
+  }
+
+  return {
+    status: "failed",
+    summaries: [renderFailedSummary(lastProviderFailure || "Claim not found in Central Health Medicare Plan Service Dates tab for matching Service Date, Charges, and Member ID.")],
+    matchCount: 0,
+    provider: providerOrder.join(", "),
+    sourceTab: "Service Dates",
+    notes: lastProviderFailure
+      ? `Searched Central Health Medicare Plan Service Dates providers: ${providerOrder.join(", ")}. Last provider failure: ${lastProviderFailure}`
+      : `Searched Central Health Medicare Plan Service Dates providers: ${providerOrder.join(", ")}. No matching Service Date + Charges + Member ID found.`
+  };
+}
+
+module.exports = {
+  name: "central-health-medicare-plan",
+  processClaim
+};
+
+
+
+

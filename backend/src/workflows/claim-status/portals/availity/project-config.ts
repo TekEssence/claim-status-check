@@ -82,6 +82,7 @@ export function applyProjectColumnMapping(projectId: string, data: Record<string
     Episode_DOS: findDataValue(data, ["Episode_DOS", "Episode DOS", "Episode Dos"]) || data.Episode_DOS || "",
     Group: findDataValue(data, ["Group"]) || data.Group || "",
     "Subscriber No": findDataValue(data, ["Member ID"]) || data["Subscriber No"] || "",
+    "Patient DOB": findDataValue(data, ["DOB"]) || data["Patient DOB"] || "",
   };
 }
 

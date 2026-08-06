@@ -3,7 +3,7 @@ import ExcelJS from "exceljs";
 import { applyProjectColumnMapping, applyProjectPreprocessing, normalizeProjectId } from "./project-config";
 import type { AvailityCredentials, AvailityInput, AvailityInputRow } from "./types";
 
-const SUPPORTED_PAYER_PATTERN = /\b(aetna|anthem|blue\s*cross|blue\s*shield|bcbs|bcbstx|wellpoint|wellcare|humana|health\s*net|healthnet|molina|triwest|tricare)\b/i;
+const SUPPORTED_PAYER_PATTERN = /\b(aetna|anthem|blue\s*cross|blue\s*shield|bcbs|bcbstx|wellpoint|wellcare|humana|central\s*health|health\s*net|healthnet|molina|providence|scan|triwest|tricare)\b/i;
 
 function asText(value: unknown): string {
   if (value == null) return "";
@@ -109,7 +109,7 @@ function assertSupportedPayers(rows: AvailityInputRow[]): void {
 
   if (unsupported.length) {
     const unique = Array.from(new Set(unsupported)).slice(0, 5);
-    throw new Error(`Availity supports only Aetna, Anthem-CA, Blue Cross Blue Shield, Wellpoint, Wellcare, Humana, Health Net, Molina, and TRIWEST-TRICARE. Unsupported payer(s): ${unique.join(", ")}`);
+    throw new Error(`Availity supports only Aetna, Anthem-CA, Blue Cross Blue Shield, Wellpoint, Wellcare, Humana, Central Health Medicare Plan, Health Net, Molina, Providence Health Plan, Scan Health, TRIWEST-TRICARE, and TRIWEST-VA CCN. Unsupported payer(s): ${unique.join(", ")}`);
   }
 }
 
