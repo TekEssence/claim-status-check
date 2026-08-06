@@ -19,9 +19,7 @@ async function settle(page: Page, milliseconds = 900): Promise<void> {
 
 async function typeNaturally(page: Page, selector: string, value: string): Promise<void> {
   const field = page.locator(selector);
-  await field.click();
-  await field.press("ControlOrMeta+A");
-  await field.pressSequentially(value, { delay: 65 });
+  await field.fill(value);
 }
 
 async function finishAstronaNotices(page: Page): Promise<void> {
@@ -216,24 +214,43 @@ export async function searchAstronaClaims(page: Page, row: AstronaInputRow, stra
   await finishAstronaNotices(page);
   const memberId = page.locator("#memberIdSearch");
   const memberName = page.locator("#patientNameSearch");
+  const previousClaims = (await astronaClaimLinks(page).allInnerTexts().catch(() => []))
+    .map((value) => value.trim()).filter(Boolean).join("|");
   await memberId.fill("");
   await memberName.fill("");
   if (strategy === "both" && row.memberId) await typeNaturally(page, "#memberIdSearch", row.memberId);
   if (strategy === "both" && searchName) {
-    await settle(page, 450);
+    await settle(page, 100);
     await typeNaturally(page, "#patientNameSearch", searchName);
   }
   if (strategy === "member-name") {
     if ((await memberId.inputValue()).trim()) await memberId.fill("");
     await typeNaturally(page, "#patientNameSearch", searchName);
   }
-  await settle(page, 700);
+  await settle(page, 250);
   if (strategy === "both" && row.memberId) await memberId.press("Enter");
   else await memberName.press("Enter");
-  await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
-  await settle(page, 2500);
-}
 
+  await page.waitForFunction((previous) => {
+    const claims = Array.from(document.querySelectorAll("span.text-brand.cursor-pointer"))
+      .map((element) => (element.textContent || "").trim())
+      .filter((value) => /^(?=[a-z0-9-]*\d)[a-z0-9-]{6,}$/i.test(value))
+      .join("|");
+    const noResults = Array.from(document.querySelectorAll("body *")).some((element) => {
+      const node = element as HTMLElement;
+      const style = window.getComputedStyle(node);
+      if (style.display === "none" || style.visibility === "hidden" || !node.getClientRects().length) return false;
+      const text = (element.textContent || "").trim();
+      return text.length < 120 && /no\s+(claims?|results?|data)\s+(found|available)|no\s+matching\s+claims?/i.test(text);
+    });
+    return noResults || (Boolean(claims) && claims !== previous);
+  }, previousClaims, { timeout: 8000 }).catch(async () => {
+    // Identical searches can legitimately return the same claim numbers. Give
+    // the portal a final render window, but never reuse results immediately.
+    await settle(page, 750);
+  });
+  await settle(page, 150);
+}
 function astronaClaimLinks(page: Page) {
   return page.locator("span.text-brand.cursor-pointer").filter({ hasText: /^\s*(?=[a-z0-9-]*\d)[a-z0-9-]{6,}\s*$/i });
 }
@@ -359,10 +376,16 @@ export async function goToNextAstronaClaimsPage(page: Page): Promise<boolean> {
   }).catch(() => true);
   if (unavailable) return false;
 
+  const previousFirstClaim = (await astronaClaimLinks(page).first().innerText().catch(() => "")).trim();
   await next.scrollIntoViewIfNeeded().catch(() => {});
   await next.click();
-  await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
-  await settle(page, 300);
+  if (previousFirstClaim) {
+    await page.waitForFunction((previous) => {
+      const first = document.querySelector("span.text-brand.cursor-pointer");
+      return Boolean(first && first.textContent?.trim() !== previous);
+    }, previousFirstClaim, { timeout: 2500 }).catch(() => {});
+  }
+  await settle(page, 100);
   return true;
 }
 
@@ -413,11 +436,26 @@ export async function openAstronaClaimByNumber(page: Page, claimNumber: string):
   await target.scrollIntoViewIfNeeded();
   const originalUrl = page.url();
   await target.click();
-  await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
-  await settle(page, 300);
+  const detailReady = await page.waitForFunction(({ expectedClaim, resultsUrl }) => {
+    const visible = (element: Element) => {
+      const node = element as HTMLElement;
+      const style = window.getComputedStyle(node);
+      return style.display !== "none" && style.visibility !== "hidden" && node.getClientRects().length > 0;
+    };
+    const dialogs = Array.from(document.querySelectorAll('[role="dialog"]')).filter(visible);
+    const root = dialogs.at(-1) || (window.location.href !== resultsUrl ? document.body : null);
+    if (!root) return false;
+    const text = (root.textContent || "").replace(/\s+/g, " ");
+    const hasExpectedClaim = expectedClaim ? text.includes(expectedClaim) : false;
+    const hasDetailLabels = /claim\s+(number|#|no|status|details?)|service\s+lines?|date\s+(received|paid|denied)/i.test(text);
+    const hasPopulatedTable = Array.from(root.querySelectorAll("table,[role=table],[role=grid]"))
+      .some((table) => table.querySelectorAll("tr,[role=row]").length >= 2);
+    return hasExpectedClaim || (hasDetailLabels && hasPopulatedTable);
+  }, { expectedClaim: claimNumber, resultsUrl: originalUrl }, { timeout: 8000 }).then(() => true).catch(() => false);
+  if (!detailReady) throw new Error(`Astrona claim ${claimNumber} detail did not finish loading; extraction was skipped to prevent stale or incomplete data.`);
+  await settle(page, 150);
   return { claimNumber, originalUrl };
 }
-
 function canonicalDate(value: string): string {
   const text = value.trim();
   const slash = text.match(/\b(\d{1,2})[\/-](\d{1,2})[\/-](\d{2,4})\b/);

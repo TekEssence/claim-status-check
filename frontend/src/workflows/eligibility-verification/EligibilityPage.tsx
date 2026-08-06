@@ -28,6 +28,7 @@ import type { ErrorScreenshot, JobProgressValue, ScrapeJobEvent } from "../../ty
 import { WaystarInputForm } from "./portals/waystar/WaystarInputForm";
 import { WaystarResultView } from "./portals/waystar/WaystarResultView";
 import { AvailityInputForm } from "./portals/availity/AvailityInputForm";
+import { UhcInputForm } from "./portals/uhc/UhcInputForm";
 
 type AuthUser = {
   username: string;
@@ -187,6 +188,7 @@ export function EligibilityPage() {
       const formData = new FormData();
       formData.append("workflowId", "eligibility-verification");
       formData.append("portalId", portal.id);
+      if (portal.id === "uhc") formData.append("payerId", "uhc-wellmed");
       formData.append("inputFile", inputFile);
       formData.append("credentialFile", credentialFile);
       const nextJobId = await startAutomationJob(formData);
@@ -327,22 +329,9 @@ export function EligibilityPage() {
 
                 <div className="mt-5 rounded-[1.7rem] border border-sky-100 bg-white/92 p-5 shadow-[0_16px_38px_rgba(148,163,184,0.12)]">
                   <p className="mb-5 text-[0.7rem] font-semibold uppercase tracking-[0.22em] text-sky-600">Portal Workflow</p>
-                  {portal.id === "uhc" ? (
-                    <div>
-                      <h2 className="font-semibold text-slate-900">Payers</h2>
-                      <div className="mt-4 max-w-md rounded-[1.2rem] border border-sky-100 bg-blue-50/60 p-5">
-                        <div className="flex items-center gap-3">
-                          <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-white text-blue-700 shadow-sm"><Building2 className="h-5 w-5" /></span>
-                          <div>
-                            <p className="font-semibold text-slate-950">UHC/Wellmed</p>
-                            <p className="mt-1 text-sm text-slate-600">UHC eligibility payer</p>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  ) : portal.id === "availity" ? <AvailityInputForm inputFile={inputFile} credentialFile={credentialFile} isRunning={isRunning} canStart={canStart} onInputFileChange={setInputFile} onCredentialFileChange={setCredentialFile} onSubmit={start} onCancel={cancel} /> : <WaystarInputForm inputFile={inputFile} credentialFile={credentialFile} isRunning={isRunning} canStart={canStart} onInputFileChange={setInputFile} onCredentialFileChange={setCredentialFile} onSubmit={start} onCancel={cancel} />}
+                  {portal.id === "uhc" ? <UhcInputForm inputFile={inputFile} credentialFile={credentialFile} isRunning={isRunning} canStart={canStart} onInputFileChange={setInputFile} onCredentialFileChange={setCredentialFile} onSubmit={start} onCancel={cancel} /> : portal.id === "availity" ? <AvailityInputForm inputFile={inputFile} credentialFile={credentialFile} isRunning={isRunning} canStart={canStart} onInputFileChange={setInputFile} onCredentialFileChange={setCredentialFile} onSubmit={start} onCancel={cancel} /> : <WaystarInputForm inputFile={inputFile} credentialFile={credentialFile} isRunning={isRunning} canStart={canStart} onInputFileChange={setInputFile} onCredentialFileChange={setCredentialFile} onSubmit={start} onCancel={cancel} />}
                 </div>
-                {portal.id !== "uhc" && <div className="mt-5"><WaystarResultView status={status} logs={logs} errorScreenshots={errorScreenshots} progress={progress} downloads={downloads} resultRows={resultRows} onDownload={downloadBase64File} /></div>}
+                <div className="mt-5"><WaystarResultView status={status} logs={logs} errorScreenshots={errorScreenshots} progress={progress} downloads={downloads} resultRows={resultRows} onDownload={downloadBase64File} /></div>
               </>
             )}
           </section>

@@ -145,21 +145,21 @@ export async function runAstronaClaimStatusJob(formData: FormData, context: Scra
     const credentials = readAstronaCredentials(input.credentialWorkbookBuffer);
     const routing = routeAstronaRows(rows, credentials);
     total = rows.length;
-    await context.emit({ type: "progress", completed: 0, total });
+    await context.emit({ type: "progress", completed: 0, total, currentRow: rows[0]?.inputRowId });
     await context.log({ level: "info", message: `Astrona input loaded: ${rows.length} row(s), ${routing.batches.length} Group/Payer login batch(es).` });
 
     for (const row of rows.filter((candidate) => candidate.validationStatus === "invalid")) {
       failure(errorRows, row, "validation", "invalid_input", row.validationMessage);
       outputRows.push(...astronaOutputRows(row, blankDetails(), "failed", row.validationMessage));
       completed += 1;
-      await context.emit({ type: "progress", completed, total });
+      await context.emit({ type: "progress", completed, total, currentRow: row.inputRowId });
     }
     for (const row of routing.unmappedRows) {
       const message = `No Astrona credentials matched Group ${row.group} and Payer ${row.payer}.`;
       failure(errorRows, row, "credential_routing", "credentials_not_found", message);
       outputRows.push(...astronaOutputRows(row, blankDetails(), "failed", message));
       completed += 1;
-      await context.emit({ type: "progress", completed, total });
+      await context.emit({ type: "progress", completed, total, currentRow: row.inputRowId });
     }
 
     for (const batch of routing.batches) {
@@ -182,7 +182,9 @@ export async function runAstronaClaimStatusJob(formData: FormData, context: Scra
         for (const row of batch.rows) {
           if (context.isCancelled?.()) throw new Error("Astrona processing was cancelled.");
           try {
-            outputRows.push(...await processRow(page, row, auditRows, context));
+            const rowOutput = await processRow(page, row, auditRows, context);
+            outputRows.push(...rowOutput);
+            await context.emit({ type: "astrona_result", rows: rowOutput });
           } catch (error) {
             const message = errorMessage(error);
             await context.log({ level: "error", message: `[Astrona row ${row.inputRowId}] Member ${row.memberId || row.memberName}: processing failed — ${message}`, rowIndex: row.inputRowId });
@@ -192,7 +194,7 @@ export async function runAstronaClaimStatusJob(formData: FormData, context: Scra
           }
           completed += 1;
           batchCompleted += 1;
-          await context.emit({ type: "progress", completed, total });
+          await context.emit({ type: "progress", completed, total, currentRow: row.inputRowId });
         }
       } catch (error) {
         const message = errorMessage(error);
@@ -201,7 +203,7 @@ export async function runAstronaClaimStatusJob(formData: FormData, context: Scra
           failure(errorRows, row, "batch_processing", "login_or_navigation_failed", message);
           outputRows.push(...astronaOutputRows(row, blankDetails(), "failed", message));
           completed += 1;
-          await context.emit({ type: "progress", completed, total });
+          await context.emit({ type: "progress", completed, total, currentRow: row.inputRowId });
         }
         await context.log({ level: "error", message: `Astrona ${batch.credentials.group}/${batch.credentials.payer} batch failed: ${message}` });
       } finally {

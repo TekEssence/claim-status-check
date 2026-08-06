@@ -683,6 +683,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
   const [availityInputFile, setAvailityInputFile] = useState<File | null>(null);
   const [astronaCredentialFile, setAstronaCredentialFile] = useState<File | null>(null);
   const [astronaInputFile, setAstronaInputFile] = useState<File | null>(null);
+  const [astronaResults, setAstronaResults] = useState<Record<string, unknown>[]>([]);
   const [allCareCredentialFile, setAllCareCredentialFile] = useState<File | null>(null);
   const [allCareInputFile, setAllCareInputFile] = useState<File | null>(null);
   const [optumProLoginFile, setOptumProLoginFile] = useState<File | null>(null);
@@ -1259,6 +1260,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     setLogs([]);
     setErrorScreenshots([]);
     setProgress(null);
+    setAstronaResults([]);
     setActiveJobId("");
     setRegalJobId("");
     setRegalMfaRequest(null);
@@ -1300,6 +1302,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     setLogs([]);
     setErrorScreenshots([]);
     setProgress(null);
+    setAstronaResults([]);
     setIsProcessing(false);
     setIsCancellingJob(false);
     setActiveJobId("");
@@ -1472,6 +1475,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     setLogs([]);
     setErrorScreenshots([]);
     setProgress(null);
+    setAstronaResults([]);
     setActiveJobId("");
     setPendingIehpRestoreJob(null);
     setPendingBlueShieldRestoreJob(null);
@@ -1515,6 +1519,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     setLogs([]);
     setErrorScreenshots([]);
     setProgress(null);
+    setAstronaResults([]);
     setActiveJobId("");
     setPendingBlueShieldRestoreJob(null);
     setIsProcessing(false);
@@ -1746,7 +1751,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
             setLogs((prev) => [...prev, eventData.message ?? ""]);
           } else if (eventData.type === "progress" && typeof eventData.completed === "number" && typeof eventData.total === "number") {
             currentCompleted = eventData.completed;
-            setProgress({ completed: eventData.completed, total: eventData.total });
+            setProgress({ completed: eventData.completed, total: eventData.total, currentRow: eventData.currentRow });
           } else if (eventData.type === "row_update") {
           applyClaimRowUpdateToWorksheet(worksheet, {
             index: eventData.index ?? 0,
@@ -1905,7 +1910,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
           if (eventData.type === "log" && eventData.message) {
             setLogs((prev) => [...prev, eventData.message ?? ""]);
           } else if (eventData.type === "progress" && typeof eventData.completed === "number" && typeof eventData.total === "number") {
-            setProgress({ completed: eventData.completed, total: eventData.total });
+            setProgress({ completed: eventData.completed, total: eventData.total, currentRow: eventData.currentRow });
           } else if (eventData.type === "error_screenshot" && typeof eventData.index === "number" && eventData.image) {
             setErrorScreenshots((prev) => [...prev, { index: eventData.index ?? -1, image: eventData.image ?? "" }]);
           } else if (eventData.type === "file_download" && eventData.filename && eventData.base64) {
@@ -1980,7 +1985,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
           if (eventData.type === "log" && eventData.message) {
             setLogs((prev) => [...prev, eventData.message ?? ""]);
           } else if (eventData.type === "progress" && typeof eventData.completed === "number" && typeof eventData.total === "number") {
-            setProgress({ completed: eventData.completed, total: eventData.total });
+            setProgress({ completed: eventData.completed, total: eventData.total, currentRow: eventData.currentRow });
           } else if (eventData.type === "error_screenshot" && typeof eventData.index === "number" && eventData.image) {
             setErrorScreenshots((prev) => [...prev, { index: eventData.index ?? -1, image: eventData.image ?? "" }]);
           } else if (eventData.type === "file_download" && eventData.filename && eventData.base64) {
@@ -2059,7 +2064,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
           if (eventData.type === "log" && eventData.message) {
             setLogs((prev) => [...prev, eventData.message ?? ""]);
           } else if (eventData.type === "progress" && typeof eventData.completed === "number" && typeof eventData.total === "number") {
-            setProgress({ completed: eventData.completed, total: eventData.total });
+            setProgress({ completed: eventData.completed, total: eventData.total, currentRow: eventData.currentRow });
           } else if (eventData.type === "input_request" && eventData.inputName) {
             setBlueShieldOtpRequest({
               inputName: eventData.inputName,
@@ -2282,7 +2287,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     if (eventData.type === "log" && eventData.message) {
       setLogs((prev) => [...prev, eventData.message ?? ""]);
     } else if (eventData.type === "progress" && typeof eventData.completed === "number" && typeof eventData.total === "number") {
-      setProgress({ completed: eventData.completed, total: eventData.total });
+      setProgress({ completed: eventData.completed, total: eventData.total, currentRow: eventData.currentRow });
     } else if (eventData.type === "input_request" && eventData.inputName) {
       if (eventData.inputName === "regal_mfa_method") {
         const options = eventData.options ?? [];
@@ -2369,7 +2374,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     if (eventData.type === "log" && eventData.message) {
       setLogs((prev) => [...prev, eventData.message ?? ""]);
     } else if (eventData.type === "progress" && typeof eventData.completed === "number" && typeof eventData.total === "number") {
-      setProgress({ completed: eventData.completed, total: eventData.total });
+      setProgress({ completed: eventData.completed, total: eventData.total, currentRow: eventData.currentRow });
     } else if (eventData.type === "job_metadata") {
       const metadata = eventData as Record<string, unknown>;
       if (typeof metadata.processedRows !== "number" || typeof metadata.totalRows !== "number") return;
@@ -2494,7 +2499,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
       if (eventData.type === "log" && eventData.message) {
         setLogs((prev) => [...prev, eventData.message ?? ""]);
       } else if (eventData.type === "progress" && typeof eventData.completed === "number" && typeof eventData.total === "number") {
-        setProgress({ completed: eventData.completed, total: eventData.total });
+        setProgress({ completed: eventData.completed, total: eventData.total, currentRow: eventData.currentRow });
       } else if (eventData.type === "error_screenshot" && typeof eventData.index === "number" && eventData.image) {
         setErrorScreenshots((prev) => [...prev, { index: eventData.index ?? -1, image: eventData.image ?? "" }]);
       } else if (eventData.type === "file_download" && eventData.filename && eventData.base64) {
@@ -2575,7 +2580,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
       if (eventData.type === "log" && eventData.message) {
         setLogs((prev) => [...prev, eventData.message ?? ""]);
       } else if (eventData.type === "progress" && typeof eventData.completed === "number" && typeof eventData.total === "number") {
-        setProgress({ completed: eventData.completed, total: eventData.total });
+        setProgress({ completed: eventData.completed, total: eventData.total, currentRow: eventData.currentRow });
       } else if (eventData.type === "error_screenshot" && typeof eventData.index === "number" && eventData.image) {
         setErrorScreenshots((prev) => [...prev, { index: eventData.index ?? -1, image: eventData.image ?? "" }]);
       } else if (eventData.type === "file_download" && eventData.filename && eventData.base64) {
@@ -2668,7 +2673,8 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
             setLogs((prev) => [...prev, eventData.message ?? ""]);
             setStatus(eventData.message);
           }
-          else if (eventData.type === "progress" && typeof eventData.completed === "number" && typeof eventData.total === "number") setProgress({ completed: eventData.completed, total: eventData.total });
+          else if (eventData.type === "progress" && typeof eventData.completed === "number" && typeof eventData.total === "number") setProgress({ completed: eventData.completed, total: eventData.total, currentRow: eventData.currentRow });
+          else if (eventData.type === "astrona_result" && eventData.rows?.length) setAstronaResults((previous) => [...previous, ...(eventData.rows ?? [])]);
           else if (eventData.type === "error_screenshot" && typeof eventData.index === "number" && eventData.image) setErrorScreenshots((prev) => [...prev, { index: eventData.index ?? -1, image: eventData.image ?? "" }]);
           else if (eventData.type === "file_download" && eventData.filename && eventData.base64) {
             const artifactKey = buildDownloadArtifactKey(eventData);
@@ -2746,7 +2752,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
       if (eventData.type === "log" && eventData.message) {
         setLogs((prev) => [...prev, eventData.message ?? ""]);
       } else if (eventData.type === "progress" && typeof eventData.completed === "number" && typeof eventData.total === "number") {
-        setProgress({ completed: eventData.completed, total: eventData.total });
+        setProgress({ completed: eventData.completed, total: eventData.total, currentRow: eventData.currentRow });
       } else if (eventData.type === "input_request" && eventData.inputName) {
         setBlueShieldOtpRequest({
           inputName: eventData.inputName,
@@ -3681,7 +3687,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
               >
                 <div className="max-w-[25rem]">
                   <h1 className="text-[2rem] font-semibold tracking-[-0.05em] text-slate-950">
-                    Welcome Back, <span className="text-[#2563EB]">{userDisplayName || "Afrin"}</span> 👋
+                    Welcome Back, <span className="text-[#2563EB]">{userDisplayName || "Afrin"}</span> ðŸ‘‹
                   </h1>
                   <p className="mt-3 max-w-md text-sm leading-6 text-slate-600">
                     Select a healthcare payer portal to automate claim status verification.
@@ -3793,6 +3799,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
                             setLogs([]);
                             setErrorScreenshots([]);
                             setProgress(null);
+    setAstronaResults([]);
                           }}
                           className={`group rounded-[1.35rem] border border-sky-100 bg-[linear-gradient(180deg,rgba(255,255,255,0.99)_0%,rgba(246,250,255,0.97)_100%)] p-4 text-left shadow-[0_16px_36px_rgba(148,163,184,0.12)] transition hover:-translate-y-0.5 hover:border-blue-400 hover:shadow-[0_22px_44px_rgba(59,130,246,0.14)] ${
                             portalLayout === "list" ? "flex items-start gap-4" : ""
@@ -4067,7 +4074,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
                 </div>
               ) : effectivePortalId === "astrona" ? (
                 <div className="mt-5">
-                  <AstronaResultView errorScreenshots={errorScreenshots} logs={logs} progress={progress} status={status} />
+                  <AstronaResultView errorScreenshots={errorScreenshots} isProcessing={isProcessing} logs={logs} progress={progress} rows={astronaResults} status={status} />
                 </div>
               ) : effectivePortalId === "all-care" ? (
                 <div className="mt-5">
@@ -4112,8 +4119,3 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     </main>
   );
 }
-
-
-
-
-

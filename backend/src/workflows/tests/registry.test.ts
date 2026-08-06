@@ -42,3 +42,12 @@ test("eligibility resolves Availity independently from claim status", () => {
   assert.equal(runner.portalId, "availity");
   assert.equal(runner.name, "Availity Eligibility Verification");
 });
+
+test("eligibility resolves UHC with the UHC/Wellmed payer", () => {
+  const runner = getAutomationRunner("eligibility-verification", "uhc", "uhc-wellmed");
+
+  assert.equal(runner.workflowId, "eligibility-verification");
+  assert.equal(runner.portalId, "uhc");
+  assert.equal(runner.payerId, "uhc-wellmed");
+  assert.equal(runner.name, "UHC/Wellmed Eligibility Verification");
+});

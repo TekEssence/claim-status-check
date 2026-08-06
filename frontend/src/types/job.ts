@@ -5,6 +5,7 @@ export type ClaimRow = Record<string, unknown> & {
 export type JobProgressValue = {
   completed: number;
   total: number;
+  currentRow?: number;
 };
 
 export type ErrorScreenshot = {
@@ -35,4 +36,6 @@ export type ScrapeJobEvent = {
   }>;
   timeoutMs?: number;
   update?: Record<string, unknown>;
+  rows?: Record<string, unknown>[];
+  currentRow?: number;
 };
