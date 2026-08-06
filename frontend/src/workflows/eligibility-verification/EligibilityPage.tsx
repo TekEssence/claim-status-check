@@ -108,7 +108,7 @@ export function EligibilityPage() {
     if (event.type === "error_screenshot" && typeof event.image === "string" && event.image) {
       setErrorScreenshots((current) => [...current, { index: typeof event.index === "number" ? event.index : -1, image: event.image! }]);
     }
-    if (event.type === "eligibility_availity_result" && event.update) {
+    if ((event.type === "eligibility_availity_result" || event.type === "eligibility_uhc_result") && event.update) {
       const result = Object.fromEntries(
         Object.entries(event.update).map(([key, value]) => [key, value == null ? "" : String(value)]),
       );

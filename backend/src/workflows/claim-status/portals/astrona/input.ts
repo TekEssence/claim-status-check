@@ -58,6 +58,7 @@ export function readAstronaInputRows(buffer: ArrayBuffer): AstronaInputRow[] {
     const missing = [!group && "Group", !payer && "Responsible Payer", !memberId && !memberName && "Member ID or Member Name"].filter(Boolean);
     return {
       inputRowId: index + 2,
+      sourceRow: { ...row },
       group,
       payer,
       memberId,

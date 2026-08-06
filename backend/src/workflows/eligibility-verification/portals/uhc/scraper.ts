@@ -4,6 +4,7 @@ import { authenticateUhcEligibility } from "./authentication";
 import { launchUhcEligibilityBrowser } from "./browser";
 import { readUhcEligibilityCredentials } from "./credentials";
 import { getUhcEligibilityPayer } from "./payers/registry";
+import { runUhcWellmedEligibilityWorkflow } from "./payers/uhc-wellmed/workflow";
 
 function requireFile(formData: FormData, key: string, label: string): File {
   const value = formData.get(key);
@@ -36,6 +37,7 @@ export function createUhcEligibilityRunner(payerId = "uhc-wellmed"): AutomationR
         await log("Opening UHC login page with the TPM/UHC credential row.");
         await authenticateUhcEligibility(page, credentials);
         await log("UHC login and authenticator OTP verification completed.");
+        await runUhcWellmedEligibilityWorkflow({ page, inputFile: input.inputFile, context });
       } finally {
         await session.browser.close().catch(() => {});
       }

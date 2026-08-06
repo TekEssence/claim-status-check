@@ -41,15 +41,8 @@ export function astronaOutputRows(row: AstronaInputRow, details: AstronaClaimDet
     const net = serviceLine.net || details.netAmount;
     const memoLine1 = serviceLine.memoLine1 || details.memoLine1;
     return {
+    ...row.sourceRow,
     input_row_id: row.inputRowId,
-    group: row.group,
-    payer: row.payer,
-    responsible_payer: row.payer,
-    member_id: row.memberId,
-    member_name: row.memberName,
-    input_dob: row.dob,
-    input_dos: row.dos,
-    input_cpt: row.cptCode,
     claim_number: details.claimNumber,
     date_paid: details.datePaid,
     check_number: details.checkNumber,

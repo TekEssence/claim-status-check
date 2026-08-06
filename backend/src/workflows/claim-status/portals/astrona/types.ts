@@ -8,6 +8,7 @@ export type AstronaCredentials = {
 
 export type AstronaInputRow = {
   inputRowId: number;
+  sourceRow: Record<string, unknown>;
   group: string;
   payer: string;
   memberId: string;

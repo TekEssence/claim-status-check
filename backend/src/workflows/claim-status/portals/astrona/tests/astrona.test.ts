@@ -106,7 +106,8 @@ test("Astrona output keeps member data, all CPTs, and denial memo", () => {
   const output = astronaOutputRow(row, {
     claimNumber: "CLM-1", datePaid: "", checkNumber: "", portalStatus: "Denied", netAmount: "$0.00", cptCodes: ["99213", "80053"], memoLine1: "Not medically necessary", serviceLines: [],
   });
-  assert.equal(output.member_id, "MEM-3");
+  assert.equal(output["Member ID"], "MEM-3");
+  assert.equal("member_id" in output, false);
   assert.equal(output.services_cpt, "99213; 80053");
   assert.equal(output.memo_line_1, "Not medically necessary");
   assert.equal(output.claim_outcome, "Denied");

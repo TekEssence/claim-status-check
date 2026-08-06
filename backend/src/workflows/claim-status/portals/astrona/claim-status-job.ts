@@ -15,6 +15,20 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function astronaRowCacheKey(row: AstronaInputRow): string {
+  const normalize = (value: string) => value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "");
+  return [row.group, row.payer, row.memberId, row.memberName, row.dob, row.dos, row.cptCode].map(normalize).join("::");
+}
+
+type CachedAstronaRow = { rows: Record<string, unknown>[]; sourceKeys: string[] };
+
+function reuseAstronaOutput(row: AstronaInputRow, cached: CachedAstronaRow): Record<string, unknown>[] {
+  return cached.rows.map((cachedRow) => {
+    const extracted = { ...cachedRow };
+    for (const key of cached.sourceKeys) delete extracted[key];
+    return { ...row.sourceRow, ...extracted, input_row_id: row.inputRowId };
+  });
+}
 function blankDetails(): AstronaClaimDetails {
   return { memberName: "", memberDob: "", claimNumber: "", datePaid: "", checkNumber: "", portalStatus: "", netAmount: "", cptCodes: [], memoLine1: "", serviceLines: [] };
 }
@@ -179,10 +193,18 @@ export async function runAstronaClaimStatusJob(formData: FormData, context: Scra
         await context.log({ level: "info", message: `Provider portal ${batch.credentials.payer} selected. Opening Claims page.` });
         await goToAstronaClaims(page);
         await context.log({ level: "info", message: `Astrona Claims page loaded. Starting ${batch.rows.length} member row(s).` });
+        const rowCache = new Map<string, CachedAstronaRow>();
         for (const row of batch.rows) {
           if (context.isCancelled?.()) throw new Error("Astrona processing was cancelled.");
           try {
-            const rowOutput = await processRow(page, row, auditRows, context);
+            const cacheKey = astronaRowCacheKey(row);
+            const cached = rowCache.get(cacheKey);
+            const rowOutput = cached ? reuseAstronaOutput(row, cached) : await processRow(page, row, auditRows, context);
+            if (cached) {
+              await context.log({ level: "info", message: `[Astrona row ${row.inputRowId}] Reused verified extraction for an identical member/DOS/CPT row.`, rowIndex: row.inputRowId });
+            } else {
+              rowCache.set(cacheKey, { rows: rowOutput.map((item) => ({ ...item })), sourceKeys: Object.keys(row.sourceRow) });
+            }
             outputRows.push(...rowOutput);
             await context.emit({ type: "astrona_result", rows: rowOutput });
           } catch (error) {
@@ -220,6 +242,7 @@ export async function runAstronaClaimStatusJob(formData: FormData, context: Scra
     await context.emit({ type: "error", message });
   }
 
+  outputRows.sort((left, right) => Number(left.input_row_id || 0) - Number(right.input_row_id || 0));
   const workbook = createAstronaWorkbook(outputRows, errorRows, auditRows);
   await context.emit(fileEvent("astrona_output.xlsx", workbook, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"));
   if (errorRows.length) {
