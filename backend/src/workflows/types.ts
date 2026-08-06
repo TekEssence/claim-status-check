@@ -8,11 +8,11 @@ export type LogEvent = {
   meta?: Record<string, unknown>;
 };
 
-export const WORKFLOW_IDS = ["claim-status", "eligibility-verification", "payment-eob-download"] as const;
+export const WORKFLOW_IDS = ["claim-status", "eligibility-verification", "payment-eob-download", "payment-posting"] as const;
 
 export type WorkflowId = (typeof WORKFLOW_IDS)[number];
 
-export const AUTOMATION_WORKFLOW_IDS = ["eligibility-verification", "payment-eob-download"] as const;
+export const AUTOMATION_WORKFLOW_IDS = ["eligibility-verification", "payment-eob-download", "payment-posting"] as const;
 
 export type AutomationWorkflowId = (typeof AUTOMATION_WORKFLOW_IDS)[number];
 

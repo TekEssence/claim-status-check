@@ -26,6 +26,25 @@ test("payment EOB download is recognized as a workflow ID", () => {
   assert.ok(WORKFLOW_IDS.includes("payment-eob-download"));
 });
 
+test("payment posting is recognized as a workflow ID", () => {
+  assert.ok(WORKFLOW_IDS.includes("payment-posting"));
+});
+
+test("payment posting resolves AdvancedMD runner", () => {
+  const runner = getAutomationRunner("payment-posting", "advancedmd");
+
+  assert.equal(runner.workflowId, "payment-posting");
+  assert.equal(runner.portalId, "advancedmd");
+  assert.equal(runner.name, "AdvancedMD Payment Posting");
+});
+
+test("payment posting rejects unknown portals", () => {
+  assert.throws(
+    () => getAutomationRunner("payment-posting", "missing-portal"),
+    /Unknown portal: missing-portal/,
+  );
+});
+
 test("payment EOB resolves Availity Remittance runner", () => {
   const runner = getAutomationRunner("payment-eob-download", "availity-remittance");
 

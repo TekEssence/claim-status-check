@@ -29,7 +29,8 @@ function ensurePersistenceListener() {
   if (persistenceListenerRegistered) return;
   persistenceListenerRegistered = true;
   registerScrapeJobEmitListener((jobId, event) => {
-    if (getScrapeJob(jobId)?.workflowId !== "eligibility-verification") return;
+    const workflowId = getScrapeJob(jobId)?.workflowId;
+    if (workflowId !== "eligibility-verification" && workflowId !== "payment-eob-download" && workflowId !== "payment-posting") return;
     void persistEvent(jobId, event);
   });
 }
@@ -63,7 +64,7 @@ export async function POST(req: Request) {
     const runner = getAutomationRunner(automationWorkflowId, portalId, payerId);
     const input = runner.validateInput(formData);
     const job = createScrapeJob(undefined, automationWorkflowId);
-    const inputFile = getFirstFile(formData, ["inputFile", "referenceExcel"]);
+    const inputFile = getFirstFile(formData, ["inputFile", "inputExcel", "referenceExcel"]);
     const credentialFile = getFirstFile(formData, ["credentialFile", "credentialExcel"]);
     await createPersistentAutomationJob({
       jobId: job.id,
@@ -97,7 +98,7 @@ export async function POST(req: Request) {
         currentCompleted: current?.currentCompleted ?? 0,
       }).catch(() => {});
     }).catch(async (error) => {
-      const message = error instanceof Error ? error.message : "Eligibility automation failed.";
+      const message = error instanceof Error ? error.message : "Automation workflow failed.";
       emitScrapeJobEvent(job.id, { type: "error", message });
       emitScrapeJobEvent(job.id, { type: "done" });
       await updateAutomationJob({ jobId: job.id, status: "failed" }).catch(() => {});
@@ -154,7 +155,7 @@ export async function DELETE(req: Request) {
   if (!(await getAutomationJobForUser(jobId, session.userId))) {
     return Response.json({ error: "Run not found." }, { status: 404 });
   }
-  cancelScrapeJob(jobId, "Eligibility run cancellation requested.");
+  cancelScrapeJob(jobId, "Automation workflow cancellation requested.");
   emitScrapeJobEvent(jobId, { type: "cancelled" });
   emitScrapeJobEvent(jobId, { type: "done" });
   await updateAutomationJob({ jobId, status: "cancelled" });

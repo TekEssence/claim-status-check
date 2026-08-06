@@ -11,6 +11,7 @@ import {
   LoaderCircle,
   LogOut,
   ReceiptText,
+  BadgeDollarSign,
   ShieldEllipsis,
   Stethoscope,
   Users,
@@ -47,6 +48,14 @@ const workflows = [
     route: "/payment-eob-download",
     icon: ReceiptText,
     iconClassName: "bg-amber-100 text-amber-700",
+  },
+  {
+    id: "payment-posting",
+    name: "Payment Posting",
+    description: "Validate payment posting input and prepare dry-run portal workflows without posting payments.",
+    route: "/payment-posting",
+    icon: BadgeDollarSign,
+    iconClassName: "bg-emerald-100 text-emerald-700",
   },
 ] as const;
 
