@@ -3,6 +3,7 @@ export const PAYMENT_POSTING_WORKFLOW_ID = "payment-posting" as const;
 export const PAYMENT_POSTING_RESULT_VALUES = [
   "Filled - Not Posted",
   "Patient Not Found",
+  "Patient Not Selected",
   "Patient ID Mismatch",
   "Visit/Claim Not Found",
   "Carrier Not Found",

@@ -18,8 +18,11 @@ import { createPaymentPostingOutputWorkbookBuffer } from "./output-builder";
 import {
   ADVANCEDMD_PAYMENT_POSTING_SELECTORS,
   AdvancedMdMissingSelectorError,
+  AdvancedMdPatientNotFoundError,
+  AdvancedMdPatientNotSelectedError,
   AdvancedMdPaymentEntryReadinessTimeoutError,
   AdvancedMdScreenshotError,
+  AdvancedMdVisitClaimNotFoundError,
   captureAdvancedMdPaymentPostingScreenshot,
   dismissAdvancedMdNotifications,
   loginToAdvancedMd,
@@ -352,13 +355,15 @@ async function automationFailedRow(
     };
   }
   const screenshot = await captureAutomationErrorScreenshot(page, screenshotFolder, row);
+  const result = paymentPostingFailureResult(error);
+  const botMessage = paymentPostingFailureBotMessage(error);
   return {
     ...createBaseResultRow({
       input: row,
       portal: advancedMdPaymentPostingConfig.name,
       jobId: context.jobId,
-      result: "Automation Failed",
-      botMessage: "AdvancedMD dry-run automation failed during Payment Entry field processing. No payment was submitted.",
+      result,
+      botMessage,
       errorDetails: selectorDetails,
       startedAt,
       screenshotFilename: screenshot.filename,
@@ -366,6 +371,20 @@ async function automationFailedRow(
     screenshotPath: screenshot.path,
     screenshotStatus: screenshot.status,
   };
+}
+
+function paymentPostingFailureResult(error: unknown): PaymentPostingResultRow["result"] {
+  if (error instanceof AdvancedMdPatientNotFoundError) return "Patient Not Found";
+  if (error instanceof AdvancedMdPatientNotSelectedError) return "Patient Not Selected";
+  if (error instanceof AdvancedMdVisitClaimNotFoundError) return "Visit/Claim Not Found";
+  return "Automation Failed";
+}
+
+function paymentPostingFailureBotMessage(error: unknown): string {
+  if (error instanceof AdvancedMdPatientNotFoundError) return "Patient Not Found. No payment was submitted.";
+  if (error instanceof AdvancedMdPatientNotSelectedError) return "Patient Not Selected. No payment was submitted.";
+  if (error instanceof AdvancedMdVisitClaimNotFoundError) return "Visit/Claim Not Found. No payment was submitted.";
+  return "AdvancedMD dry-run automation failed during Payment Entry field processing. No payment was submitted.";
 }
 
 async function captureAutomationErrorScreenshot(

@@ -284,6 +284,27 @@ export class AdvancedMdPaymentEntryReadinessTimeoutError extends Error {
   }
 }
 
+export class AdvancedMdVisitClaimNotFoundError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "AdvancedMdVisitClaimNotFoundError";
+  }
+}
+
+export class AdvancedMdPatientNotFoundError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "AdvancedMdPatientNotFoundError";
+  }
+}
+
+export class AdvancedMdPatientNotSelectedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "AdvancedMdPatientNotSelectedError";
+  }
+}
+
 const ADVANCEDMD_PAYMENT_ENTRY_READY_TIMEOUT_MS = 210000;
 const ADVANCEDMD_EOB_CHECK_NUMBER_PENDO_ID = "eob-checknumber-single-search-input-20250104";
 
@@ -574,7 +595,7 @@ export async function prepareAdvancedMdPaymentPostingRow(options: {
   });
 
   const patientSelected = await runPaymentEntryFieldStage(logField, row.inputRow, "Patient", "Selecting Patient", "Patient selected", paymentFrameWrapperPendoDescription("payment-entry-patient-search-input-20240229"), async () => (
-    selectPatientByNameAndId(page, selectors, row)
+    selectPatientByNameAndId(page, selectors, row, logField)
   ));
 
   const selectedVisit = await runPaymentEntryFieldStage(logField, row.inputRow, "Visit/Claim #", "Selecting DOS-matched Visit/Claim", "Visit/Claim selected", paymentFrameWrapperPendoDescription("payment-entry-visit-input-20240229"), async () => {
@@ -587,6 +608,8 @@ export async function prepareAdvancedMdPaymentPostingRow(options: {
       resolvedVisitClaimInput,
       selectors.paymentEntry.visitClaimDropdownOptions,
       row.visitDateDos,
+      logField,
+      row.inputRow,
     );
   });
 
@@ -610,8 +633,9 @@ export async function prepareAdvancedMdPaymentPostingRow(options: {
   const finalDisplayedStatusBeforeChanges = await readFinalStatus(matchedRow, selectors, "Bill Next");
   let insuranceAllowedEntered = "";
   if (row.allowedAmount) {
+    const allowedAmount = row.allowedAmount;
     await runPaymentEntryFieldStage(logField, row.inputRow, "Insurance Allowed", "Filling Insurance Allowed", "Insurance Allowed filled", "frame #frmPaymentEntry matched line item Insurance Allowed input", async () => {
-      insuranceAllowedEntered = formatCurrencyInput(row.allowedAmount);
+      insuranceAllowedEntered = formatCurrencyInput(allowedAmount);
       const insuranceAllowedInput = await firstVisibleLocator([
         matchedRow.locator(selectors.lineItems.insuranceAllowedInput).first(),
         rowGridInputByHeader(matchedRow, "Ins. Allowed"),
@@ -720,36 +744,246 @@ function requireResolvedLocator(locator: Locator | null, label: string): Locator
   throw new Error(`AdvancedMD ${label} locator was not resolved before output values were read.`);
 }
 
+function patientResultOptions(page: Page, optionSelector: string): Locator {
+  const cardSelectors = [
+    optionSelector,
+    ".patient-result",
+    ".patient-card",
+    ".lookup-result",
+    ".result-card",
+    ".search-result",
+    "[class*=\"patient\"][class*=\"result\"]",
+    "[class*=\"lookup\"][class*=\"result\"]",
+    "[class*=\"result\"]",
+  ].join(", ");
+  return paymentFrame(page).locator(cardSelectors);
+}
+
+async function waitForPatientDropdownToClose(page: Page, optionSelector: string, timeoutMs: number): Promise<void> {
+  const options = patientResultOptions(page, optionSelector);
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!await options.first().isVisible({ timeout: 250 }).catch(() => false)) return;
+    await page.waitForTimeout(250);
+  }
+}
+
+async function waitForPatientCommit(
+  page: Page,
+  patientInput: Locator,
+  selectedLabel: string,
+  patientName: string,
+  timeoutMs: number,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const committedPatient = await readCommittedPatientValue(page, patientInput);
+    const invalid = await isPatientFieldInvalid(patientInput);
+    const dependentData = await isPatientDependentDataPopulated(page);
+    if (!invalid && dependentData && patientValuesMatch(committedPatient || selectedLabel, patientName)) return;
+    await page.waitForTimeout(250);
+  }
+}
+
+async function readCommittedPatientValue(page: Page, patientInput: Locator): Promise<string> {
+  const headerText = await textContent(paymentFrame(page).locator(".tab-content, .patient-header, .patient-banner, [class*=\"patient\"][class*=\"header\"], [class*=\"patient\"][class*=\"banner\"]").filter({ hasText: "|" }).first());
+  if (headerText) return headerText;
+  return lookupDisplayedValue(patientInput);
+}
+
+async function isPatientFieldInvalid(patientInput: Locator): Promise<boolean> {
+  return patientInput.evaluate((element) => {
+    const target = element as HTMLElement;
+    const wrapper = target.closest("mat-form-field, amds-patient-lookup-control, [data-pendo-id], .ng-invalid, .mat-form-field-invalid");
+    if (!wrapper) return false;
+    return wrapper.classList.contains("ng-invalid") ||
+      wrapper.classList.contains("mat-form-field-invalid") ||
+      wrapper.getAttribute("aria-invalid") === "true" ||
+      target.getAttribute("aria-invalid") === "true";
+  }).catch(() => false);
+}
+
+async function isPatientDependentDataPopulated(page: Page): Promise<boolean> {
+  const frame = paymentFrame(page);
+  const chartValue = await textContent(frame.locator("xpath=//*[normalize-space(.)='Chart #']/following::*[self::input or self::div or self::span][normalize-space(.) or @value][1]").first());
+  if (chartValue) return true;
+  const chartInputValue = await frame.locator("xpath=//*[normalize-space(.)='Chart #']/following::input[1]").first().inputValue().catch(() => "");
+  if (chartInputValue.trim()) return true;
+  const responsibleValue = await textContent(frame.locator("xpath=//*[contains(normalize-space(.),'Responsible Party')]/following::*[self::input or self::div or self::span][normalize-space(.) or @value][1]").first());
+  if (responsibleValue) return true;
+  return !!await frame.locator("xpath=//*[contains(normalize-space(.),'Responsible Party')]/following::input[1]").first().inputValue().then((value) => value.trim()).catch(() => "");
+}
+
+/**
+ * Types into the Patient search field without ever blurring it. The generic
+ * fillValue() helper ends with a .blur() call, which is fine for plain text
+ * inputs but is wrong here: AdvancedMD's Patient autocomplete panel only
+ * stays open while this field keeps focus, and blurring closes it before a
+ * result can be clicked. Focus must remain on this input for the entire
+ * type -> wait-for-dropdown -> click-result sequence.
+ */
+async function fillPatientSearchKeepingFocus(patientInput: Locator, value: string): Promise<void> {
+  await patientInput.waitFor({ state: "attached", timeout: 15000 });
+  await patientInput.scrollIntoViewIfNeeded().catch(() => {});
+  await patientInput.click({ force: true });
+  await patientInput.press(process.platform === "darwin" ? "Meta+A" : "Control+A").catch(() => {});
+  await patientInput.press("Backspace").catch(() => {});
+  await patientInput.type(value, { delay: 20, timeout: 15000 });
+  // No .blur() here on purpose — focus must stay on the field until a
+  // dropdown result has actually been clicked below.
+}
+
 async function selectPatientByNameAndId(
   page: Page,
   selectors: AdvancedMdSelectorConfig,
   row: PaymentPostingInputRow,
+  logField: AdvancedMdPaymentEntryFieldLogger,
 ): Promise<string> {
   const patientInput = await paymentFrameInputByCandidates("Patient", [
     paymentFrameInputByWrapperPendoId(page, "payment-entry-patient-search-input-20240229", "Patient"),
     paymentFrame(page).locator("amds-patient-lookup-control[controlname=\"patientLookup\"] input").first(),
     paymentFrame(page).locator("amds-patient-lookup-control input").first(),
   ]);
-  await fillValue(patientInput, row.patientName);
-  const options = await paymentEntryOptions(page, selectors.paymentEntry.patientDropdownOptions);
-  await options.first().waitFor({ state: "visible", timeout: 15000 });
-  const count = await options.count();
+
+  await patientInput.waitFor({ state: "attached", timeout: 15000 });
+  await patientInput.scrollIntoViewIfNeeded().catch(() => {});
+  await patientInput.click({ force: true });
+  await logField({
+    level: "info",
+    message: `AdvancedMD row ${row.inputRow}: Patient input focused.`,
+    eventName: "payment_posting_advancedmd_patient_focused",
+    meta: { field: "Patient" },
+  });
+
+  await fillPatientSearchKeepingFocus(patientInput, row.patientName);
+  await logField({
+    level: "info",
+    message: `AdvancedMD row ${row.inputRow}: Patient search value: ${row.patientName}`,
+    eventName: "payment_posting_advancedmd_patient_search",
+    meta: { field: "Patient", searchValue: row.patientName },
+  });
+
+  await logField({
+    level: "info",
+    message: `AdvancedMD row ${row.inputRow}: Waiting for patient dropdown while keeping focus.`,
+    eventName: "payment_posting_advancedmd_patient_waiting_dropdown",
+    meta: { field: "Patient" },
+  });
+  const options = patientResultOptions(page, selectors.paymentEntry.patientDropdownOptions);
+  await options.first().waitFor({ state: "visible", timeout: 10000 }).catch(() => {});
+  const count = await options.count().catch(() => 0);
+  await logField({
+    level: "info",
+    message: `AdvancedMD row ${row.inputRow}: Patient dropdown result count: ${count}`,
+    eventName: "payment_posting_advancedmd_patient_result_count",
+    meta: { field: "Patient", resultCount: count },
+  });
+  if (count === 0) {
+    throw new AdvancedMdPatientNotFoundError(`Patient Not Found. No dropdown results appeared for "${row.patientName}".`);
+  }
+
+  // Matching priority:
+  //   A. Exact name + a matching Patient ID / Control Number, when an
+  //      identifier is actually displayed in the result — resolved
+  //      immediately, no ambiguity possible.
+  //   B. Exact normalized name when there is exactly one result and no
+  //      identifier was available to check.
+  //   C. Multiple same-name results with no identifier to disambiguate —
+  //      reported as ambiguous rather than guessed.
   let selected: Locator | null = null;
+  let selectedLabel = "";
+  let ambiguous = false;
+  const nameOnlyMatches: { option: Locator; label: string }[] = [];
+
   for (let index = 0; index < count; index += 1) {
     const option = options.nth(index);
+    if (!await option.isVisible({ timeout: 250 }).catch(() => false)) continue;
     const label = await textContent(option);
+    if (!label) continue;
+    await logField({
+      level: "info",
+      message: `AdvancedMD row ${row.inputRow}: Patient candidate: ${label}`,
+      eventName: "payment_posting_advancedmd_patient_candidate",
+      meta: { field: "Patient", candidate: label },
+    });
     const labelLower = label.toLowerCase();
     const patientIdMatches = row.patientId ? labelLower.includes(row.patientId.toLowerCase()) : false;
     const controlNumberMatches = row.patientControlNumber ? labelLower.includes(row.patientControlNumber.toLowerCase()) : false;
     if (patientIdMatches || controlNumberMatches) {
       selected = option;
+      selectedLabel = label;
       break;
     }
+    if (patientValuesMatch(label, row.patientName)) {
+      nameOnlyMatches.push({ option, label });
+    }
   }
-  selected ??= options.first();
-  const label = await textContent(selected);
+
+  if (!selected) {
+    if (nameOnlyMatches.length === 1) {
+      selected = nameOnlyMatches[0].option;
+      selectedLabel = nameOnlyMatches[0].label;
+    } else if (nameOnlyMatches.length > 1) {
+      ambiguous = true;
+    }
+  }
+
+  if (ambiguous) {
+    throw new AdvancedMdPatientNotFoundError(`Patient Ambiguous. Multiple dropdown results named "${row.patientName}" and no Patient ID / Control Number was displayed to tell them apart.`);
+  }
+  if (!selected) {
+    throw new AdvancedMdPatientNotFoundError(`Patient Not Found. No dropdown result matched "${row.patientName}".`);
+  }
+
+  selectedLabel ||= await textContent(selected);
   await selected.click();
-  return label;
+  await logField({
+    level: "info",
+    message: `AdvancedMD row ${row.inputRow}: Patient result clicked: ${selectedLabel}`,
+    eventName: "payment_posting_advancedmd_patient_option_clicked",
+    meta: {
+      field: "Patient",
+      option: selectedLabel,
+      patientIdSelected: extractMatchedToken(selectedLabel, row.patientId),
+      patientControlNumberSelected: extractMatchedToken(selectedLabel, row.patientControlNumber),
+    },
+  });
+  await waitForPatientDropdownToClose(page, selectors.paymentEntry.patientDropdownOptions, 5000);
+  await waitForPatientCommit(page, patientInput, selectedLabel, row.patientName, 7000);
+  const finalPatient = await waitForLookupDisplayedValue(patientInput, row.patientName, 5000);
+  const committedPatient = await readCommittedPatientValue(page, patientInput);
+  const finalDisplay = committedPatient || finalPatient;
+  const selectedLooksCorrect = patientValuesMatch(selectedLabel, row.patientName);
+  const committedLooksCorrect = patientValuesMatch(finalDisplay, row.patientName);
+  const invalid = await isPatientFieldInvalid(patientInput);
+  const patientDataPopulated = await isPatientDependentDataPopulated(page);
+  const success = selectedLooksCorrect && committedLooksCorrect && !invalid && patientDataPopulated;
+  await logField({
+    level: "info",
+    message: `AdvancedMD row ${row.inputRow}: Patient committed: ${finalDisplay || "(blank)"}.`,
+    eventName: "payment_posting_advancedmd_patient_committed",
+    meta: { field: "Patient", committed: finalDisplay },
+  });
+  await logField({
+    level: success ? "info" : "error",
+    message: `AdvancedMD row ${row.inputRow}: Patient selection ${success ? "success" : "failure"}.`,
+    eventName: success ? "payment_posting_advancedmd_patient_selection_success" : "payment_posting_advancedmd_patient_selection_failed",
+    meta: {
+      field: "Patient",
+      searchValue: row.patientName,
+      optionSelected: selectedLabel,
+      finalDisplayed: finalDisplay,
+      patientIdSelected: extractMatchedToken(finalDisplay || selectedLabel, row.patientId),
+      patientControlNumberSelected: extractMatchedToken(finalDisplay || selectedLabel, row.patientControlNumber),
+      invalid,
+      patientDataPopulated,
+      success,
+    },
+  });
+  if (!success) {
+    throw new AdvancedMdPatientNotSelectedError(`Patient Not Selected. Expected "${row.patientName}", committed "${finalDisplay || "(blank)"}".`);
+  }
+  return finalDisplay;
 }
 
 async function selectVisitClaimByDos(
@@ -757,26 +991,81 @@ async function selectVisitClaimByDos(
   input: Locator,
   optionSelector: string,
   excelDos: string,
+  logField: AdvancedMdPaymentEntryFieldLogger,
+  inputRow: number,
 ): Promise<{ visitClaimNumber: string; visitDate: string; label: string }> {
-  await fillValue(input, " ");
   const normalizedDos = normalizeVisitDateForOption(excelDos);
+  await logField({
+    level: "info",
+    message: `AdvancedMD row ${inputRow}: Looking for Visit/Claim matching DOS ${excelDos}.`,
+    eventName: "payment_posting_advancedmd_visit_claim_search",
+    meta: { field: "Visit/Claim #", dosInput: excelDos, normalizedDos },
+  });
+  await openLookupDropdown(input);
   const options = await paymentEntryOptions(page, optionSelector);
-  await options.first().waitFor({ state: "visible", timeout: 15000 });
-  const count = await options.count();
+  await options.first().waitFor({ state: "visible", timeout: 10000 }).catch(() => {});
+  const count = await options.count().catch(() => 0);
+  let selectedLabel = "";
+  let selectedVisitDate = "";
+  let selectedVisitClaimNumber = "";
+  let selectedVisitTime = "";
   for (let index = 0; index < count; index += 1) {
     const option = options.nth(index);
+    if (!await option.isVisible({ timeout: 250 }).catch(() => false)) continue;
     const label = await textContent(option);
     const visitDate = extractVisitDate(label);
     if (visitDate && normalizeVisitDateForOption(visitDate) === normalizedDos) {
+      selectedLabel = label;
+      selectedVisitDate = visitDate;
+      selectedVisitClaimNumber = extractVisitClaimNumber(label);
+      selectedVisitTime = extractVisitTime(label);
       await option.click();
-      return {
-        visitClaimNumber: extractVisitClaimNumber(label),
-        visitDate,
-        label,
-      };
+      await logField({
+        level: "info",
+        message: `AdvancedMD row ${inputRow}: Visit option selected: ${selectedLabel}`,
+        eventName: "payment_posting_advancedmd_visit_claim_option_selected",
+        meta: {
+          field: "Visit/Claim #",
+          dosInput: excelDos,
+          visitClaimSelected: selectedVisitClaimNumber,
+          visitDateSelected: selectedVisitDate,
+          visitTimeSelected: selectedVisitTime,
+          option: selectedLabel,
+        },
+      });
+      break;
     }
   }
-  throw new Error(`Visit/Claim option was not found for DOS ${excelDos}.`);
+
+  const finalVisit = await waitForLookupDisplayedValue(input, selectedLabel || selectedVisitClaimNumber || excelDos, 5000);
+  const fieldPopulated = !!normalizeLookupText(finalVisit);
+  const finalVisitDate = extractVisitDate(finalVisit) || selectedVisitDate;
+  const finalVisitClaimNumber = extractVisitClaimNumber(finalVisit) || selectedVisitClaimNumber;
+  const finalVisitTime = extractVisitTime(finalVisit) || selectedVisitTime;
+  const success = fieldPopulated && !!finalVisitDate && normalizeVisitDateForOption(finalVisitDate) === normalizedDos;
+  await logField({
+    level: success ? "info" : "error",
+    message: `AdvancedMD row ${inputRow}: Final Visit/Claim displayed: ${finalVisit || selectedLabel || "(blank)"}. Visit/Claim selection ${success ? "success" : "failure"}.`,
+    eventName: success ? "payment_posting_advancedmd_visit_claim_selection_success" : "payment_posting_advancedmd_visit_claim_selection_failed",
+    meta: {
+      field: "Visit/Claim #",
+      dosInput: excelDos,
+      visitClaimSelected: finalVisitClaimNumber,
+      visitDateSelected: finalVisitDate,
+      visitTimeSelected: finalVisitTime,
+      optionSelected: selectedLabel,
+      finalDisplayed: finalVisit,
+      success,
+    },
+  });
+  if (!success) {
+    throw new AdvancedMdVisitClaimNotFoundError(`Visit/Claim Not Found. Expected DOS "${excelDos}", displayed "${finalVisit || selectedLabel || "(blank)"}".`);
+  }
+  return {
+    visitClaimNumber: finalVisitClaimNumber,
+    visitDate: finalVisitDate,
+    label: finalVisit || selectedLabel,
+  };
 }
 
 async function fillLookupAndSelect(
@@ -872,6 +1161,12 @@ async function waitForLookupDisplayedValue(input: Locator, expectedValue: string
   return latest || await lookupDisplayedValue(input);
 }
 
+async function openLookupDropdown(input: Locator): Promise<void> {
+  await input.waitFor({ state: "attached", timeout: 15000 });
+  await input.scrollIntoViewIfNeeded().catch(() => {});
+  await input.click({ force: true }).catch(() => {});
+}
+
 async function lookupDisplayedValue(input: Locator): Promise<string> {
   const value = await inputValue(input);
   if (value) return value;
@@ -886,6 +1181,15 @@ function carrierValuesMatch(actual: string, expected: string): boolean {
   return normalizedActual === normalizedExpected ||
     normalizedActual.includes(normalizedExpected) ||
     normalizedExpected.includes(normalizedActual);
+}
+
+function patientValuesMatch(actual: string, expected: string): boolean {
+  return carrierValuesMatch(actual, expected);
+}
+
+function extractMatchedToken(label: string, token: string | undefined): string {
+  if (!token) return "";
+  return label.toLowerCase().includes(token.toLowerCase()) ? token : "";
 }
 
 function normalizeLookupText(value: string): string {
@@ -1176,6 +1480,11 @@ function normalizeVisitDateForOption(value: string): string {
 function extractVisitDate(optionLabel: string): string {
   const match = optionLabel.match(/\b(\d{1,2}\/\d{1,2}\/(?:\d{2}|\d{4}))\b/);
   return match ? normalizeVisitDateForOption(match[1]) : "";
+}
+
+function extractVisitTime(optionLabel: string): string {
+  const match = optionLabel.match(/\b(\d{1,2}:\d{2}\s*(?:AM|PM))\b/i);
+  return match?.[1]?.replace(/\s+/g, " ").toUpperCase() ?? "";
 }
 
 function extractVisitClaimNumber(optionLabel: string): string {
