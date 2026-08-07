@@ -552,7 +552,7 @@ export async function prepareAdvancedMdPaymentPostingRow(options: {
 
   let carrierSelected = "";
   await runPaymentEntryFieldStage(logField, row.inputRow, "Carrier", "Filling Carrier", "Carrier selected", paymentFrameWrapperPendoDescription("eob-carrier-input-search-20240229"), async () => {
-    carrierSelected = await fillLookupAndSelect(page, carrierInput, selectors.paymentEntry.carrierDropdownOptions, row.carrier, row.carrier);
+    carrierSelected = await fillCarrierAndConfirmSelected(page, carrierInput, selectors.paymentEntry.carrierDropdownOptions, row.carrier, logField, row.inputRow);
   });
 
   await runPaymentEntryFieldStage(logField, row.inputRow, "Check Amount", "Filling Check Amount", "Check Amount filled", "frame #frmPaymentEntry input[formcontrolname=\"eobCheckAmount\"]", async () => {
@@ -793,6 +793,107 @@ async function fillLookupAndSelect(
   const label = await textContent(option);
   await option.click();
   return label || expectedText;
+}
+
+async function fillCarrierAndConfirmSelected(
+  page: Page,
+  input: Locator,
+  optionSelector: string,
+  expectedCarrier: string,
+  logField: AdvancedMdPaymentEntryFieldLogger,
+  inputRow: number,
+): Promise<string> {
+  await logField({
+    level: "info",
+    message: `AdvancedMD row ${inputRow}: Carrier search value: ${expectedCarrier}`,
+    eventName: "payment_posting_advancedmd_carrier_search",
+    meta: { field: "Carrier", searchValue: expectedCarrier },
+  });
+  await fillValue(input, expectedCarrier);
+
+  let clickedOption = "";
+  const options = await paymentEntryOptions(page, optionSelector);
+  const optionCount = await options.count().catch(() => 0);
+  if (optionCount > 0 && await options.first().isVisible({ timeout: 3000 }).catch(() => false)) {
+    const bestOption = await bestMatchingOption(options, expectedCarrier);
+    if (bestOption) {
+      clickedOption = await textContent(bestOption);
+      await bestOption.click();
+      await logField({
+        level: "info",
+        message: `AdvancedMD row ${inputRow}: Carrier option clicked: ${clickedOption}`,
+        eventName: "payment_posting_advancedmd_carrier_option_clicked",
+        meta: { field: "Carrier", option: clickedOption },
+      });
+    }
+  }
+
+  const finalCarrier = await waitForLookupDisplayedValue(input, expectedCarrier, 5000);
+  const success = carrierValuesMatch(finalCarrier, expectedCarrier);
+  await logField({
+    level: success ? "info" : "error",
+    message: `AdvancedMD row ${inputRow}: Final Carrier displayed: ${finalCarrier || "(blank)"}. Carrier selection ${success ? "success" : "failure"}.`,
+    eventName: success ? "payment_posting_advancedmd_carrier_selection_success" : "payment_posting_advancedmd_carrier_selection_failed",
+    meta: {
+      field: "Carrier",
+      searchValue: expectedCarrier,
+      optionClicked: clickedOption,
+      finalDisplayed: finalCarrier,
+      success,
+    },
+  });
+  if (!success) {
+    throw new Error(`Carrier selection failed. Expected "${expectedCarrier}", displayed "${finalCarrier || "(blank)"}".`);
+  }
+  return finalCarrier;
+}
+
+async function bestMatchingOption(options: Locator, expectedText: string): Promise<Locator | null> {
+  const count = await options.count().catch(() => 0);
+  let firstVisible: Locator | null = null;
+  for (let index = 0; index < count; index += 1) {
+    const option = options.nth(index);
+    if (!await option.isVisible({ timeout: 250 }).catch(() => false)) continue;
+    firstVisible ??= option;
+    const label = await textContent(option);
+    if (carrierValuesMatch(label, expectedText)) return option;
+  }
+  return firstVisible;
+}
+
+async function waitForLookupDisplayedValue(input: Locator, expectedValue: string, timeoutMs: number): Promise<string> {
+  const deadline = Date.now() + timeoutMs;
+  let latest = "";
+  while (Date.now() < deadline) {
+    latest = await lookupDisplayedValue(input);
+    if (carrierValuesMatch(latest, expectedValue)) return latest;
+    await input.page().waitForTimeout(250);
+  }
+  return latest || await lookupDisplayedValue(input);
+}
+
+async function lookupDisplayedValue(input: Locator): Promise<string> {
+  const value = await inputValue(input);
+  if (value) return value;
+  const text = await textContent(input.locator("xpath=ancestor::*[@data-pendo-id][1]").first());
+  return text;
+}
+
+function carrierValuesMatch(actual: string, expected: string): boolean {
+  const normalizedActual = normalizeLookupText(actual);
+  const normalizedExpected = normalizeLookupText(expected);
+  if (!normalizedActual || !normalizedExpected) return false;
+  return normalizedActual === normalizedExpected ||
+    normalizedActual.includes(normalizedExpected) ||
+    normalizedExpected.includes(normalizedActual);
+}
+
+function normalizeLookupText(value: string): string {
+  return value
+    .replace(/\s+/g, " ")
+    .replace(/[^\w\s]/g, "")
+    .trim()
+    .toLowerCase();
 }
 
 async function paymentEntryOptions(page: Page, optionSelector: string): Promise<Locator> {
