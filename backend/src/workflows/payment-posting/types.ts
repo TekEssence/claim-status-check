@@ -164,7 +164,18 @@ export type PaymentPostingResultRow = {
   visitClaimInput: string;
   visitClaimSelected: string;
   visitDateDos: string;
+  dosInputRaw: string;
+  dosInputShortFormat: string;
+  dosInputFullFormat: string;
+  dosInputCanonical: string;
+  visitOptionsFoundCount: string;
+  visitOptionsFound: string;
+  visitComparisonDetails: string;
   visitDateSelected: string;
+  visitTimeSelected: string;
+  visitDateCanonical: string;
+  dosMatch: string;
+  visitMatchResult: string;
   paymentAmountInput: string;
   paymentAmountEntered: string;
   excelCpt: string;

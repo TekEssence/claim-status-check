@@ -357,7 +357,7 @@ async function automationFailedRow(
   const screenshot = await captureAutomationErrorScreenshot(page, screenshotFolder, row);
   const result = paymentPostingFailureResult(error);
   const botMessage = paymentPostingFailureBotMessage(error);
-  return {
+  const resultRow = {
     ...createBaseResultRow({
       input: row,
       portal: advancedMdPaymentPostingConfig.name,
@@ -371,6 +371,10 @@ async function automationFailedRow(
     screenshotPath: screenshot.path,
     screenshotStatus: screenshot.status,
   };
+  if (error instanceof AdvancedMdVisitClaimNotFoundError && error.visitComparison) {
+    Object.assign(resultRow, error.visitComparison);
+  }
+  return resultRow;
 }
 
 function paymentPostingFailureResult(error: unknown): PaymentPostingResultRow["result"] {
@@ -434,6 +438,17 @@ function filledNotPostedRow(
     patientIdSelected: prepared.patientIdSelected,
     visitClaimSelected: prepared.visitClaimSelected,
     visitDateSelected: prepared.visitDateSelected,
+    visitTimeSelected: prepared.visitTimeSelected,
+    visitDateCanonical: prepared.visitDateCanonical,
+    dosInputRaw: prepared.dosInputRaw,
+    dosInputShortFormat: prepared.dosInputShortFormat,
+    dosInputFullFormat: prepared.dosInputFullFormat,
+    dosInputCanonical: prepared.dosInputCanonical,
+    visitOptionsFoundCount: prepared.visitOptionsFoundCount,
+    visitOptionsFound: prepared.visitOptionsFound,
+    visitComparisonDetails: prepared.visitComparisonDetails,
+    dosMatch: prepared.dosMatch,
+    visitMatchResult: prepared.visitMatchResult,
     paymentAmountEntered: prepared.paymentAmountEntered,
     lineItemCode: prepared.lineItemCode,
     cptMatch: "Yes",

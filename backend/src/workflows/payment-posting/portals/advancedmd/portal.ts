@@ -214,6 +214,17 @@ export type AdvancedMdPreparedPaymentResult = {
   patientIdSelected: string;
   visitClaimSelected: string;
   visitDateSelected: string;
+  visitTimeSelected: string;
+  visitDateCanonical: string;
+  dosInputRaw: string;
+  dosInputShortFormat: string;
+  dosInputFullFormat: string;
+  dosInputCanonical: string;
+  visitOptionsFoundCount: string;
+  visitOptionsFound: string;
+  visitComparisonDetails: string;
+  dosMatch: string;
+  visitMatchResult: string;
   paymentAmountEntered: string;
   lineItemCode: string;
   lineItemCharge: string;
@@ -273,6 +284,50 @@ export type AdvancedMdPaymentEntryFieldLog = {
 
 type AdvancedMdPaymentEntryFieldLogger = (event: AdvancedMdPaymentEntryFieldLog) => Promise<void>;
 
+type VisitClaimControl = {
+  wrapper: Locator;
+  clickable: Locator;
+  display: Locator;
+  description: string;
+};
+
+type VisitDosFormats = {
+  raw: string;
+  short: string;
+  full: string;
+  canonical: string;
+  fullYear: number;
+};
+
+type VisitOptionComparison = {
+  optionText: string;
+  visitClaimNumber: string;
+  visitDateRaw: string;
+  visitDateShort: string;
+  visitDateFull: string;
+  visitDateCanonical: string;
+  visitTime: string;
+  match: boolean;
+  ignored: boolean;
+};
+
+type SelectedVisitClaim = {
+  visitClaimNumber: string;
+  visitDate: string;
+  visitTime: string;
+  visitDateCanonical: string;
+  label: string;
+  dosInputRaw: string;
+  dosInputShortFormat: string;
+  dosInputFullFormat: string;
+  dosInputCanonical: string;
+  optionsFoundCount: string;
+  optionsFound: string;
+  comparisonDetails: string;
+  dosMatch: string;
+  matchResult: string;
+};
+
 export class AdvancedMdPaymentEntryReadinessTimeoutError extends Error {
   constructor(
     message: string,
@@ -285,7 +340,20 @@ export class AdvancedMdPaymentEntryReadinessTimeoutError extends Error {
 }
 
 export class AdvancedMdVisitClaimNotFoundError extends Error {
-  constructor(message: string) {
+  constructor(
+    message: string,
+    readonly visitComparison?: {
+      dosInputRaw: string;
+      dosInputShortFormat: string;
+      dosInputFullFormat: string;
+      dosInputCanonical: string;
+      visitOptionsFoundCount: string;
+      visitOptionsFound: string;
+      visitComparisonDetails: string;
+      dosMatch: string;
+      visitMatchResult: string;
+    },
+  ) {
     super(message);
     this.name = "AdvancedMdVisitClaimNotFoundError";
   }
@@ -598,14 +666,12 @@ export async function prepareAdvancedMdPaymentPostingRow(options: {
     selectPatientByNameAndId(page, selectors, row, logField)
   ));
 
-  const selectedVisit = await runPaymentEntryFieldStage(logField, row.inputRow, "Visit/Claim #", "Selecting DOS-matched Visit/Claim", "Visit/Claim selected", paymentFrameWrapperPendoDescription("payment-entry-visit-input-20240229"), async () => {
-    const resolvedVisitClaimInput = await paymentFrameInputByCandidates("Visit/Claim #", [
-      paymentFrameInputByWrapperPendoId(page, "payment-entry-visit-input-20240229", "Visit/Claim #"),
-      paymentFrame(page).locator("amds-visit-field input").first(),
-    ]);
+  const selectedVisit = await runPaymentEntryFieldStage(logField, row.inputRow, "Visit/Claim #", "Resolving Visit/Claim control", "Visit/Claim selected", "frame #frmPaymentEntry Visit/Claim control", async () => {
+    await waitForPatientDependentFieldsToStabilize(page, 7000);
+    const visitControl = await resolveVisitClaimControlAfterPatient(page, logField, row.inputRow);
     return selectVisitClaimByDos(
       page,
-      resolvedVisitClaimInput,
+      visitControl,
       selectors.paymentEntry.visitClaimDropdownOptions,
       row.visitDateDos,
       logField,
@@ -674,6 +740,17 @@ export async function prepareAdvancedMdPaymentPostingRow(options: {
     patientIdSelected: extractSelectedPatientIdentifier(patientSelected, row),
     visitClaimSelected: selectedVisit.visitClaimNumber,
     visitDateSelected: selectedVisit.visitDate,
+    visitTimeSelected: selectedVisit.visitTime,
+    visitDateCanonical: selectedVisit.visitDateCanonical,
+    dosInputRaw: selectedVisit.dosInputRaw,
+    dosInputShortFormat: selectedVisit.dosInputShortFormat,
+    dosInputFullFormat: selectedVisit.dosInputFullFormat,
+    dosInputCanonical: selectedVisit.dosInputCanonical,
+    visitOptionsFoundCount: selectedVisit.optionsFoundCount,
+    visitOptionsFound: selectedVisit.optionsFound,
+    visitComparisonDetails: selectedVisit.comparisonDetails,
+    dosMatch: selectedVisit.dosMatch,
+    visitMatchResult: selectedVisit.matchResult,
     paymentAmountEntered: await inputValue(requireResolvedLocator(paymentAmountInput, "Payment Amount")),
     lineItemCode: match.lineItem.code,
     lineItemCharge: match.lineItem.charge,
@@ -778,15 +855,24 @@ async function waitForPatientCommit(
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const committedPatient = await readCommittedPatientValue(page, patientInput);
-    const invalid = await isPatientFieldInvalid(patientInput);
     const dependentData = await isPatientDependentDataPopulated(page);
-    if (!invalid && dependentData && patientValuesMatch(committedPatient || selectedLabel, patientName)) return;
+    if (dependentData && patientValuesMatch(committedPatient || selectedLabel, patientName)) return;
     await page.waitForTimeout(250);
   }
 }
 
 async function readCommittedPatientValue(page: Page, patientInput: Locator): Promise<string> {
-  const headerText = await textContent(paymentFrame(page).locator(".tab-content, .patient-header, .patient-banner, [class*=\"patient\"][class*=\"header\"], [class*=\"patient\"][class*=\"banner\"]").filter({ hasText: "|" }).first());
+  const frame = paymentFrame(page);
+  const headerText = await textContent(frame.locator([
+    ".tab-content",
+    ".patient-header",
+    ".patient-banner",
+    "[class*=\"patient\"][class*=\"header\"]",
+    "[class*=\"patient\"][class*=\"banner\"]",
+    ".app-title",
+    ".tab-pane",
+    "body",
+  ].join(", ")).filter({ hasText: "|" }).first());
   if (headerText) return headerText;
   return lookupDisplayedValue(patientInput);
 }
@@ -805,13 +891,114 @@ async function isPatientFieldInvalid(patientInput: Locator): Promise<boolean> {
 
 async function isPatientDependentDataPopulated(page: Page): Promise<boolean> {
   const frame = paymentFrame(page);
-  const chartValue = await textContent(frame.locator("xpath=//*[normalize-space(.)='Chart #']/following::*[self::input or self::div or self::span][normalize-space(.) or @value][1]").first());
-  if (chartValue) return true;
+  const bodyText = await textContent(frame.locator("body").first());
+  if (/\bchart\s*#\s+\d+/i.test(bodyText)) return true;
+  if (/\bresponsible\s+party\s+\S+/i.test(bodyText)) return true;
   const chartInputValue = await frame.locator("xpath=//*[normalize-space(.)='Chart #']/following::input[1]").first().inputValue().catch(() => "");
   if (chartInputValue.trim()) return true;
-  const responsibleValue = await textContent(frame.locator("xpath=//*[contains(normalize-space(.),'Responsible Party')]/following::*[self::input or self::div or self::span][normalize-space(.) or @value][1]").first());
-  if (responsibleValue) return true;
   return !!await frame.locator("xpath=//*[contains(normalize-space(.),'Responsible Party')]/following::input[1]").first().inputValue().then((value) => value.trim()).catch(() => "");
+}
+
+async function waitForPatientDependentFieldsToStabilize(page: Page, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await isPatientDependentDataPopulated(page)) {
+      await page.waitForTimeout(500);
+      return;
+    }
+    await page.waitForTimeout(250);
+  }
+}
+
+async function resolveVisitClaimControlAfterPatient(
+  page: Page,
+  logField: AdvancedMdPaymentEntryFieldLogger,
+  inputRow: number,
+): Promise<VisitClaimControl> {
+  await logField({
+    level: "info",
+    message: `AdvancedMD row ${inputRow}: Resolving Visit/Claim control.`,
+    eventName: "payment_posting_advancedmd_visit_claim_resolving_control",
+    meta: { field: "Visit/Claim #" },
+  });
+
+  const frame = paymentFrame(page);
+  const wrapperCandidates = [
+    frame.locator("[data-pendo-id=\"payment-entry-visit-input-20240229\"]").first(),
+    frame.locator("amds-visit-field").first(),
+    frame.locator("[controlname*=\"visit\" i]").first(),
+    frame.locator("[data-pendo-id*=\"visit\" i]").first(),
+    frame.locator("xpath=//*[contains(normalize-space(.),'Visit/Claim #')]/following::*[self::amds-visit-field or self::*[@data-pendo-id] or self::input or self::button][1]").first(),
+    frame.locator("xpath=//*[contains(normalize-space(.),'Visit/Claim #')]/ancestor::*[contains(@class,'form') or contains(@class,'field') or contains(@class,'section')][1]").first(),
+  ];
+  const wrapper = await firstExistingLocator(wrapperCandidates);
+
+  const wrapperCount = await wrapper.count().catch(() => 0);
+  const tagName = wrapperCount > 0
+    ? await wrapper.evaluate((element) => element.tagName.toLowerCase()).catch(() => "")
+    : "";
+  const outerHTML = wrapperCount > 0
+    ? await wrapper.evaluate((element) => element.outerHTML.slice(0, 1200)).catch(() => "")
+    : "";
+  const innerInputCount = wrapperCount > 0 ? await wrapper.locator("input").count().catch(() => 0) : 0;
+  const clickableCount = wrapperCount > 0 ? await wrapper.locator("input, button, [role=\"button\"], .mat-icon, mat-icon, svg, [class*=\"search\" i], [class*=\"lookup\" i]").count().catch(() => 0) : 0;
+  const displayedText = wrapperCount > 0 ? await textContent(wrapper) : "";
+  const searchExists = wrapperCount > 0 ? await wrapper.locator("mat-icon, .mat-icon, svg, [class*=\"search\" i], [aria-label*=\"search\" i]").count().then((count) => count > 0).catch(() => false) : false;
+
+  await logField({
+    level: "info",
+    message: `AdvancedMD row ${inputRow}: Visit/Claim diagnostics before click.`,
+    eventName: "payment_posting_advancedmd_visit_claim_diagnostics",
+    meta: {
+      field: "Visit/Claim #",
+      wrapperCount,
+      tagName,
+      outerHTML,
+      innerInputCount,
+      clickableButtonOrIconCount: clickableCount,
+      displayedText,
+      searchExists,
+    },
+  });
+
+  if (wrapperCount === 0) {
+    throw new AdvancedMdVisitClaimNotFoundError("Visit/Claim control not found");
+  }
+
+  const clickable = await firstExistingLocator([
+    wrapper.locator("input:not([type=\"hidden\"])").first(),
+    wrapper.locator("button").first(),
+    wrapper.locator("[role=\"button\"]").first(),
+    wrapper.locator("mat-icon, .mat-icon, svg").first(),
+    wrapper,
+  ]);
+  await logField({
+    level: "info",
+    message: `AdvancedMD row ${inputRow}: Visit/Claim control found.`,
+    eventName: "payment_posting_advancedmd_visit_claim_control_found",
+    meta: {
+      field: "Visit/Claim #",
+      tagName,
+      innerInputCount,
+      clickableButtonOrIconCount: clickableCount,
+      displayedText,
+      searchExists,
+    },
+  });
+
+  return {
+    wrapper,
+    clickable,
+    display: wrapper,
+    description: "frame #frmPaymentEntry Visit/Claim wrapper/control",
+  };
+}
+
+async function firstExistingLocator(candidates: Locator[]): Promise<Locator> {
+  for (const candidate of candidates) {
+    if (await candidate.count().then((count) => count > 0).catch(() => false)) return candidate;
+  }
+  return candidates[candidates.length - 1];
 }
 
 /**
@@ -957,7 +1144,7 @@ async function selectPatientByNameAndId(
   const committedLooksCorrect = patientValuesMatch(finalDisplay, row.patientName);
   const invalid = await isPatientFieldInvalid(patientInput);
   const patientDataPopulated = await isPatientDependentDataPopulated(page);
-  const success = selectedLooksCorrect && committedLooksCorrect && !invalid && patientDataPopulated;
+  const success = selectedLooksCorrect && committedLooksCorrect && patientDataPopulated;
   await logField({
     level: "info",
     message: `AdvancedMD row ${row.inputRow}: Patient committed: ${finalDisplay || "(blank)"}.`,
@@ -988,41 +1175,108 @@ async function selectPatientByNameAndId(
 
 async function selectVisitClaimByDos(
   page: Page,
-  input: Locator,
+  control: VisitClaimControl,
   optionSelector: string,
   excelDos: string,
   logField: AdvancedMdPaymentEntryFieldLogger,
   inputRow: number,
-): Promise<{ visitClaimNumber: string; visitDate: string; label: string }> {
-  const normalizedDos = normalizeVisitDateForOption(excelDos);
+): Promise<SelectedVisitClaim> {
   await logField({
     level: "info",
-    message: `AdvancedMD row ${inputRow}: Looking for Visit/Claim matching DOS ${excelDos}.`,
-    eventName: "payment_posting_advancedmd_visit_claim_search",
-    meta: { field: "Visit/Claim #", dosInput: excelDos, normalizedDos },
+    message: `AdvancedMD row ${inputRow}: Clicking Visit/Claim.`,
+    eventName: "payment_posting_advancedmd_visit_claim_clicking",
+    meta: { field: "Visit/Claim #", locator: control.description },
   });
-  await openLookupDropdown(input);
+  await openLookupDropdown(control.clickable);
+  await logField({
+    level: "info",
+    message: `AdvancedMD row ${inputRow}: Visit/Claim clicked.`,
+    eventName: "payment_posting_advancedmd_visit_claim_clicked",
+    meta: { field: "Visit/Claim #", locator: control.description },
+  });
+  await logField({
+    level: "info",
+    message: `AdvancedMD row ${inputRow}: Waiting for Visit/Claim dropdown.`,
+    eventName: "payment_posting_advancedmd_visit_claim_waiting_dropdown",
+    meta: { field: "Visit/Claim #" },
+  });
   const options = await paymentEntryOptions(page, optionSelector);
   await options.first().waitFor({ state: "visible", timeout: 10000 }).catch(() => {});
   const count = await options.count().catch(() => 0);
+  await logField({
+    level: "info",
+    message: `AdvancedMD row ${inputRow}: Visit options found: ${count}.`,
+    eventName: "payment_posting_advancedmd_visit_claim_result_count",
+    meta: { field: "Visit/Claim #", resultCount: count, locator: control.description },
+  });
+  const dosFormats = buildVisitDosFormats(excelDos);
+  await logField({
+    level: "info",
+    message: `AdvancedMD row ${inputRow}: Excel DOS raw: ${dosFormats.raw}; short: ${dosFormats.short}; full: ${dosFormats.full}; canonical: ${dosFormats.canonical}.`,
+    eventName: "payment_posting_advancedmd_visit_claim_dos_formats",
+    meta: { field: "Visit/Claim #", ...dosFormats },
+  });
   let selectedLabel = "";
   let selectedVisitDate = "";
   let selectedVisitClaimNumber = "";
   let selectedVisitTime = "";
+  let selectedVisitDateCanonical = "";
+  const comparisons: VisitOptionComparison[] = [];
   for (let index = 0; index < count; index += 1) {
     const option = options.nth(index);
     if (!await option.isVisible({ timeout: 250 }).catch(() => false)) continue;
     const label = await textContent(option);
+    if (isNonVisitOption(label)) continue;
     const visitDate = extractVisitDate(label);
-    if (visitDate && normalizeVisitDateForOption(visitDate) === normalizedDos) {
+    const visitClaimNumber = extractVisitClaimNumber(label);
+    const visitTime = extractVisitTime(label);
+    const comparison = compareVisitOptionToDos(label, dosFormats);
+    comparisons.push(comparison);
+    await logField({
+      level: "info",
+      message: `AdvancedMD row ${inputRow}: Visit option candidate: ${label}`,
+      eventName: "payment_posting_advancedmd_visit_claim_candidate",
+      meta: {
+        field: "Visit/Claim #",
+        option: label,
+        visitClaimNumber,
+        visitDate,
+        visitTime,
+        dosInput: excelDos,
+        dosInputShort: dosFormats.short,
+        dosInputFull: dosFormats.full,
+        dosInputCanonical: dosFormats.canonical,
+        visitDateCanonical: comparison.visitDateCanonical,
+        dosMatch: comparison.match,
+      },
+    });
+    if (comparison.match) {
       selectedLabel = label;
       selectedVisitDate = visitDate;
-      selectedVisitClaimNumber = extractVisitClaimNumber(label);
-      selectedVisitTime = extractVisitTime(label);
+      selectedVisitClaimNumber = visitClaimNumber;
+      selectedVisitTime = visitTime;
+      selectedVisitDateCanonical = comparison.visitDateCanonical;
+      await logField({
+        level: "info",
+        message: `AdvancedMD row ${inputRow}: DOS match found: ${selectedLabel}`,
+        eventName: "payment_posting_advancedmd_visit_claim_dos_match_found",
+        meta: {
+          field: "Visit/Claim #",
+          dosInput: excelDos,
+          dosInputShort: dosFormats.short,
+          dosInputFull: dosFormats.full,
+          dosInputCanonical: dosFormats.canonical,
+          visitClaimSelected: selectedVisitClaimNumber,
+          visitDateSelected: selectedVisitDate,
+          visitTimeSelected: selectedVisitTime,
+          visitDateCanonical: selectedVisitDateCanonical,
+          option: selectedLabel,
+        },
+      });
       await option.click();
       await logField({
         level: "info",
-        message: `AdvancedMD row ${inputRow}: Visit option selected: ${selectedLabel}`,
+        message: `AdvancedMD row ${inputRow}: Visit/Claim option clicked: ${selectedLabel}`,
         eventName: "payment_posting_advancedmd_visit_claim_option_selected",
         meta: {
           field: "Visit/Claim #",
@@ -1037,12 +1291,14 @@ async function selectVisitClaimByDos(
     }
   }
 
-  const finalVisit = await waitForLookupDisplayedValue(input, selectedLabel || selectedVisitClaimNumber || excelDos, 5000);
+  await waitForVisitClaimDropdownToClose(page, optionSelector, 5000);
+  const finalVisit = await waitForVisitClaimDisplayedValue(control.display, selectedLabel || selectedVisitClaimNumber, 5000);
   const fieldPopulated = !!normalizeLookupText(finalVisit);
   const finalVisitDate = extractVisitDate(finalVisit) || selectedVisitDate;
   const finalVisitClaimNumber = extractVisitClaimNumber(finalVisit) || selectedVisitClaimNumber;
   const finalVisitTime = extractVisitTime(finalVisit) || selectedVisitTime;
-  const success = fieldPopulated && !!finalVisitDate && normalizeVisitDateForOption(finalVisitDate) === normalizedDos;
+  const finalVisitDateCanonical = normalizeVisitDateCanonical(finalVisitDate || selectedVisitDate, dosFormats.fullYear) || selectedVisitDateCanonical;
+  const success = fieldPopulated && !!finalVisitDateCanonical && finalVisitDateCanonical === dosFormats.canonical;
   await logField({
     level: success ? "info" : "error",
     message: `AdvancedMD row ${inputRow}: Final Visit/Claim displayed: ${finalVisit || selectedLabel || "(blank)"}. Visit/Claim selection ${success ? "success" : "failure"}.`,
@@ -1053,18 +1309,43 @@ async function selectVisitClaimByDos(
       visitClaimSelected: finalVisitClaimNumber,
       visitDateSelected: finalVisitDate,
       visitTimeSelected: finalVisitTime,
+      visitDateCanonical: finalVisitDateCanonical,
       optionSelected: selectedLabel,
       finalDisplayed: finalVisit,
       success,
     },
   });
   if (!success) {
-    throw new AdvancedMdVisitClaimNotFoundError(`Visit/Claim Not Found. Expected DOS "${excelDos}", displayed "${finalVisit || selectedLabel || "(blank)"}".`);
+    throw new AdvancedMdVisitClaimNotFoundError(
+      `Visit/Claim Not Found. Expected DOS "${excelDos}". Comparisons: ${formatVisitComparisonDetails(comparisons)}`,
+      {
+        dosInputRaw: dosFormats.raw,
+        dosInputShortFormat: dosFormats.short,
+        dosInputFullFormat: dosFormats.full,
+        dosInputCanonical: dosFormats.canonical,
+        visitOptionsFoundCount: String(comparisons.length),
+        visitOptionsFound: comparisons.map((comparison) => comparison.optionText).join(" | "),
+        visitComparisonDetails: formatVisitComparisonDetails(comparisons),
+        dosMatch: "No",
+        visitMatchResult: "Visit/Claim Not Found",
+      },
+    );
   }
   return {
     visitClaimNumber: finalVisitClaimNumber,
     visitDate: finalVisitDate,
+    visitTime: finalVisitTime,
+    visitDateCanonical: finalVisitDateCanonical,
     label: finalVisit || selectedLabel,
+    dosInputRaw: dosFormats.raw,
+    dosInputShortFormat: dosFormats.short,
+    dosInputFullFormat: dosFormats.full,
+    dosInputCanonical: dosFormats.canonical,
+    optionsFoundCount: String(comparisons.length),
+    optionsFound: comparisons.map((comparison) => comparison.optionText).join(" | "),
+    comparisonDetails: formatVisitComparisonDetails(comparisons),
+    dosMatch: "Yes",
+    matchResult: "Matched by DOS",
   };
 }
 
@@ -1165,6 +1446,32 @@ async function openLookupDropdown(input: Locator): Promise<void> {
   await input.waitFor({ state: "attached", timeout: 15000 });
   await input.scrollIntoViewIfNeeded().catch(() => {});
   await input.click({ force: true }).catch(() => {});
+}
+
+async function waitForVisitClaimDropdownToClose(page: Page, optionSelector: string, timeoutMs: number): Promise<void> {
+  const options = await paymentEntryOptions(page, optionSelector);
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!await options.first().isVisible({ timeout: 250 }).catch(() => false)) return;
+    await page.waitForTimeout(250);
+  }
+}
+
+async function waitForVisitClaimDisplayedValue(display: Locator, expectedValue: string, timeoutMs: number): Promise<string> {
+  const deadline = Date.now() + timeoutMs;
+  let latest = "";
+  while (Date.now() < deadline) {
+    latest = await visitClaimDisplayedValue(display);
+    if (normalizeLookupText(latest) && (!expectedValue || normalizeLookupText(latest).includes(normalizeLookupText(expectedValue)))) return latest;
+    await display.page().waitForTimeout(250);
+  }
+  return latest || await visitClaimDisplayedValue(display);
+}
+
+async function visitClaimDisplayedValue(display: Locator): Promise<string> {
+  const inputValueText = await display.locator("input:not([type=\"hidden\"])").first().inputValue().catch(() => "");
+  if (inputValueText.trim()) return inputValueText.trim();
+  return textContent(display);
 }
 
 async function lookupDisplayedValue(input: Locator): Promise<string> {
@@ -1477,9 +1784,119 @@ function normalizeVisitDateForOption(value: string): string {
   return `${match[1]}/${match[2]}/${match[3].slice(-2)}`;
 }
 
+function buildVisitDosFormats(rawDos: string): VisitDosFormats {
+  const normalized = normalizeAdvancedMdDate(rawDos);
+  const parsed = parseDateParts(normalized) ?? parseDateParts(rawDos);
+  if (!parsed) {
+    return {
+      raw: rawDos,
+      short: normalized.trim(),
+      full: normalized.trim(),
+      canonical: normalized.trim(),
+      fullYear: new Date().getFullYear(),
+    };
+  }
+
+  return formatVisitDosParts(rawDos, parsed.month, parsed.day, parsed.year);
+}
+
+function parseDateParts(value: string): { month: number; day: number; year: number } | null {
+  const trimmed = value.trim();
+  let match = trimmed.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (match) {
+    return {
+      month: Number(match[2]),
+      day: Number(match[3]),
+      year: Number(match[1]),
+    };
+  }
+
+  match = trimmed.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2}|\d{4})$/);
+  if (!match) return null;
+  const rawYear = Number(match[3]);
+  return {
+    month: Number(match[1]),
+    day: Number(match[2]),
+    year: rawYear < 100 ? 2000 + rawYear : rawYear,
+  };
+}
+
+function formatVisitDosParts(raw: string, month: number, day: number, year: number): VisitDosFormats {
+  const mm = String(month).padStart(2, "0");
+  const dd = String(day).padStart(2, "0");
+  const fullYear = String(year).padStart(4, "0");
+  const shortYear = fullYear.slice(-2);
+  return {
+    raw,
+    short: `${mm}/${dd}/${shortYear}`,
+    full: `${mm}/${dd}/${fullYear}`,
+    canonical: `${fullYear}-${mm}-${dd}`,
+    fullYear: year,
+  };
+}
+
+function compareVisitOptionToDos(optionText: string, dosFormats: VisitDosFormats): VisitOptionComparison {
+  const visitDateRaw = extractVisitDateRaw(optionText);
+  const visitClaimNumber = extractVisitClaimNumber(optionText);
+  const visitTime = extractVisitTime(optionText);
+  const visitDateShort = visitDateRaw ? normalizeVisitDateForOption(visitDateRaw) : "";
+  const visitDateCanonical = normalizeVisitDateCanonical(visitDateRaw, dosFormats.fullYear);
+  const visitDateFull = visitDateCanonical ? canonicalToFullVisitDate(visitDateCanonical) : "";
+  const match = !!visitDateRaw && (
+    visitDateShort === dosFormats.short ||
+    visitDateFull === dosFormats.full ||
+    visitDateCanonical === dosFormats.canonical
+  );
+  return {
+    optionText,
+    visitClaimNumber,
+    visitDateRaw,
+    visitDateShort,
+    visitDateFull,
+    visitDateCanonical,
+    visitTime,
+    match,
+    ignored: false,
+  };
+}
+
+function normalizeVisitDateCanonical(value: string, fallbackFullYear: number): string {
+  const parsed = parseDateParts(value);
+  if (!parsed) return "";
+  const year = /\b\d{1,2}\/\d{1,2}\/\d{2}\b/.test(value.trim())
+    ? centuryYearFromFallback(parsed.year, fallbackFullYear)
+    : parsed.year;
+  return formatVisitDosParts(value, parsed.month, parsed.day, year).canonical;
+}
+
+function centuryYearFromFallback(twoOrFullDigitYear: number, fallbackFullYear: number): number {
+  if (twoOrFullDigitYear >= 100) return twoOrFullDigitYear;
+  return Math.floor(fallbackFullYear / 100) * 100 + twoOrFullDigitYear;
+}
+
+function canonicalToFullVisitDate(canonical: string): string {
+  const match = canonical.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  return match ? `${match[2]}/${match[3]}/${match[1]}` : "";
+}
+
+function isNonVisitOption(optionText: string): boolean {
+  return !extractVisitClaimNumber(optionText) || !extractVisitDateRaw(optionText);
+}
+
+function formatVisitComparisonDetails(comparisons: VisitOptionComparison[]): string {
+  return comparisons.map((comparison) => (
+    `${comparison.optionText} => Date ${comparison.visitDateRaw || "(none)"} => Canonical ${comparison.visitDateCanonical || "(none)"} => ${comparison.match ? "MATCH" : "NO MATCH"}`
+  )).join("; ");
+}
+
 function extractVisitDate(optionLabel: string): string {
   const match = optionLabel.match(/\b(\d{1,2}\/\d{1,2}\/(?:\d{2}|\d{4}))\b/);
   return match ? normalizeVisitDateForOption(match[1]) : "";
+}
+
+function extractVisitDateRaw(optionLabel: string): string {
+  const match = optionLabel.match(/\b(\d{1,2}\/\d{1,2}\/(?:\d{2}|\d{4}))\b/);
+  return match?.[1] ?? "";
 }
 
 function extractVisitTime(optionLabel: string): string {
