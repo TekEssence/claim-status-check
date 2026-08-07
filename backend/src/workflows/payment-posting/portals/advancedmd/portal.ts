@@ -37,7 +37,6 @@ export type AdvancedMdSelectorConfig = {
     carrierDropdownOptions: string;
     checkAmountInput: string;
     depositDateInput: string;
-    insuranceTab: string;
     patientInput: string;
     patientDropdownOptions: string;
     visitClaimInput: string;
@@ -99,47 +98,46 @@ export const ADVANCEDMD_PAYMENT_POSTING_SELECTORS: AdvancedMdSelectorConfig = {
     paymentEntryTab: "[title=\"Payment Entry\"], .tab-title:has-text(\"Payment Entry\"), .tab:has-text(\"Payment Entry\")",
   },
   paymentEntry: {
-    eobSection: ".eob amds-eob-check",
-    checkNumberInput: "[data-pendo-id=\"eob-checknumber-single-search-input-20250104\"] input",
-    carrierInput: "[data-pendo-id=\"eob-carrier-input-search-20240229\"] input",
+    eobSection: ".eob, .eob amds-eob-check, .eob .eob-container, amds-eob-check",
+    checkNumberInput: ".eob [data-pendo-id=\"eob-checknumber-single-search-input-20250104\"], .eob amds-single-eob-search, .eob amds-eob-check amds-single-eob-search, [data-pendo-id=\"eob-checknumber-single-search-input-20250104\"], amds-eob-check amds-single-eob-search, amds-single-eob-search",
+    carrierInput: ".eob [data-pendo-id=\"eob-carrier-input-search-20240229\"], .eob amds-eob-carrier-lookup, [data-pendo-id=\"eob-carrier-input-search-20240229\"], amds-eob-carrier-lookup",
     carrierDropdownOptions: ".mat-autocomplete-panel [role=\"option\"], [role=\"listbox\"] [role=\"option\"]",
-    checkAmountInput: "input[formcontrolname=\"eobCheckAmount\"]",
-    depositDateInput: "[data-pendo-id=\"eob-check-deposit-date-20240229\"] input.mat-input-element",
-    insuranceTab: "[role=\"tab\"]:has-text(\"Insurance\"), button:has-text(\"Insurance\"), .mat-tab-label:has-text(\"Insurance\"), .tab:has-text(\"Insurance\")",
-    patientInput: "amds-lookup-control[controlname=\"patient\"] input, [data-pendo-id*=\"patient\" i] input",
+    checkAmountInput: ".eob input[formcontrolname=\"eobCheckAmount\"], .eob [formcontrolname=\"eobCheckAmount\"]",
+    depositDateInput: ".eob [data-pendo-id=\"eob-check-deposit-date-20240229\"], .eob input[formcontrolname=\"eobDepositDate\"], [data-pendo-id=\"eob-check-deposit-date-20240229\"]",
+    patientInput: "[data-pendo-id=\"payment-entry-patient-search-input-20240229\"], amds-patient-lookup-control[controlname=\"patientLookup\"], amds-patient-lookup-control",
     patientDropdownOptions: ".mat-autocomplete-panel [role=\"option\"], [role=\"listbox\"] [role=\"option\"], .cdk-overlay-pane [role=\"option\"]",
-    visitClaimInput: "amds-lookup-control[controlname*=\"visit\" i] input, [data-pendo-id*=\"visit\" i] input, [data-pendo-id*=\"claim\" i] input",
+    visitClaimInput: "[data-pendo-id=\"payment-entry-visit-input-20240229\"], amds-visit-field",
     visitClaimDropdownOptions: ".mat-autocomplete-panel [role=\"option\"], [role=\"listbox\"] [role=\"option\"], .cdk-overlay-pane [role=\"option\"]",
-    paymentAmountInput: "input[formcontrolname=\"paymentAmount\"], input[formcontrolname*=\"payment\" i][amdsinputfilter=\"money\"]",
-    remainingAmountValue: "input[formcontrolname*=\"remaining\" i], .remaining input, .remaining",
-    lineItemTable: "table[mat-table]",
+    paymentAmountInput: ".pf-payment-data-section input[formcontrolname=\"amount\"], .pf-payment-data-section input[formcontrolname=\"paymentAmount\"]",
+    remainingAmountValue: "input[formcontrolname=\"amountRemaining\"], input[formcontrolname*=\"remaining\" i], .remaining input, .remaining",
+    lineItemTable: ".pf-charges-grid, amds-charges-grid, .pf-charges-grid table[mat-table], amds-charges-grid table[mat-table]",
   },
   lineItems: {
-    row: "tr[mat-row], .mat-row",
-    dateCell: ".mat-column-date, .cdk-column-date",
-    codeCell: ".mat-column-code, .cdk-column-code",
-    chargeCell: ".mat-column-charge, .cdk-column-charge",
+    row: ".pf-charges-grid tr[mat-row], .pf-charges-grid .mat-row, amds-charges-grid tr[mat-row], amds-charges-grid .mat-row",
+    dateCell: ".mat-column-dateOfService, .cdk-column-dateOfService, .mat-column-date, .cdk-column-date",
+    codeCell: ".mat-column-chargeCode, .cdk-column-chargeCode, .mat-column-code, .cdk-column-code",
+    chargeCell: ".mat-column-chargeAmount, .cdk-column-chargeAmount, .mat-column-charge, .cdk-column-charge",
     insurancePortionCell: ".mat-column-insurancePortion, .cdk-column-insurancePortion, .mat-column-insPortion, .cdk-column-insPortion",
     patientPortionCell: ".mat-column-patientPortion, .cdk-column-patientPortion",
-    insuranceAllowedInput: ".mat-column-insuranceAllowed input, .cdk-column-insuranceAllowed input",
-    insuranceNotAllowedCell: ".mat-column-insuranceNotAllowed, .cdk-column-insuranceNotAllowed",
-    paymentInput: ".mat-column-payment input, .cdk-column-payment input",
+    insuranceAllowedInput: ".mat-column-allowedAmount input, .cdk-column-allowedAmount input, .mat-column-insuranceAllowed input, .cdk-column-insuranceAllowed input",
+    insuranceNotAllowedCell: ".mat-column-notAllowedAmount, .cdk-column-notAllowedAmount, .mat-column-insuranceNotAllowed, .cdk-column-insuranceNotAllowed",
+    paymentInput: ".mat-column-amount input, .cdk-column-amount input, .mat-column-payment input, .cdk-column-payment input",
     insuranceBalanceCell: ".mat-column-insuranceBalance, .cdk-column-insuranceBalance",
     patientBalanceCell: ".mat-column-patientBalance, .cdk-column-patientBalance",
     writeOffCodeCell: ".mat-column-writeOffCode, .cdk-column-writeOffCode",
-    writeOffCell: ".mat-column-writeOff, .cdk-column-writeOff",
-    statusDropdown: ".mat-column-status input, .cdk-column-status input",
-    paymentReasonButton: ".mat-column-carcRarc button, .cdk-column-carcRarc button",
+    writeOffCell: ".mat-column-writeOffAmount, .cdk-column-writeOffAmount, .mat-column-writeOff, .cdk-column-writeOff",
+    statusDropdown: ".mat-column-paymentStatus input, .cdk-column-paymentStatus input, .mat-column-status input, .cdk-column-status input",
+    paymentReasonButton: ".mat-column-paymentReasons .payment-reasons-code-editable, .cdk-column-paymentReasons .payment-reasons-code-editable, .mat-column-paymentReasons, .cdk-column-paymentReasons, .mat-column-carcRarc button, .cdk-column-carcRarc button",
     riskCodeCell: ".mat-column-riskCode, .cdk-column-riskCode",
     riskAmountCell: ".mat-column-riskAmount, .cdk-column-riskAmount",
     providerCell: ".mat-column-provider, .cdk-column-provider",
   },
   paymentReasons: {
-    dialog: ".reason-panel, amds-payment-reasons, .mat-dialog-container:has([data-pendo-id=\"save-panel-reasons-20240229\"])",
-    paymentReasonsTab: "button:has-text(\"Payment Reasons\"), .mat-tab-label:has-text(\"Payment Reasons\")",
-    remarkCodesTab: "button:has-text(\"Remark Codes\"), .mat-tab-label:has-text(\"Remark Codes\")",
+    dialog: "amds-rarc, .rarc-body, .mat-dialog-container:has([data-pendo-id=\"save-panel-reasons-20240229\"]), .cdk-overlay-pane:has([data-pendo-id=\"save-panel-reasons-20240229\"])",
+    paymentReasonsTab: "a[mat-tab-link]:has-text(\"Payment Reasons\"), .mat-tab-link:has-text(\"Payment Reasons\")",
+    remarkCodesTab: "a[mat-tab-link]:has-text(\"Remark Codes\"), .mat-tab-link:has-text(\"Remark Codes\")",
     paymentReasonSearchInput: "input[data-pendo-id=\"reason-search-20240229\"]",
-    remarkCodeSearchInput: ".rarc-code-field input",
+    remarkCodeSearchInput: ".rarc-body .rarc-code-field input, .mat-column-rarcCode input, .cdk-column-rarcCode input",
     resultRows: ".mat-autocomplete-panel [role=\"option\"], [role=\"listbox\"] [role=\"option\"]",
     saveButton: "button[data-pendo-id=\"save-panel-reasons-20240229\"]",
   },
@@ -165,7 +163,6 @@ export const REQUIRED_ADVANCEDMD_SELECTOR_KEYS = [
   "paymentEntry.carrierDropdownOptions",
   "paymentEntry.checkAmountInput",
   "paymentEntry.depositDateInput",
-  "paymentEntry.insuranceTab",
   "paymentEntry.patientInput",
   "paymentEntry.patientDropdownOptions",
   "paymentEntry.visitClaimInput",
@@ -252,6 +249,44 @@ export class AdvancedMdScreenshotError extends Error {
   }
 }
 
+export type AdvancedMdPaymentEntryReadinessTiming = {
+  quickPayClickedAt?: string;
+  paymentIframeDetectedAt?: string;
+  paymentEntryDomDetectedAt?: string;
+  eobCheckVisibleAt?: string;
+  eobCheckInteractableAt?: string;
+  totalLoadDurationMs: number;
+};
+
+export type AdvancedMdPaymentEntryReadinessState = {
+  found: boolean;
+  visible: boolean;
+  enabled: boolean;
+};
+
+export type AdvancedMdPaymentEntryFieldLog = {
+  level?: "debug" | "info" | "warn" | "error";
+  message: string;
+  eventName?: string;
+  meta?: Record<string, unknown>;
+};
+
+type AdvancedMdPaymentEntryFieldLogger = (event: AdvancedMdPaymentEntryFieldLog) => Promise<void>;
+
+export class AdvancedMdPaymentEntryReadinessTimeoutError extends Error {
+  constructor(
+    message: string,
+    readonly locatorState: AdvancedMdPaymentEntryReadinessState,
+    readonly timing: AdvancedMdPaymentEntryReadinessTiming,
+  ) {
+    super(message);
+    this.name = "AdvancedMdPaymentEntryReadinessTimeoutError";
+  }
+}
+
+const ADVANCEDMD_PAYMENT_ENTRY_READY_TIMEOUT_MS = 210000;
+const ADVANCEDMD_EOB_CHECK_NUMBER_PENDO_ID = "eob-checknumber-single-search-input-20250104";
+
 export function getMissingAdvancedMdSelectors(selectors: AdvancedMdSelectorConfig): string[] {
   return REQUIRED_ADVANCEDMD_SELECTOR_KEYS.filter((key) => !readSelector(selectors, key));
 }
@@ -332,7 +367,7 @@ export async function resolveAdvancedMdAppPage(page: Page): Promise<Page> {
   return page;
 }
 
-export async function openAdvancedMdQuickPay(page: Page, selectors = ADVANCEDMD_PAYMENT_POSTING_SELECTORS): Promise<void> {
+export async function openAdvancedMdQuickPay(page: Page, selectors = ADVANCEDMD_PAYMENT_POSTING_SELECTORS): Promise<Date> {
   assertRequiredSelectors(selectors, [
     "navigation.billingMenu",
     "navigation.quickPayMenuItem",
@@ -357,11 +392,131 @@ export async function openAdvancedMdQuickPay(page: Page, selectors = ADVANCEDMD_
     page.getByText("Quick Pay", { exact: true }).first(),
   ]);
   await quickPay.click();
+  const quickPayClickedAt = new Date();
 
   await firstVisibleLocator([
     page.locator(selectors.navigation.paymentEntryTab).first(),
     page.getByText("Payment Entry", { exact: true }).first(),
   ]);
+
+  return quickPayClickedAt;
+}
+
+/**
+ * Single explicit checkpoint confirming the Payment Entry screen is actually
+ * ready before any field is touched. This waits on the real EOB Check # control
+ * confirmed in the Payment Entry DOM and only returns when it is interactable.
+ */
+export async function waitForAdvancedMdPaymentEntryReady(
+  page: Page,
+  selectors: AdvancedMdSelectorConfig = ADVANCEDMD_PAYMENT_POSTING_SELECTORS,
+  timeoutMs = ADVANCEDMD_PAYMENT_ENTRY_READY_TIMEOUT_MS,
+  options: {
+    quickPayClickedAt?: Date;
+    onTiming?: (label: string, timing: AdvancedMdPaymentEntryReadinessTiming) => Promise<void>;
+  } = {},
+): Promise<AdvancedMdPaymentEntryReadinessTiming> {
+  assertRequiredSelectors(selectors, [
+    "paymentEntry.checkNumberInput",
+  ]);
+
+  const startedAt = options.quickPayClickedAt ?? new Date();
+  const timing: AdvancedMdPaymentEntryReadinessTiming = {
+    quickPayClickedAt: startedAt.toISOString(),
+    totalLoadDurationMs: 0,
+  };
+  const eobCheckInput = eobCheckNumberReadinessInputLocator(page);
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    if (!timing.paymentIframeDetectedAt && await hasPaymentEntryIframe(page)) {
+      timing.paymentIframeDetectedAt = new Date().toISOString();
+      await options.onTiming?.("Payment iframe detected at", withLoadDuration(timing, startedAt));
+    }
+
+    const locatorState = await getAdvancedMdEobCheckReadinessState(eobCheckInput);
+    if (locatorState.found && !timing.paymentEntryDomDetectedAt) {
+      timing.paymentEntryDomDetectedAt = new Date().toISOString();
+      await options.onTiming?.("Payment Entry DOM detected at", withLoadDuration(timing, startedAt));
+    }
+    if (locatorState.visible && !timing.eobCheckVisibleAt) {
+      timing.eobCheckVisibleAt = new Date().toISOString();
+      await options.onTiming?.("EOB Check # visible at", withLoadDuration(timing, startedAt));
+    }
+    if (locatorState.enabled) {
+      timing.eobCheckInteractableAt = new Date().toISOString();
+      await options.onTiming?.("EOB Check # interactable at", withLoadDuration(timing, startedAt));
+      return withLoadDuration(timing, startedAt);
+    }
+
+    await page.waitForTimeout(Math.min(500, Math.max(1, deadline - Date.now())));
+  }
+
+  const locatorState = await getAdvancedMdEobCheckReadinessState(eobCheckInput);
+  throw new AdvancedMdPaymentEntryReadinessTimeoutError(
+    "AdvancedMD Payment Entry screen did not become ready because the EOB Check # control did not become interactable. No fields were filled for this row.",
+    locatorState,
+    withLoadDuration(timing, startedAt),
+  );
+}
+
+function eobCheckNumberReadinessInputLocator(page: Page): Locator {
+  const checkNumberControl = paymentFrame(page).locator(`[data-pendo-id="${ADVANCEDMD_EOB_CHECK_NUMBER_PENDO_ID}"]`).first();
+  return checkNumberControl.locator("input").first();
+}
+
+function paymentFrame(page: Page): FrameLocator {
+  return page.frameLocator("#frmPaymentEntry");
+}
+
+function paymentFrameInputByWrapperPendoId(page: Page, pendoId: string, label: string): Locator {
+  return paymentFrame(page)
+    .locator(`[data-pendo-id="${pendoId}"]`)
+    .first()
+    .locator("input")
+    .first()
+    .describe(`AdvancedMD Payment Entry ${label}: #frmPaymentEntry [data-pendo-id="${pendoId}"] input`);
+}
+
+async function paymentFrameInputByCandidates(label: string, candidates: Locator[]): Promise<Locator> {
+  try {
+    return await firstVisibleOrAttachedInputLocator(candidates, label);
+  } catch (error) {
+    throw new Error(
+      `AdvancedMD input locator failed for ${label}. Payment Entry iframe locator candidates were not usable. ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+}
+
+function eobCheckNumberReadinessDescription(): string {
+  return paymentFrameWrapperPendoDescription(ADVANCEDMD_EOB_CHECK_NUMBER_PENDO_ID);
+}
+
+function paymentFrameWrapperPendoDescription(pendoId: string): string {
+  return `frame #frmPaymentEntry [data-pendo-id="${pendoId}"] input`;
+}
+
+async function getAdvancedMdEobCheckReadinessState(input: Locator): Promise<AdvancedMdPaymentEntryReadinessState> {
+  const found = await input.count().then((count) => count > 0).catch(() => false);
+  if (!found) return { found: false, visible: false, enabled: false };
+
+  const visible = await input.isVisible({ timeout: 250 }).catch(() => false);
+  const enabled = visible && await input.isEnabled({ timeout: 250 }).catch(() => false);
+  return { found, visible, enabled };
+}
+
+async function hasPaymentEntryIframe(page: Page): Promise<boolean> {
+  return page.locator("#frmPaymentEntry").first().count().then((count) => count > 0).catch(() => false);
+}
+
+function withLoadDuration(
+  timing: AdvancedMdPaymentEntryReadinessTiming,
+  startedAt: Date,
+): AdvancedMdPaymentEntryReadinessTiming {
+  return {
+    ...timing,
+    totalLoadDurationMs: Date.now() - startedAt.getTime(),
+  };
 }
 
 export async function prepareAdvancedMdPaymentPostingRow(options: {
@@ -370,37 +525,80 @@ export async function prepareAdvancedMdPaymentPostingRow(options: {
   row: PaymentPostingInputRow;
   selectors?: AdvancedMdSelectorConfig;
   screenshotFolder: string;
+  fieldLogger?: AdvancedMdPaymentEntryFieldLogger;
 }): Promise<AdvancedMdPreparedPaymentResult> {
   const { page, row, screenshotFolder } = options;
   const selectors = options.selectors ?? ADVANCEDMD_PAYMENT_POSTING_SELECTORS;
   assertAdvancedMdSelectorsReady(selectors);
 
-  await firstVisibleLocator([
-    page.locator(selectors.paymentEntry.insuranceTab).first(),
-    page.getByRole("tab", { name: "Insurance" }).first(),
-    page.getByText("Insurance", { exact: true }).first(),
-  ]).then((locator) => locator.click());
+  // Explicit readiness checkpoint before touching a single field on this row.
+  await waitForAdvancedMdPaymentEntryReady(page, selectors);
 
-  const checkNumberInput = await inputBySelectorOrLabel(page, selectors.paymentEntry.checkNumberInput, "Check #");
-  const carrierInput = await inputBySelectorOrLabel(page, selectors.paymentEntry.carrierInput, "Carrier");
-  const checkAmountInput = await inputBySelectorOrLabel(page, selectors.paymentEntry.checkAmountInput, "Check Amount");
-  const depositDateInput = await inputBySelectorOrLabel(page, selectors.paymentEntry.depositDateInput, "Deposit Date");
+  const logField = (event: AdvancedMdPaymentEntryFieldLog) => options.fieldLogger?.(event) ?? Promise.resolve();
+  const checkNumberInput = eobCheckNumberReadinessInputLocator(page);
+  const carrierInput = paymentFrameInputByWrapperPendoId(page, "eob-carrier-input-search-20240229", "EOB Carrier");
+  let checkAmountInput: Locator | null = null;
+  let depositDateInput: Locator | null = null;
 
-  await fillValue(checkNumberInput, row.checkNumber);
-  const carrierSelected = await fillLookupAndSelect(page, carrierInput, selectors.paymentEntry.carrierDropdownOptions, row.carrier, row.carrier);
-  await fillValue(checkAmountInput, formatCurrencyInput(row.checkAmount));
-  await fillValue(depositDateInput, normalizeAdvancedMdDate(row.checkDate));
+  await runPaymentEntryFieldStage(logField, row.inputRow, "Check #", "Filling Check #", "Check # filled", eobCheckNumberReadinessDescription(), async () => {
+    await fillValue(checkNumberInput, row.checkNumber);
+    await logField({
+      level: "info",
+      message: `AdvancedMD row ${row.inputRow}: Check # entered: ${row.checkNumber}`,
+      eventName: "payment_posting_advancedmd_field_filled",
+      meta: { field: "Check #", value: row.checkNumber },
+    });
+  });
 
-  const patientSelected = await selectPatientByNameAndId(page, selectors, row);
-  const visitClaimInput = await inputBySelectorOrLabel(page, selectors.paymentEntry.visitClaimInput, "Visit/Claim #");
-  const selectedVisit = await selectVisitClaimByDos(
-    page,
-    visitClaimInput,
-    selectors.paymentEntry.visitClaimDropdownOptions,
-    row.visitDateDos,
-  );
-  const paymentAmountInput = await inputBySelectorOrLabel(page, selectors.paymentEntry.paymentAmountInput, "Payment Amount");
-  await fillValue(paymentAmountInput, formatCurrencyInput(row.paymentAmount));
+  let carrierSelected = "";
+  await runPaymentEntryFieldStage(logField, row.inputRow, "Carrier", "Filling Carrier", "Carrier selected", paymentFrameWrapperPendoDescription("eob-carrier-input-search-20240229"), async () => {
+    carrierSelected = await fillLookupAndSelect(page, carrierInput, selectors.paymentEntry.carrierDropdownOptions, row.carrier, row.carrier);
+  });
+
+  await runPaymentEntryFieldStage(logField, row.inputRow, "Check Amount", "Filling Check Amount", "Check Amount filled", "frame #frmPaymentEntry input[formcontrolname=\"eobCheckAmount\"]", async () => {
+    const resolvedCheckAmountInput = await paymentFrameInputByCandidates("EOB Check Amount", [
+      paymentFrame(page).locator("input[formcontrolname=\"eobCheckAmount\"]").first(),
+      paymentFrame(page).locator("[formcontrolname=\"eobCheckAmount\"] input").first(),
+    ]);
+    checkAmountInput = resolvedCheckAmountInput;
+    await fillValue(resolvedCheckAmountInput, formatCurrencyInput(row.checkAmount));
+  });
+
+  await runPaymentEntryFieldStage(logField, row.inputRow, "Deposit Date", "Filling Deposit Date", "Deposit Date filled", "frame #frmPaymentEntry [data-pendo-id=\"eob-check-deposit-date-20240229\"] input", async () => {
+    const resolvedDepositDateInput = await paymentFrameInputByCandidates("EOB Deposit Date", [
+      paymentFrameInputByWrapperPendoId(page, "eob-check-deposit-date-20240229", "EOB Deposit Date"),
+      paymentFrame(page).locator("input[formcontrolname=\"eobDepositDate\"]").first(),
+    ]);
+    depositDateInput = resolvedDepositDateInput;
+    await fillValue(resolvedDepositDateInput, normalizeAdvancedMdDate(row.checkDate));
+  });
+
+  const patientSelected = await runPaymentEntryFieldStage(logField, row.inputRow, "Patient", "Selecting Patient", "Patient selected", paymentFrameWrapperPendoDescription("payment-entry-patient-search-input-20240229"), async () => (
+    selectPatientByNameAndId(page, selectors, row)
+  ));
+
+  const selectedVisit = await runPaymentEntryFieldStage(logField, row.inputRow, "Visit/Claim #", "Selecting DOS-matched Visit/Claim", "Visit/Claim selected", paymentFrameWrapperPendoDescription("payment-entry-visit-input-20240229"), async () => {
+    const resolvedVisitClaimInput = await paymentFrameInputByCandidates("Visit/Claim #", [
+      paymentFrameInputByWrapperPendoId(page, "payment-entry-visit-input-20240229", "Visit/Claim #"),
+      paymentFrame(page).locator("amds-visit-field input").first(),
+    ]);
+    return selectVisitClaimByDos(
+      page,
+      resolvedVisitClaimInput,
+      selectors.paymentEntry.visitClaimDropdownOptions,
+      row.visitDateDos,
+    );
+  });
+
+  let paymentAmountInput: Locator | null = null;
+  await runPaymentEntryFieldStage(logField, row.inputRow, "Payment Amount", "Filling Payment Amount", "Payment Amount filled", "frame #frmPaymentEntry .pf-payment-data-section input[formcontrolname=\"amount\"]", async () => {
+    const resolvedPaymentAmountInput = await paymentFrameInputByCandidates("Payment Amount", [
+      paymentFrame(page).locator(".pf-payment-data-section input[formcontrolname=\"amount\"]").first(),
+      paymentFrame(page).locator(".pf-payment-data-section input[formcontrolname=\"paymentAmount\"]").first(),
+    ]);
+    paymentAmountInput = resolvedPaymentAmountInput;
+    await fillValue(resolvedPaymentAmountInput, formatCurrencyInput(row.paymentAmount));
+  });
 
   const displayedLineItems = await readDisplayedLineItems(page, selectors);
   const match = findLineItemMatch(displayedLineItems, row);
@@ -408,43 +606,51 @@ export async function prepareAdvancedMdPaymentPostingRow(options: {
     throw new Error(`AdvancedMD line item match failed: ${match.type}`);
   }
 
-  const matchedRow = page.locator(selectors.lineItems.row).nth(Number(match.lineItem.rowId));
+  const matchedRow = paymentFrame(page).locator(selectors.lineItems.row).nth(Number(match.lineItem.rowId));
   const finalDisplayedStatusBeforeChanges = await readFinalStatus(matchedRow, selectors, "Bill Next");
   let insuranceAllowedEntered = "";
   if (row.allowedAmount) {
-    insuranceAllowedEntered = formatCurrencyInput(row.allowedAmount);
-    const insuranceAllowedInput = await firstVisibleLocator([
-      matchedRow.locator(selectors.lineItems.insuranceAllowedInput).first(),
-      rowGridInputByHeader(matchedRow, "Ins. Allowed"),
-    ]);
-    await fillValue(insuranceAllowedInput, insuranceAllowedEntered);
-    insuranceAllowedEntered = await inputValue(insuranceAllowedInput);
+    await runPaymentEntryFieldStage(logField, row.inputRow, "Insurance Allowed", "Filling Insurance Allowed", "Insurance Allowed filled", "frame #frmPaymentEntry matched line item Insurance Allowed input", async () => {
+      insuranceAllowedEntered = formatCurrencyInput(row.allowedAmount);
+      const insuranceAllowedInput = await firstVisibleLocator([
+        matchedRow.locator(selectors.lineItems.insuranceAllowedInput).first(),
+        rowGridInputByHeader(matchedRow, "Ins. Allowed"),
+      ]);
+      await fillValue(insuranceAllowedInput, insuranceAllowedEntered);
+      insuranceAllowedEntered = await inputValue(insuranceAllowedInput);
+    });
   }
 
   const paymentEntered = formatCurrencyInput(row.paymentAmount);
-  const linePaymentInput = await firstVisibleLocator([
-    matchedRow.locator(selectors.lineItems.paymentInput).first(),
-    rowGridInputByHeader(matchedRow, "Payment"),
-  ]);
-  await fillValue(linePaymentInput, paymentEntered);
+  let linePaymentInput: Locator | null = null;
+  await runPaymentEntryFieldStage(logField, row.inputRow, "Line Payment", "Filling line-item Payment", "Line-item Payment filled", "frame #frmPaymentEntry matched line item Payment input", async () => {
+    const resolvedLinePaymentInput = await firstVisibleLocator([
+      matchedRow.locator(selectors.lineItems.paymentInput).first(),
+      rowGridInputByHeader(matchedRow, "Payment"),
+    ]);
+    linePaymentInput = resolvedLinePaymentInput;
+    await fillValue(resolvedLinePaymentInput, paymentEntered);
+  });
 
-  const { denialCodeSelected, denialCodeDescription } = await applyDenialCode(page, matchedRow, selectors, row);
+  const { denialCodeSelected, denialCodeDescription } = await runPaymentEntryFieldStage(logField, row.inputRow, "Denial Code", "Handling Denial Code", "Denial Code handled", "frame #frmPaymentEntry matched line item payment reasons control", async () => (
+    applyDenialCode(page, matchedRow, selectors, row)
+  ));
 
   const screenshotFilename = buildPaymentPostingScreenshotFilename(row);
   const screenshotPath = path.join(screenshotFolder, screenshotFilename);
   await waitForCalculatedValuesToSettle(page);
-  await captureCompletedPaymentScreenshot(page, screenshotFilename, screenshotPath);
+  await captureAdvancedMdPaymentPostingScreenshot(page, screenshotFilename, screenshotPath);
 
   return {
     checkNumberEntered: await inputValue(checkNumberInput),
     carrierSelected,
-    checkAmountEntered: await inputValue(checkAmountInput),
-    depositDateEntered: await inputValue(depositDateInput),
+    checkAmountEntered: await inputValue(requireResolvedLocator(checkAmountInput, "Check Amount")),
+    depositDateEntered: await inputValue(requireResolvedLocator(depositDateInput, "Deposit Date")),
     patientSelected,
     patientIdSelected: extractSelectedPatientIdentifier(patientSelected, row),
     visitClaimSelected: selectedVisit.visitClaimNumber,
     visitDateSelected: selectedVisit.visitDate,
-    paymentAmountEntered: await inputValue(paymentAmountInput),
+    paymentAmountEntered: await inputValue(requireResolvedLocator(paymentAmountInput, "Payment Amount")),
     lineItemCode: match.lineItem.code,
     lineItemCharge: match.lineItem.charge,
     lineMatchResult: "Unique CPT and charge match",
@@ -452,7 +658,7 @@ export async function prepareAdvancedMdPaymentPostingRow(options: {
     patientPortion: match.lineItem.patientPortion ?? "",
     insuranceAllowedEntered,
     insuranceNotAllowed: await textContent(matchedRow.locator(selectors.lineItems.insuranceNotAllowedCell).first()),
-    paymentEntered: await inputValue(linePaymentInput),
+    paymentEntered: await inputValue(requireResolvedLocator(linePaymentInput, "Line Payment")),
     insuranceBalance: await textContent(matchedRow.locator(selectors.lineItems.insuranceBalanceCell).first()),
     patientBalance: await textContent(matchedRow.locator(selectors.lineItems.patientBalanceCell).first()),
     writeOffCode: await textContent(matchedRow.locator(selectors.lineItems.writeOffCodeCell).first()),
@@ -473,14 +679,59 @@ export async function prepareAdvancedMdPaymentPostingRow(options: {
   };
 }
 
+async function runPaymentEntryFieldStage<T>(
+  logField: AdvancedMdPaymentEntryFieldLogger,
+  inputRow: number,
+  field: string,
+  startMessage: string,
+  successMessage: string,
+  locatorDescription: string,
+  action: () => Promise<T>,
+): Promise<T> {
+  await logField({
+    level: "info",
+    message: `AdvancedMD row ${inputRow}: ${startMessage}.`,
+    eventName: "payment_posting_advancedmd_field_start",
+    meta: { field, locator: locatorDescription },
+  });
+
+  try {
+    const result = await action();
+    await logField({
+      level: "info",
+      message: `AdvancedMD row ${inputRow}: ${successMessage}.`,
+      eventName: "payment_posting_advancedmd_field_filled",
+      meta: { field, locator: locatorDescription },
+    });
+    return result;
+  } catch (error) {
+    await logField({
+      level: "error",
+      message: `AdvancedMD row ${inputRow}: failed while processing ${field} using locator ${locatorDescription}. ${error instanceof Error ? error.message : String(error)}`,
+      eventName: "payment_posting_advancedmd_field_failed",
+      meta: { field, locator: locatorDescription },
+    });
+    throw error;
+  }
+}
+
+function requireResolvedLocator(locator: Locator | null, label: string): Locator {
+  if (locator) return locator;
+  throw new Error(`AdvancedMD ${label} locator was not resolved before output values were read.`);
+}
+
 async function selectPatientByNameAndId(
   page: Page,
   selectors: AdvancedMdSelectorConfig,
   row: PaymentPostingInputRow,
 ): Promise<string> {
-  const patientInput = await inputBySelectorOrLabel(page, selectors.paymentEntry.patientInput, "Patient");
+  const patientInput = await paymentFrameInputByCandidates("Patient", [
+    paymentFrameInputByWrapperPendoId(page, "payment-entry-patient-search-input-20240229", "Patient"),
+    paymentFrame(page).locator("amds-patient-lookup-control[controlname=\"patientLookup\"] input").first(),
+    paymentFrame(page).locator("amds-patient-lookup-control input").first(),
+  ]);
   await fillValue(patientInput, row.patientName);
-  const options = page.locator(selectors.paymentEntry.patientDropdownOptions);
+  const options = await paymentEntryOptions(page, selectors.paymentEntry.patientDropdownOptions);
   await options.first().waitFor({ state: "visible", timeout: 15000 });
   const count = await options.count();
   let selected: Locator | null = null;
@@ -509,7 +760,7 @@ async function selectVisitClaimByDos(
 ): Promise<{ visitClaimNumber: string; visitDate: string; label: string }> {
   await fillValue(input, " ");
   const normalizedDos = normalizeVisitDateForOption(excelDos);
-  const options = page.locator(optionSelector);
+  const options = await paymentEntryOptions(page, optionSelector);
   await options.first().waitFor({ state: "visible", timeout: 15000 });
   const count = await options.count();
   for (let index = 0; index < count; index += 1) {
@@ -536,16 +787,23 @@ async function fillLookupAndSelect(
   expectedText: string,
 ): Promise<string> {
   await fillValue(input, searchText);
-  const option = page.locator(optionSelector).filter({ hasText: expectedText }).first();
+  const options = await paymentEntryOptions(page, optionSelector);
+  const option = options.filter({ hasText: expectedText }).first();
   await option.waitFor({ state: "visible", timeout: 15000 });
   const label = await textContent(option);
   await option.click();
   return label || expectedText;
 }
 
+async function paymentEntryOptions(page: Page, optionSelector: string): Promise<Locator> {
+  const frameOptions = paymentFrame(page).locator(optionSelector);
+  if (await frameOptions.first().isVisible({ timeout: 1000 }).catch(() => false)) return frameOptions;
+  return page.locator(optionSelector);
+}
+
 async function readDisplayedLineItems(page: Page, selectors: AdvancedMdSelectorConfig): Promise<DisplayedPaymentPostingLineItem[]> {
-  await page.locator(selectors.paymentEntry.lineItemTable).first().waitFor({ state: "visible", timeout: 30000 });
-  const rows = page.locator(selectors.lineItems.row);
+  await paymentFrame(page).locator(selectors.paymentEntry.lineItemTable).first().waitFor({ state: "visible", timeout: 30000 });
+  const rows = paymentFrame(page).locator(selectors.lineItems.row);
   const count = await rows.count();
   const lineItems: DisplayedPaymentPostingLineItem[] = [];
   for (let index = 0; index < count; index += 1) {
@@ -609,11 +867,13 @@ async function loginInput(frame: FrameLocator, selector: string, fallbackIndex: 
 }
 
 async function inputBySelectorOrLabel(page: Page, selector: string, label: string): Promise<Locator> {
-  return firstVisibleLocator([
+  return firstVisibleOrAttachedInputLocator([
     page.locator(selector).first(),
+    page.locator(`.pf-payment-data-section mat-form-field:has(mat-label:text-is("${label}")) input:not([type="hidden"])`).first(),
+    page.locator(`.eob mat-form-field:has(mat-label:text-is("${label}")) input:not([type="hidden"])`).first(),
     fieldInputByLabel(page, label),
     page.getByLabel(label, { exact: true }).first(),
-  ]);
+  ], label);
 }
 
 function fieldInputByLabel(page: Page, label: string): Locator {
@@ -632,13 +892,82 @@ function rowGridInputByHeader(row: Locator, header: string): Locator {
 }
 
 async function firstVisibleLocator(candidates: Locator[]): Promise<Locator> {
-  for (const candidate of candidates) {
-    if (await candidate.isVisible({ timeout: 2500 }).catch(() => false)) return candidate;
+  const resolved = await firstVisibleOptionalLocator(candidates, 15000);
+  if (resolved) return resolved;
+  throw new Error("AdvancedMD locator resolution failed because none of the candidate locators became visible.");
+}
+
+async function firstVisibleOrAttachedInputLocator(candidates: Locator[], label: string): Promise<Locator> {
+  const visible = await firstVisibleOptionalInputLocator(candidates, 10000);
+  if (visible) return visible;
+
+  const deadline = Date.now() + 15000;
+  while (Date.now() < deadline) {
+    for (const candidate of candidates) {
+      const input = await attachedInputCandidate(candidate);
+      if (input) return input;
+    }
+    await candidatePollPause(candidates[0]);
   }
-  const last = candidates.at(-1);
-  if (!last) throw new Error("AdvancedMD locator resolution failed because no candidates were provided.");
-  await last.waitFor({ state: "visible", timeout: 15000 });
-  return last;
+
+  throw new Error(`AdvancedMD input locator failed for ${label}. None of the supplied selector or label candidates were found in the Payment Entry DOM.`);
+}
+
+async function firstVisibleOptionalInputLocator(candidates: Locator[], timeoutMs: number): Promise<Locator | null> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    for (const candidate of candidates) {
+      const input = await visibleInputCandidate(candidate);
+      if (input) return input;
+    }
+    await candidatePollPause(candidates[0]);
+  }
+  return null;
+}
+
+async function visibleInputCandidate(candidate: Locator): Promise<Locator | null> {
+  const direct = candidate.first();
+  if (await isUsableInput(direct, true)) return direct;
+
+  for (const nested of nestedInputCandidates(candidate)) {
+    if (await isUsableInput(nested, true)) return nested;
+  }
+  return null;
+}
+
+async function attachedInputCandidate(candidate: Locator): Promise<Locator | null> {
+  const direct = candidate.first();
+  if (await isUsableInput(direct, false)) return direct;
+
+  for (const nested of nestedInputCandidates(candidate)) {
+    if (await isUsableInput(nested, false)) return nested;
+  }
+  return null;
+}
+
+function nestedInputCandidates(candidate: Locator): Locator[] {
+  return [
+    candidate.locator("input:not([type=\"hidden\"])").first(),
+    candidate.locator("textarea:not([type=\"hidden\"])").first(),
+    candidate.locator("[contenteditable=\"true\"]").first(),
+  ];
+}
+
+async function isUsableInput(locator: Locator, requireVisible: boolean): Promise<boolean> {
+  const exists = await locator.count().then((count) => count > 0).catch(() => false);
+  if (!exists) return false;
+  const isInput = await locator.evaluate((element) => {
+    const tag = element.tagName.toLowerCase();
+    return tag === "input" || tag === "textarea" || element.getAttribute("contenteditable") === "true";
+  }).catch(() => false);
+  if (!isInput) return false;
+  if (!requireVisible) return true;
+  return locator.isVisible({ timeout: 250 }).catch(() => false);
+}
+
+async function candidatePollPause(candidate: Locator | undefined): Promise<void> {
+  if (!candidate) return;
+  await candidate.page().waitForTimeout(250);
 }
 
 async function firstVisibleOptionalLocator(candidates: Locator[], timeoutMs: number): Promise<Locator | null> {
@@ -651,11 +980,35 @@ async function firstVisibleOptionalLocator(candidates: Locator[], timeoutMs: num
   return null;
 }
 
+async function firstAttachedOptionalLocator(candidates: Locator[], timeoutMs: number): Promise<Locator | null> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    for (const candidate of candidates) {
+      if (await candidate.count().then((count) => count > 0).catch(() => false)) return candidate;
+    }
+    await candidatePollPause(candidates[0]);
+  }
+  return null;
+}
+
+async function waitForAdvancedMdPageLoadToSettle(page: Page, deadline: number): Promise<void> {
+  const remaining = Math.max(0, deadline - Date.now());
+  if (remaining <= 0) return;
+
+  await page.waitForLoadState("domcontentloaded", { timeout: Math.min(10000, remaining) }).catch(() => {});
+  const networkIdleRemaining = Math.max(0, deadline - Date.now());
+  if (networkIdleRemaining > 0) {
+    await page.waitForLoadState("networkidle", { timeout: Math.min(15000, networkIdleRemaining) }).catch(() => {});
+  }
+  const pauseRemaining = Math.max(0, deadline - Date.now());
+  if (pauseRemaining > 0) await page.waitForTimeout(Math.min(500, pauseRemaining));
+}
+
 async function waitForCalculatedValuesToSettle(page: Page): Promise<void> {
   await page.waitForTimeout(1000);
 }
 
-async function captureCompletedPaymentScreenshot(page: Page, screenshotFilename: string, screenshotPath: string): Promise<void> {
+export async function captureAdvancedMdPaymentPostingScreenshot(page: Page, screenshotFilename: string, screenshotPath: string): Promise<void> {
   try {
     await page.screenshot({
       path: screenshotPath,
@@ -668,9 +1021,22 @@ async function captureCompletedPaymentScreenshot(page: Page, screenshotFilename:
 }
 
 async function fillValue(locator: Locator, value: string): Promise<void> {
-  await locator.waitFor({ state: "visible", timeout: 15000 });
-  await locator.click().catch(() => {});
-  await locator.fill(value);
+  await locator.waitFor({ state: "attached", timeout: 15000 });
+  await locator.scrollIntoViewIfNeeded().catch(() => {});
+  await locator.click({ force: true }).catch(() => {});
+  await locator.fill(value, { force: true }).catch(async () => {
+    await locator.press(process.platform === "darwin" ? "Meta+A" : "Control+A", { timeout: 5000 }).catch(() => {});
+    await locator.type(value, { delay: 15, timeout: 15000 });
+  });
+  const currentValue = await inputValue(locator);
+  if (currentValue !== value) {
+    await locator.evaluate((element, nextValue) => {
+      const target = element as HTMLInputElement | HTMLTextAreaElement;
+      target.value = nextValue;
+      target.dispatchEvent(new Event("input", { bubbles: true }));
+      target.dispatchEvent(new Event("change", { bubbles: true }));
+    }, value).catch(() => {});
+  }
   await locator.blur().catch(() => {});
 }
 
@@ -687,7 +1053,10 @@ async function readFinalStatus(row: Locator, selectors: AdvancedMdSelectorConfig
 }
 
 async function textContent(locator: Locator): Promise<string> {
-  return (await locator.textContent().catch(() => ""))?.replace(/\s+/g, " ").trim() ?? "";
+  const text = (await locator.textContent().catch(() => ""))?.replace(/\s+/g, " ").trim() ?? "";
+  if (text) return text;
+  const input = locator.locator("input").first();
+  return (await input.inputValue().catch(() => ""))?.trim() ?? "";
 }
 
 function formatCurrencyInput(value: string): string {

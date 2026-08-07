@@ -104,4 +104,3 @@ function filterByOptionalExact(
 function formatMmDdYyyy(date: Date): string {
   return `${String(date.getUTCMonth() + 1).padStart(2, "0")}/${String(date.getUTCDate()).padStart(2, "0")}/${date.getUTCFullYear()}`;
 }
-

@@ -102,6 +102,23 @@ export function validatePaymentPostingInputRow(row: PaymentPostingInputRow): str
   return errors;
 }
 
+/**
+ * Builds a human-readable diagnostic comparing the headers actually detected
+ * in the uploaded workbook against every header alias this parser recognizes.
+ * Used to make header-mismatch validation failures loud and actionable
+ * instead of silently producing empty fields.
+ */
+export function describeAdvancedMdInputHeaderMismatch(raw: Record<string, string>): string {
+  const detectedHeaders = Object.keys(raw);
+  const expectedHeaders = Object.values(PAYMENT_POSTING_INPUT_ALIASES).flat();
+  const normalizedDetected = new Set(detectedHeaders.map(normalizeHeader));
+  const unmatchedExpected = expectedHeaders.filter((header) => !normalizedDetected.has(normalizeHeader(header)));
+  return [
+    `Detected workbook headers: ${detectedHeaders.length ? detectedHeaders.join(", ") : "(none found)"}.`,
+    `Expected headers not found in workbook: ${unmatchedExpected.length ? unmatchedExpected.join(", ") : "(none - all expected headers matched)"}.`,
+  ].join(" ");
+}
+
 function findValue(row: Record<string, string>, aliases: readonly string[]): string {
   const wanted = new Set(aliases.map(normalizeHeader));
   for (const [key, value] of Object.entries(row)) {
