@@ -17,6 +17,11 @@ export type ScrapeJobEvent = {
   message?: string;
   completed?: number;
   total?: number;
+  current?: number;
+  currentRow?: number;
+  totalRows?: number;
+  payerName?: string;
+  stage?: string;
   index?: number;
   image?: string;
   html?: string;

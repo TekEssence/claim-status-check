@@ -1010,6 +1010,7 @@ async function extractHipaaLineRows(page, options = {}) {
       cellByAnyExactHeader(cells, headers, ["hipaa codes", "reason/remark codes", "reason/remark"], 6)
     );
     const line = {
+      status: cellByAnyExactHeader(cells, headers, ["status"], 0) || cells[0] || "",
       serviceDates: cellByAnyExactHeader(cells, headers, ["service dates"], 1) || cells[0] || "",
       revenueCode: cellByAnyExactHeader(cells, headers, ["revenue code", "rev"], 5) || "",
       procedureCode: procedureCode.trim(),

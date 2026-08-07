@@ -133,4 +133,38 @@ describe("applyProjectOutputStrategy", () => {
     assert.match(String(outputRow.bot_updated_claim_status), /expired\. and 00312:/);
     assert.doesNotMatch(String(outputRow.bot_updated_claim_status), /\|/);
   });
+
+  it("uses matched Medrevenu CPT line status before claim status", () => {
+    const row = createInputRow({ CPT: "A4550" });
+    const [outputRow] = applyProjectOutputStrategy({
+      projectId: "medrevenu",
+      row,
+      outputRow: createOutputRow(row),
+      timestamp: "2026-07-15T00:00:00.000Z",
+      result: {
+        status: "success",
+        summaries: ["claim level summary"],
+        details: [{
+          type: "paid",
+          claimStatus: "PAID",
+          serviceDate: "06/26/2026",
+          receivedDate: "07/01/2026",
+          checkDate: "07/05/2026",
+          claimNumber: "CLAIM123",
+          lines: [{
+            procedureCode: "A4550",
+            status: "DENIED",
+            paid: "$0.00",
+            reasonRemarkCode: "97",
+            description: "The benefit for this service is included in the payment.",
+          }],
+        }],
+      },
+    });
+
+    assert.match(String(outputRow.bot_updated_claim_status), /CPT A4550/);
+    assert.match(String(outputRow.bot_updated_claim_status), /denied on 07\/05\/2026/);
+    assert.match(String(outputRow.bot_updated_claim_status), /denial reason 97/);
+    assert.doesNotMatch(String(outputRow.bot_updated_claim_status), /paid amount/);
+  });
 });

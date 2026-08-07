@@ -102,7 +102,7 @@ export function AvailityInputForm({
         <Play className="h-4 w-4" strokeWidth={2.2} />
         {isProcessing ? "Processing..." : "Start processing"}
       </button>
-      <p className="text-center text-sm text-slate-500">Output Excel downloads automatically after completion.</p>
+      <p className="text-center text-sm text-slate-500">Output Excel downloads automatically after completion. Current results are also saved after each processed row.</p>
     </form>
   );
 }

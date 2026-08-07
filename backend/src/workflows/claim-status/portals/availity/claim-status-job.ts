@@ -1,4 +1,7 @@
 import { createRequire } from "node:module";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import type { Page } from "playwright-core";
 import type { ScraperContext } from "../../types";
 import { launchAvailityBrowser } from "./browser";
@@ -141,6 +144,32 @@ function downloadableFileEvent(filename: string, buffer: Buffer, mimeType: strin
   };
 }
 
+function outputSnapshotEvent(filename: string, fields: { buffer?: Buffer; path?: string }, completed: number, total: number, mimeType: string): Record<string, unknown> {
+  return {
+    type: "output_snapshot",
+    filename,
+    ...(fields.buffer ? { base64: fields.buffer.toString("base64") } : {}),
+    ...(fields.path ? { path: fields.path } : {}),
+    completed,
+    total,
+    mimeType,
+  };
+}
+
+function rowProgressEvent(row: AvailityInputRow, current: number, total: number, stage: string): Record<string, unknown> {
+  return {
+    type: "row_progress",
+    current,
+    currentRow: row.input_row_id,
+    totalRows: total,
+    total,
+    completed: current - 1,
+    payerName: row.data["Payer Name"] || "Unknown payer",
+    stage,
+  };
+}
+
+
 function legacyLevelToContextLevel(level: string): "debug" | "info" | "warn" | "error" {
   if (level === "ERROR") return "error";
   if (level === "WARN") return "warn";
@@ -236,6 +265,28 @@ export async function runAvailityClaimStatusJob(formData: FormData, context: Scr
     outputWorkbookEmitted = true;
   };
 
+  const emitOutputSnapshot = async (completed: number): Promise<void> => {
+    const workbookBuffer = await createAvailityOutputWorkbookBuffer({
+      inputHeaders: input.inputHeaders,
+      inputRows: inputSheetRows,
+      outputRows,
+      errorRows,
+      auditRows,
+    });
+    const snapshotDir = path.join(os.tmpdir(), "availity-output-snapshots", runId);
+    fs.mkdirSync(snapshotDir, { recursive: true });
+    const snapshotPath = path.join(snapshotDir, "availity_output_snapshot.xlsx");
+    fs.writeFileSync(snapshotPath, workbookBuffer);
+    const shouldSendWorkbookToBrowser = completed % 10 === 0 || completed === input.inputRows.length;
+    await context.emit(outputSnapshotEvent(
+      "availity_output_snapshot.xlsx",
+      shouldSendWorkbookToBrowser ? { buffer: workbookBuffer, path: snapshotPath } : { path: snapshotPath },
+      completed,
+      input.inputRows.length,
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ));
+  };
+
   try {
     session = await initializeSession(input, context, log);
 
@@ -256,6 +307,7 @@ export async function runAvailityClaimStatusJob(formData: FormData, context: Scr
       activeRow = row;
       const startedAt = Date.now();
       const outputRow = buildBaseOutput(row);
+      await context.emit(rowProgressEvent(row, index + 1, input.inputRows.length, "started"));
       let validation: { isValid: boolean; validation_status: string; validation_message: string; mappedPayerName: string };
       try {
         validation = validateRow(
@@ -285,6 +337,7 @@ export async function runAvailityClaimStatusJob(formData: FormData, context: Scr
         });
         addAudit(auditRows, runId, row, "validation", "failed", validation.validation_message, startedAt);
         await context.emit({ type: "progress", completed: index + 1, total: input.inputRows.length });
+        await emitOutputSnapshot(index + 1);
         activeRow = null;
         continue;
       }
@@ -293,6 +346,7 @@ export async function runAvailityClaimStatusJob(formData: FormData, context: Scr
       let lastRowErrorMessage = "";
       for (let rowAttempt = 1; rowAttempt <= ROW_PROCESS_MAX_ATTEMPTS && !rowHandled; rowAttempt += 1) {
         try {
+          await context.emit(rowProgressEvent(row, index + 1, input.inputRows.length, `attempt ${rowAttempt}`));
           const result = await processValidRow(session.page, row, validation.mappedPayerName, automationState, {
             projectId: input.projectId,
             providerMappings,
@@ -354,6 +408,7 @@ export async function runAvailityClaimStatusJob(formData: FormData, context: Scr
       }
 
       await context.emit({ type: "progress", completed: index + 1, total: input.inputRows.length });
+      await emitOutputSnapshot(index + 1);
       activeRow = null;
     }
 
