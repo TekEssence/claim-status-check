@@ -803,6 +803,12 @@ async function readStableResultText(scope: PortalScope, timeout = resultReadyTim
   return latest;
 }
 
+export function parsePlanBeginDate(text: string): string {
+  return text.match(
+    /Plan\s*Begin\s*Date\s*:?\s*([A-Za-z]{3,9}\s+\d{1,2},\s*\d{4})/i,
+  )?.[1] || "";
+}
+
 export function parseWellcareEligibilityFallbacks(text: string): {
   eligibilityBeginDate: string;
   healthCareFacilityName: string;
@@ -904,6 +910,7 @@ type BcbsAvailityEligibilityWorkflowOptions = {
   useCoverageBenefitDatesFallback?: boolean;
   requirePatientName?: boolean;
   useWellcareEligibilityFallbacks?: boolean;
+  usePlanBeginDateFallback?: boolean;
 };
 
 export async function runBcbsAvailityEligibilityWorkflow(
@@ -991,6 +998,7 @@ export async function runBcbsAvailityEligibilityWorkflow(
       const wellcareFallbacks = options.useWellcareEligibilityFallbacks
         ? parseWellcareEligibilityFallbacks(resultText)
         : { eligibilityBeginDate: "", healthCareFacilityName: "", insuranceType: "" };
+      const planBeginDate = options.usePlanBeginDateFallback ? parsePlanBeginDate(resultText) : "";
       let { otherInsurance, otherInsuranceEffectiveDate } = await readOtherInsurance(portal);
       if (!otherInsurance && wellcareFallbacks.healthCareFacilityName) {
         otherInsurance = wellcareFallbacks.healthCareFacilityName;
@@ -1000,7 +1008,7 @@ export async function runBcbsAvailityEligibilityWorkflow(
       const insuranceType = await readLabeledResultValue(portal, SELECTORS.results.insuranceTypeLabel, "Insurance Type") || snapshot.insuranceType || wellcareFallbacks.insuranceType;
       const planType = await readLabeledResultValue(portal, SELECTORS.results.planProductLabel, "Plan / Product") || snapshot.planType;
       const coverageStatus = locatedCoverageStatus || snapshot.coverageStatus.toLowerCase();
-      const effectiveDate = locatedDates.effectiveDate || snapshot.effectiveDate || coverageBenefitDates.effectiveDate || wellcareFallbacks.eligibilityBeginDate;
+      const effectiveDate = locatedDates.effectiveDate || snapshot.effectiveDate || coverageBenefitDates.effectiveDate || wellcareFallbacks.eligibilityBeginDate || planBeginDate;
       const endDate = locatedDates.endDate || snapshot.endDate || coverageBenefitDates.endDate;
       const network = await readSelectedNetwork(portal);
       if (/\bhmo\b/i.test(insuranceType) && !otherInsurance) {

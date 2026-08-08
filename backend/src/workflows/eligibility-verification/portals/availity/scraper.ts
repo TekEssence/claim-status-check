@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import * as XLSX from "xlsx";
 import type { AutomationContext, AutomationRunner, JobEvent, LogEvent } from "../../../types";
 import type { EligibilityRunInput } from "../../types";
@@ -113,15 +115,42 @@ export function createAvailityEligibilityRunner(): AutomationRunner<EligibilityR
       const rowUpdates = new Map<number, Record<string, unknown>>();
       let completedRows = 0;
       let finalOutputEmitted = false;
+      const safeJobId = context.jobId.replace(/[^a-zA-Z0-9_-]+/g, "_");
+      const backupDirectory = path.join(process.cwd(), "data", "outputs", "availity", safeJobId);
+      fs.mkdirSync(backupDirectory, { recursive: true });
+      const backupOutputPath = path.join(backupDirectory, "availity-eligibility-output-latest.xlsx");
+      let lastBackupError = "";
 
-      const emitFinalOutput = async (unprocessedError?: string) => {
-        if (finalOutputEmitted) return;
+      const persistBackupOutput = (unprocessedError = "Pending - not processed"): Buffer => {
         const output = buildMergedOutput({
           originalRows,
           completedRows: mergedOutputRows,
           rowUpdates,
           unprocessedError,
         });
+        const temporaryPath = `${backupOutputPath}.tmp`;
+        try {
+          fs.writeFileSync(temporaryPath, output);
+          if (fs.existsSync(backupOutputPath)) fs.rmSync(backupOutputPath, { force: true });
+          fs.renameSync(temporaryPath, backupOutputPath);
+          lastBackupError = "";
+        } catch (error) {
+          lastBackupError = error instanceof Error ? error.message : String(error);
+          try {
+            fs.writeFileSync(backupOutputPath, output);
+            lastBackupError = "";
+          } catch (fallbackError) {
+            lastBackupError = fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
+          }
+        } finally {
+          if (fs.existsSync(temporaryPath)) fs.rmSync(temporaryPath, { force: true });
+        }
+        return output;
+      };
+
+      const emitFinalOutput = async (unprocessedError?: string) => {
+        if (finalOutputEmitted) return;
+        const output = persistBackupOutput(unprocessedError || "");
         await context.emit({
           type: "file_download",
           filename: "availity-eligibility-output.xlsx",
@@ -132,6 +161,7 @@ export function createAvailityEligibilityRunner(): AutomationRunner<EligibilityR
       };
 
       try {
+        persistBackupOutput();
         await context.log({
           level: "info",
           message: `Detected ${batches.length} payer batch(es) across ${totalRows} row(s).`,
@@ -185,6 +215,7 @@ export function createAvailityEligibilityRunner(): AutomationRunner<EligibilityR
             ?? await session.context.newPage();
           stage = `Patient Registration > Eligibility and Benefits Inquiry > ${batch.payerId} processing`;
           const batchOffset = completedRows;
+          let currentBatchProgress = 0;
           const translateLog = (event: LogEvent): LogEvent => {
             const translated = {
               ...event,
@@ -197,6 +228,7 @@ export function createAvailityEligibilityRunner(): AutomationRunner<EligibilityR
               && typeof translated.rowIndex === "number"
             ) {
               rowUpdates.set(translated.rowIndex, { Error: translated.message });
+              persistBackupOutput();
             }
             return translated;
           };
@@ -206,12 +238,14 @@ export function createAvailityEligibilityRunner(): AutomationRunner<EligibilityR
             emit: async (event) => {
               if (isExcelDownload(event)) {
                 mergedOutputRows.push(...readOutputRows(event.base64));
+                persistBackupOutput();
                 return;
               }
               if (
                 event.type === "progress"
                 && typeof event.completed === "number"
               ) {
+                currentBatchProgress = Math.max(currentBatchProgress, event.completed);
                 await context.emit({
                   ...event,
                   completed: Math.min(batchOffset + event.completed, totalRows),
@@ -234,6 +268,7 @@ export function createAvailityEligibilityRunner(): AutomationRunner<EligibilityR
                     translatedRowIndex,
                     event.update as Record<string, unknown>,
                   );
+                  persistBackupOutput();
                 }
                 await context.emit({
                   ...event,
@@ -244,8 +279,30 @@ export function createAvailityEligibilityRunner(): AutomationRunner<EligibilityR
               await context.emit(event);
             },
           };
-          await payer.run({ page, inputFile: batch.inputFile, context: batchContext });
+          let heartbeatRunning = false;
+          const heartbeat = setInterval(() => {
+            if (heartbeatRunning) return;
+            heartbeatRunning = true;
+            const currentCompleted = Math.min(batchOffset + currentBatchProgress, totalRows);
+            void Promise.allSettled([
+              context.log({
+                level: "info",
+                message: `Still processing ${batch.payerId}: ${currentBatchProgress} of ${batch.rowCount} row(s) completed in this payer batch.`,
+                eventName: "eligibility_availity_processing_heartbeat",
+                meta: { payerId: batch.payerId, completed: currentCompleted, total: totalRows },
+              }),
+              context.emit({ type: "progress", completed: currentCompleted, total: totalRows }),
+            ]).finally(() => {
+              heartbeatRunning = false;
+            });
+          }, 15_000);
+          try {
+            await payer.run({ page, inputFile: batch.inputFile, context: batchContext });
+          } finally {
+            clearInterval(heartbeat);
+          }
           completedRows += batch.rowCount;
+          persistBackupOutput();
           await context.emit({ type: "progress", completed: completedRows, total: totalRows });
         }
 
@@ -255,7 +312,7 @@ export function createAvailityEligibilityRunner(): AutomationRunner<EligibilityR
         await emitFinalOutput();
         await context.log({
           level: "info",
-          message: `Created one combined Availity eligibility output workbook with ${mergedOutputRows.length} row(s).`,
+          message: `Created one combined Availity eligibility output workbook in original input order. Backup: ${backupOutputPath}${lastBackupError ? ` (backup warning: ${lastBackupError})` : ""}.`,
           eventName: "eligibility_availity_output_created",
         });
         stage = "completed";

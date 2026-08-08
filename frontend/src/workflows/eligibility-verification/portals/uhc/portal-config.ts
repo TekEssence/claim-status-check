@@ -8,5 +8,10 @@ export const uhcEligibilityFrontendPortalConfig = {
     "United Healthcare Dual Complete",
     "United Health Care",
     "UHC Medicare Advantage",
+    "United Health Care Of All States",
+    "United Health Choice Plus Network",
+    "UHC",
+    "United Healthcare Community Plan TX",
+    "United Healthcare",
   ],
 } as const;

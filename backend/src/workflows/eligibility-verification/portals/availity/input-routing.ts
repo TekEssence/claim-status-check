@@ -3,6 +3,7 @@ import * as XLSX from "xlsx";
 export type AvailityEligibilityPayerId =
   | "aetna-medicare"
   | "bcbs"
+  | "humana"
   | "van-lang-ipa"
   | "amerigroup"
   | "wellpoint"
@@ -52,12 +53,14 @@ export function resolveAvailityEligibilityInputPayer(payerName: string): Availit
     || normalized.includes("bluecross")
     || normalized.includes("blueshield")
   ) return "bcbs";
+  if (normalized.includes("humana")) return "humana";
+  if (normalized.includes("vicarehealthipa")) return "van-lang-ipa";
   if (normalized.includes("vanlang")) return "van-lang-ipa";
   if (normalized.includes("amerigroup")) return "amerigroup";
   if (normalized.includes("wellcare")) return "wellcare";
   if (normalized.includes("wellpoint")) return "wellpoint";
   throw new Error(
-    `Unsupported Availity eligibility payer "${payerName}" in the input workbook. Expected Aetna, Aetna Medicare, Blue Cross Blue Shield, Van Lang IPA, Amerigroup, Wellpoint, or Wellcare.`,
+    `Unsupported Availity eligibility payer "${payerName}" in the input workbook. Expected Aetna, Aetna Medicare, Blue Cross Blue Shield, Humana, Van Lang IPA, VI Care Health IPA, Amerigroup, Wellpoint, or Wellcare.`,
   );
 }
 
