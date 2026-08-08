@@ -471,6 +471,8 @@ function filledNotPostedRow(
     denialCodeSelected: prepared.denialCodeSelected,
     denialCodeDescription: prepared.denialCodeDescription,
     reasonDescriptionSelected: prepared.reasonDescriptionSelected,
+    remarkCodePopupStatus: prepared.remarkCodePopupStatus,
+    remarkCodeSaveStatus: prepared.remarkCodeSaveStatus,
     finalDisplayedStatus: prepared.finalDisplayedStatus,
     provider: prepared.provider,
     screenshotPath: prepared.screenshotPath,

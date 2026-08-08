@@ -206,6 +206,8 @@ export type PaymentPostingResultRow = {
   denialCodeSelected: string;
   denialCodeDescription: string;
   reasonDescriptionSelected: string;
+  remarkCodePopupStatus: string;
+  remarkCodeSaveStatus: string;
   statusInput: string;
   finalDisplayedStatus: string;
   provider: string;

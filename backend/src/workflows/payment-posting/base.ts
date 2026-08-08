@@ -179,6 +179,8 @@ export function createBaseResultRow(options: {
     denialCodeSelected: "",
     denialCodeDescription: "",
     reasonDescriptionSelected: "",
+    remarkCodePopupStatus: "",
+    remarkCodeSaveStatus: "",
     statusInput: options.input.status ?? "",
     finalDisplayedStatus: "",
     provider: options.input.provider ?? "",

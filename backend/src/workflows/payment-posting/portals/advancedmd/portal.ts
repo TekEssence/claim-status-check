@@ -133,12 +133,12 @@ export const ADVANCEDMD_PAYMENT_POSTING_SELECTORS: AdvancedMdSelectorConfig = {
     providerCell: ".mat-column-provider, .cdk-column-provider",
   },
   paymentReasons: {
-    dialog: "amds-rarc, .rarc-body, .mat-dialog-container:has([data-pendo-id=\"save-panel-reasons-20240229\"]), .cdk-overlay-pane:has([data-pendo-id=\"save-panel-reasons-20240229\"])",
+    dialog: "a[mat-tab-link]:has-text(\"Payment Reasons\"), a[mat-tab-link]:has-text(\"Remark Codes\")",
     paymentReasonsTab: "a[mat-tab-link]:has-text(\"Payment Reasons\"), .mat-tab-link:has-text(\"Payment Reasons\")",
     remarkCodesTab: "a[mat-tab-link]:has-text(\"Remark Codes\"), .mat-tab-link:has-text(\"Remark Codes\")",
     paymentReasonSearchInput: "input[data-pendo-id=\"reason-search-20240229\"]",
     remarkCodeSearchInput: ".rarc-body .rarc-code-field input, .mat-column-rarcCode input, .cdk-column-rarcCode input",
-    resultRows: ".mat-autocomplete-panel [role=\"option\"], [role=\"listbox\"] [role=\"option\"]",
+    resultRows: ".mat-autocomplete-panel [role=\"option\"], [role=\"listbox\"] [role=\"option\"], .cdk-overlay-pane [role=\"option\"], mat-option",
     saveButton: "button[data-pendo-id=\"save-panel-reasons-20240229\"]",
   },
   screenshots: {
@@ -245,6 +245,8 @@ export type AdvancedMdPreparedPaymentResult = {
   reasonDescriptionSelected: string;
   denialCodeSelected: string;
   denialCodeDescription: string;
+  remarkCodePopupStatus: string;
+  remarkCodeSaveStatus: string;
   finalDisplayedStatus: string;
   provider: string;
   displayedLineItems: DisplayedPaymentPostingLineItem[];
@@ -722,8 +724,8 @@ export async function prepareAdvancedMdPaymentPostingRow(options: {
     await fillValue(resolvedLinePaymentInput, paymentEntered);
   });
 
-  const { denialCodeSelected, denialCodeDescription } = await runPaymentEntryFieldStage(logField, row.inputRow, "Denial Code", "Handling Denial Code", "Denial Code handled", "frame #frmPaymentEntry matched line item payment reasons control", async () => (
-    applyDenialCode(page, matchedRow, selectors, row)
+  const { denialCodeSelected, denialCodeDescription, popupStatus, saveStatus } = await runPaymentEntryFieldStage(logField, row.inputRow, "Denial Code", "Handling Denial Code", "Denial Code handled", "frame #frmPaymentEntry matched line item payment reasons control", async () => (
+    applyDenialCode(page, matchedRow, selectors, row, logField, row.inputRow)
   ));
 
   const screenshotFilename = buildPaymentPostingScreenshotFilename(row);
@@ -771,6 +773,8 @@ export async function prepareAdvancedMdPaymentPostingRow(options: {
     reasonDescriptionSelected: denialCodeDescription,
     denialCodeSelected,
     denialCodeDescription,
+    remarkCodePopupStatus: popupStatus,
+    remarkCodeSaveStatus: saveStatus,
     finalDisplayedStatus: await readFinalStatus(matchedRow, selectors, finalDisplayedStatusBeforeChanges),
     provider: await textContent(matchedRow.locator(selectors.lineItems.providerCell).first()),
     displayedLineItems,
@@ -1543,30 +1547,129 @@ async function applyDenialCode(
   matchedRow: Locator,
   selectors: AdvancedMdSelectorConfig,
   row: PaymentPostingInputRow,
-): Promise<{ denialCodeSelected: string; denialCodeDescription: string }> {
+  logField: AdvancedMdPaymentEntryFieldLogger,
+  inputRow: number,
+): Promise<{ denialCodeSelected: string; denialCodeDescription: string; popupStatus: string; saveStatus: string }> {
   const denialCode = row.denialCode?.trim() ?? "";
-  if (!denialCode) return { denialCodeSelected: "", denialCodeDescription: "" };
+  if (!denialCode) return { denialCodeSelected: "", denialCodeDescription: "", popupStatus: "", saveStatus: "" };
 
   await matchedRow.locator(selectors.lineItems.paymentReasonButton).first().click();
-  await page.locator(selectors.paymentReasons.dialog).first().waitFor({ state: "visible", timeout: 15000 });
-  await page.locator(selectors.paymentReasons.remarkCodesTab).first().click();
-  const addRemark = page.locator("button[data-pendo-id=\"open-remark-20240229\"]").first();
-  if (await addRemark.isVisible({ timeout: 3000 }).catch(() => false)) await addRemark.click();
-  const remarkCodeInput = await firstVisibleLocator([
-    page.locator(selectors.paymentReasons.remarkCodeSearchInput).first(),
-    page.locator(".rarc-code-field input").first(),
-  ]);
-  const denialCodeDescription = await fillLookupAndSelect(
-    page,
-    remarkCodeInput,
-    selectors.paymentReasons.resultRows,
-    denialCode,
-    denialCode,
-  );
+  await logField({ level: "info", message: "CARC/RARC clicked.", eventName: "payment_posting_advancedmd_carc_rarc_clicked", meta: { field: "CARC/RARC" } });
 
-  await page.locator(selectors.paymentReasons.saveButton).first().click();
-  await page.locator(selectors.paymentReasons.dialog).first().waitFor({ state: "hidden", timeout: 15000 }).catch(() => {});
-  return { denialCodeSelected: denialCode, denialCodeDescription };
+  const frame = paymentFrame(page);
+  const paymentReasonsTab = frame.locator("a[mat-tab-link]").filter({ hasText: /^Payment Reasons$/ }).first();
+  const remarkCodesTab = frame.locator("a[mat-tab-link]").filter({ hasText: /^Remark Codes$/ }).first();
+  await Promise.race([
+    paymentReasonsTab.waitFor({ state: "visible", timeout: 15000 }),
+    remarkCodesTab.waitFor({ state: "visible", timeout: 15000 }),
+  ]);
+  await logField({ level: "info", message: "Payment Reasons / Remark Codes popup opened.", eventName: "payment_posting_advancedmd_reasons_popup_opened", meta: { field: "CARC/RARC" } });
+
+  await logField({ level: "info", message: "Clicking Remark Codes tab.", eventName: "payment_posting_advancedmd_remark_codes_tab_clicking", meta: { field: "CARC/RARC" } });
+  await remarkCodesTab.click();
+  await logField({ level: "info", message: "Remark Codes tab clicked.", eventName: "payment_posting_advancedmd_remark_codes_tab_clicked", meta: { field: "CARC/RARC" } });
+  const remarkBody = frame.locator(".rarc-body").first();
+  await remarkBody.waitFor({ state: "visible", timeout: 15000 });
+  await logField({ level: "info", message: "Remark Codes body visible.", eventName: "payment_posting_advancedmd_remark_codes_body_visible", meta: { field: "CARC/RARC" } });
+
+  await logField({ level: "info", message: `Denial Code input: ${denialCode}.`, eventName: "payment_posting_advancedmd_remark_code_input_value", meta: { denialCode } });
+  const remarkCodeInput = remarkBody.locator(".rarc-code-field input").first();
+  await remarkCodeInput.waitFor({ state: "visible", timeout: 15000 });
+  await fillAutocompleteKeepingFocus(remarkCodeInput, denialCode);
+
+  const options = frame.locator(selectors.paymentReasons.resultRows);
+  await options.first().waitFor({ state: "visible", timeout: 10000 }).catch(() => {});
+  const optionCount = await options.count().catch(() => 0);
+  await logField({ level: "info", message: `Remark Code dropdown count: ${optionCount}.`, eventName: "payment_posting_advancedmd_remark_code_results_found", meta: { count: optionCount } });
+
+  let selectedOption: Locator | null = null;
+  let selectedLabel = "";
+  for (let index = 0; index < optionCount; index += 1) {
+    const option = options.nth(index);
+    if (!await option.isVisible({ timeout: 250 }).catch(() => false)) continue;
+    const label = await textContent(option);
+    await logField({ level: "info", message: `Remark Code candidate: ${label}.`, eventName: "payment_posting_advancedmd_remark_code_candidate", meta: { candidate: label } });
+    const optionCode = extractRemarkCode(label);
+    if (remarkCodesEquivalent(optionCode, denialCode)) {
+      selectedOption = option;
+      selectedLabel = label;
+      await logField({ level: "info", message: `Remark Code matched: ${optionCode}.`, eventName: "payment_posting_advancedmd_remark_code_matched", meta: { code: optionCode, candidate: label } });
+      break;
+    }
+  }
+  if (!selectedOption) {
+    throw new Error(`Remark Code not found for denial code ${denialCode}.`);
+  }
+
+  await selectedOption.click();
+  await logField({ level: "info", message: "Remark Code option clicked.", eventName: "payment_posting_advancedmd_remark_code_option_clicked", meta: { option: selectedLabel } });
+  const selectedCode = await waitForRemarkCodeValue(remarkCodeInput, denialCode, 5000);
+  const selectedDescription = extractRemarkDescription(selectedLabel);
+
+  await logField({ level: "info", message: "Saving Remark Code popup.", eventName: "payment_posting_advancedmd_remark_code_popup_saving", meta: { code: selectedCode, description: selectedDescription } });
+  await frame.locator(selectors.paymentReasons.saveButton).first().click();
+  await remarkBody.waitFor({ state: "hidden", timeout: 15000 }).catch(() => {});
+  await logField({ level: "info", message: "Remark Code popup saved.", eventName: "payment_posting_advancedmd_remark_code_popup_saved", meta: { code: selectedCode, description: selectedDescription } });
+
+  const carcRarcValue = await waitForLineItemReasonValue(matchedRow, selectedCode, 5000);
+  await logField({ level: "info", message: `CARC/RARC selected: ${carcRarcValue || selectedCode}.`, eventName: "payment_posting_advancedmd_carc_rarc_selected", meta: { code: selectedCode, displayed: carcRarcValue } });
+  return {
+    denialCodeSelected: selectedCode,
+    denialCodeDescription: selectedDescription,
+    popupStatus: "Opened",
+    saveStatus: "Saved",
+  };
+}
+
+async function fillAutocompleteKeepingFocus(input: Locator, value: string): Promise<void> {
+  await input.waitFor({ state: "visible", timeout: 15000 });
+  await input.scrollIntoViewIfNeeded().catch(() => {});
+  await input.click({ force: true });
+  await input.press(process.platform === "darwin" ? "Meta+A" : "Control+A").catch(() => {});
+  await input.press("Backspace").catch(() => {});
+  await input.type(value, { delay: 20, timeout: 15000 });
+}
+
+function extractRemarkCode(label: string): string {
+  return label.trim().split(/\s+/)[0] ?? "";
+}
+
+function extractRemarkDescription(label: string): string {
+  const trimmed = label.trim();
+  const code = extractRemarkCode(trimmed);
+  return code ? trimmed.slice(code.length).trim() : "";
+}
+
+function remarkCodesEquivalent(actual: string, expected: string): boolean {
+  const normalizedActual = normalizeRemarkCode(actual);
+  const normalizedExpected = normalizeRemarkCode(expected);
+  return !!normalizedActual && normalizedActual === normalizedExpected;
+}
+
+function normalizeRemarkCode(value: string): string {
+  return value.trim().replace(/\s+/g, "").replace(/-/g, "").toUpperCase();
+}
+
+async function waitForRemarkCodeValue(input: Locator, expected: string, timeoutMs: number): Promise<string> {
+  const deadline = Date.now() + timeoutMs;
+  let latest = "";
+  while (Date.now() < deadline) {
+    latest = await inputValue(input);
+    if (remarkCodesEquivalent(latest, expected)) return latest;
+    await input.page().waitForTimeout(250);
+  }
+  return latest || expected;
+}
+
+async function waitForLineItemReasonValue(row: Locator, expected: string, timeoutMs: number): Promise<string> {
+  const deadline = Date.now() + timeoutMs;
+  let latest = "";
+  while (Date.now() < deadline) {
+    latest = await textContent(row.locator(".mat-column-paymentReasons, .cdk-column-paymentReasons, .mat-column-carcRarc, .cdk-column-carcRarc").first());
+    if (remarkCodesEquivalent(latest, expected) || normalizeLookupText(latest).includes(normalizeLookupText(expected))) return latest;
+    await row.page().waitForTimeout(250);
+  }
+  return latest;
 }
 
 async function loginInput(frame: FrameLocator, selector: string, fallbackIndex: number): Promise<Locator> {
