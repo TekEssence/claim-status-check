@@ -7,6 +7,10 @@ export const uhcEligibilityPayerRegistry = {
     id: "aarp-medicare-advantage-wellmed",
     name: "AARP Medicare Advantage Wellmed",
   },
+  "united-healthcare-dual-complete": {
+    id: "united-healthcare-dual-complete",
+    name: "United Healthcare Dual Complete",
+  },
 } as const;
 
 export function getUhcEligibilityPayer(payerId: string) {

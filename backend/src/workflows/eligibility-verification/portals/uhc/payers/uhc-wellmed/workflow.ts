@@ -618,29 +618,6 @@ function extractedFieldCount(result: Record<string, string>): number {
   return UHC_OUTPUT_HEADERS.filter((header) => Boolean(result[header]?.trim())).length;
 }
 
-const UHC_CORE_RESULT_FIELDS: (keyof UhcEligibilityOutput)[] = [
-  "Coverage Status",
-  "Eff Date",
-  "End Date",
-  "Relationship to Subscriber",
-  "Plan Type",
-  "Bot Insurance Type",
-];
-
-function missingCoreResultFields(result: UhcEligibilityOutput): string[] {
-  return UHC_CORE_RESULT_FIELDS.filter((header) => !result[header]?.trim());
-}
-
-function mergeUhcResults(
-  current: UhcEligibilityOutput,
-  next: UhcEligibilityOutput,
-): UhcEligibilityOutput {
-  const merged = { ...current };
-  for (const header of UHC_OUTPUT_HEADERS) {
-    if (next[header]?.trim()) merged[header] = next[header];
-  }
-  return merged;
-}
 function addOutputColumns(sheet: ExcelJS.Worksheet): number {
   const start = sheet.columnCount + 1;
   UHC_OUTPUT_HEADERS.forEach((header, offset) => {
@@ -668,22 +645,7 @@ async function searchAndExtractUhcRow(
   if (openNewSearch) await openNewSearchForm(page);
   await enterSearch(page, row);
   await waitForFreshResult(page, isCancelled);
-  let result = outputTemplate();
-  let previousCount = 0;
-  let stableReads = 0;
-  for (let attempt = 1; attempt <= 3; attempt += 1) {
-    const extracted = parseUhcEligibilityResultText(await readScopedUhcResultText(page));
-    result = mergeUhcResults(result, extracted);
-    const count = extractedFieldCount(result);
-    stableReads = count === previousCount ? stableReads + 1 : 0;
-    previousCount = count;
-
-    if (missingCoreResultFields(result).length === 0 && stableReads >= 1) break;
-    if (attempt < 3) {
-      if (isCancelled?.()) throw new UhcCancellation("UHC eligibility cancellation requested.");
-      await page.waitForTimeout(2_000);
-    }
-  }
+  const result = parseUhcEligibilityResultText(await readScopedUhcResultText(page));
   const extracted = extractedFieldCount(result);
   if (extracted === 0) {
     throw new Error("The result page loaded, but none of the requested UHC fields could be extracted.");

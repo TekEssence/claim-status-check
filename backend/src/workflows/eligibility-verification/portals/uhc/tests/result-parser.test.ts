@@ -117,6 +117,20 @@ test("extracts AARP effective date when the policy end date is Present", () => {
   assert.equal(result["Eff Date"], "02/01/2026");
   assert.equal(result["End Date"], "Present");
 });
+test("maps text-only no deductible and no out-of-pocket messages to zero", () => {
+  const result = parseUhcEligibilityResultText(`
+    Individual, In-Network
+    Plan Deductible
+    Member's plan does not have a deductible.
+    Out-of-Pocket Maximum
+    Member's plan does not have an out-of-pocket maximum.
+  `);
+
+  assert.equal(result.Deductible, "$0.00");
+  assert.equal(result["Deductible Met"], "$0.00");
+  assert.equal(result["Out of Pocket"], "$0.00");
+  assert.equal(result["Out of Pocket Met"], "$0.00");
+});
 test("retries only ambiguous UHC no-result responses", () => {
   assert.equal(shouldRetryNoResult("No Results Found"), true);
   assert.equal(shouldRetryNoResult("Your search returned no results with the Member ID you submitted."), true);
