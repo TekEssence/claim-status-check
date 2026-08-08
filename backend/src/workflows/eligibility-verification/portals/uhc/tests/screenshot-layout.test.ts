@@ -17,7 +17,7 @@ test("maps the UHC screenshot layout using the requested business rules", () => 
     Network Status
     In-Network
     Individual, In-Network
-    Plan Deductible Per Calendar Year
+    Plan Deductible Per  Calendar Year
     $283.00 of $283.00 Met
     $0.00 Remaining: $0.00 $283.00
     Out-of-Pocket Maximum Per Calendar Year
@@ -68,4 +68,35 @@ test("maps network and maximums when the individual heading is omitted", () => {
   assert.equal(result["Deductible Met"], "$125.00");
   assert.equal(result["Out of Pocket"], "$5,000.00");
   assert.equal(result["Out of Pocket Met"], "$900.00");
+});
+test("uses separately captured maximum rows when the first individual block is incomplete", () => {
+  const result = parseUhcEligibilityResultText(`
+    Deductibles & Maximums
+    Individual, In-Network
+    Network Status
+    In-Network
+    POPULAR SERVICES COVERAGE
+    Plan Deductible Per  Calendar Year
+    $283.00 of $283.00 Met
+    $0.00 Remaining: $0.00 $283.00
+    Out-of-Pocket Maximum Per  Calendar Year
+    $495.47 of $9,250.00 Met
+    $0.00 Remaining: $8,754.53 $9,250.00
+  `);
+
+  assert.equal(result.Deductible, "$283.00");
+  assert.equal(result["Deductible Met"], "$283.00");
+  assert.equal(result["Out of Pocket"], "$9,250.00");
+  assert.equal(result["Out of Pocket Met"], "$495.47");
+});
+test("uses policy selected and product type when UHC omits the plan name label", () => {
+  const result = parseUhcEligibilityResultText(`
+    Policy Selected: UnitedHealthcare Dual Complete HMOPOS Full H532
+    UNITEDHEALTHCARE
+    Product Type
+    Medicare Primary
+  `);
+
+  assert.equal(result["Bot Insurance Type"], "UnitedHealthcare Dual Complete HMOPOS Full H532");
+  assert.equal(result["Plan Type"], "Medicare Primary");
 });

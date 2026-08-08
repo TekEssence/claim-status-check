@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { parseUhcEligibilityResultText, UHC_OUTPUT_HEADERS } from "../payers/uhc-wellmed/workflow";
+import { parseUhcEligibilityResultText, shouldRetryNoResult, UHC_OUTPUT_HEADERS } from "../payers/uhc-wellmed/workflow";
 
 test("extracts the requested UHC/Wellmed eligibility output fields", () => {
   const result = parseUhcEligibilityResultText(`
@@ -52,6 +52,7 @@ test("extracts the requested UHC/Wellmed eligibility output fields", () => {
     "Deductible Met": "$125",
     "Out of Pocket": "$5,000",
     "Out of Pocket Met": "$900",
+    "Error": "",
   });
 });
 
@@ -71,4 +72,9 @@ test("does not confuse totals with their met values", () => {
   assert.equal(result["Deductible Met"], "$100");
   assert.equal(result["Out of Pocket"], "$5,000");
   assert.equal(result["Out of Pocket Met"], "$300");
+});
+test("retries only ambiguous UHC no-result responses", () => {
+  assert.equal(shouldRetryNoResult("No Results Found"), true);
+  assert.equal(shouldRetryNoResult("Your search returned no results with the Member ID you submitted."), true);
+  assert.equal(shouldRetryNoResult("Policies were found outside of the entered date range."), false);
 });

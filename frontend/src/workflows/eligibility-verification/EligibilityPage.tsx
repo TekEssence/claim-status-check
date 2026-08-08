@@ -101,9 +101,12 @@ export function EligibilityPage() {
   }, [router]);
 
   const handleEvent = useCallback((event: ScrapeJobEvent) => {
-    if (event.type === "log" && event.message) setLogs((current) => [...current, event.message!]);
+    if (event.type === "log" && event.message) {
+      setLogs((current) => [...current, event.message!]);
+      setStatus(event.message);
+    }
     if (event.type === "progress" && typeof event.completed === "number" && typeof event.total === "number") {
-      setProgress({ completed: event.completed, total: event.total });
+      setProgress({ completed: event.completed, total: event.total, currentRow: event.currentRow });
     }
     if (event.type === "error_screenshot" && typeof event.image === "string" && event.image) {
       setErrorScreenshots((current) => [...current, { index: typeof event.index === "number" ? event.index : -1, image: event.image! }]);
@@ -138,6 +141,7 @@ export function EligibilityPage() {
       setIsRunning(false);
     }
     if (event.type === "done") {
+      streamController.current?.abort();
       setIsRunning(false);
       if (!jobFailed.current) {
         setHasCompleted(true);

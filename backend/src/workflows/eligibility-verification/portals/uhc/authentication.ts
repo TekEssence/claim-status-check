@@ -55,10 +55,9 @@ async function typeUsernameLikeOptum(page: Page, username: string): Promise<stri
   await field.click();
   await page.keyboard.press("Control+A");
   await page.keyboard.press("Backspace");
-  await page.type(SELECTORS.username, username, { delay: 80 });
+  await field.pressSequentially(username, { delay: 80 });
   return field.inputValue({ timeout: 3_000 }).catch(() => "");
 }
-
 function watchLoginOptions(page: Page): Promise<Response | null> {
   return page.waitForResponse(
     (response) => response.url().includes("/api/v1/auth/login-options"),

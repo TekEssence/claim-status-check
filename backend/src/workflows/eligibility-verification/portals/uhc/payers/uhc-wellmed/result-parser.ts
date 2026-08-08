@@ -33,7 +33,7 @@ function metAndTotal(block: string, label: RegExp): { met: string; total: string
   const tail = block.slice(labelMatch.index + labelMatch[0].length, labelMatch.index + labelMatch[0].length + 240);
   const values = tail.match(/\$\s*[\d,]+(?:\.\d{1,2})?/g) ?? [];
   if (values.length < 2) return null;
-  return { met: money(values[0].replace("$", "")), total: money(values[1].replace("$", "")) };
+  return { met: money(values[0]!.replace("$", "")), total: money(values[1]!.replace("$", "")) };
 }
 
 function specialistBenefits(text: string): { copay: string; coinsurance: string } {
@@ -56,9 +56,11 @@ export function applyUhcResultLayout(
     result["End Date"] = policy[3];
   }
 
-  const planName = valueAfterLabel(text, ["Plan Name"]);
+  const planName = valueAfterLabel(text, ["Plan Name", "Insurance Type", "Coverage Type"])
+    || text.match(/Policy Selected:\s*([^\r\n]+)/i)?.[1]?.trim()
+    || "";
   if (planName) result["Bot Insurance Type"] = planName;
-  const planType = valueAfterLabel(text, ["Plan Type"]);
+  const planType = valueAfterLabel(text, ["Plan Type", "Product Type"]);
   if (planType) result["Plan Type"] = planType;
 
   const network = valueAfterLabel(text, ["Network Status"]);
@@ -68,12 +70,14 @@ export function applyUhcResultLayout(
   const individual = section(text, /\bIndividual,\s*(?:In-Network|Out-of-Network)\b/i, /\b(?:Family,|Popular Services Coverage)\b/i)
     || section(text, /Deductibles\s*&\s*Maximums/i, /Popular Services Coverage/i)
     || text;
-  const deductible = metAndTotal(individual, /Plan Deductible Per Calendar Year/i);
+  const deductible = metAndTotal(individual, /Plan\s+Deductible\s+Per\s+Calendar\s+Year/i)
+    ?? metAndTotal(text, /Plan\s+Deductible\s+Per\s+Calendar\s+Year/i);
   if (deductible) {
     result.Deductible = deductible.total;
     result["Deductible Met"] = deductible.met;
   }
-  const outOfPocket = metAndTotal(individual, /Out-of-Pocket Maximum Per Calendar Year/i);
+  const outOfPocket = metAndTotal(individual, /Out-of-Pocket\s+Maximum\s+Per\s+Calendar\s+Year/i)
+    ?? metAndTotal(text, /Out-of-Pocket\s+Maximum\s+Per\s+Calendar\s+Year/i);
   if (outOfPocket) {
     result["Out of Pocket"] = outOfPocket.total;
     result["Out of Pocket Met"] = outOfPocket.met;
