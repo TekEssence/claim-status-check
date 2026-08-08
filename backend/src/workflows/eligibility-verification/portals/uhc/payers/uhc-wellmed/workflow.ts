@@ -230,7 +230,16 @@ async function typeSearchValue(page: Page, field: Locator, value: string, delay:
   await page.waitForTimeout(300);
   await page.keyboard.type(value, { delay });
   await page.waitForTimeout(700);
-  if (await field.inputValue() !== value) {
+  const normalized = (input: string) => input.toLowerCase().replace(/[^a-z0-9]+/g, "");
+  let retainedValue = await field.inputValue();
+  if (normalized(retainedValue) !== normalized(value)) {
+    // UHC occasionally rerenders a controlled input while keys are being sent.
+    // Re-resolve the same attached field through fill, which emits an input event.
+    await field.fill(value);
+    await page.waitForTimeout(500);
+    retainedValue = await field.inputValue();
+  }
+  if (!normalized(retainedValue) || normalized(retainedValue) !== normalized(value)) {
     throw new Error("A UHC eligibility search field did not retain its exact input value.");
   }
 }
@@ -488,16 +497,11 @@ async function openNewSearchForm(page: Page): Promise<void> {
   await button.scrollIntoViewIfNeeded().catch(() => {});
   await button.waitFor({ state: "visible" });
   await button.click();
-  const member = await firstVisibleLocator(page, SELECTORS.memberId, 60_000, "Member ID field");
-  const dob = await firstVisibleLocator(page, SELECTORS.dateOfBirth, 60_000, "date of birth field");
-  await member.waitFor({ state: "visible" });
-  await dob.waitFor({ state: "visible" });
-  // The form is rendered in a panel. Let its opening transition finish and
-  // confirm it stayed open before the next row starts typing.
+  // UHC replaces the initial panel DOM during its opening animation. Wait for
+  // that replacement before resolving fresh input locators for the next row.
   await page.waitForTimeout(1_500);
-  if (!await member.isVisible().catch(() => false) || !await dob.isVisible().catch(() => false)) {
-    throw new Error("The UHC New Search form closed before Member ID and date of birth could be entered.");
-  }
+  await firstVisibleLocator(page, SELECTORS.memberId, 60_000, "Member ID field");
+  await firstVisibleLocator(page, SELECTORS.dateOfBirth, 60_000, "date of birth field");
 }
 function cleanPortalMessage(value: string): string {
   return value.replace(/\s+/g, " ").replace(/^(?:close|cancel)\s+/i, "").trim();

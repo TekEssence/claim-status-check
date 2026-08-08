@@ -91,18 +91,12 @@ export function applyUhcResultLayout(
   if (deductible) {
     result.Deductible = deductible.total;
     result["Deductible Met"] = deductible.met;
-  } else if (/member(?:'s|’s)?\s+plan\s+does\s+not\s+have\s+a\s+deductible/i.test(text)) {
-    result.Deductible = "$0.00";
-    result["Deductible Met"] = "$0.00";
   }
   const outOfPocket = metAndTotal(individual, /Out-of-Pocket\s+Maximum\s+Per\s+Calendar\s+Year/i)
     ?? metAndTotal(text, /Out-of-Pocket\s+Maximum\s+Per\s+Calendar\s+Year/i);
   if (outOfPocket) {
     result["Out of Pocket"] = outOfPocket.total;
     result["Out of Pocket Met"] = outOfPocket.met;
-  } else if (/member(?:'s|’s)?\s+plan\s+does\s+not\s+have\s+an?\s+out[- ]of[- ]pocket(?:\s+maximum)?/i.test(text)) {
-    result["Out of Pocket"] = "$0.00";
-    result["Out of Pocket Met"] = "$0.00";
   }
 
   const specialist = specialistBenefits(text);
