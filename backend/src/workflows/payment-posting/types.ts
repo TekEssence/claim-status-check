@@ -168,6 +168,9 @@ export type PaymentPostingResultRow = {
   dosInputShortFormat: string;
   dosInputFullFormat: string;
   dosInputCanonical: string;
+  visitInitialOptionCount: string;
+  visitRetryPerformed: string;
+  visitFinalOptionCount: string;
   visitOptionsFoundCount: string;
   visitOptionsFound: string;
   visitComparisonDetails: string;
@@ -209,6 +212,11 @@ export type PaymentPostingResultRow = {
   remarkCodePopupStatus: string;
   remarkCodeSaveStatus: string;
   statusInput: string;
+  previousDisplayedStatus: string;
+  statusOptionsFound: string;
+  statusSelected: string;
+  statusMatch: string;
+  statusAction: string;
   finalDisplayedStatus: string;
   provider: string;
   screenshotFilename: string;

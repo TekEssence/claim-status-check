@@ -220,6 +220,9 @@ export type AdvancedMdPreparedPaymentResult = {
   dosInputShortFormat: string;
   dosInputFullFormat: string;
   dosInputCanonical: string;
+  visitInitialOptionCount: string;
+  visitRetryPerformed: string;
+  visitFinalOptionCount: string;
   visitOptionsFoundCount: string;
   visitOptionsFound: string;
   visitComparisonDetails: string;
@@ -247,6 +250,11 @@ export type AdvancedMdPreparedPaymentResult = {
   denialCodeDescription: string;
   remarkCodePopupStatus: string;
   remarkCodeSaveStatus: string;
+  previousDisplayedStatus: string;
+  statusOptionsFound: string;
+  statusSelected: string;
+  statusMatch: string;
+  statusAction: string;
   finalDisplayedStatus: string;
   provider: string;
   displayedLineItems: DisplayedPaymentPostingLineItem[];
@@ -323,11 +331,20 @@ type SelectedVisitClaim = {
   dosInputShortFormat: string;
   dosInputFullFormat: string;
   dosInputCanonical: string;
+  visitInitialOptionCount: string;
+  visitRetryPerformed: string;
+  visitFinalOptionCount: string;
   optionsFoundCount: string;
   optionsFound: string;
   comparisonDetails: string;
   dosMatch: string;
   matchResult: string;
+};
+
+type VisitDropdownWaitResult = {
+  options: Locator;
+  realOptionCount: number;
+  realOptionLabels: string[];
 };
 
 export class AdvancedMdPaymentEntryReadinessTimeoutError extends Error {
@@ -349,6 +366,9 @@ export class AdvancedMdVisitClaimNotFoundError extends Error {
       dosInputShortFormat: string;
       dosInputFullFormat: string;
       dosInputCanonical: string;
+      visitInitialOptionCount: string;
+      visitRetryPerformed: string;
+      visitFinalOptionCount: string;
       visitOptionsFoundCount: string;
       visitOptionsFound: string;
       visitComparisonDetails: string;
@@ -358,6 +378,23 @@ export class AdvancedMdVisitClaimNotFoundError extends Error {
   ) {
     super(message);
     this.name = "AdvancedMdVisitClaimNotFoundError";
+  }
+}
+
+export class AdvancedMdStatusNotFoundError extends Error {
+  constructor(
+    message: string,
+    readonly statusDetails: {
+      previousDisplayedStatus: string;
+      statusOptionsFound: string;
+      statusSelected: string;
+      statusMatch: string;
+      statusAction: string;
+      finalDisplayedStatus: string;
+    },
+  ) {
+    super(message);
+    this.name = "AdvancedMdStatusNotFoundError";
   }
 }
 
@@ -698,7 +735,6 @@ export async function prepareAdvancedMdPaymentPostingRow(options: {
   }
 
   const matchedRow = paymentFrame(page).locator(selectors.lineItems.row).nth(Number(match.lineItem.rowId));
-  const finalDisplayedStatusBeforeChanges = await readFinalStatus(matchedRow, selectors, "Bill Next");
   let insuranceAllowedEntered = "";
   if (row.allowedAmount) {
     const allowedAmount = row.allowedAmount;
@@ -728,6 +764,10 @@ export async function prepareAdvancedMdPaymentPostingRow(options: {
     applyDenialCode(page, matchedRow, selectors, row, logField, row.inputRow)
   ));
 
+  const statusResult = await runPaymentEntryFieldStage(logField, row.inputRow, "Status", "Handling Status", "Status handled", "frame #frmPaymentEntry matched line item Status control", async () => (
+    applyLineItemStatus(page, matchedRow, selectors, row, logField)
+  ));
+
   const screenshotFilename = buildPaymentPostingScreenshotFilename(row);
   const screenshotPath = path.join(screenshotFolder, screenshotFilename);
   await waitForCalculatedValuesToSettle(page);
@@ -748,6 +788,9 @@ export async function prepareAdvancedMdPaymentPostingRow(options: {
     dosInputShortFormat: selectedVisit.dosInputShortFormat,
     dosInputFullFormat: selectedVisit.dosInputFullFormat,
     dosInputCanonical: selectedVisit.dosInputCanonical,
+    visitInitialOptionCount: selectedVisit.visitInitialOptionCount,
+    visitRetryPerformed: selectedVisit.visitRetryPerformed,
+    visitFinalOptionCount: selectedVisit.visitFinalOptionCount,
     visitOptionsFoundCount: selectedVisit.optionsFoundCount,
     visitOptionsFound: selectedVisit.optionsFound,
     visitComparisonDetails: selectedVisit.comparisonDetails,
@@ -775,7 +818,12 @@ export async function prepareAdvancedMdPaymentPostingRow(options: {
     denialCodeDescription,
     remarkCodePopupStatus: popupStatus,
     remarkCodeSaveStatus: saveStatus,
-    finalDisplayedStatus: await readFinalStatus(matchedRow, selectors, finalDisplayedStatusBeforeChanges),
+    previousDisplayedStatus: statusResult.previousDisplayedStatus,
+    statusOptionsFound: statusResult.statusOptionsFound,
+    statusSelected: statusResult.statusSelected,
+    statusMatch: statusResult.statusMatch,
+    statusAction: statusResult.statusAction,
+    finalDisplayedStatus: statusResult.finalDisplayedStatus,
     provider: await textContent(matchedRow.locator(selectors.lineItems.providerCell).first()),
     displayedLineItems,
     screenshotFilename,
@@ -976,6 +1024,10 @@ async function resolveVisitClaimControlAfterPatient(
     wrapper.locator("mat-icon, .mat-icon, svg").first(),
     wrapper,
   ]);
+  await clickable.waitFor({ state: "visible", timeout: 15000 });
+  if (!await clickable.isEnabled({ timeout: 3000 }).catch(() => true)) {
+    throw new AdvancedMdVisitClaimNotFoundError("Visit/Claim control was found but is not enabled/interactable");
+  }
   await logField({
     level: "info",
     message: `AdvancedMD row ${inputRow}: Visit/Claim control found.`,
@@ -1204,9 +1256,28 @@ async function selectVisitClaimByDos(
     eventName: "payment_posting_advancedmd_visit_claim_waiting_dropdown",
     meta: { field: "Visit/Claim #" },
   });
-  const options = await paymentEntryOptions(page, optionSelector);
-  await options.first().waitFor({ state: "visible", timeout: 10000 }).catch(() => {});
-  const count = await options.count().catch(() => 0);
+  let dropdown = await waitForRealVisitOptions(page, optionSelector, logField, inputRow, 12000, 1);
+  const initialOptionCount = dropdown.realOptionCount;
+  let retryPerformed = "No";
+  if (initialOptionCount === 0) {
+    retryPerformed = "Yes";
+    await logField({
+      level: "warn",
+      message: `AdvancedMD row ${inputRow}: Visit/Claim dropdown had zero real visit options; retrying once.`,
+      eventName: "payment_posting_advancedmd_visit_claim_retrying_zero_options",
+      meta: { field: "Visit/Claim #" },
+    });
+    await openLookupDropdown(control.clickable);
+    await logField({
+      level: "info",
+      message: `AdvancedMD row ${inputRow}: Visit/Claim clicked.`,
+      eventName: "payment_posting_advancedmd_visit_claim_clicked_retry",
+      meta: { field: "Visit/Claim #", locator: control.description, retry: true },
+    });
+    dropdown = await waitForRealVisitOptions(page, optionSelector, logField, inputRow, 12000, 2);
+  }
+  const options = dropdown.options;
+  const count = dropdown.realOptionCount;
   await logField({
     level: "info",
     message: `AdvancedMD row ${inputRow}: Visit options found: ${count}.`,
@@ -1226,7 +1297,8 @@ async function selectVisitClaimByDos(
   let selectedVisitTime = "";
   let selectedVisitDateCanonical = "";
   const comparisons: VisitOptionComparison[] = [];
-  for (let index = 0; index < count; index += 1) {
+  const allOptionCount = await options.count().catch(() => 0);
+  for (let index = 0; index < allOptionCount; index += 1) {
     const option = options.nth(index);
     if (!await option.isVisible({ timeout: 250 }).catch(() => false)) continue;
     const label = await textContent(option);
@@ -1295,6 +1367,26 @@ async function selectVisitClaimByDos(
     }
   }
 
+  if (comparisons.length === 0) {
+    throw new AdvancedMdVisitClaimNotFoundError(
+      "Visit/Claim dropdown returned no visit options after retry.",
+      {
+        dosInputRaw: dosFormats.raw,
+        dosInputShortFormat: dosFormats.short,
+        dosInputFullFormat: dosFormats.full,
+        dosInputCanonical: dosFormats.canonical,
+        visitInitialOptionCount: String(initialOptionCount),
+        visitRetryPerformed: retryPerformed,
+        visitFinalOptionCount: String(count),
+        visitOptionsFoundCount: "0",
+        visitOptionsFound: "",
+        visitComparisonDetails: "",
+        dosMatch: "No",
+        visitMatchResult: "No Visit/Claim Options",
+      },
+    );
+  }
+
   await waitForVisitClaimDropdownToClose(page, optionSelector, 5000);
   const finalVisit = await waitForVisitClaimDisplayedValue(control.display, selectedLabel || selectedVisitClaimNumber, 5000);
   const fieldPopulated = !!normalizeLookupText(finalVisit);
@@ -1327,11 +1419,14 @@ async function selectVisitClaimByDos(
         dosInputShortFormat: dosFormats.short,
         dosInputFullFormat: dosFormats.full,
         dosInputCanonical: dosFormats.canonical,
+        visitInitialOptionCount: String(initialOptionCount),
+        visitRetryPerformed: retryPerformed,
+        visitFinalOptionCount: String(count),
         visitOptionsFoundCount: String(comparisons.length),
         visitOptionsFound: comparisons.map((comparison) => comparison.optionText).join(" | "),
         visitComparisonDetails: formatVisitComparisonDetails(comparisons),
         dosMatch: "No",
-        visitMatchResult: "Visit/Claim Not Found",
+        visitMatchResult: "No DOS Match",
       },
     );
   }
@@ -1345,6 +1440,9 @@ async function selectVisitClaimByDos(
     dosInputShortFormat: dosFormats.short,
     dosInputFullFormat: dosFormats.full,
     dosInputCanonical: dosFormats.canonical,
+    visitInitialOptionCount: String(initialOptionCount),
+    visitRetryPerformed: retryPerformed,
+    visitFinalOptionCount: String(count),
     optionsFoundCount: String(comparisons.length),
     optionsFound: comparisons.map((comparison) => comparison.optionText).join(" | "),
     comparisonDetails: formatVisitComparisonDetails(comparisons),
@@ -1517,6 +1615,58 @@ async function paymentEntryOptions(page: Page, optionSelector: string): Promise<
   return page.locator(optionSelector);
 }
 
+async function waitForRealVisitOptions(
+  page: Page,
+  optionSelector: string,
+  logField: AdvancedMdPaymentEntryFieldLogger,
+  inputRow: number,
+  timeoutMs: number,
+  waitRound: number,
+): Promise<VisitDropdownWaitResult> {
+  const options = await paymentEntryOptions(page, optionSelector);
+  const deadline = Date.now() + timeoutMs;
+  let attempt = 0;
+  let latestLabels: string[] = [];
+  let latestRealCount = 0;
+  while (Date.now() < deadline) {
+    attempt += 1;
+    const allLabels = await visibleOptionLabels(options);
+    latestLabels = allLabels.filter((label) => !isNonVisitOption(label));
+    latestRealCount = latestLabels.length;
+    await logField({
+      level: "info",
+      message: `AdvancedMD row ${inputRow}: Visit option count attempt ${attempt}: ${latestRealCount}.`,
+      eventName: "payment_posting_advancedmd_visit_claim_option_count_attempt",
+      meta: {
+        field: "Visit/Claim #",
+        waitRound,
+        attempt,
+        realVisitOptionCount: latestRealCount,
+        visibleOptionCount: allLabels.length,
+      },
+    });
+    if (latestRealCount > 0) break;
+    await page.waitForTimeout(400);
+  }
+  return {
+    options,
+    realOptionCount: latestRealCount,
+    realOptionLabels: latestLabels,
+  };
+}
+
+async function visibleOptionLabels(options: Locator): Promise<string[]> {
+  const count = await options.count().catch(() => 0);
+  const labels: string[] = [];
+  for (let index = 0; index < count; index += 1) {
+    const option = options.nth(index);
+    if (!await option.isVisible({ timeout: 100 }).catch(() => false)) continue;
+    const label = await textContent(option);
+    if (label) labels.push(label);
+  }
+  return labels;
+}
+
 async function readDisplayedLineItems(page: Page, selectors: AdvancedMdSelectorConfig): Promise<DisplayedPaymentPostingLineItem[]> {
   await paymentFrame(page).locator(selectors.paymentEntry.lineItemTable).first().waitFor({ state: "visible", timeout: 30000 });
   const rows = paymentFrame(page).locator(selectors.lineItems.row);
@@ -1618,6 +1768,109 @@ async function applyDenialCode(
     denialCodeDescription: selectedDescription,
     popupStatus: "Opened",
     saveStatus: "Saved",
+  };
+}
+
+async function applyLineItemStatus(
+  page: Page,
+  matchedRow: Locator,
+  selectors: AdvancedMdSelectorConfig,
+  row: PaymentPostingInputRow,
+  logField: AdvancedMdPaymentEntryFieldLogger,
+): Promise<{
+  previousDisplayedStatus: string;
+  statusOptionsFound: string;
+  statusSelected: string;
+  statusMatch: string;
+  statusAction: string;
+  finalDisplayedStatus: string;
+}> {
+  const statusInputValue = row.status?.trim() ?? "";
+  const previousDisplayedStatus = await readFinalStatus(matchedRow, selectors, "Bill Next");
+  if (!statusInputValue) {
+    await logField({ level: "info", message: "Status Input is blank.", eventName: "payment_posting_advancedmd_status_blank", meta: { previousDisplayedStatus } });
+    await logField({ level: "info", message: "Status left unchanged.", eventName: "payment_posting_advancedmd_status_unchanged", meta: { previousDisplayedStatus } });
+    await logField({ level: "info", message: `Final Status displayed: ${previousDisplayedStatus}.`, eventName: "payment_posting_advancedmd_status_final_displayed", meta: { finalDisplayedStatus: previousDisplayedStatus } });
+    return {
+      previousDisplayedStatus,
+      statusOptionsFound: "",
+      statusSelected: "",
+      statusMatch: "",
+      statusAction: "Unchanged",
+      finalDisplayedStatus: previousDisplayedStatus,
+    };
+  }
+
+  await logField({ level: "info", message: `Status Input: ${statusInputValue}.`, eventName: "payment_posting_advancedmd_status_input", meta: { statusInput: statusInputValue, previousDisplayedStatus } });
+
+  const frame = paymentFrame(page);
+  const statusCell = matchedRow.locator("td.mat-column-paymentStatus, td.cdk-column-paymentStatus, .mat-column-paymentStatus, .cdk-column-paymentStatus").first();
+  await statusCell.waitFor({ state: "visible", timeout: 15000 });
+  const statusInput = statusCell.locator("input[formcontrolname=\"paymentStatusDescription\"]").first();
+  await statusInput.waitFor({ state: "attached", timeout: 15000 });
+  const clearButton = statusCell.locator("button.igrid-autocomplete-field-suffix-button").first();
+
+  await logField({ level: "info", message: "Clearing current Status.", eventName: "payment_posting_advancedmd_status_clearing", meta: { previousDisplayedStatus } });
+  await clearButton.click({ force: true });
+  await waitForInputEnabled(statusInput, 10000);
+  await logField({ level: "info", message: "Status input enabled.", eventName: "payment_posting_advancedmd_status_input_enabled", meta: { statusInput: statusInputValue } });
+
+  await logField({ level: "info", message: "Opening Status dropdown.", eventName: "payment_posting_advancedmd_status_dropdown_opening", meta: { statusInput: statusInputValue } });
+  await statusInput.click({ force: true });
+  const options = frame.locator("mat-option[role=\"option\"], [role=\"option\"].mat-option");
+  await options.first().waitFor({ state: "visible", timeout: 10000 }).catch(() => {});
+  const optionCount = await options.count().catch(() => 0);
+  await logField({ level: "info", message: `Status options found: ${optionCount}`, eventName: "payment_posting_advancedmd_status_options_found", meta: { count: optionCount } });
+
+  const optionLabels: string[] = [];
+  let selectedOption: Locator | null = null;
+  let selectedStatus = "";
+  for (let index = 0; index < optionCount; index += 1) {
+    const option = options.nth(index);
+    if (!await option.isVisible({ timeout: 250 }).catch(() => false)) continue;
+    const label = await textContent(option);
+    if (!label) continue;
+    optionLabels.push(label);
+    await logField({ level: "info", message: `Status option candidate: ${label}`, eventName: "payment_posting_advancedmd_status_option_candidate", meta: { candidate: label } });
+    if (statusValuesEqual(label, statusInputValue)) {
+      selectedOption = option;
+      selectedStatus = label;
+      await logField({ level: "info", message: `Status match found: ${label}`, eventName: "payment_posting_advancedmd_status_match_found", meta: { status: label } });
+      break;
+    }
+  }
+
+  const statusOptionsFound = optionLabels.join(" | ");
+  if (!selectedOption) {
+    await restorePreviousStatusIfPossible(frame, statusInput, options, previousDisplayedStatus, logField);
+    const finalDisplayedStatus = await readFinalStatus(matchedRow, selectors, "");
+    throw new AdvancedMdStatusNotFoundError(`Status Not Found: "${statusInputValue}"`, {
+      previousDisplayedStatus,
+      statusOptionsFound,
+      statusSelected: "",
+      statusMatch: "No",
+      statusAction: "Not Found",
+      finalDisplayedStatus,
+    });
+  }
+
+  await selectedOption.click();
+  await logField({ level: "info", message: `Status option clicked: ${selectedStatus}`, eventName: "payment_posting_advancedmd_status_option_clicked", meta: { status: selectedStatus } });
+  await options.first().waitFor({ state: "hidden", timeout: 10000 }).catch(() => {});
+  const finalDisplayedStatus = await waitForFinalStatus(matchedRow, selectors, selectedStatus, 10000);
+  await logField({ level: "info", message: `Final Status displayed: ${finalDisplayedStatus}.`, eventName: "payment_posting_advancedmd_status_final_displayed", meta: { finalDisplayedStatus } });
+  if (!statusValuesEqual(finalDisplayedStatus, statusInputValue)) {
+    throw new Error(`Status selection failed: expected "${statusInputValue}", displayed "${finalDisplayedStatus}".`);
+  }
+  await logField({ level: "info", message: "Status selection success.", eventName: "payment_posting_advancedmd_status_selection_success", meta: { status: finalDisplayedStatus } });
+
+  return {
+    previousDisplayedStatus,
+    statusOptionsFound,
+    statusSelected: selectedStatus,
+    statusMatch: "Yes",
+    statusAction: "Updated",
+    finalDisplayedStatus,
   };
 }
 
@@ -1865,6 +2118,56 @@ async function readFinalStatus(row: Locator, selectors: AdvancedMdSelectorConfig
   if (value) return value;
   const text = await textContent(row.locator(".mat-column-status, .cdk-column-status").first());
   return text || fallback;
+}
+
+async function waitForInputEnabled(input: Locator, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await input.isEnabled({ timeout: 250 }).catch(() => false)) return;
+    await input.page().waitForTimeout(250);
+  }
+  throw new Error("Status input did not become enabled after clearing current status.");
+}
+
+function statusValuesEqual(actual: string, expected: string): boolean {
+  return normalizeStatusText(actual) === normalizeStatusText(expected);
+}
+
+function normalizeStatusText(value: string): string {
+  return value.replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+async function waitForFinalStatus(row: Locator, selectors: AdvancedMdSelectorConfig, expected: string, timeoutMs: number): Promise<string> {
+  const deadline = Date.now() + timeoutMs;
+  let latest = "";
+  while (Date.now() < deadline) {
+    latest = await readFinalStatus(row, selectors, latest);
+    if (statusValuesEqual(latest, expected)) return latest;
+    await row.page().waitForTimeout(250);
+  }
+  return latest;
+}
+
+async function restorePreviousStatusIfPossible(
+  frame: FrameLocator,
+  statusInput: Locator,
+  options: Locator,
+  previousDisplayedStatus: string,
+  logField: AdvancedMdPaymentEntryFieldLogger,
+): Promise<void> {
+  if (!previousDisplayedStatus) return;
+  await statusInput.click({ force: true }).catch(() => {});
+  const optionCount = await options.count().catch(() => 0);
+  for (let index = 0; index < optionCount; index += 1) {
+    const option = options.nth(index);
+    const label = await textContent(option);
+    if (!statusValuesEqual(label, previousDisplayedStatus)) continue;
+    await option.click().catch(() => {});
+    await logField({ level: "warn", message: `Status restored to previous value: ${previousDisplayedStatus}.`, eventName: "payment_posting_advancedmd_status_restored", meta: { previousDisplayedStatus } });
+    return;
+  }
+  await frame.locator("body").click({ position: { x: 1, y: 1 }, force: true }).catch(() => {});
+  await logField({ level: "warn", message: `Status was cleared but no replacement was found. Previous Status could not be restored: ${previousDisplayedStatus}.`, eventName: "payment_posting_advancedmd_status_restore_failed", meta: { previousDisplayedStatus } });
 }
 
 async function textContent(locator: Locator): Promise<string> {

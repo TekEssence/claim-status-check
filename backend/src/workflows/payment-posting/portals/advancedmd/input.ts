@@ -20,6 +20,7 @@ export const PAYMENT_POSTING_INPUT_ALIASES = {
   denialReason: ["Denial Reason"],
   remarkCode: ["Remark Code"],
   remarkReason: ["Remark Reason"],
+  status: ["Status"],
 } as const;
 
 export async function readAdvancedMdPaymentPostingInput(file: File): Promise<PaymentPostingInputRow[]> {
@@ -74,7 +75,7 @@ export function mapInputRow(raw: Record<string, string>, inputRow: number): Paym
     remarkReason: findValue(raw, PAYMENT_POSTING_INPUT_ALIASES.remarkReason) || undefined,
     adjustmentCode: undefined,
     raDenialCode: undefined,
-    status: undefined,
+    status: findValue(raw, PAYMENT_POSTING_INPUT_ALIASES.status) || undefined,
     modifier: undefined,
     units: undefined,
     provider: undefined,

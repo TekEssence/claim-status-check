@@ -22,6 +22,7 @@ import {
   AdvancedMdPatientNotSelectedError,
   AdvancedMdPaymentEntryReadinessTimeoutError,
   AdvancedMdScreenshotError,
+  AdvancedMdStatusNotFoundError,
   AdvancedMdVisitClaimNotFoundError,
   captureAdvancedMdPaymentPostingScreenshot,
   dismissAdvancedMdNotifications,
@@ -374,6 +375,9 @@ async function automationFailedRow(
   if (error instanceof AdvancedMdVisitClaimNotFoundError && error.visitComparison) {
     Object.assign(resultRow, error.visitComparison);
   }
+  if (error instanceof AdvancedMdStatusNotFoundError) {
+    Object.assign(resultRow, error.statusDetails);
+  }
   return resultRow;
 }
 
@@ -381,13 +385,16 @@ function paymentPostingFailureResult(error: unknown): PaymentPostingResultRow["r
   if (error instanceof AdvancedMdPatientNotFoundError) return "Patient Not Found";
   if (error instanceof AdvancedMdPatientNotSelectedError) return "Patient Not Selected";
   if (error instanceof AdvancedMdVisitClaimNotFoundError) return "Visit/Claim Not Found";
+  if (error instanceof AdvancedMdStatusNotFoundError) return "Automation Failed";
   return "Automation Failed";
 }
 
 function paymentPostingFailureBotMessage(error: unknown): string {
   if (error instanceof AdvancedMdPatientNotFoundError) return "Patient Not Found. No payment was submitted.";
   if (error instanceof AdvancedMdPatientNotSelectedError) return "Patient Not Selected. No payment was submitted.";
+  if (error instanceof AdvancedMdVisitClaimNotFoundError && error.message.includes("no visit options")) return "No Visit/Claim options were available for the selected patient.";
   if (error instanceof AdvancedMdVisitClaimNotFoundError) return "Visit/Claim Not Found. No payment was submitted.";
+  if (error instanceof AdvancedMdStatusNotFoundError) return "Status Not Found. No payment was submitted.";
   return "AdvancedMD dry-run automation failed during Payment Entry field processing. No payment was submitted.";
 }
 
@@ -444,6 +451,9 @@ function filledNotPostedRow(
     dosInputShortFormat: prepared.dosInputShortFormat,
     dosInputFullFormat: prepared.dosInputFullFormat,
     dosInputCanonical: prepared.dosInputCanonical,
+    visitInitialOptionCount: prepared.visitInitialOptionCount,
+    visitRetryPerformed: prepared.visitRetryPerformed,
+    visitFinalOptionCount: prepared.visitFinalOptionCount,
     visitOptionsFoundCount: prepared.visitOptionsFoundCount,
     visitOptionsFound: prepared.visitOptionsFound,
     visitComparisonDetails: prepared.visitComparisonDetails,
@@ -473,6 +483,11 @@ function filledNotPostedRow(
     reasonDescriptionSelected: prepared.reasonDescriptionSelected,
     remarkCodePopupStatus: prepared.remarkCodePopupStatus,
     remarkCodeSaveStatus: prepared.remarkCodeSaveStatus,
+    previousDisplayedStatus: prepared.previousDisplayedStatus,
+    statusOptionsFound: prepared.statusOptionsFound,
+    statusSelected: prepared.statusSelected,
+    statusMatch: prepared.statusMatch,
+    statusAction: prepared.statusAction,
     finalDisplayedStatus: prepared.finalDisplayedStatus,
     provider: prepared.provider,
     screenshotPath: prepared.screenshotPath,
@@ -488,6 +503,7 @@ function filledNotPostedRow(
       "Line Item Payment",
       prepared.insuranceAllowedEntered ? "Insurance Allowed" : "",
       prepared.carcSelected || prepared.rarcSelected ? "CARC/RARC" : "",
+      prepared.statusAction === "Updated" ? "Status" : "",
     ].filter(Boolean).join(", "),
     skippedFields: "Post action",
   };
