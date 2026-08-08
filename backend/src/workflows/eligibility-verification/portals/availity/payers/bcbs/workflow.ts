@@ -20,6 +20,36 @@ function findValue(row: Record<string, unknown>, aliases: string[]): string {
   return normalize(match?.[1]);
 }
 
+export function resolveAvailityWellcarePatientName(row: Record<string, unknown>): {
+  firstName: string;
+  lastName: string;
+} {
+  const firstName = findValue(row, ["Patient First Name", "Patient F Name", "First Name", "Pat First Name", "Member First Name"]);
+  const lastName = findValue(row, ["Patient Last Name", "Patient L Name", "Last Name", "Pat Last Name", "Member Last Name"]);
+  if (firstName || lastName) return { firstName, lastName };
+
+  const fullName = findValue(row, ["Patient Name", "Patient Full Name", "Member Name", "Subscriber Name", "Patient"])
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!fullName) return { firstName: "", lastName: "" };
+  if (fullName.includes(",")) {
+    const [combinedLastName, combinedFirstName = ""] = fullName.split(",", 2).map((part) => part.trim());
+    return { firstName: combinedFirstName.split(" ")[0] || "", lastName: combinedLastName };
+  }
+
+  const parts = fullName.split(" ").filter(Boolean);
+  if (parts.length === 1) return { firstName: parts[0], lastName: "" };
+  if (parts.length >= 3 && parts[1].length === 1) {
+    return { firstName: parts[2], lastName: parts[0] };
+  }
+  return { firstName: parts[1], lastName: parts[0] };
+}
+
+function patientNameInput(page: PortalScope, label: "Patient First Name" | "Patient Last Name", selector: string): Locator {
+  const labeled = page.getByLabel(label, { exact: true }).first();
+  return labeled.or(page.locator(selector).first()).first();
+}
+
 async function enterText(locator: Locator, value: string): Promise<void> {
   try {
     await locator.click({ timeout: 5_000 });
@@ -43,6 +73,46 @@ async function chooseAutocompleteInput(page: PortalScope, input: Locator, value:
 
 async function chooseAutocomplete(page: PortalScope, selector: string, value: string): Promise<void> {
   await chooseAutocompleteInput(page, page.locator(selector).first(), value);
+}
+
+async function autocompleteSelectionIsPresent(
+  page: PortalScope,
+  selector: string,
+  expectedValue: string,
+): Promise<boolean> {
+  const control = page.locator(selector).first();
+  if (!await control.isVisible().catch(() => false)) return false;
+  const selectedText = [
+    await control.inputValue().catch(() => ""),
+    await control.getAttribute("value").catch(() => ""),
+    await control.getAttribute("aria-valuetext").catch(() => ""),
+    await control.locator("xpath=..").innerText().catch(() => ""),
+  ].join(" ").toLowerCase();
+  return expectedValue
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean)
+    .every((part) => selectedText.includes(part));
+}
+
+async function ensureAutocompleteSelected(
+  page: PortalScope,
+  selector: string,
+  value: string,
+): Promise<void> {
+  if (await autocompleteSelectionIsPresent(page, selector, value)) return;
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      await chooseAutocomplete(page, selector, value);
+      if (await autocompleteSelectionIsPresent(page, selector, value)) return;
+      throw new Error(`Selection did not retain "${value}".`);
+    } catch (error) {
+      lastError = error;
+      if (attempt < 3) await pause(1_000);
+    }
+  }
+  throw lastError;
 }
 
 async function providerSelectionIsPresent(
@@ -73,6 +143,13 @@ async function ensureProviderSelected(
   if (!await providerSelectionIsPresent(page, providerName)) {
     throw new Error(`Provider selection did not retain "${providerName}".`);
   }
+}
+
+async function ensureHealthBenefitPlanCoverage(page: PortalScope): Promise<void> {
+  const serviceType = page.locator(SELECTORS.inquiryForm.serviceType).first();
+  await serviceType.waitFor({ state: "visible" });
+  if (await autocompleteSelectionIsPresent(page, SELECTORS.inquiryForm.serviceType, "Health Benefit Plan Coverage - 30")) return;
+  await ensureAutocompleteSelected(page, SELECTORS.inquiryForm.serviceType, "Health Benefit Plan Coverage - 30");
 }
 
 async function chooseProviderType(page: PortalScope, value: string): Promise<void> {
@@ -110,7 +187,17 @@ async function clickFirstVisible(scope: PortalScope, selector: string): Promise<
   const candidate = visible[0]?.locator;
   if (!candidate) return false;
   await candidate.scrollIntoViewIfNeeded().catch(() => {});
-  await candidate.click({ timeout: 10_000 });
+  try {
+    await candidate.click({ timeout: 10_000 });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!/intercepts pointer events|ClickCaptureShade/i.test(message)) throw error;
+    await candidate.evaluate((element) => {
+      const actionable = element.closest<HTMLElement>("a, button, [role='menuitem']") || element;
+      (actionable as HTMLElement).click();
+    });
+  }
+  await pause(750);
   return true;
 }
 function currentAvailityScopes(rootPage: Page): PortalScope[] {
@@ -716,6 +803,33 @@ async function readStableResultText(scope: PortalScope, timeout = resultReadyTim
   return latest;
 }
 
+export function parseWellcareEligibilityFallbacks(text: string): {
+  eligibilityBeginDate: string;
+  healthCareFacilityName: string;
+  insuranceType: string;
+} {
+  const eligibilityBeginDate = text.match(
+    /Eligibility\s*Begin\s*Date\s*:?\s*([A-Za-z]{3,9}\s+\d{1,2},\s*\d{4})/i,
+  )?.[1] || "";
+  const healthCareFacilityName = text.match(
+    /Health\s*Care\s*Facility[\s\r\n]*Name\s*:\s*([^\r\n]+)/i,
+  )?.[1]?.trim() || "";
+  const insuranceType = text.match(
+    /Insurance\s*Type\s*:?\s*([^\r\n]+)/i,
+  )?.[1]?.trim() || "";
+  return { eligibilityBeginDate, healthCareFacilityName, insuranceType };
+}
+
+export function parseCoverageBenefitDates(text: string): { effectiveDate: string; endDate: string } {
+  const date = "([A-Za-z]{3,9}\\s+\\d{1,2},\\s*\\d{4})";
+  const coverageStart = text.match(new RegExp(`Coverage\\s*Start\\s*Date\\s*:?\\s*${date}`, "i"));
+  const coverageEnd = text.match(new RegExp(`Coverage\\s*End\\s*Date\\s*:?\\s*${date}`, "i"));
+  return {
+    effectiveDate: coverageStart?.[1] || "",
+    endDate: coverageEnd?.[1] || "",
+  };
+}
+
 export function parseAvailitySnapshotBasics(text: string): SnapshotBasics {
   const date = "([A-Za-z]{3,9}\\s+\\d{1,2},\\s*\\d{4})";
   const planRange = text.match(new RegExp(`Current\\s*Plan\\s*Effective\\s*Date\\s*:?\\s*${date}\\s*-\\s*${date}`, "i"));
@@ -782,7 +896,20 @@ async function emitRowScreenshot(context: AvailityEligibilityPayerWorkflowInput[
   if (screenshot) await context.emit({ type: "error_screenshot", index: rowIndex, image: screenshot.toString("base64") }).catch(() => {});
 }
 
-export async function runBcbsAvailityEligibilityWorkflow({ page, inputFile, context }: AvailityEligibilityPayerWorkflowInput): Promise<void> {
+type BcbsAvailityEligibilityWorkflowOptions = {
+  payerSelection?: string;
+  skipProviderType?: boolean;
+  skipPlaceOfService?: boolean;
+  ensureHealthBenefitPlanCoverage?: boolean;
+  useCoverageBenefitDatesFallback?: boolean;
+  requirePatientName?: boolean;
+  useWellcareEligibilityFallbacks?: boolean;
+};
+
+export async function runBcbsAvailityEligibilityWorkflow(
+  { page, inputFile, context }: AvailityEligibilityPayerWorkflowInput,
+  options: BcbsAvailityEligibilityWorkflowOptions = {},
+): Promise<void> {
   const workbook = XLSX.read(await inputFile.arrayBuffer(), { type: "array" });
   const sheet = workbook.Sheets[workbook.SheetNames[0]];
   if (!sheet) throw new Error("The BCBS eligibility workbook does not contain a worksheet.");
@@ -809,14 +936,31 @@ export async function runBcbsAvailityEligibilityWorkflow({ page, inputFile, cont
       if (!memberId || !dob) throw new Error("Missing Member ID/Patient ID or DOB.");
 
       await context.log({ level: "info", message: `Row ${excelRow}: entering patient eligibility data.`, eventName: "eligibility_availity_row_started", rowIndex: excelRow });
-      await chooseAutocomplete(portal, SELECTORS.payerSelection.payer, findValue(row, ["Payer Portal", "Payer Code"]) || "BCBSTX");
+      const payerName = options.payerSelection || findValue(row, ["Payer Portal", "Payer Code"]) || "BCBSTX";
+      await ensureAutocompleteSelected(portal, SELECTORS.payerSelection.payer, payerName);
       await ensureProviderSelected(portal, "DAO, THUAN DUC");
-      await chooseProviderType(portal, findValue(row, ["Provider Type"]) || "Professional");
+      if (!options.skipProviderType) {
+        await chooseProviderType(portal, findValue(row, ["Provider Type"]) || "Professional");
+      }
       await enterText(portal.locator(SELECTORS.inquiryForm.memberId).first(), memberId);
+      if (options.requirePatientName) {
+        const patientName = resolveAvailityWellcarePatientName(row);
+        if (!patientName.firstName || !patientName.lastName) {
+          throw new Error("Missing Patient First Name or Patient Last Name.");
+        }
+        await enterText(patientNameInput(portal, "Patient Last Name", SELECTORS.inquiryForm.patientLastName), patientName.lastName);
+        await enterText(patientNameInput(portal, "Patient First Name", SELECTORS.inquiryForm.patientFirstName), patientName.firstName);
+      }
       await enterDob(portal, dob);
       for (const tip of await portal.locator(SELECTORS.inquiryForm.dismissTips).all()) await tip.click().catch(() => {});
-      await chooseAutocomplete(portal, SELECTORS.inquiryForm.placeOfService, findValue(row, ["Place of Service"]) || "Office");
-      await chooseAutocomplete(portal, SELECTORS.inquiryForm.serviceType, findValue(row, ["Benefit Service Type", "Service Type"]) || "Health Benefit Plan Coverage - 30");
+      if (!options.skipPlaceOfService) {
+        await chooseAutocomplete(portal, SELECTORS.inquiryForm.placeOfService, findValue(row, ["Place of Service"]) || "Office");
+      }
+      if (options.ensureHealthBenefitPlanCoverage) {
+        await ensureHealthBenefitPlanCoverage(portal);
+      } else {
+        await chooseAutocomplete(portal, SELECTORS.inquiryForm.serviceType, findValue(row, ["Benefit Service Type", "Service Type"]) || "Health Benefit Plan Coverage - 30");
+      }
 
       const submit = portal.locator(SELECTORS.inquiryForm.submit).first();
       await submit.waitFor({ state: "visible" });
@@ -841,13 +985,23 @@ export async function runBcbsAvailityEligibilityWorkflow({ page, inputFile, cont
       const snapshot = parseAvailitySnapshotBasics(resultText);
       const locatedCoverageStatus = await readCoverageStatus(portal);
       const locatedDates = await readPlanDates(portal);
+      const coverageBenefitDates = options.useCoverageBenefitDatesFallback
+        ? parseCoverageBenefitDates(resultText)
+        : { effectiveDate: "", endDate: "" };
+      const wellcareFallbacks = options.useWellcareEligibilityFallbacks
+        ? parseWellcareEligibilityFallbacks(resultText)
+        : { eligibilityBeginDate: "", healthCareFacilityName: "", insuranceType: "" };
       let { otherInsurance, otherInsuranceEffectiveDate } = await readOtherInsurance(portal);
+      if (!otherInsurance && wellcareFallbacks.healthCareFacilityName) {
+        otherInsurance = wellcareFallbacks.healthCareFacilityName;
+        otherInsuranceEffectiveDate = "";
+      }
       const relationship = await readRelationshipToSubscriber(portal) || snapshot.relationship;
-      const insuranceType = await readLabeledResultValue(portal, SELECTORS.results.insuranceTypeLabel, "Insurance Type") || snapshot.insuranceType;
+      const insuranceType = await readLabeledResultValue(portal, SELECTORS.results.insuranceTypeLabel, "Insurance Type") || snapshot.insuranceType || wellcareFallbacks.insuranceType;
       const planType = await readLabeledResultValue(portal, SELECTORS.results.planProductLabel, "Plan / Product") || snapshot.planType;
       const coverageStatus = locatedCoverageStatus || snapshot.coverageStatus.toLowerCase();
-      const effectiveDate = locatedDates.effectiveDate || snapshot.effectiveDate;
-      const endDate = locatedDates.endDate || snapshot.endDate;
+      const effectiveDate = locatedDates.effectiveDate || snapshot.effectiveDate || coverageBenefitDates.effectiveDate || wellcareFallbacks.eligibilityBeginDate;
+      const endDate = locatedDates.endDate || snapshot.endDate || coverageBenefitDates.endDate;
       const network = await readSelectedNetwork(portal);
       if (/\bhmo\b/i.test(insuranceType) && !otherInsurance) {
         otherInsurance = await readPrimaryCareProvider(portal);

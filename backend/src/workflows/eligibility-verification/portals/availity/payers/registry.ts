@@ -1,13 +1,17 @@
 import { UnknownPortalError } from "../../../../../core/errors";
+import { aetnaMedicareAvailityEligibilityPayer } from "./aetna-medicare";
 import { bcbsAvailityEligibilityPayer } from "./bcbs";
 import { vanLangIpaAvailityEligibilityPayer } from "./van-lang-ipa";
+import { wellcareAvailityEligibilityPayer } from "./wellcare";
 import type { AvailityEligibilityPayerHandler } from "./types";
 
 export const availityEligibilityPayerRegistry = {
+  "aetna-medicare": aetnaMedicareAvailityEligibilityPayer,
   bcbs: bcbsAvailityEligibilityPayer,
   "van-lang-ipa": vanLangIpaAvailityEligibilityPayer,
   amerigroup: vanLangIpaAvailityEligibilityPayer,
   wellpoint: vanLangIpaAvailityEligibilityPayer,
+  wellcare: wellcareAvailityEligibilityPayer,
 } satisfies Record<string, AvailityEligibilityPayerHandler>;
 
 export function getAvailityEligibilityPayer(

@@ -1,7 +1,7 @@
 export const BCBS_AVAILITY_ELIGIBILITY_SELECTORS = {
   navigation: {
     patientRegistration: "text=\"Patient Registration\"",
-    eligibilityInquiry: "text=\"Eligibility and Benefits Inquiry\"",
+    eligibilityInquiry: "a:has-text('Eligibility and Benefits Inquiry'), button:has-text('Eligibility and Benefits Inquiry'), [role='menuitem']:has-text('Eligibility and Benefits Inquiry')",
   },
   payerSelection: {
     payer: "#payerId-field",
@@ -10,6 +10,8 @@ export const BCBS_AVAILITY_ELIGIBILITY_SELECTORS = {
   inquiryForm: {
     providerType: "input[aria-required='true'][role='combobox']",
     memberId: "input[name='memberId']",
+    patientLastName: "input[name='patientLastName'], input[aria-label='Patient Last Name']",
+    patientFirstName: "input[name='patientFirstName'], input[aria-label='Patient First Name']",
     birthMonth: "[role='spinbutton'][aria-label='Month']",
     birthDay: "[role='spinbutton'][aria-label='Day']",
     birthYear: "[role='spinbutton'][aria-label='Year']",
