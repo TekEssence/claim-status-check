@@ -77,3 +77,17 @@ test("eligibility resolves United Healthcare Dual Complete through the shared UH
   assert.equal(runner.payerId, "united-healthcare-dual-complete");
   assert.equal(runner.name, "United Healthcare Dual Complete Eligibility Verification");
 });
+
+for (const payer of [
+  { id: "united-health-care", name: "United Health Care" },
+  { id: "uhc-medicare-advantage", name: "UHC Medicare Advantage" },
+]) {
+  test(`eligibility resolves ${payer.name} through the shared UHC workflow`, () => {
+    const runner = getAutomationRunner("eligibility-verification", "uhc", payer.id);
+
+    assert.equal(runner.workflowId, "eligibility-verification");
+    assert.equal(runner.portalId, "uhc");
+    assert.equal(runner.payerId, payer.id);
+    assert.equal(runner.name, `${payer.name} Eligibility Verification`);
+  });
+}

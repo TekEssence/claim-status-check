@@ -11,6 +11,14 @@ export const uhcEligibilityPayerRegistry = {
     id: "united-healthcare-dual-complete",
     name: "United Healthcare Dual Complete",
   },
+  "united-health-care": {
+    id: "united-health-care",
+    name: "United Health Care",
+  },
+  "uhc-medicare-advantage": {
+    id: "uhc-medicare-advantage",
+    name: "UHC Medicare Advantage",
+  },
 } as const;
 
 export function getUhcEligibilityPayer(payerId: string) {
