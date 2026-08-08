@@ -16,10 +16,6 @@ type Props = {
 export function UhcInputForm(props: Props) {
   return (
     <form onSubmit={props.onSubmit} className="space-y-5">
-      <div className="rounded-[1.1rem] border border-blue-100 bg-blue-50/70 p-4">
-        <p className="font-semibold text-slate-950">UHC/Wellmed</p>
-        <p className="mt-1 text-sm text-slate-600">Credentials are selected only from the TPM row whose Portal value is UHC.</p>
-      </div>
       <div className="grid gap-4 lg:grid-cols-2">
         <PortalUploadCard mode="file" accept=".xlsx,.xls" acceptedFormats=".xlsx, .xls" description="Upload Project, Portal, Link, Username, Password, and Secret Key. The UHC row is selected automatically." fileName={props.credentialFile?.name} icon={KeyRound} inputId="uhcEligibilityCredentials" onFileSelect={props.onCredentialFileChange} sizeHint="25 MB" title="Upload UHC Login File" />
         <PortalUploadCard mode="file" accept=".xlsx,.xls" acceptedFormats=".xlsx, .xls" description="Upload the UHC/Wellmed member eligibility workbook." fileName={props.inputFile?.name} icon={FileSpreadsheet} inputId="uhcEligibilityInput" onFileSelect={props.onInputFileChange} sizeHint="25 MB" title="Upload Eligibility File" />

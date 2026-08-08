@@ -86,7 +86,14 @@ function labeledValue(text: string, aliases: string[]): string {
     const line = lines[index];
     const normalizedLine = normalizeLabel(line);
     for (const alias of normalizedAliases) {
-      if (normalizedLine === alias) return lines[index + 1] ?? "";
+      if (normalizedLine === alias) {
+        for (let valueIndex = index + 1; valueIndex <= Math.min(index + 5, lines.length - 1); valueIndex += 1) {
+          const value = lines[valueIndex] ?? "";
+          if (/^(?:keyboard_arrow_(?:down|up)|expand_(?:more|less)|arrow_drop_(?:down|up))$/i.test(value)) continue;
+          return value;
+        }
+        return "";
+      }
       if (normalizedLine.startsWith(`${alias} `) && /[:-]/.test(line)) {
         return line.replace(/^[^:-]+[:-]\s*/, "").trim();
       }
@@ -368,8 +375,26 @@ async function labeledRowText(page: Page, candidates: Locator, labels: RegExp): 
   return "";
 }
 async function readScopedUhcResultText(page: Page): Promise<string> {
+  const expandableSummarySections = page.locator("button[aria-expanded='false']").filter({
+    hasText: /Member (?:Information|Details|Summary)|Coverage (?:Information|Details|Summary)|Eligibility Details|Policy (?:Information|Details)/i,
+  });
+  const expandableCount = await expandableSummarySections.count().catch(() => 0);
+  for (let index = 0; index < expandableCount; index += 1) {
+    const section = expandableSummarySections.nth(index);
+    if (!await section.isVisible().catch(() => false)) continue;
+    await section.scrollIntoViewIfNeeded().catch(() => {});
+    await section.click().catch(() => {});
+    await page.waitForTimeout(800);
+  }
+
   const policyLocator = page.locator("ul").filter({ hasText: /Policy Selected:/i }).first();
   const policy = await optionalVisibleText(page, policyLocator);
+
+  const memberSummary = await labeledRowText(
+    page,
+    page.getByText(/^(?:Coverage Status|Member Status|Effective Date|Termination Date|End Date|Relationship to Subscriber)$/i),
+    /^(?:Coverage Status|Member Status|Effective Date|Termination Date|End Date|Relationship to Subscriber)$/i,
+  );
 
   const unitedHealthcareHeading = page.locator("h3").filter({ hasText: /^UNITEDHEALTHCARE$/i }).first();
   const planName = await labeledRowText(
@@ -411,8 +436,14 @@ async function readScopedUhcResultText(page: Page): Promise<string> {
   }
   const popular = await ancestorTextContaining(popularHeading, [/Specialist Visit/i, /Copay/i, /Coinsurance/i], 10);
 
+  // UHC renders the member summary (status, dates and relationship) outside the
+  // benefit cards below. Keep the targeted card text, but also capture the full
+  // result DOM after scrolling/expanding has caused lazy sections to render.
+  const fullResultPage = await page.locator("body").innerText({ timeout: 10_000 }).catch(() => "");
+
   return [
     policy,
+    memberSummary,
     "UNITEDHEALTHCARE",
     plan,
     "Coordination of Benefits",
@@ -421,6 +452,7 @@ async function readScopedUhcResultText(page: Page): Promise<string> {
     deductibles,
     "POPULAR SERVICES COVERAGE",
     popular,
+    fullResultPage,
   ].filter(Boolean).join(String.fromCharCode(10));
 }
 
@@ -585,6 +617,30 @@ async function waitForFreshResult(
 function extractedFieldCount(result: Record<string, string>): number {
   return UHC_OUTPUT_HEADERS.filter((header) => Boolean(result[header]?.trim())).length;
 }
+
+const UHC_CORE_RESULT_FIELDS: (keyof UhcEligibilityOutput)[] = [
+  "Coverage Status",
+  "Eff Date",
+  "End Date",
+  "Relationship to Subscriber",
+  "Plan Type",
+  "Bot Insurance Type",
+];
+
+function missingCoreResultFields(result: UhcEligibilityOutput): string[] {
+  return UHC_CORE_RESULT_FIELDS.filter((header) => !result[header]?.trim());
+}
+
+function mergeUhcResults(
+  current: UhcEligibilityOutput,
+  next: UhcEligibilityOutput,
+): UhcEligibilityOutput {
+  const merged = { ...current };
+  for (const header of UHC_OUTPUT_HEADERS) {
+    if (next[header]?.trim()) merged[header] = next[header];
+  }
+  return merged;
+}
 function addOutputColumns(sheet: ExcelJS.Worksheet): number {
   const start = sheet.columnCount + 1;
   UHC_OUTPUT_HEADERS.forEach((header, offset) => {
@@ -612,7 +668,22 @@ async function searchAndExtractUhcRow(
   if (openNewSearch) await openNewSearchForm(page);
   await enterSearch(page, row);
   await waitForFreshResult(page, isCancelled);
-  const result = parseUhcEligibilityResultText(await readScopedUhcResultText(page));
+  let result = outputTemplate();
+  let previousCount = 0;
+  let stableReads = 0;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    const extracted = parseUhcEligibilityResultText(await readScopedUhcResultText(page));
+    result = mergeUhcResults(result, extracted);
+    const count = extractedFieldCount(result);
+    stableReads = count === previousCount ? stableReads + 1 : 0;
+    previousCount = count;
+
+    if (missingCoreResultFields(result).length === 0 && stableReads >= 1) break;
+    if (attempt < 3) {
+      if (isCancelled?.()) throw new UhcCancellation("UHC eligibility cancellation requested.");
+      await page.waitForTimeout(2_000);
+    }
+  }
   const extracted = extractedFieldCount(result);
   if (extracted === 0) {
     throw new Error("The result page loaded, but none of the requested UHC fields could be extracted.");

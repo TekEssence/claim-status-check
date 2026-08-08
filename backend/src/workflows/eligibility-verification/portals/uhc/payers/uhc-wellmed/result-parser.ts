@@ -4,7 +4,14 @@ function valueAfterLabel(text: string, labels: string[]): string {
   const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
   for (let index = 0; index < lines.length; index += 1) {
     for (const label of labels) {
-      if (lines[index].toLowerCase() === label.toLowerCase()) return lines[index + 1] ?? "";
+      if (lines[index].toLowerCase() === label.toLowerCase()) {
+        for (let valueIndex = index + 1; valueIndex <= Math.min(index + 5, lines.length - 1); valueIndex += 1) {
+          const value = lines[valueIndex] ?? "";
+          if (/^(?:keyboard_arrow_(?:down|up)|expand_(?:more|less)|arrow_drop_(?:down|up))$/i.test(value)) continue;
+          return value;
+        }
+        return "";
+      }
       const inline = lines[index].match(new RegExp(`^${label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*[:-]\\s*(.+)$`, "i"));
       if (inline) return inline[1].trim();
     }
@@ -49,11 +56,20 @@ export function applyUhcResultLayout(
   initial: UhcEligibilityOutput,
 ): UhcEligibilityOutput {
   const result = { ...initial };
-  const policy = text.match(/\b(Active|Inactive)\s*\(\s*(\d{1,2}\/\d{1,2}\/\d{4})\s*-\s*(\d{1,2}\/\d{1,2}\/\d{4})\s*\)/i);
+  if (result["Coverage Status"] && !/^(?:active|inactive)$/i.test(result["Coverage Status"])) {
+    result["Coverage Status"] = "";
+  }
+  const policy = text.match(/\b(Active|Inactive)\s*\(\s*(\d{1,2}\/\d{1,2}\/\d{4})\s*-\s*(\d{1,2}\/\d{1,2}\/\d{4}|Present)\s*\)/i);
   if (policy) {
     result["Coverage Status"] = policy[1][0].toUpperCase() + policy[1].slice(1).toLowerCase();
     result["Eff Date"] = policy[2];
     result["End Date"] = policy[3];
+  }
+  if (!result["Coverage Status"]) {
+    const standaloneStatus = text.match(/(?:^|\n)\s*(Active|Inactive)\s*(?:\(|$)/im)?.[1];
+    if (standaloneStatus) {
+      result["Coverage Status"] = standaloneStatus[0].toUpperCase() + standaloneStatus.slice(1).toLowerCase();
+    }
   }
 
   const planName = valueAfterLabel(text, ["Plan Name", "Insurance Type", "Coverage Type"])

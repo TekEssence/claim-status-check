@@ -73,6 +73,50 @@ test("does not confuse totals with their met values", () => {
   assert.equal(result["Out of Pocket"], "$5,000");
   assert.equal(result["Out of Pocket Met"], "$300");
 });
+test("ignores UHC material icon text between result labels and values", () => {
+  const result = parseUhcEligibilityResultText(`
+    Coverage Status
+    keyboard_arrow_down
+    Active
+    Effective Date
+    keyboard_arrow_down
+    01/01/2026
+    End Date
+    keyboard_arrow_down
+    12/31/2026
+    Relationship to Subscriber
+    keyboard_arrow_down
+    Self
+  `);
+
+  assert.equal(result["Coverage Status"], "Active");
+  assert.equal(result["Eff Date"], "01/01/2026");
+  assert.equal(result["End Date"], "12/31/2026");
+  assert.equal(result["Relationship to Subscriber"], "Self");
+});
+test("extracts AARP coverage when UHC labels the field only as Coverage", () => {
+  const result = parseUhcEligibilityResultText(`
+    Policy Selected: AARP Medicare Advantage Wellmed
+    Coverage
+    keyboard_arrow_down
+    Active
+    Plan Type
+    Point of Service (POS)
+  `);
+
+  assert.equal(result["Coverage Status"], "Active");
+});
+test("extracts AARP effective date when the policy end date is Present", () => {
+  const result = parseUhcEligibilityResultText(`
+    Policy Selected: HMOPOS-AARP Medicare Advantage Extras From UHC TX
+    Active(02/01/2026 - Present)
+    Service Dates Requested: 08/08/2026 - 08/08/2026
+  `);
+
+  assert.equal(result["Coverage Status"], "Active");
+  assert.equal(result["Eff Date"], "02/01/2026");
+  assert.equal(result["End Date"], "Present");
+});
 test("retries only ambiguous UHC no-result responses", () => {
   assert.equal(shouldRetryNoResult("No Results Found"), true);
   assert.equal(shouldRetryNoResult("Your search returned no results with the Member ID you submitted."), true);

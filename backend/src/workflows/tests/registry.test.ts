@@ -51,3 +51,16 @@ test("eligibility resolves UHC with the UHC/Wellmed payer", () => {
   assert.equal(runner.payerId, "uhc-wellmed");
   assert.equal(runner.name, "UHC/Wellmed Eligibility Verification");
 });
+
+test("eligibility resolves AARP Medicare Advantage Wellmed through the shared UHC workflow", () => {
+  const runner = getAutomationRunner(
+    "eligibility-verification",
+    "uhc",
+    "aarp-medicare-advantage-wellmed",
+  );
+
+  assert.equal(runner.workflowId, "eligibility-verification");
+  assert.equal(runner.portalId, "uhc");
+  assert.equal(runner.payerId, "aarp-medicare-advantage-wellmed");
+  assert.equal(runner.name, "AARP Medicare Advantage Wellmed Eligibility Verification");
+});
