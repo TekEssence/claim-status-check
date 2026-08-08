@@ -45,7 +45,7 @@ function findPayerName(row: Record<string, unknown>): string {
 
 export function resolveAvailityEligibilityInputPayer(payerName: string): AvailityEligibilityPayerId {
   const normalized = normalizeKey(payerName);
-  if (normalized.includes("aetna") && normalized.includes("medicare")) return "aetna-medicare";
+  if (normalized.includes("aetna")) return "aetna-medicare";
   if (
     normalized === "bcbs"
     || normalized.includes("bcbstx")
@@ -57,7 +57,7 @@ export function resolveAvailityEligibilityInputPayer(payerName: string): Availit
   if (normalized.includes("wellcare")) return "wellcare";
   if (normalized.includes("wellpoint")) return "wellpoint";
   throw new Error(
-    `Unsupported Availity eligibility payer "${payerName}" in the input workbook. Expected Aetna Medicare, Blue Cross Blue Shield, Van Lang IPA, Amerigroup, Wellpoint, or Wellcare.`,
+    `Unsupported Availity eligibility payer "${payerName}" in the input workbook. Expected Aetna, Aetna Medicare, Blue Cross Blue Shield, Van Lang IPA, Amerigroup, Wellpoint, or Wellcare.`,
   );
 }
 
