@@ -67,16 +67,34 @@ test("output workbook includes schema and dry-run no-post values", async () => {
   });
   const buffer = await createPaymentPostingOutputWorkbookBuffer([result]);
   const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.load(buffer);
-  const worksheet = workbook.getWorksheet("Payment Posting Results");
-  assert.ok(worksheet);
+  await workbook.xlsx.load(buffer as never);
 
-  const headers = worksheet!.getRow(1).values as unknown[];
+  const inputWorksheet = workbook.getWorksheet("Input");
+  const outputWorksheet = workbook.getWorksheet("Output");
+  const exceptionsWorksheet = workbook.getWorksheet("Exceptions");
+  const runDetailsWorksheet = workbook.getWorksheet("Run Details");
+  assert.ok(inputWorksheet);
+  assert.ok(outputWorksheet);
+  assert.ok(exceptionsWorksheet);
+  assert.ok(runDetailsWorksheet);
+
+  const inputHeaders = inputWorksheet!.getRow(1).values as unknown[];
+  assert.ok(inputHeaders.includes("Check #"));
+  assert.equal(inputWorksheet!.getRow(2).getCell(inputHeaders.indexOf("Check #")).value, "12/34:56");
+
+  const headers = outputWorksheet!.getRow(1).values as unknown[];
   for (const column of PAYMENT_POSTING_OUTPUT_COLUMNS) {
     assert.ok(headers.includes(column), `missing ${column}`);
   }
-  const dryRunColumn = headers.indexOf("Dry Run");
-  const postedColumn = headers.indexOf("Posted");
-  assert.equal(worksheet!.getRow(2).getCell(dryRunColumn).value, "Yes");
-  assert.equal(worksheet!.getRow(2).getCell(postedColumn).value, "No");
+  assert.equal(outputWorksheet!.getRow(2).getCell(headers.indexOf("Result")).value, "Automation Error");
+  assert.equal(outputWorksheet!.actualRowCount, 2);
+
+  const exceptionHeaders = exceptionsWorksheet!.getRow(1).values as unknown[];
+  assert.equal(exceptionsWorksheet!.getRow(2).getCell(exceptionHeaders.indexOf("Result")).value, "Automation Error");
+
+  const runDetailsHeaders = runDetailsWorksheet!.getRow(1).values as unknown[];
+  const dryRunColumn = runDetailsHeaders.indexOf("Dry Run");
+  const postedColumn = runDetailsHeaders.indexOf("Posted");
+  assert.equal(runDetailsWorksheet!.getRow(2).getCell(dryRunColumn).value, "Yes");
+  assert.equal(runDetailsWorksheet!.getRow(2).getCell(postedColumn).value, "No");
 });
