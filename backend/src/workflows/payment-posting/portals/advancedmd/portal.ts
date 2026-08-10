@@ -701,7 +701,20 @@ export async function prepareAdvancedMdPaymentPostingRow(options: {
   ));
 
   const selectedVisit = await runPaymentEntryFieldStage(logField, row.inputRow, "Visit/Claim #", "Resolving Visit/Claim control", "Visit/Claim selected", "frame #frmPaymentEntry Visit/Claim control", async () => {
+    const transitionStart = Date.now();
+    await logField({
+      level: "info",
+      message: `AdvancedMD row ${row.inputRow}: Waiting for patient-dependent fields before Visit/Claim.`,
+      eventName: "payment_posting_advancedmd_patient_visit_transition_waiting",
+      meta: { field: "Visit/Claim #" },
+    });
     await waitForPatientDependentFieldsToStabilize(page, 7000);
+    await logField({
+      level: "info",
+      message: `AdvancedMD row ${row.inputRow}: Patient -> Visit/Claim transition ready after: ${Date.now() - transitionStart} ms.`,
+      eventName: "payment_posting_advancedmd_patient_visit_transition_ready",
+      meta: { field: "Visit/Claim #", durationMs: Date.now() - transitionStart },
+    });
     const visitControl = await resolveVisitClaimControlAfterPatient(page, logField, row.inputRow);
     return selectVisitClaimByDos(
       page,
@@ -945,7 +958,6 @@ async function waitForPatientDependentFieldsToStabilize(page: Page, timeoutMs: n
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (await isPatientDependentDataPopulated(page)) {
-      await page.waitForTimeout(500);
       return;
     }
     await page.waitForTimeout(250);
@@ -1011,7 +1023,6 @@ async function resolveVisitClaimControlAfterPatient(
     wrapper.locator("input:not([type=\"hidden\"])").first(),
     wrapper.locator("button").first(),
     wrapper.locator("[role=\"button\"]").first(),
-    wrapper.locator("mat-icon, .mat-icon, svg").first(),
     wrapper,
   ]);
   await clickable.waitFor({ state: "visible", timeout: 15000 });
@@ -1066,12 +1077,80 @@ async function fillPatientSearchKeepingFocus(patientInput: Locator, value: strin
   // dropdown result has actually been clicked below.
 }
 
+async function findPatientDropdownSelectionFast(
+  page: Page,
+  optionSelector: string,
+  row: PaymentPostingInputRow,
+  logField: AdvancedMdPaymentEntryFieldLogger,
+  startedAt: number,
+  timeoutMs: number,
+): Promise<{ selected: Locator; selectedLabel: string; firstVisibleAfterMs: number; exactMatchAfterMs: number } | null> {
+  const options = patientResultOptions(page, optionSelector);
+  const deadline = Date.now() + timeoutMs;
+  let firstVisibleAfterMs = 0;
+  while (Date.now() < deadline) {
+    const count = await options.count().catch(() => 0);
+    const visibleCandidates: { option: Locator; label: string }[] = [];
+    for (let index = 0; index < count; index += 1) {
+      const option = options.nth(index);
+      if (!await option.isVisible({ timeout: 100 }).catch(() => false)) continue;
+      const label = await textContent(option);
+      if (!label) continue;
+      visibleCandidates.push({ option, label });
+    }
+
+    if (visibleCandidates.length > 0 && firstVisibleAfterMs === 0) {
+      firstVisibleAfterMs = Date.now() - startedAt;
+      await logField({
+        level: "info",
+        message: `AdvancedMD row ${row.inputRow}: Patient dropdown first visible after: ${firstVisibleAfterMs} ms.`,
+        eventName: "payment_posting_advancedmd_patient_dropdown_first_visible",
+        meta: { field: "Patient", firstVisibleAfterMs, visibleCount: visibleCandidates.length },
+      });
+    }
+
+    const exactNameMatches = visibleCandidates.filter(({ label }) => patientNameExactlyMatches(label, row.patientName));
+    const idMatch = exactNameMatches.find(({ label }) => row.patientId && label.toLowerCase().includes(row.patientId.toLowerCase()));
+    const controlMatch = exactNameMatches.find(({ label }) => row.patientControlNumber && label.toLowerCase().includes(row.patientControlNumber.toLowerCase()));
+    const selected = idMatch ?? controlMatch ?? (exactNameMatches.length === 1 ? exactNameMatches[0] : null);
+    if (selected) {
+      const exactMatchAfterMs = Date.now() - startedAt;
+      await logField({
+        level: "info",
+        message: `AdvancedMD row ${row.inputRow}: Patient exact match found after: ${exactMatchAfterMs} ms.`,
+        eventName: "payment_posting_advancedmd_patient_exact_match_timing",
+        meta: {
+          field: "Patient",
+          exactMatchAfterMs,
+          option: selected.label,
+          matchType: selected === idMatch ? "Patient ID + name" : selected === controlMatch ? "Patient Control Number + name" : "Exact name",
+        },
+      });
+      return {
+        selected: selected.option,
+        selectedLabel: selected.label,
+        firstVisibleAfterMs,
+        exactMatchAfterMs,
+      };
+    }
+    await page.waitForTimeout(200);
+  }
+  return null;
+}
+
 async function selectPatientByNameAndId(
   page: Page,
   selectors: AdvancedMdSelectorConfig,
   row: PaymentPostingInputRow,
   logField: AdvancedMdPaymentEntryFieldLogger,
 ): Promise<string> {
+  const patientStart = Date.now();
+  await logField({
+    level: "info",
+    message: `AdvancedMD row ${row.inputRow}: Patient input started.`,
+    eventName: "payment_posting_advancedmd_patient_input_started",
+    meta: { field: "Patient" },
+  });
   const patientInput = await paymentFrameInputByCandidates("Patient", [
     paymentFrameInputByWrapperPendoId(page, "payment-entry-patient-search-input-20240229", "Patient"),
     paymentFrame(page).locator("amds-patient-lookup-control[controlname=\"patientLookup\"] input").first(),
@@ -1095,6 +1174,85 @@ async function selectPatientByNameAndId(
     eventName: "payment_posting_advancedmd_patient_search",
     meta: { field: "Patient", searchValue: row.patientName },
   });
+
+  const fastSelection = await findPatientDropdownSelectionFast(page, selectors.paymentEntry.patientDropdownOptions, row, logField, patientStart, 10000);
+  if (fastSelection) {
+    const selectedLabel = fastSelection.selectedLabel || await textContent(fastSelection.selected);
+    await fastSelection.selected.click();
+    const clickedAfterMs = Date.now() - patientStart;
+    await logField({
+      level: "info",
+      message: `AdvancedMD row ${row.inputRow}: Patient result clicked: ${selectedLabel}`,
+      eventName: "payment_posting_advancedmd_patient_option_clicked",
+      meta: {
+        field: "Patient",
+        option: selectedLabel,
+        patientIdSelected: extractMatchedToken(selectedLabel, row.patientId),
+        patientControlNumberSelected: extractMatchedToken(selectedLabel, row.patientControlNumber),
+      },
+    });
+    await logField({
+      level: "info",
+      message: `AdvancedMD row ${row.inputRow}: Patient option clicked after: ${clickedAfterMs} ms.`,
+      eventName: "payment_posting_advancedmd_patient_option_clicked_timing",
+      meta: {
+        field: "Patient",
+        firstVisibleAfterMs: fastSelection.firstVisibleAfterMs,
+        exactMatchAfterMs: fastSelection.exactMatchAfterMs,
+        clickedAfterMs,
+      },
+    });
+    await logField({
+      level: "info",
+      message: `AdvancedMD row ${row.inputRow}: Waiting for Patient commit.`,
+      eventName: "payment_posting_advancedmd_patient_waiting_commit",
+      meta: { field: "Patient" },
+    });
+    const commitStart = Date.now();
+    await waitForPatientDropdownToClose(page, selectors.paymentEntry.patientDropdownOptions, 5000);
+    await waitForPatientCommit(page, patientInput, selectedLabel, row.patientName, 7000);
+    const commitDurationMs = Date.now() - commitStart;
+    await logField({
+      level: "info",
+      message: `AdvancedMD row ${row.inputRow}: Patient commit completed after: ${commitDurationMs} ms.`,
+      eventName: "payment_posting_advancedmd_patient_commit_timing",
+      meta: { field: "Patient", commitDurationMs },
+    });
+    const finalPatient = await waitForLookupDisplayedValue(patientInput, row.patientName, 5000);
+    const committedPatient = await readCommittedPatientValue(page, patientInput);
+    const finalDisplay = committedPatient || finalPatient;
+    const selectedLooksCorrect = patientValuesMatch(selectedLabel, row.patientName);
+    const committedLooksCorrect = patientValuesMatch(finalDisplay, row.patientName);
+    const invalid = await isPatientFieldInvalid(patientInput);
+    const patientDataPopulated = await isPatientDependentDataPopulated(page);
+    const success = selectedLooksCorrect && committedLooksCorrect && patientDataPopulated;
+    await logField({
+      level: "info",
+      message: `AdvancedMD row ${row.inputRow}: Patient committed: ${finalDisplay || "(blank)"}.`,
+      eventName: "payment_posting_advancedmd_patient_committed",
+      meta: { field: "Patient", committed: finalDisplay },
+    });
+    await logField({
+      level: success ? "info" : "error",
+      message: `AdvancedMD row ${row.inputRow}: Patient selection ${success ? "success" : "failure"}.`,
+      eventName: success ? "payment_posting_advancedmd_patient_selection_success" : "payment_posting_advancedmd_patient_selection_failed",
+      meta: {
+        field: "Patient",
+        searchValue: row.patientName,
+        optionSelected: selectedLabel,
+        finalDisplayed: finalDisplay,
+        patientIdSelected: extractMatchedToken(finalDisplay || selectedLabel, row.patientId),
+        patientControlNumberSelected: extractMatchedToken(finalDisplay || selectedLabel, row.patientControlNumber),
+        invalid,
+        patientDataPopulated,
+        success,
+      },
+    });
+    if (!success) {
+      throw new AdvancedMdPatientNotSelectedError(`Patient Not Selected. Expected "${row.patientName}", committed "${finalDisplay || "(blank)"}".`);
+    }
+    return finalDisplay;
+  }
 
   await logField({
     level: "info",
@@ -1246,7 +1404,10 @@ async function selectVisitClaimByDos(
     eventName: "payment_posting_advancedmd_visit_claim_waiting_dropdown",
     meta: { field: "Visit/Claim #" },
   });
-  let dropdown = await waitForRealVisitOptions(page, optionSelector, logField, inputRow, 12000, 1);
+  let dropdownOpened = await waitForVisitClaimDropdownOpen(page, optionSelector, logField, inputRow, 3000, 1);
+  let dropdown = dropdownOpened
+    ? await waitForRealVisitOptions(page, optionSelector, logField, inputRow, 10000, 1)
+    : { options: await paymentEntryOptions(page, optionSelector), realOptionCount: 0, realOptionLabels: [] };
   const initialOptionCount = dropdown.realOptionCount;
   let retryPerformed = "No";
   if (initialOptionCount === 0) {
@@ -1264,7 +1425,10 @@ async function selectVisitClaimByDos(
       eventName: "payment_posting_advancedmd_visit_claim_clicked_retry",
       meta: { field: "Visit/Claim #", locator: control.description, retry: true },
     });
-    dropdown = await waitForRealVisitOptions(page, optionSelector, logField, inputRow, 12000, 2);
+    dropdownOpened = await waitForVisitClaimDropdownOpen(page, optionSelector, logField, inputRow, 3000, 2);
+    dropdown = dropdownOpened
+      ? await waitForRealVisitOptions(page, optionSelector, logField, inputRow, 10000, 2)
+      : { options: await paymentEntryOptions(page, optionSelector), realOptionCount: 0, realOptionLabels: [] };
   }
   const options = dropdown.options;
   const count = dropdown.realOptionCount;
@@ -1586,6 +1750,25 @@ function patientValuesMatch(actual: string, expected: string): boolean {
   return carrierValuesMatch(actual, expected);
 }
 
+function patientNameExactlyMatches(candidateLabel: string, expectedName: string): boolean {
+  const normalizedExpected = normalizePatientNameForExactMatch(expectedName);
+  const normalizedCandidate = normalizePatientNameForExactMatch(candidateLabel);
+  return !!normalizedExpected && (
+    normalizedCandidate === normalizedExpected ||
+    normalizedCandidate.startsWith(`${normalizedExpected} `) ||
+    normalizedCandidate.includes(` ${normalizedExpected}`)
+  );
+}
+
+function normalizePatientNameForExactMatch(value: string): string {
+  return value
+    .split(/\b\d{1,2}\/\d{1,2}\/\d{2,4}\b/)[0]
+    .replace(/\s+/g, " ")
+    .replace(/[^\p{L},\s'-]/gu, "")
+    .trim()
+    .toLowerCase();
+}
+
 function extractMatchedToken(label: string, token: string | undefined): string {
   if (!token) return "";
   return label.toLowerCase().includes(token.toLowerCase()) ? token : "";
@@ -1625,7 +1808,7 @@ async function waitForRealVisitOptions(
     latestRealCount = latestLabels.length;
     await logField({
       level: "info",
-      message: `AdvancedMD row ${inputRow}: Visit option count attempt ${attempt}: ${latestRealCount}.`,
+      message: `AdvancedMD row ${inputRow}: Visit options poll ${attempt}: ${latestRealCount}.`,
       eventName: "payment_posting_advancedmd_visit_claim_option_count_attempt",
       meta: {
         field: "Visit/Claim #",
@@ -1643,6 +1826,40 @@ async function waitForRealVisitOptions(
     realOptionCount: latestRealCount,
     realOptionLabels: latestLabels,
   };
+}
+
+async function waitForVisitClaimDropdownOpen(
+  page: Page,
+  optionSelector: string,
+  logField: AdvancedMdPaymentEntryFieldLogger,
+  inputRow: number,
+  timeoutMs: number,
+  waitRound: number,
+): Promise<boolean> {
+  const options = await paymentEntryOptions(page, optionSelector);
+  const deadline = Date.now() + timeoutMs;
+  let attempt = 0;
+  while (Date.now() < deadline) {
+    attempt += 1;
+    const labels = await visibleOptionLabels(options);
+    if (labels.length > 0) {
+      await logField({
+        level: "info",
+        message: `AdvancedMD row ${inputRow}: Visit/Claim dropdown opened.`,
+        eventName: "payment_posting_advancedmd_visit_claim_dropdown_opened",
+        meta: { field: "Visit/Claim #", waitRound, attempt, visibleOptionCount: labels.length },
+      });
+      return true;
+    }
+    await page.waitForTimeout(250);
+  }
+  await logField({
+    level: "warn",
+    message: `AdvancedMD row ${inputRow}: Visit/Claim dropdown did not open after click.`,
+    eventName: "payment_posting_advancedmd_visit_claim_dropdown_not_open",
+    meta: { field: "Visit/Claim #", waitRound, timeoutMs },
+  });
+  return false;
 }
 
 async function visibleOptionLabels(options: Locator): Promise<string[]> {
@@ -2197,13 +2414,13 @@ async function fastFillTopPaymentAmount(
     await exactLocator.scrollIntoViewIfNeeded().catch(() => {});
     await exactLocator.click();
     await exactLocator.press(process.platform === "darwin" ? "Meta+A" : "Control+A");
-    await logFillTiming(logField, row.inputRow, "Payment Amount", "focus/click", Date.now() - focusStart);
+    await logFillTiming(logField, row.inputRow, "Payment Amount", "focused", Date.now() - focusStart);
 
-    const typingStart = Date.now();
-    await exactLocator.type(expected, { delay: 10, timeout: 15000 });
-    await logFillTiming(logField, row.inputRow, "Payment Amount", "typing", Date.now() - typingStart);
+    const enterStart = Date.now();
+    await exactLocator.fill(expected);
+    await logFillTiming(logField, row.inputRow, "Payment Amount", "value entered", Date.now() - enterStart);
 
-    const verifyStart = Date.now();
+    const readbackStart = Date.now();
     const actual = await inputValue(exactLocator);
     await logField({
       level: "info",
@@ -2211,15 +2428,15 @@ async function fastFillTopPaymentAmount(
       eventName: "payment_posting_advancedmd_payment_amount_entered",
       meta: { field: "Payment Amount", entered: actual, expected },
     });
-    await logFillTiming(logField, row.inputRow, "Payment Amount", "verification", Date.now() - verifyStart);
+    await logFillTiming(logField, row.inputRow, "Payment Amount", "readback", Date.now() - readbackStart);
     if (!currencyInputsEquivalent(actual, expected)) {
       throw new Error(`expected "${expected}", found "${actual}"`);
     }
 
     const commitStart = Date.now();
     await exactLocator.blur().catch(() => {});
-    await logFillTiming(logField, row.inputRow, "Payment Amount", "commit/blur", Date.now() - commitStart);
-    await logFillTiming(logField, row.inputRow, "Payment Amount", "total fill duration", Date.now() - totalStart);
+    await logFillTiming(logField, row.inputRow, "Payment Amount", "commit complete", Date.now() - commitStart);
+    await logFillTiming(logField, row.inputRow, "Payment Amount", "total duration", Date.now() - totalStart);
     await logField({
       level: "info",
       message: `AdvancedMD row ${row.inputRow}: Payment Amount fill success.`,
