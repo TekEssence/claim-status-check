@@ -164,6 +164,8 @@ export function createWaystarRunner(): AutomationRunner<EligibilityRunInput> {
                   page,
                   credentials,
                   payerName: payer.portalPayerName,
+                  serviceTypeCode: payer.serviceTypeCode,
+                  patientLookupCode: payer.patientLookupCode,
                   row,
                 });
                 let result = applyWaystarResultDefaults(payer.parseResult(payload, row), row);
@@ -179,6 +181,8 @@ export function createWaystarRunner(): AutomationRunner<EligibilityRunInput> {
                     page,
                     credentials,
                     payerName: payer.portalPayerName,
+                    serviceTypeCode: payer.serviceTypeCode,
+                    patientLookupCode: payer.patientLookupCode,
                     row,
                   });
                   result = applyWaystarResultDefaults(payer.parseResult(payload, row), row);
@@ -419,7 +423,7 @@ export function describeEligibilityExtraction(result: EligibilityResult): {
   extracted: string[];
   missing: string[];
 } {
-  if ((result.payerId === "bcbs-ppo" || result.payerId === "cigna-open-access-plus" || result.payerId === "baycare-plus-medicare-advantage" || result.payerId === "aetna" || result.payerId === "aetna-medicare-ppo" || result.payerId === "united-healthcare-all-states" || result.payerId === "aarp-medicare-complete")) {
+  if ((result.payerId === "bcbs-ppo" || result.payerId === "cigna-open-access-plus" || result.payerId === "baycare-plus-medicare-advantage" || result.payerId === "aetna" || result.payerId === "aetna-medicare-ppo" || result.payerId === "united-healthcare-all-states" || result.payerId === "aarp-medicare-complete" || result.payerId === "umr" || result.payerId === "humana-medicare-ppo" || result.payerId === "av-med")) {
     const fields = [
       { label: "Coverage Status", value: result.coverageStatus !== "unknown" && result.coverageStatus !== "error", required: true },
       { label: "Eff Date", value: Boolean(result.effectiveDate), required: false },
@@ -470,6 +474,7 @@ function isFailedAtPayerResult(result: EligibilityResult): boolean {
 function isWaystarInquiryFieldError(message: string): boolean {
   const normalized = message.toLowerCase();
   return normalized.includes("did not fill correctly") ||
+    normalized.includes("inquiry field") && normalized.includes("was not visible") ||
     normalized.includes("inquiry fields were not present on the page before submit");
 }
 function isWaystarSessionLoginError(message: string): boolean {

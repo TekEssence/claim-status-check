@@ -200,6 +200,26 @@ test("routes every Cigna alias through the same Open Access Plus implementation"
   ]);
   assert.equal(routing.unsupportedRows.length, 0);
 });
+test("routes AV Med to the AvMed 59274 Waystar payer", () => {
+  const routing = routeWaystarRowsByPayer([
+    { Payer: "AV Med", "Member ID": "AVMED-1" },
+  ]);
+
+  assert.deepEqual(routing.batches.map((batch) => [batch.payerId, batch.payerName]), [
+    ["av-med", "AV Med"],
+  ]);
+});
+
+test("routes HUMANA MEDICARE PPO to the Humana 61101 Waystar payer", () => {
+  const routing = routeWaystarRowsByPayer([
+    { Payer: "HUMANA MEDICARE PPO", "Member ID": "HUMANA-1" },
+  ]);
+
+  assert.deepEqual(routing.batches.map((batch) => [batch.payerId, batch.payerName]), [
+    ["humana-medicare-ppo", "HUMANA MEDICARE PPO"],
+  ]);
+});
+
 test("routes AETNA separately from Aetna Medicare PPO", () => {
   const routing = routeWaystarRowsByPayer([
     { Payer: "AETNA", "Member ID": "AETNA-1" },

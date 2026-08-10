@@ -66,3 +66,32 @@ test("creates a Waystar output workbook with verified inputs, results, and row e
   assert.equal(rows[1]["Relationship to Subscriber"], "Self");
   assert.equal("Bot Network" in rows[0], false);
   assert.equal("Bot Error" in rows[0], false);});
+test("writes UMR Plan Network Name in the existing Plan Type column", async () => {
+  const inputWorkbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(inputWorkbook, XLSX.utils.aoa_to_sheet([
+    ["Member ID"],
+    ["ABC123"],
+  ]), "Eligibility");
+  const inputBuffer = XLSX.write(inputWorkbook, { type: "buffer", bookType: "xlsx" }) as Buffer;
+
+  const output = await buildWaystarOutputWorkbook({
+    inputFile: new File([inputBuffer], "umr-eligibility.xlsx"),
+    rows: new Map([[2, { originalIndex: 2, memberId: "ABC123", raw: {} }]]),
+    results: new Map([[2, {
+      rowIndex: 2,
+      payerId: "umr",
+      coverageStatus: "active",
+      effectiveDate: "01/01/2025",
+      planType: "UNITEDHEALTHCARE CHOICE PLUS",
+      benefits: [],
+    }]]),
+    errors: new Map(),
+  });
+
+  const workbook = XLSX.read(output, { type: "buffer" });
+  const rows = XLSX.utils.sheet_to_json<Record<string, string>>(workbook.Sheets[workbook.SheetNames[0]], { defval: "" });
+  assert.equal(rows[0]["Eff Date"], "01/01/2025");
+  assert.equal(rows[0]["Plan Type"], "UNITEDHEALTHCARE CHOICE PLUS");
+  assert.equal("Plan Name" in rows[0], false);
+  assert.equal("Bot Plan Name" in rows[0], false);
+});

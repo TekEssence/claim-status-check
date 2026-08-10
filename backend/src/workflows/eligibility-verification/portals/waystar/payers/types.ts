@@ -10,5 +10,7 @@ export interface WaystarPayerHandler {
   insuranceNameAliases: string[];
   credentialProject?: string;
   requiredFields: string[];
+  serviceTypeCode?: string;
+  patientLookupCode?: string;
   parseResult(payload: unknown, row: EligibilityInputRow): EligibilityResult;
 }

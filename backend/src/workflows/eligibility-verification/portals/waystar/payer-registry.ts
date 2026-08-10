@@ -8,10 +8,15 @@ import { bayCarePlusMedicareAdvantagePayer } from "./payers/baycare-plus-medicar
 import { bcbsPpoPayer } from "./payers/bcbs-ppo";
 import { cignaOpenAccessPlusPayer } from "./payers/cigna-open-access-plus";
 import { medicarePayer } from "./payers/medicare";
+import { avMedPayer } from "./payers/av-med";
+import { humanaMedicarePpoPayer } from "./payers/humana-medicare-ppo";
+import { umrPayer } from "./payers/umr";
 import type { WaystarPayerHandler } from "./payers/types";
 
 export const waystarPayerRegistry = {
   medicare: medicarePayer,
+  "av-med": avMedPayer,
+  "humana-medicare-ppo": humanaMedicarePpoPayer,
   "aetna-medicare-ppo": aetnaMedicarePpoPayer,
   aetna: aetnaPayer,
   "aarp-medicare-complete": aarpMedicareCompletePayer,
@@ -20,6 +25,7 @@ export const waystarPayerRegistry = {
   "baycare-plus-medicare-advantage": bayCarePlusMedicareAdvantagePayer,
   "bcbs-ppo": bcbsPpoPayer,
   "cigna-open-access-plus": cignaOpenAccessPlusPayer,
+  umr: umrPayer,
 } satisfies Record<string, WaystarPayerHandler>;
 
 export function getWaystarPayer(payerId: string): WaystarPayerHandler {

@@ -46,7 +46,6 @@ BCBS_OUTPUT_COLUMNS[4] = { header: "Other Ins Eff Date", value: (_row, result) =
 BCBS_OUTPUT_COLUMNS[5].header = "Relationship to Subscriber";
 BCBS_OUTPUT_COLUMNS[6].header = "Plan Type";
 BCBS_OUTPUT_COLUMNS[7].header = "Bot Insurance Type";
-
 function splitOutputDateRange(value?: string): { effectiveDate: string; endDate: string } {
   const [effectiveDate = "", endDate = ""] = (value ?? "").split(/\s*\bto\b\s*/i, 2);
   return { effectiveDate: effectiveDate.trim(), endDate: endDate.trim() };
@@ -68,7 +67,7 @@ export async function buildWaystarOutputWorkbook(options: {
   const sheet = workbook.worksheets[0];
   if (!sheet) throw new Error("The eligibility workbook does not contain a worksheet.");
 
-  const outputColumns = [...options.results.values()].some((result) => result.payerId === "bcbs-ppo" || result.payerId === "cigna-open-access-plus" || result.payerId === "baycare-plus-medicare-advantage" || result.payerId === "aetna" || result.payerId === "aetna-medicare-ppo" || result.payerId === "united-healthcare-all-states" || result.payerId === "aarp-medicare-complete")
+  const outputColumns = [...options.results.values()].some((result) => result.payerId === "bcbs-ppo" || result.payerId === "cigna-open-access-plus" || result.payerId === "baycare-plus-medicare-advantage" || result.payerId === "aetna" || result.payerId === "aetna-medicare-ppo" || result.payerId === "united-healthcare-all-states" || result.payerId === "aarp-medicare-complete" || result.payerId === "umr" || result.payerId === "humana-medicare-ppo" || result.payerId === "av-med")
     ? BCBS_OUTPUT_COLUMNS
     : LEGACY_OUTPUT_COLUMNS;
   const outputStartColumn = sheet.columnCount + 1;

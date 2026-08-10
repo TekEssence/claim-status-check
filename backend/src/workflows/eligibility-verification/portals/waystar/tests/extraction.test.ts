@@ -12,6 +12,7 @@ function compactResult(payerId: string): EligibilityResult {
     terminationDate: "12/31/2026",
     relationshipToSubscriber: "Self",
     planType: "PPO",
+    planName: "UNITEDHEALTHCARE CHOICE PLUS",
     insuranceType: "Commercial",
     benefits: [],
   };
@@ -26,6 +27,27 @@ test("reports only compact output fields for BCBS PPO", () => {
 
 test("reports only compact output fields for Cigna Open Access Plus", () => {
   assert.deepEqual(describeEligibilityExtraction(compactResult("cigna-open-access-plus")), {
+    extracted: ["Coverage Status", "Eff Date", "End Date", "Relationship to Subscriber", "Plan Type", "Bot Insurance Type"],
+    missing: [],
+  });
+});
+
+test("reports only compact output fields for AV Med", () => {
+  assert.deepEqual(describeEligibilityExtraction(compactResult("av-med")), {
+    extracted: ["Coverage Status", "Eff Date", "End Date", "Relationship to Subscriber", "Plan Type", "Bot Insurance Type"],
+    missing: [],
+  });
+});
+
+test("reports only compact output fields for Humana Medicare PPO", () => {
+  assert.deepEqual(describeEligibilityExtraction(compactResult("humana-medicare-ppo")), {
+    extracted: ["Coverage Status", "Eff Date", "End Date", "Relationship to Subscriber", "Plan Type", "Bot Insurance Type"],
+    missing: [],
+  });
+});
+
+test("reports only compact output fields for UMR", () => {
+  assert.deepEqual(describeEligibilityExtraction(compactResult("umr")), {
     extracted: ["Coverage Status", "Eff Date", "End Date", "Relationship to Subscriber", "Plan Type", "Bot Insurance Type"],
     missing: [],
   });

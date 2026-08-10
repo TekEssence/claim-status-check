@@ -17,6 +17,8 @@ type WaystarEligibilityPayload = {
     eligibilityEndDate?: unknown;
     planStatus?: unknown;
     planType?: unknown;
+    planSponsor?: unknown;
+    benefitBeginDate?: unknown;
     general?: { coverageDescription?: unknown };
     benefitSections?: WaystarProfessionalOfficeSection[];
   };
@@ -41,6 +43,9 @@ type WaystarPatientInformation = {
 type WaystarSubscriberCoverageInformation = {
   groupNumber?: unknown;
   planDate?: unknown;
+  planNetworkName?: unknown;
+  planSponsor?: unknown;
+  planBeginDate?: unknown;
   premiumPaidToDateEnd?: unknown;
   insuranceType?: unknown;
   otherInsurance?: unknown;
@@ -85,8 +90,8 @@ export function parseWaystarEligibilityResult(
     : overallCoverageStatus !== "unknown"
     ? overallCoverageStatus
     : normalizeCoverageStatus(planStatus);
-  const planType = normalizePlanType(asText(coverage?.planType));
-  const planName = asText(coverage?.coverageDescription) ||
+  const coveragePlanType = normalizePlanType(asText(coverage?.planType));
+  const coveragePlanName = asText(coverage?.coverageDescription) ||
     sectionStatuses.map((section) => asText(section.title)).filter(Boolean).join(", ") ||
     undefined;
   const subscriber = result.subscriberInformation ?? {};
@@ -95,7 +100,19 @@ export function parseWaystarEligibilityResult(
   const planDateRange = payerId === "bcbs-ppo"
     ? splitPlanDateRange(asText(subscriberCoverage.planDate))
     : {};
-  const effectiveDate = asText(coverage?.eligibilityBeginDate) || planDateRange.effectiveDate;
+  const planType = payerId === "umr"
+    ? asText(subscriberCoverage.planNetworkName) || coveragePlanType
+    : payerId === "av-med"
+    ? asText(coverage?.planSponsor) || asText(subscriberCoverage.planSponsor) || coveragePlanType
+    : coveragePlanType;
+  const planName = coveragePlanName;
+  const effectiveDate = payerId === "av-med"
+    ? asText(coverage?.benefitBeginDate) || asText(subscriberCoverage.planBeginDate) || asText(coverage?.eligibilityBeginDate)
+    : asText(coverage?.eligibilityBeginDate) ||
+      planDateRange.effectiveDate ||
+      (payerId === "umr" || payerId === "humana-medicare-ppo"
+        ? asText(subscriberCoverage.planBeginDate)
+        : undefined);
   const terminationDate = asText(coverage?.eligibilityEndDate) || planDateRange.terminationDate;
   const professionalOffice = selectProfessionalOfficeBenefits(
     result.professionalOffice,

@@ -38,6 +38,8 @@ export type WaystarInquiryPayload = {
   subscriberCoverageInformation?: {
     groupNumber?: string;
     planDate?: string;
+    planNetworkName?: string;
+    planSponsor?: string;
     planBeginDate?: string;
     planEndDate?: string;
     premiumPaidToDateEnd?: string;
@@ -52,6 +54,8 @@ export type WaystarInquiryPayload = {
     eligibilityEndDate?: string;
     planStatus?: string;
     planType?: string;
+    planSponsor?: string;
+    benefitBeginDate?: string;
     general?: { coverageDescription?: string };
     benefitSections?: WaystarBenefitSection[];
   };
@@ -68,7 +72,14 @@ const authenticatedWaystarContexts = new WeakSet<BrowserContext>();
 const cardSwipeAutoClosePages = new WeakSet<Page>();
 
 export async function loginToWaystar(page: Page, credentials: WaystarCredentials): Promise<void> {
-  await page.goto(credentials.loginUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
+  try {
+    await page.goto(credentials.loginUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
+  } catch (error) {
+    if (!isWaystarAbortedNavigationError(error)) throw error;
+    // The legacy ZirMed login can cancel its initial navigation while it
+    // redirects to Waystar. Continue when the redirected login UI appears.
+    await page.waitForLoadState("domcontentloaded", { timeout: 30000 }).catch(() => {});
+  }
   await page.locator(WAYSTAR_SELECTORS.login.username).first().waitFor({ state: "visible", timeout: 30000 });
   await humanPause(page, 700, 1300);
   await humanType(page.locator(WAYSTAR_SELECTORS.login.username).first(), credentials.username);
@@ -87,6 +98,11 @@ export async function loginToWaystar(page: Page, credentials: WaystarCredentials
     timeout: 30000,
   });
   authenticatedWaystarContexts.add(page.context());
+}
+
+export function isWaystarAbortedNavigationError(error: unknown): boolean {
+  return error instanceof Error &&
+    error.message.toLowerCase().includes("net::err_aborted");
 }
 
 export async function openEligibilityInquiry(page: Page): Promise<Page> {
@@ -183,12 +199,18 @@ export async function submitWaystarInquiry(options: {
   page: Page;
   credentials: WaystarCredentials;
   payerName: string;
+  serviceTypeCode?: string;
+  patientLookupCode?: string;
   row: EligibilityInputRow;
 }): Promise<WaystarInquiryPayload> {
   const { page, credentials, payerName, row } = options;
   const inquiryPage = await openEligibilityInquiry(page);
   await humanPause(inquiryPage, 650, 1200);
-  const expectedServiceType = normalizeServiceTypeCode(row.serviceType) || credentials.serviceTypeCode;
+  const expectedServiceType = resolveWaystarServiceTypeCode(
+    options.serviceTypeCode,
+    row.serviceType,
+    credentials.serviceTypeCode,
+  );
   const expectedMemberId = normalizeWaystarMemberIdForPayer(payerName, row.memberId || row.subscriberId || "");
   const expectedLastName = row.patientLastName || "";
   const expectedFirstName = row.patientFirstName || "";
@@ -207,6 +229,9 @@ export async function submitWaystarInquiry(options: {
   }
   await humanPause(inquiryPage);
   await selectServiceType(inquiryPage, expectedServiceType);
+  if (options.patientLookupCode) {
+    await selectPatientLookupOption(inquiryPage, options.patientLookupCode);
+  }
   await waitForBlockingOverlaysToClear(inquiryPage, 30000);
   await dismissWaystarDatePicker(inquiryPage);
   await fillVerifiedText(inquiryPage, WAYSTAR_SELECTORS.inquiry.memberId, expectedMemberId, "Member ID");
@@ -410,7 +435,9 @@ const dataId = header.getAttribute("data-id");
     const subscriberCoverageInformation = coverageBlock ? {
       groupNumber: coverageBlock.fields["Group Number"],
       planDate: coverageBlock.fields["Plan Date"] || findRowValueByLabel("Plan Date"),
-      planBeginDate: coverageBlock.fields["Plan Begin Date"] || findRowValueByLabel("Plan Begin Date"),
+      planNetworkName: coverageBlock.fields["Plan Network Name"] || findRowValueByLabel("Plan Network Name"),
+      planSponsor: coverageBlock.fields["Plan Sponsor"] || findRowValueByLabel("Plan Sponsor"),
+      planBeginDate: coverageBlock.fields["Plan Begin Date"] || findRowValueByLabel("Plan Begin Date") || findRowValueByLabel("Benefit Begin Date"),
       planEndDate: coverageBlock.fields["Plan End Date"] || findRowValueByLabel("Plan End Date"),
       premiumPaidToDateEnd: coverageBlock.fields["Premium Paid-to Date End"],
       insuranceType: coverageBlock.fields["Insurance Type"],
@@ -429,6 +456,8 @@ const dataId = header.getAttribute("data-id");
       eligibilityEndDate?: string;
       planStatus?: string;
       planType?: string;
+      planSponsor?: string;
+      benefitBeginDate?: string;
       benefitSections?: ReturnType<typeof parseSectionContents>;
     } | undefined;
 
@@ -441,6 +470,8 @@ const dataId = header.getAttribute("data-id");
         eligibilityEndDate: findRowValueByLabel("Eligibility End Date"),
         planStatus: hbpc.status,
         planType: textOf(planTypeEl) || undefined,
+        planSponsor: findRowValueByLabel("Plan Sponsor"),
+        benefitBeginDate: findRowValueByLabel("Benefit Begin Date") || findRowValueByLabel("Plan Begin Date"),
         benefitSections: hbpcSections.length > 0 ? hbpcSections : undefined,
       };
     }
@@ -538,6 +569,16 @@ type WaystarInquirySnapshot = {
   firstName: string;
   dateOfBirth: string;
 };
+
+export function resolveWaystarServiceTypeCode(
+  payerServiceTypeCode: string | undefined,
+  rowServiceTypeCode: string | undefined,
+  credentialServiceTypeCode: string,
+): string {
+  return normalizeServiceTypeCode(payerServiceTypeCode) ||
+    normalizeServiceTypeCode(rowServiceTypeCode) ||
+    credentialServiceTypeCode;
+}
 
 export function findWaystarServiceTypeOption(
   options: WaystarSelectOption[],
@@ -785,6 +826,39 @@ async function commitTypedPayerSelection(payerInput: Locator): Promise<void> {
   await payerInput.page().waitForTimeout(50);
 }
 
+export function findWaystarPatientLookupOption(
+  options: Array<{ value: string; label: string }>,
+  lookupCode: string,
+): { value: string; label: string } | null {
+  const normalizedExpectedLabel = "sbr id lname fname dob";
+  return options.find((option) => option.value === lookupCode) ??
+    options.find((option) => normalizeText(option.label) === normalizedExpectedLabel) ??
+    null;
+}
+
+async function selectPatientLookupOption(page: Page, lookupCode: string): Promise<void> {
+  const lookup = page.locator(WAYSTAR_SELECTORS.inquiry.patientLookup).first();
+  await lookup.waitFor({ state: "visible", timeout: 30000 });
+  await waitForEnabled(lookup, "Waystar Look Up By");
+  const options = await lookup.locator("option").evaluateAll((nodes) =>
+    nodes.map((node) => ({
+      value: (node as HTMLOptionElement).value,
+      label: (node.textContent || "").trim(),
+    })),
+  );
+  const expected = findWaystarPatientLookupOption(options, lookupCode);
+  if (!expected) {
+    throw new Error(`Waystar Look Up By option Sbr ID, LName, FName, DOB (${lookupCode}) was not available.`);
+  }
+  await lookup.selectOption(expected.value);
+  const selected = await lookup.locator("option:checked").evaluate((node) => ({
+    value: (node as HTMLOptionElement).value,
+    label: (node.textContent || "").trim(),
+  }));
+  if (selected.value !== expected.value || normalizeText(selected.label) !== normalizeText(expected.label)) {
+    throw new Error(`Waystar Look Up By selection did not stick. Expected ${expected.label}, found ${selected.label || selected.value || "blank"}.`);
+  }
+}
 async function selectServiceType(page: Page, serviceTypeCode: string): Promise<void> {
   const serviceType = page.locator(WAYSTAR_SELECTORS.inquiry.serviceType).first();
   await serviceType.waitFor({ state: "visible", timeout: 30000 });
@@ -867,7 +941,9 @@ async function dismissWaystarDatePicker(page: Page): Promise<void> {
 }
 async function fillVerifiedText(page: Page, selector: string, value: string, label: string, compareAsDate = false): Promise<void> {
   const input = page.locator(selector).first();
-  await input.waitFor({ state: "visible", timeout: 30000 });
+  await input.waitFor({ state: "visible", timeout: 30000 }).catch(() => {
+    throw new Error(`Waystar inquiry field ${label} was not visible after 30 seconds.`);
+  });
   await waitForEnabled(input, `Waystar ${label}`);
   await humanType(input, value);
   await commitInputValue(input);
