@@ -14,6 +14,7 @@ import {
   Stethoscope,
   Users,
 } from "lucide-react";
+import { getCognitoAccessToken, isCognitoMode, redirectToCognitoLogout } from "../api/cognito-auth";
 
 type AuthUser = {
   username: string;
@@ -47,6 +48,21 @@ export function WorkflowDashboardPage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    if (isCognitoMode()) {
+      if (!getCognitoAccessToken()) {
+        router.replace("/");
+        return;
+      }
+      setUser({
+        username: "Cognito user",
+        email: "Signed in with Cognito",
+        role: "USER",
+        mustResetPassword: false,
+      });
+      setLoading(false);
+      return;
+    }
+
     let active = true;
     fetch("/api/auth/me")
       .then(async (response) => {
@@ -69,6 +85,11 @@ export function WorkflowDashboardPage() {
   }, [router]);
 
   async function logout() {
+    if (isCognitoMode()) {
+      redirectToCognitoLogout();
+      return;
+    }
+
     await fetch("/api/auth/logout", { method: "POST" }).catch(() => {});
     router.replace("/");
   }

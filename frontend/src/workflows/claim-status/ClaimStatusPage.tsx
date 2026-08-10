@@ -28,7 +28,21 @@ import optumLogo from "../../Assets/optum-logo.svg";
 import regalLogo from "../../Assets/channels4_profile (1).jpg";
 import availityLogo from "../../Assets/availity-logo.jpg";
 import { applyClaimRowUpdateToWorksheet, postProcessWorksheet } from "./portals/iehp/workbook";
-import { cancelScrapeJob as cancelScrapeJobRequest, getActiveScrapeJobErrorId, getCurrentScrapeJob, startScrapeJob, subscribeToScrapeJobEvents, submitScrapeJobInput, type CurrentScrapeJob } from "../../api/scrape-jobs-api";
+import {
+  cancelScrapeJob as cancelScrapeJobRequest,
+  getActiveScrapeJobErrorId,
+  getCurrentScrapeJob,
+  getScrapeJobDetails,
+  getScrapeJobDownload,
+  isAwsWorkflowMode,
+  listScrapeJobs,
+  startScrapeJob,
+  subscribeToScrapeJobEvents,
+  submitScrapeJobInput,
+  type CurrentScrapeJob,
+  type ScrapeJobSummary,
+} from "../../api/scrape-jobs-api";
+import { getCognitoAccessToken, isCognitoMode, redirectToCognitoLogout } from "../../api/cognito-auth";
 import { clearStoredRunContext, loadClaimFileHandle, loadIehpLoginFile, saveClaimFileHandle, saveIehpLoginFile } from "../../lib/run-context-store";
 import type { FileSystemFileHandle, WindowWithFilePicker } from "../../types/file-system-access";
 import type { ClaimRow, ErrorScreenshot, JobProgressValue, ScrapeJobEvent } from "../../types/job";
@@ -115,6 +129,26 @@ const PORTAL_ROUTE_MAP: Record<PortalId, string> = {
 
 function isPortalId(value: string): value is PortalId {
   return value === "iehp" || value === "aerial" || value === "regal" || value === "blue-shield" || value === "availity" || value === "optum-pro";
+}
+
+function isTerminalWorkflowStatus(status: string): boolean {
+  return status === "completed" || status === "failed" || status === "cancelled";
+}
+
+function formatShortJobId(jobId: string): string {
+  return jobId ? jobId.slice(0, 8) : "";
+}
+
+function formatRunTimestamp(value: string | null | undefined): string {
+  if (!value) return "Not available";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Not available";
+  return date.toLocaleString([], {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
 function canRestoreCurrentJob(job: CurrentScrapeJob): job is CurrentScrapeJob & { portalId: PortalId } {
@@ -618,8 +652,8 @@ async function writeWorkbookToClaimFile(claimFileHandle: FileSystemFileHandle, e
 export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: PortalId | null }) {
   const router = useRouter();
   const pathname = usePathname();
-  const [authUser, setAuthUser] = useState<AuthUser | null>(() => readCachedAuthUser());
-  const [authLoading, setAuthLoading] = useState(() => readCachedAuthUser() === null);
+  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
   const [authUsername, setAuthUsername] = useState("");
   const [authPassword, setAuthPassword] = useState("");
   const [authConfirmPassword, setAuthConfirmPassword] = useState("");
@@ -692,6 +726,12 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
   const [errorScreenshots, setErrorScreenshots] = useState<ErrorScreenshot[]>([]);
   const [progress, setProgress] = useState<JobProgressValue | null>(null);
   const [activeJobId, setActiveJobId] = useState<string>("");
+  const [workflowRuns, setWorkflowRuns] = useState<ScrapeJobSummary[]>([]);
+  const [workflowRunsLoading, setWorkflowRunsLoading] = useState(false);
+  const [workflowRunsError, setWorkflowRunsError] = useState("");
+  const [selectedWorkflowRunId, setSelectedWorkflowRunId] = useState("");
+  const [downloadingWorkflowJobId, setDownloadingWorkflowJobId] = useState("");
+  const [cancellingWorkflowJobId, setCancellingWorkflowJobId] = useState("");
   const [jobRestoreLoading, setJobRestoreLoading] = useState(true);
   const [pendingIehpRestoreJob, setPendingIehpRestoreJob] = useState<CurrentScrapeJob | null>(null);
   const [pendingRegalRestoreJob, setPendingRegalRestoreJob] = useState<CurrentScrapeJob | null>(null);
@@ -705,6 +745,8 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
   });
 
   const isProtectedRoute = pathname !== "/";
+  const awsWorkflowMode = isAwsWorkflowMode();
+  const workflowRunTrackingEnabled = Boolean(authUser);
   const effectivePortalId = forcedPortalId ?? selectedPortalId;
   const availablePortals = useMemo(
     () => claimStatusPortalRegistry,
@@ -742,6 +784,18 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     );
   }, [availablePortals, portalFilter, portalSearch, portalSort]);
   const recentPortals = useMemo(() => availablePortals.slice(0, 4), [availablePortals]);
+  const visibleWorkflowRuns = useMemo(
+    () =>
+      workflowRuns.filter((job) =>
+        !isTerminalWorkflowStatus(job.status) &&
+        (!effectivePortalId || job.portalId === effectivePortalId),
+      ),
+    [effectivePortalId, workflowRuns],
+  );
+  const runningWorkflowRunCount = useMemo(
+    () => workflowRuns.filter((job) => !isTerminalWorkflowStatus(job.status)).length,
+    [workflowRuns],
+  );
   const userDisplayName = useMemo(() => {
     const raw = authUser?.email || authUser?.username || "Afrin";
     const candidate = raw.split("@")[0].replace(/[._-]+/g, " ").trim();
@@ -762,29 +816,31 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
         .toUpperCase(),
     [userDisplayName],
   );
+  const canStartAnotherRun = workflowRunTrackingEnabled || !isProcessing;
+  const blockPortalFormForProcessing = isProcessing && !workflowRunTrackingEnabled;
   const canSubmitIehp = useMemo(
-    () => Boolean(iehpLoginFile && claimFileHandle && !isProcessing),
-    [iehpLoginFile, claimFileHandle, isProcessing],
+    () => Boolean(iehpLoginFile && claimFileHandle && canStartAnotherRun),
+    [iehpLoginFile, claimFileHandle, canStartAnotherRun],
   );
   const canSubmitAerial = useMemo(
-    () => Boolean(aerialInputFile && !isProcessing),
-    [aerialInputFile, isProcessing],
+    () => Boolean(aerialInputFile && canStartAnotherRun),
+    [aerialInputFile, canStartAnotherRun],
   );
   const canSubmitAvaility = useMemo(
-    () => Boolean(availityProjectId && availityCredentialFile && availityInputFile && !isProcessing),
-    [availityProjectId, availityCredentialFile, availityInputFile, isProcessing],
+    () => Boolean(availityProjectId && availityCredentialFile && availityInputFile && canStartAnotherRun),
+    [availityProjectId, availityCredentialFile, availityInputFile, canStartAnotherRun],
   );
   const canSubmitOptumPro = useMemo(
-    () => Boolean(optumProLoginFile && optumProInputFile && !isProcessing),
-    [optumProLoginFile, optumProInputFile, isProcessing],
+    () => Boolean(optumProLoginFile && optumProInputFile && canStartAnotherRun),
+    [optumProLoginFile, optumProInputFile, canStartAnotherRun],
   );
   const canSubmitRegal = useMemo(
-    () => Boolean(regalClaimFile && !isProcessing),
-    [regalClaimFile, isProcessing],
+    () => Boolean(regalClaimFile && canStartAnotherRun),
+    [regalClaimFile, canStartAnotherRun],
   );
   const canSubmitBlueShield = useMemo(
-    () => Boolean(blueShieldCredentialFile && blueShieldInputFile && !isProcessing),
-    [blueShieldCredentialFile, blueShieldInputFile, isProcessing],
+    () => Boolean(blueShieldCredentialFile && blueShieldInputFile && canStartAnotherRun),
+    [blueShieldCredentialFile, blueShieldInputFile, canStartAnotherRun],
   );
   const currentCanSubmit =
     effectivePortalId === "iehp"
@@ -923,6 +979,22 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
   }
 
   useEffect(() => {
+    if (isCognitoMode()) {
+      if (getCognitoAccessToken()) {
+        updateAuthUser({
+          userId: "cognito",
+          username: "Cognito user",
+          email: "Signed in with Cognito",
+          role: "USER",
+          mustResetPassword: false,
+        });
+      } else {
+        updateAuthUser(null);
+      }
+      setAuthLoading(false);
+      return;
+    }
+
     let mounted = true;
 
     fetch("/api/auth/me")
@@ -1162,6 +1234,76 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     };
   }, [authUser, availablePortals.length]);
 
+  async function refreshWorkflowRuns(options?: { silent?: boolean }) {
+    if (!workflowRunTrackingEnabled) {
+      setWorkflowRuns([]);
+      return;
+    }
+
+    if (!options?.silent) {
+      setWorkflowRunsLoading(true);
+      setWorkflowRunsError("");
+    }
+
+    try {
+      const jobs = await listScrapeJobs(50);
+      setWorkflowRuns(jobs);
+      setWorkflowRunsError("");
+      setDashboardStatsData((current) => ({
+        ...current,
+        runningJobs: jobs.filter((job) => !isTerminalWorkflowStatus(job.status)).length,
+      }));
+    } catch (error) {
+      setWorkflowRunsError(getErrorMessage(error));
+    } finally {
+      if (!options?.silent) {
+        setWorkflowRunsLoading(false);
+      }
+    }
+  }
+
+  useEffect(() => {
+    if (!workflowRunTrackingEnabled) return;
+    let cancelled = false;
+
+    const load = async (silent: boolean) => {
+      if (cancelled) return;
+      await refreshWorkflowRuns({ silent });
+    };
+
+    void load(false);
+    const interval = window.setInterval(() => {
+      void load(true);
+    }, 5000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [workflowRunTrackingEnabled, authUser?.userId]);
+
+  useEffect(() => {
+    if (!selectedWorkflowRunId) return;
+    const selectedRun = workflowRuns.find((job) => job.jobId === selectedWorkflowRunId);
+    if (!selectedRun || isTerminalWorkflowStatus(selectedRun.status)) return;
+
+    let cancelled = false;
+    const load = async () => {
+      if (cancelled) return;
+      await loadWorkflowRunDetails(selectedRun);
+    };
+
+    void load();
+    const interval = window.setInterval(() => {
+      void load();
+    }, 3000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [selectedWorkflowRunId, workflowRuns]);
+
   useEffect(() => {
     if (typeof window === "undefined") return;
     if (forcedPortalId) return;
@@ -1349,6 +1491,13 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
   }
 
   async function logout() {
+    if (isCognitoMode()) {
+      await clearStoredRunContext().catch(() => {});
+      updateAuthUser(null);
+      redirectToCognitoLogout();
+      return;
+    }
+
     await fetch("/api/auth/logout", { method: "POST" }).catch(() => {});
     await clearStoredRunContext().catch(() => {});
     updateAuthUser(null);
@@ -1397,6 +1546,9 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     setErrorScreenshots([]);
     setProgress(null);
     setActiveJobId("");
+    setWorkflowRuns([]);
+    setWorkflowRunsError("");
+    setSelectedWorkflowRunId("");
     setPendingIehpRestoreJob(null);
     setPendingBlueShieldRestoreJob(null);
   }
@@ -1423,11 +1575,81 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
       setOptumProStaleRunAvailable(false);
       setIsProcessing(false);
       setStatus("Processing cancelled.");
+      await refreshWorkflowRuns({ silent: true });
       await clearStoredRunContext().catch(() => {});
     } catch (error) {
       setStatus(`Failed to cancel processing: ${getErrorMessage(error)}`);
     } finally {
       setIsCancellingJob(false);
+    }
+  }
+
+  async function loadWorkflowRunDetails(job: ScrapeJobSummary) {
+    try {
+      const details = await getScrapeJobDetails(job.jobId);
+      setLogs(details.logs);
+      setProgress(details.totalRows > 0 ? { completed: details.currentCompleted, total: details.totalRows } : null);
+      setStatus(
+        `${details.portalId.toUpperCase()} run ${formatShortJobId(details.jobId)} is ${details.status.replace(/_/g, " ")}.`,
+      );
+    } catch (error) {
+      setStatus(`Failed to load run ${formatShortJobId(job.jobId)}: ${getErrorMessage(error)}`);
+    }
+  }
+
+  async function selectWorkflowRun(job: ScrapeJobSummary) {
+    setSelectedWorkflowRunId(job.jobId);
+    setSelectedPortalId(isPortalId(job.portalId) ? job.portalId : null);
+    if (isPortalId(job.portalId)) {
+      navigateToPortalRoute(job.portalId);
+    }
+    setActiveJobId(job.jobId);
+    setProgress(job.totalRows > 0 ? { completed: job.currentCompleted, total: job.totalRows } : null);
+    setStatus(
+      `${job.portalId.toUpperCase()} run ${formatShortJobId(job.jobId)} is ${job.status.replace(/_/g, " ")}.`,
+    );
+    await loadWorkflowRunDetails(job);
+  }
+
+  async function cancelWorkflowRun(job: ScrapeJobSummary) {
+    if (isTerminalWorkflowStatus(job.status) || cancellingWorkflowJobId) return;
+
+    setCancellingWorkflowJobId(job.jobId);
+    setStatus(`Cancelling ${job.portalId.toUpperCase()} run ${formatShortJobId(job.jobId)}...`);
+    try {
+      await cancelScrapeJobRequest(job.jobId);
+      await refreshWorkflowRuns({ silent: true });
+      if (activeJobId === job.jobId) {
+        setActiveJobId("");
+        setIsProcessing(false);
+      }
+      setStatus(`Cancel requested for ${job.portalId.toUpperCase()} run ${formatShortJobId(job.jobId)}.`);
+    } catch (error) {
+      setStatus(`Failed to cancel run ${formatShortJobId(job.jobId)}: ${getErrorMessage(error)}`);
+    } finally {
+      setCancellingWorkflowJobId("");
+    }
+  }
+
+  async function downloadWorkflowRun(job: ScrapeJobSummary) {
+    if (!job.artifactCount || downloadingWorkflowJobId) return;
+
+    setDownloadingWorkflowJobId(job.jobId);
+    setStatus(`Preparing download for ${job.portalId.toUpperCase()} run ${formatShortJobId(job.jobId)}...`);
+    try {
+      const { filename, downloadUrl } = await getScrapeJobDownload(job.jobId);
+      const link = document.createElement("a");
+      link.href = downloadUrl;
+      link.download = filename;
+      link.rel = "noreferrer";
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      setStatus(`Download started for ${filename}.`);
+    } catch (error) {
+      setStatus(`Failed to download run ${formatShortJobId(job.jobId)}: ${getErrorMessage(error)}`);
+    } finally {
+      setDownloadingWorkflowJobId("");
     }
   }
 
@@ -1724,6 +1946,10 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
           }
           subscribedJobId = await startScrapeJob(formData);
           setActiveJobId(subscribedJobId);
+          setIehpLoginFile(null);
+          setClaimFileHandle(null);
+          setClaimFileName("");
+          void refreshWorkflowRuns({ silent: true });
         }
 
         await subscribeToScrapeJobEvents({
@@ -2108,6 +2334,9 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
         formData.append("claimExcel", regalClaimFile);
         formData.append("claimFileName", regalClaimFile.name);
         await startScrapeJob(formData);
+        setRegalLoginFile(null);
+        setRegalClaimFile(null);
+        void refreshWorkflowRuns({ silent: true });
       }
 
       await subscribeToScrapeJobEvents({
@@ -2444,6 +2673,9 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
       subscribedJobId = jobId;
       setActiveJobId(jobId);
       setAvailityJobId(jobId);
+      setAerialCredentialFile(null);
+      setAerialInputFile(null);
+      void refreshWorkflowRuns({ silent: true });
       await subscribeToScrapeJobEvents({
         jobId,
         signal: streamAbortController.signal,
@@ -2544,6 +2776,9 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
       const jobId = await startScrapeJob(formData);
       subscribedJobId = jobId;
       setActiveJobId(jobId);
+      setAvailityCredentialFile(null);
+      setAvailityInputFile(null);
+      void refreshWorkflowRuns({ silent: true });
       await subscribeToScrapeJobEvents({
         jobId,
         signal: streamAbortController.signal,
@@ -2656,6 +2891,9 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
       subscribedJobId = jobId;
       setBlueShieldJobId(jobId);
       setActiveJobId(jobId);
+      setBlueShieldCredentialFile(null);
+      setBlueShieldInputFile(null);
+      void refreshWorkflowRuns({ silent: true });
       await subscribeToScrapeJobEvents({
         jobId,
         signal: streamAbortController.signal,
@@ -2744,6 +2982,9 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
       setPendingRegalRestoreJob(null);
       setRegalJobId(jobId);
       setActiveJobId(jobId);
+      setRegalLoginFile(null);
+      setRegalClaimFile(null);
+      void refreshWorkflowRuns({ silent: true });
       await subscribeToScrapeJobEvents({
         jobId,
         signal: streamAbortController.signal,
@@ -2841,6 +3082,9 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
       const jobId = await startScrapeJob(formData);
       setOptumProJobId(jobId);
       setActiveJobId(jobId);
+      setOptumProLoginFile(null);
+      setOptumProInputFile(null);
+      void refreshWorkflowRuns({ silent: true });
       await subscribeToScrapeJobEvents({
         jobId,
         signal: streamAbortController.signal,
@@ -2923,6 +3167,139 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
       : latestRegalOutput.filename;
     downloadBase64File(filename, latestRegalOutput.base64, latestRegalOutput.mimeType);
   }
+
+  const workflowRunsPanel = workflowRunTrackingEnabled ? (
+    <div className="mt-5 rounded-[1.5rem] border border-sky-100 bg-white/92 p-5 shadow-[0_16px_36px_rgba(148,163,184,0.12)]">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <p className="text-[0.7rem] font-semibold uppercase tracking-[0.22em] text-sky-600">My Active Runs</p>
+          <h2 className="mt-1 text-base font-semibold text-slate-950">
+            {effectivePortalId ? `${selectedPortal?.name ?? "Portal"} active runs` : "Running claim status jobs"}
+          </h2>
+          <p className="mt-1 text-xs text-slate-500">
+            {runningWorkflowRunCount} active {runningWorkflowRunCount === 1 ? "run" : "runs"} across your account.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => void refreshWorkflowRuns()}
+          className="inline-flex h-10 items-center justify-center rounded-[0.95rem] border border-sky-100 bg-white px-4 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-sky-50"
+        >
+          {workflowRunsLoading ? "Refreshing..." : "Refresh"}
+        </button>
+      </div>
+
+      {workflowRunsError ? (
+        <div className="rounded-[1rem] border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-700">
+          Failed to load runs: {workflowRunsError}
+        </div>
+      ) : visibleWorkflowRuns.length === 0 ? (
+        <div className="rounded-[1rem] border border-dashed border-sky-200 bg-sky-50/60 px-4 py-6 text-center text-sm text-slate-500">
+          No active runs found for this view.
+        </div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="min-w-full text-left text-sm">
+            <thead>
+              <tr className="border-b border-sky-100 text-xs uppercase tracking-[0.14em] text-slate-400">
+                <th className="whitespace-nowrap px-3 py-3 font-semibold">Run</th>
+                <th className="whitespace-nowrap px-3 py-3 font-semibold">Portal</th>
+                <th className="whitespace-nowrap px-3 py-3 font-semibold">Status</th>
+                <th className="min-w-[12rem] px-3 py-3 font-semibold">Progress</th>
+                <th className="whitespace-nowrap px-3 py-3 font-semibold">Updated</th>
+                <th className="whitespace-nowrap px-3 py-3 text-right font-semibold">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {visibleWorkflowRuns.map((job) => {
+                const portalName = claimStatusPortalRegistry.find((portal) => portal.id === job.portalId)?.name ?? job.portalId.toUpperCase();
+                const progressPercent = job.totalRows > 0
+                  ? Math.min(100, Math.round((job.currentCompleted / job.totalRows) * 100))
+                  : 0;
+                const isActiveStatus = !isTerminalWorkflowStatus(job.status);
+                const statusClassName =
+                  job.status === "completed"
+                    ? "bg-emerald-50 text-emerald-700"
+                    : job.status === "failed"
+                      ? "bg-red-50 text-red-700"
+                      : job.status === "cancelled"
+                        ? "bg-slate-100 text-slate-600"
+                        : job.status === "waiting_otp"
+                          ? "bg-amber-50 text-amber-700"
+                          : "bg-blue-50 text-blue-700";
+
+                return (
+                  <tr
+                    key={job.jobId}
+                    className={`border-b border-sky-50 last:border-0 ${selectedWorkflowRunId === job.jobId ? "bg-blue-50/45" : ""}`}
+                  >
+                    <td className="whitespace-nowrap px-3 py-3">
+                      <button
+                        type="button"
+                        onClick={() => void selectWorkflowRun(job)}
+                        className="font-mono text-xs font-semibold text-blue-700 hover:text-blue-900"
+                      >
+                        {formatShortJobId(job.jobId)}
+                      </button>
+                      <div className="mt-1 max-w-[10rem] truncate text-[0.7rem] text-slate-400">
+                        {job.claimFileName || job.loginFileName || "Uploaded files"}
+                      </div>
+                    </td>
+                    <td className="whitespace-nowrap px-3 py-3 text-slate-700">{portalName}</td>
+                    <td className="whitespace-nowrap px-3 py-3">
+                      <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${statusClassName}`}>
+                        {job.status.replace(/_/g, " ")}
+                      </span>
+                    </td>
+                    <td className="px-3 py-3">
+                      <div className="flex items-center justify-between gap-3 text-xs text-slate-500">
+                        <span>{job.totalRows > 0 ? `${job.currentCompleted} of ${job.totalRows} rows` : "Rows not reported"}</span>
+                        <span>{progressPercent}%</span>
+                      </div>
+                      <div className="mt-2 h-2 overflow-hidden rounded-full bg-sky-50">
+                        <div
+                          className={`h-full rounded-full ${job.status === "failed" ? "bg-red-400" : job.status === "completed" ? "bg-emerald-500" : "bg-blue-500"}`}
+                          style={{ width: `${progressPercent}%` }}
+                        />
+                      </div>
+                    </td>
+                    <td className="whitespace-nowrap px-3 py-3 text-xs text-slate-500">{formatRunTimestamp(job.updatedAt)}</td>
+                    <td className="px-3 py-3">
+                      <div className="flex justify-end gap-2">
+                        <button
+                          type="button"
+                          onClick={() => void selectWorkflowRun(job)}
+                          className="rounded-[0.75rem] border border-sky-100 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-sky-50"
+                        >
+                          View
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void downloadWorkflowRun(job)}
+                          disabled={!job.artifactCount || downloadingWorkflowJobId === job.jobId}
+                          className="rounded-[0.75rem] border border-emerald-100 bg-white px-3 py-2 text-xs font-semibold text-emerald-700 transition hover:bg-emerald-50 disabled:cursor-not-allowed disabled:text-slate-300"
+                        >
+                          {downloadingWorkflowJobId === job.jobId ? "Preparing" : "Download"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void cancelWorkflowRun(job)}
+                          disabled={!isActiveStatus || cancellingWorkflowJobId === job.jobId}
+                          className="rounded-[0.75rem] border border-red-100 bg-white px-3 py-2 text-xs font-semibold text-red-700 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:text-slate-300"
+                        >
+                          {cancellingWorkflowJobId === job.jobId ? "Cancelling" : "Cancel"}
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  ) : null;
 
   if (authLoading && !authUser) {
     return null;
@@ -3570,6 +3947,8 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
                 </div>
               </motion.div>
 
+              {workflowRunsPanel}
+
               <div className="mt-5">
                 <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
                   <label className="flex h-12 w-full items-center gap-3 rounded-[1rem] border border-sky-100 bg-white/95 px-4 shadow-[0_10px_28px_rgba(148,163,184,0.1)] lg:max-w-[24rem]">
@@ -3787,6 +4166,8 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
                 </div>
               </div>
 
+              {workflowRunsPanel}
+
               <div className="mt-5">
                 <div className="rounded-[1.7rem] border border-sky-100 bg-white/92 p-5 shadow-[0_16px_38px_rgba(148,163,184,0.12)]">
                   <div className="mb-5">
@@ -3809,7 +4190,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
                     <IehpInputForm
                       canSubmit={canSubmitIehp}
                       claimFileName={claimFileName}
-                      isProcessing={isProcessing}
+                      isProcessing={blockPortalFormForProcessing}
                       isResumePending={Boolean(pendingIehpRestoreJob)}
                       loginFileName={iehpLoginFile?.name ?? ""}
                       onLoginFileChange={handleLoginFileChange}
@@ -3821,7 +4202,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
                       canSubmit={canSubmitAerial}
                       credentialFileName={aerialCredentialFile?.name ?? ""}
                       inputFileName={aerialInputFile?.name ?? ""}
-                      isProcessing={isProcessing}
+                      isProcessing={blockPortalFormForProcessing}
                       onCredentialFileChange={setAerialCredentialFile}
                       onInputFileChange={setAerialInputFile}
                       onSubmit={submitAerial}
@@ -3830,7 +4211,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
                     <RegalInputForm
                       canSubmit={canSubmitRegal}
                       claimFileName={regalClaimFile?.name ?? ""}
-                      isProcessing={isProcessing}
+                      isProcessing={blockPortalFormForProcessing}
                       loginFileName={regalLoginFile?.name ?? ""}
                       onClaimFileChange={setRegalClaimFile}
                       onLoginFileChange={setRegalLoginFile}
@@ -3841,7 +4222,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
                       canSubmit={canSubmitAvaility}
                       credentialFileName={availityCredentialFile?.name ?? ""}
                       inputFileName={availityInputFile?.name ?? ""}
-                      isProcessing={isProcessing}
+                      isProcessing={blockPortalFormForProcessing}
                       selectedProjectId={availityProjectId}
                       onCredentialFileChange={setAvailityCredentialFile}
                       onInputFileChange={setAvailityInputFile}
@@ -3852,7 +4233,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
                     <OptumProInputForm
                       canSubmit={canSubmitOptumPro}
                       inputFileName={optumProInputFile?.name ?? ""}
-                      isProcessing={isProcessing}
+                      isProcessing={blockPortalFormForProcessing}
                       loginFileName={optumProLoginFile?.name ?? ""}
                       onInputFileChange={setOptumProInputFile}
                       onLoginFileChange={setOptumProLoginFile}
@@ -3863,7 +4244,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
                       canSubmit={canSubmitBlueShield}
                       credentialFileName={blueShieldCredentialFile?.name ?? ""}
                       inputFileName={blueShieldInputFile?.name ?? ""}
-                      isProcessing={isProcessing}
+                      isProcessing={blockPortalFormForProcessing}
                       onCredentialFileChange={setBlueShieldCredentialFile}
                       onInputFileChange={setBlueShieldInputFile}
                       onSubmit={submitBlueShield}

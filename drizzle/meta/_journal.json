@@ -8,6 +8,27 @@
       "when": 1783574795591,
       "tag": "0000_normal_true_believers",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1785946200000,
+      "tag": "0001_workflow_runtime",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1786020000000,
+      "tag": "0002_workflow_runtime_compat",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1786113500000,
+      "tag": "0003_workflow_artifact_bucket_compat",
+      "breakpoints": true
     }
   ]
 }

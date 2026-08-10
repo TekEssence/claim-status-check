@@ -164,6 +164,25 @@ export async function getScrapeJobByIdForUser(jobId: string, userId: string): Pr
   return mapPersistentScrapeJob(row, logs, artifacts);
 }
 
+export async function listScrapeJobsForUser(userId: string, limit = 25): Promise<PersistentScrapeJob[]> {
+  const safeLimit = Math.max(1, Math.min(limit, 100));
+  const rows = await runDbWithRetry((db) =>
+    db
+      .select()
+      .from(scrapeJobs)
+      .where(eq(scrapeJobs.userId, userId))
+      .orderBy(desc(scrapeJobs.updatedAt))
+      .limit(safeLimit),
+  );
+
+  return Promise.all(
+    rows.map(async (row) => {
+      const artifacts = await getScrapeJobArtifacts(row.jobId);
+      return mapPersistentScrapeJob(row, [], artifacts);
+    }),
+  );
+}
+
 async function getScrapeJobLogs(jobId: string): Promise<string[]> {
   const rows = await runDbWithRetry((db) =>
     db

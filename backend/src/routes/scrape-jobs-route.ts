@@ -60,16 +60,9 @@ export async function POST(req: Request) {
     const requestedJobId = getRequestedJobId(formData);
     const totalRows = getTotalRows(formData);
     const startIndex = getStartIndex(formData);
-    const existingActiveJob = await getNormalizedActiveScrapeJobForUser(session.userId);
-
-    if (!requestedJobId && existingActiveJob) {
-      return Response.json(
-        { error: "Another run is already active for this user. Please wait for it to finish or reconnect to it.", jobId: existingActiveJob.jobId },
-        { status: 409 },
-      );
-    }
 
     if (requestedJobId) {
+      const existingActiveJob = await getNormalizedActiveScrapeJobForUser(session.userId);
       if (!existingActiveJob || existingActiveJob.jobId !== requestedJobId) {
         return Response.json({ error: "The requested run is no longer active for this user." }, { status: 409 });
       }

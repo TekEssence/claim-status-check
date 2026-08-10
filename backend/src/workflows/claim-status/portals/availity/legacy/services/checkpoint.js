@@ -4,7 +4,8 @@ const fs = require("fs");
 const path = require("path");
 
 function ensureCheckpointDir() {
-  const dir = path.resolve("checkpoints");
+  const runtimeRoot = process.env.CLAIM_STATUS_RUNTIME_DIR || "/tmp/claim-status-artifacts";
+  const dir = path.join(runtimeRoot, "availity", "checkpoints");
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }

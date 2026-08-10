@@ -4,7 +4,7 @@ export default $config({
   app(input) {
     const tags = {
       Project: "claim-status",
-      Environment: "dev",
+      Environment: input.stage,
     };
 
     return {
@@ -23,8 +23,92 @@ export default $config({
     };
   },
   async run() {
+    const aws = await import("@pulumi/aws");
+    const fs = await import("node:fs");
+
+    function loadDeployEnv() {
+      const values: Record<string, string> = {};
+      for (const file of [".env.local", ".env"]) {
+        if (!fs.existsSync(file)) continue;
+        const content = fs.readFileSync(file, "utf8");
+        for (const rawLine of content.split(/\r?\n/)) {
+          const line = rawLine.trim();
+          if (!line || line.startsWith("#")) continue;
+          const separator = line.indexOf("=");
+          if (separator <= 0) continue;
+          const key = line.slice(0, separator).trim();
+          const value = line.slice(separator + 1).trim().replace(/^['"]|['"]$/g, "");
+          values[key] = value;
+        }
+      }
+      return values;
+    }
+
+    const deployEnv = loadDeployEnv();
+    const databaseUrl = process.env.DATABASE_URL || deployEnv.DATABASE_URL || "";
+    const dbSsl = process.env.DB_SSL || deployEnv.DB_SSL || "true";
+    if (!databaseUrl) {
+      throw new Error("DATABASE_URL must be set in the shell or .env.local before deploying AWS workflow APIs.");
+    }
+
+    const inputsBucket = new sst.aws.Bucket("WorkflowInputs", {
+      cors: {
+        allowOrigins: ["*"],
+        allowMethods: ["PUT", "GET", "HEAD"],
+        allowHeaders: ["*"],
+      },
+    });
+
     const outputsBucket = new sst.aws.Bucket("WorkflowOutputs", {
-      cors: false,
+      cors: {
+        allowOrigins: ["*"],
+        allowMethods: ["GET", "HEAD"],
+        allowHeaders: ["*"],
+      },
+    });
+
+    const userPool = new aws.cognito.UserPool("InternalUsers", {
+      usernameAttributes: ["email"],
+      autoVerifiedAttributes: ["email"],
+      passwordPolicy: {
+        minimumLength: 12,
+        requireLowercase: true,
+        requireNumbers: true,
+        requireSymbols: false,
+        requireUppercase: true,
+        temporaryPasswordValidityDays: 7,
+      },
+      mfaConfiguration: "OPTIONAL",
+      softwareTokenMfaConfiguration: {
+        enabled: true,
+      },
+    });
+
+    const userPoolClient = new aws.cognito.UserPoolClient("WebClient", {
+      userPoolId: userPool.id,
+      generateSecret: false,
+      explicitAuthFlows: [
+        "ALLOW_USER_SRP_AUTH",
+        "ALLOW_REFRESH_TOKEN_AUTH",
+        "ALLOW_USER_PASSWORD_AUTH",
+      ],
+      allowedOauthFlowsUserPoolClient: true,
+      allowedOauthFlows: ["code", "implicit"],
+      allowedOauthScopes: ["email", "openid", "profile"],
+      callbackUrls: [
+        "http://localhost:3000/",
+        "https://d2rdco8saesh4t.cloudfront.net/",
+      ],
+      logoutUrls: [
+        "http://localhost:3000/",
+        "https://d2rdco8saesh4t.cloudfront.net/",
+      ],
+      supportedIdentityProviders: ["COGNITO"],
+    });
+
+    const userPoolDomain = new aws.cognito.UserPoolDomain("InternalUsersDomain", {
+      userPoolId: userPool.id,
+      domain: $interpolate`claim-status-${$app.stage}-${aws.getCallerIdentityOutput({}).accountId}`,
     });
 
     const vpc = new sst.aws.Vpc("Vpc", {
@@ -35,7 +119,21 @@ export default $config({
       vpc,
     });
 
-    const task = new sst.aws.Task("AppTask", {
+    const webSocketApi = new sst.aws.ApiGatewayWebSocket("WorkflowWebSocketApi", {
+      transform: {
+        route: {
+          handler: (args) => {
+            args.environment ??= {};
+            args.environment.DATABASE_URL = databaseUrl;
+            args.environment.DB_SSL = dbSsl;
+            args.environment.COGNITO_ISSUER = $interpolate`https://cognito-idp.${aws.getRegionOutput({}).name}.amazonaws.com/${userPool.id}`;
+            args.environment.COGNITO_CLIENT_ID = userPoolClient.id;
+          },
+        },
+      },
+    });
+
+    const workerTask = new sst.aws.Task("WorkerTask", {
       cluster,
       cpu: "2 vCPU",
       memory: "4 GB",
@@ -43,25 +141,26 @@ export default $config({
       public: true,
       containers: [
         {
-          name: "app",
+          name: "worker",
           image: {
             context: ".",
-            dockerfile: "Dockerfile",
+            dockerfile: "Dockerfile.worker",
           },
-          command: ["npm", "run", "start", "--", "-H", "0.0.0.0", "-p", "3000"],
           environment: {
             NODE_ENV: "production",
             NEXT_TELEMETRY_DISABLED: "1",
-            PORT: "3000",
-            HOSTNAME: "0.0.0.0",
+            DATABASE_URL: databaseUrl,
+            DB_SSL: dbSsl,
             BROWSER_HEADLESS: "true",
             BROWSER_KEEP_OPEN: "false",
             EXIT_AFTER_WORKFLOW_DONE: "true",
             EXIT_AFTER_WORKFLOW_DELAY_MS: "15000",
+            WORKFLOW_INPUTS_BUCKET: inputsBucket.name,
             WORKFLOW_OUTPUTS_BUCKET: outputsBucket.name,
+            WEBSOCKET_MANAGEMENT_ENDPOINT: webSocketApi.managementEndpoint,
           },
           logging: {
-            name: "/claim-status/dev/app",
+            name: $interpolate`/claim-status/${$app.stage}/worker`,
             retention: "1 week",
           },
         },
@@ -69,21 +168,118 @@ export default $config({
       permissions: [
         {
           actions: ["s3:ListBucket"],
-          resources: [outputsBucket.arn],
+          resources: [inputsBucket.arn, outputsBucket.arn],
         },
         {
           actions: ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
-          resources: [$interpolate`${outputsBucket.arn}/*`],
+          resources: [
+            $interpolate`${inputsBucket.arn}/*`,
+            $interpolate`${outputsBucket.arn}/*`,
+          ],
+        },
+        {
+          actions: ["execute-api:ManageConnections"],
+          resources: ["*"],
         },
       ],
     });
 
+    const httpApi = new sst.aws.ApiGatewayV2("WorkflowHttpApi", {
+      cors: {
+        allowOrigins: ["*"],
+        allowHeaders: ["authorization", "content-type"],
+        allowMethods: ["GET", "POST", "DELETE", "OPTIONS"],
+      },
+      transform: {
+        route: {
+          handler: (args) => {
+            args.environment ??= {};
+            args.environment.DATABASE_URL = databaseUrl;
+            args.environment.DB_SSL = dbSsl;
+            args.environment.WORKFLOW_INPUTS_BUCKET = inputsBucket.name;
+            args.environment.WORKFLOW_OUTPUTS_BUCKET = outputsBucket.name;
+            args.environment.WORKER_CLUSTER_ARN = cluster.id;
+            args.environment.WORKER_TASK_DEFINITION_ARN = workerTask.nodes.taskDefinition.arn;
+            args.environment.WORKER_CONTAINER_NAME = "worker";
+            args.environment.WORKER_SUBNET_IDS = $jsonStringify(workerTask.subnets);
+            args.environment.WORKER_SECURITY_GROUP_IDS = $jsonStringify(workerTask.securityGroups);
+            args.permissions ??= [];
+            args.permissions.push(
+              {
+                actions: ["ecs:RunTask", "ecs:StopTask", "ecs:DescribeTasks"],
+                resources: ["*"],
+              },
+              {
+                actions: ["iam:PassRole"],
+                resources: ["*"],
+              },
+              {
+                actions: ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+                resources: [
+                  $interpolate`${inputsBucket.arn}/*`,
+                  $interpolate`${outputsBucket.arn}/*`,
+                ],
+              },
+              {
+                actions: ["s3:ListBucket"],
+                resources: [inputsBucket.arn, outputsBucket.arn],
+              },
+            );
+          },
+        },
+      },
+    });
+
+    const httpAuthorizer = httpApi.addAuthorizer({
+      name: "Cognito",
+      jwt: {
+        issuer: $interpolate`https://cognito-idp.${aws.getRegionOutput({}).name}.amazonaws.com/${userPool.id}`,
+        audiences: [userPoolClient.id],
+      },
+    });
+    const httpAuth = { jwt: { authorizer: httpAuthorizer.id } };
+
+    httpApi.route("POST /jobs", "backend/src/aws/http/create-job.handler", { auth: httpAuth });
+    httpApi.route("GET /jobs", "backend/src/aws/http/list-jobs.handler", { auth: httpAuth });
+    httpApi.route("POST /jobs/{jobId}/confirm", "backend/src/aws/http/confirm-job.handler", { auth: httpAuth });
+    httpApi.route("GET /jobs/{jobId}", "backend/src/aws/http/get-job.handler", { auth: httpAuth });
+    httpApi.route("POST /jobs/{jobId}/otp", "backend/src/aws/http/submit-otp.handler", { auth: httpAuth });
+    httpApi.route("POST /jobs/{jobId}/cancel", "backend/src/aws/http/cancel-job.handler", { auth: httpAuth });
+    httpApi.route("POST /jobs/{jobId}/force-stop", "backend/src/aws/http/force-stop-job.handler", { auth: httpAuth });
+    httpApi.route("GET /jobs/{jobId}/download", "backend/src/aws/http/download-job.handler", { auth: httpAuth });
+
+    webSocketApi.route("$connect", "backend/src/aws/ws/connect.handler");
+    webSocketApi.route("$disconnect", "backend/src/aws/ws/disconnect.handler");
+    webSocketApi.route("$default", "backend/src/aws/ws/default.handler");
+
+    const frontend = new sst.aws.StaticSite("Frontend", {
+      path: ".",
+      environment: {
+        STATIC_EXPORT: "true",
+        NEXT_PUBLIC_WORKFLOW_API_URL: httpApi.url,
+        NEXT_PUBLIC_WORKFLOW_WS_URL: webSocketApi.url,
+        NEXT_PUBLIC_COGNITO_USER_POOL_ID: userPool.id,
+        NEXT_PUBLIC_COGNITO_CLIENT_ID: userPoolClient.id,
+        NEXT_PUBLIC_COGNITO_DOMAIN: $interpolate`https://${userPoolDomain.domain}.auth.${aws.getRegionOutput({}).name}.amazoncognito.com`,
+      },
+      build: {
+        command: "npm run build:static",
+        output: "out",
+      },
+    });
+
     return {
-      bucketName: outputsBucket.name,
+      frontendUrl: frontend.url,
+      httpApiUrl: httpApi.url,
+      webSocketApiUrl: webSocketApi.url,
+      cognitoUserPoolId: userPool.id,
+      cognitoClientId: userPoolClient.id,
+      cognitoDomain: $interpolate`https://${userPoolDomain.domain}.auth.${aws.getRegionOutput({}).name}.amazoncognito.com`,
+      inputBucketName: inputsBucket.name,
+      outputBucketName: outputsBucket.name,
       cluster: cluster.id,
-      publicSubnets: vpc.publicSubnets,
-      task: task.nodes.taskDefinition.arn,
-      taskLogGroup: "/claim-status/dev/app",
+      workerTaskDefinition: workerTask.nodes.taskDefinition.arn,
+      workerTaskLogGroup: $interpolate`/claim-status/${$app.stage}/worker`,
     };
   },
 });

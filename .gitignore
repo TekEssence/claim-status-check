@@ -2,6 +2,7 @@
 
 # dependencies
 /node_modules
+node_modules/
 /.pnp
 .pnp.*
 .yarn/*
@@ -37,6 +38,14 @@ yarn-error.log*
 # vercel
 .vercel
 
+# local build/deploy tooling caches
+.sst/
+.npm-cache/
+.turbo/
+
+# generated AWS/SST env types
+sst-env.d.ts
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts
@@ -48,3 +57,5 @@ next-env.d.ts
 
 eligibility-verification-architecture-report.md
 eligibility-verification-architecture.txt
+
+cost-filter.json

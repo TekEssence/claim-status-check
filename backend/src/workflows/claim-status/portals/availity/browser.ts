@@ -31,7 +31,7 @@ async function launchLocalBrowserWithFallback(options: {
   headless: boolean;
   browserChannel: string;
   log: (message: string) => Promise<void>;
-}): Promise<Browser> {
+}): Promise<AvailityBrowserSession> {
   const executablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || "";
   const attempts: Array<{ label: string; launchOptions: LaunchOptions }> = [];
 
@@ -72,12 +72,22 @@ async function launchLocalBrowserWithFallback(options: {
     seen.add(key);
     return true;
   })) {
+    let browser: Browser | null = null;
+    let context: BrowserContext | null = null;
     try {
       await options.log(`Launching Availity browser using ${attempt.label} (${options.headless ? "headless" : "headed"}).`);
-      return await playwright.launch(attempt.launchOptions);
+      browser = await playwright.launch(attempt.launchOptions);
+      context = await browser.newContext({
+        acceptDownloads: true,
+        viewport: { width: 1600, height: 1000 },
+      });
+      await context.newPage();
+      return { browser, context };
     } catch (error) {
       lastError = error;
       await options.log(`Availity browser launch failed for ${attempt.label}: ${summarizeLaunchError(error)}`);
+      await context?.close().catch(() => {});
+      await browser?.close().catch(() => {});
     }
   }
 
@@ -106,14 +116,9 @@ export async function launchAvailityBrowser(log: (message: string) => Promise<vo
     return { browser, context };
   }
 
-  const browser = await launchLocalBrowserWithFallback({
+  return launchLocalBrowserWithFallback({
     headless,
     browserChannel,
     log,
   });
-  const context = await browser.newContext({
-    acceptDownloads: true,
-    viewport: { width: 1600, height: 1000 },
-  });
-  return { browser, context };
 }

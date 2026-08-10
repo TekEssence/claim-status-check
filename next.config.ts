@@ -1,7 +1,10 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  output: "standalone",
+  output: process.env.STATIC_EXPORT === "true" ? "export" : "standalone",
+  images: {
+    unoptimized: process.env.STATIC_EXPORT === "true",
+  },
   serverExternalPackages: ["@sparticuz/chromium"],
   outputFileTracingIncludes: {
     "/api/scrape-jobs": ["node_modules/@sparticuz/chromium/bin/**/*"],

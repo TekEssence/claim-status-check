@@ -78,7 +78,10 @@ export function PortalUploadCard(props: PortalUploadCardProps) {
             id={props.inputId}
             type="file"
             accept={props.accept}
-            onChange={(event) => props.onFileSelect(event.target.files?.[0] ?? null)}
+            onChange={(event) => {
+              props.onFileSelect(event.target.files?.[0] ?? null);
+              event.currentTarget.value = "";
+            }}
             className="hidden"
           />
           <label

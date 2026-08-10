@@ -36,7 +36,11 @@ type StreamEvent = Record<string, unknown>;
 
 export async function runIehpClaimStatusJob(jobId: string, formData: FormData, context?: ScraperContext): Promise<void> {
   const sendEvent = async (data: StreamEvent) => {
-    emitScrapeJobEvent(jobId, data);
+    if (context?.emit) {
+      await context.emit(data);
+    } else {
+      emitScrapeJobEvent(jobId, data);
+    }
     await new Promise(resolve => setTimeout(resolve, 50));
   };
 

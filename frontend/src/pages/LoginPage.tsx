@@ -14,6 +14,7 @@ import {
   Stethoscope,
   User,
 } from "lucide-react";
+import { isCognitoMode, redirectToCognitoLogin, storeCognitoTokenFromHash } from "../api/cognito-auth";
 
 const reveal = {
   hidden: { opacity: 0, y: 24 },
@@ -38,6 +39,13 @@ export function LoginPage() {
   const [authError, setAuthError] = useState("");
 
   useEffect(() => {
+    if (isCognitoMode()) {
+      if (storeCognitoTokenFromHash()) {
+        router.replace("/portal");
+      }
+      return;
+    }
+
     let cancelled = false;
 
     const loadAuthUser = async () => {
@@ -65,6 +73,11 @@ export function LoginPage() {
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (isCognitoMode()) {
+      redirectToCognitoLogin();
+      return;
+    }
+
     setSubmitting(true);
     setAuthError("");
 

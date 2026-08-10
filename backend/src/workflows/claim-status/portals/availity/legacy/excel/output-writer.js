@@ -77,7 +77,8 @@ async function writeOutputWorkbook({ runId, inputHeaders, inputRows, outputRows,
   addSheet(workbook, "Error", ERROR_COLUMNS, errorRows);
   addSheet(workbook, "Audit_Log", AUDIT_COLUMNS, auditRows);
 
-  const outputDir = path.resolve("output");
+  const runtimeRoot = process.env.CLAIM_STATUS_RUNTIME_DIR || "/tmp/claim-status-artifacts";
+  const outputDir = path.join(runtimeRoot, "availity", "output");
   fs.mkdirSync(outputDir, { recursive: true });
 
   const timestamp = getDateTimeStamp();

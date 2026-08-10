@@ -3,11 +3,13 @@ import { Pool } from "pg";
 import * as betterAuthSchema from "./schema/better-auth";
 import * as automationJobsSchema from "./schema/automation-jobs";
 import * as scrapeJobsSchema from "./schema/scrape-jobs";
+import * as workflowRuntimeSchema from "./schema/workflow-runtime";
 
 const schema = {
   ...betterAuthSchema,
   ...automationJobsSchema,
   ...scrapeJobsSchema,
+  ...workflowRuntimeSchema,
 };
 
 let pool: Pool | null = null;

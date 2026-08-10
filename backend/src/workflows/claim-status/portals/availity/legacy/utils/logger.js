@@ -3,7 +3,8 @@
 const fs = require("fs");
 const path = require("path");
 
-const logsDir = path.resolve(__dirname, "..", "logs");
+const runtimeRoot = process.env.CLAIM_STATUS_RUNTIME_DIR || "/tmp/claim-status-artifacts";
+const logsDir = path.join(runtimeRoot, "availity", "logs");
 const logFilePath = path.join(logsDir, "automation.log");
 let logSink = null;
 
