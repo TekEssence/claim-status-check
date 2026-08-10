@@ -7,8 +7,10 @@ import type {
 } from "../../types";
 import type { AdvancedMdPaymentPostingCredentials } from "./credentials";
 import {
+  currencyAmountsEqual,
   findLineItemMatch,
   normalizeAdvancedMdDate,
+  normalizeCpt,
   normalizeCurrencyCents,
 } from "./line-items";
 
@@ -727,14 +729,21 @@ export async function prepareAdvancedMdPaymentPostingRow(options: {
   });
 
   let paymentAmountInput: Locator | null = null;
+  await logField({
+    level: "info",
+    message: `AdvancedMD row ${row.inputRow}: Starting Payment Amount immediately after Visit verification.`,
+    eventName: "payment_posting_advancedmd_payment_amount_starting_after_visit_verification",
+    meta: { field: "Payment Amount", visitClaimSelected: selectedVisit.visitClaimNumber },
+  });
   await runPaymentEntryFieldStage(logField, row.inputRow, "Payment Amount", "Filling Payment Amount", "Payment Amount filled", "frame #frmPaymentEntry .pf-payment-data-section input[formcontrolname=\"amount\"]", async () => {
     paymentAmountInput = await fastFillTopPaymentAmount(page, row, logField);
   });
 
-  const displayedLineItems = await readDisplayedLineItems(page, selectors);
+  const displayedLineItems = await readDisplayedLineItems(page, selectors, logField, row.inputRow);
+  await logLineItemMatchDiagnostics(logField, row, displayedLineItems);
   const match = findLineItemMatch(displayedLineItems, row);
   if (match.type !== "unique") {
-    throw new Error(`AdvancedMD line item match failed: ${match.type}`);
+    throw new Error(lineItemMatchFailureMessage(match, displayedLineItems.length));
   }
 
   const matchedRow = paymentFrame(page).locator(selectors.lineItems.row).nth(Number(match.lineItem.rowId));
@@ -1541,8 +1550,41 @@ async function selectVisitClaimByDos(
     );
   }
 
+  const postSelectionStart = Date.now();
+  const dropdownCloseStart = Date.now();
   await waitForVisitClaimDropdownToClose(page, optionSelector, 5000);
-  const finalVisit = await waitForVisitClaimDisplayedValue(control.display, selectedLabel || selectedVisitClaimNumber, 5000);
+  await logField({
+    level: "info",
+    message: `AdvancedMD row ${inputRow}: Visit/Claim dropdown closed after: ${Date.now() - dropdownCloseStart} ms.`,
+    eventName: "payment_posting_advancedmd_visit_claim_dropdown_closed",
+    meta: { field: "Visit/Claim #", durationMs: Date.now() - dropdownCloseStart },
+  });
+  const displayedValueStart = Date.now();
+  await logField({
+    level: "info",
+    message: `AdvancedMD row ${inputRow}: Expected Visit/Claim: ${selectedVisitClaimNumber || selectedLabel}.`,
+    eventName: "payment_posting_advancedmd_visit_claim_expected_value",
+    meta: { field: "Visit/Claim #", expectedVisitClaim: selectedVisitClaimNumber, expectedLabel: selectedLabel },
+  });
+  const finalVisit = await waitForVisitClaimDisplayedValue(
+    control.display,
+    selectedVisitClaimNumber || selectedLabel,
+    5000,
+    logField,
+    inputRow,
+  );
+  await logField({
+    level: "info",
+    message: `AdvancedMD row ${inputRow}: Visit/Claim displayed value confirmed after: ${Date.now() - displayedValueStart} ms.`,
+    eventName: "payment_posting_advancedmd_visit_claim_displayed_value_confirmed",
+    meta: { field: "Visit/Claim #", durationMs: Date.now() - displayedValueStart, finalDisplayed: finalVisit },
+  });
+  await logField({
+    level: "info",
+    message: `AdvancedMD row ${inputRow}: Visit/Claim post-selection verification total: ${Date.now() - postSelectionStart} ms.`,
+    eventName: "payment_posting_advancedmd_visit_claim_post_selection_total",
+    meta: { field: "Visit/Claim #", durationMs: Date.now() - postSelectionStart },
+  });
   const fieldPopulated = !!normalizeLookupText(finalVisit);
   const finalVisitDate = extractVisitDate(finalVisit) || selectedVisitDate;
   const finalVisitClaimNumber = extractVisitClaimNumber(finalVisit) || selectedVisitClaimNumber;
@@ -1713,21 +1755,56 @@ async function waitForVisitClaimDropdownToClose(page: Page, optionSelector: stri
   }
 }
 
-async function waitForVisitClaimDisplayedValue(display: Locator, expectedValue: string, timeoutMs: number): Promise<string> {
+async function waitForVisitClaimDisplayedValue(
+  display: Locator,
+  expectedValue: string,
+  timeoutMs: number,
+  logField?: AdvancedMdPaymentEntryFieldLogger,
+  inputRow?: number,
+): Promise<string> {
   const deadline = Date.now() + timeoutMs;
   let latest = "";
+  latest = await visitClaimDisplayedValue(display);
+  const immediateMatched = visitClaimValueMatchesExpected(latest, expectedValue);
+  await logField?.({
+    level: "info",
+    message: `AdvancedMD row ${inputRow}: Immediate Visit/Claim displayed raw value: ${latest || "(blank)"}.`,
+    eventName: "payment_posting_advancedmd_visit_claim_immediate_displayed_raw",
+    meta: { field: "Visit/Claim #", expectedValue, rawValue: latest },
+  });
+  await logField?.({
+    level: "info",
+    message: `AdvancedMD row ${inputRow}: Immediate Visit/Claim displayed normalized value: ${normalizeLookupText(latest) || "(blank)"}. Verification matched: ${immediateMatched ? "Yes" : "No"}.`,
+    eventName: "payment_posting_advancedmd_visit_claim_immediate_displayed_normalized",
+    meta: { field: "Visit/Claim #", expectedValue, normalizedValue: normalizeLookupText(latest), matched: immediateMatched },
+  });
+  if (immediateMatched) return latest;
+
   while (Date.now() < deadline) {
     latest = await visitClaimDisplayedValue(display);
-    if (normalizeLookupText(latest) && (!expectedValue || normalizeLookupText(latest).includes(normalizeLookupText(expectedValue)))) return latest;
-    await display.page().waitForTimeout(250);
+    if (visitClaimValueMatchesExpected(latest, expectedValue)) return latest;
+    await display.page().waitForTimeout(75);
   }
   return latest || await visitClaimDisplayedValue(display);
 }
 
+function visitClaimValueMatchesExpected(actualValue: string, expectedValue: string): boolean {
+  const actual = normalizeLookupText(actualValue);
+  if (!actual) return false;
+  const expected = normalizeLookupText(expectedValue);
+  if (!expected) return true;
+  const expectedVisitNumber = normalizeLookupText(extractVisitClaimNumber(expectedValue));
+  return actual.includes(expected) || expected.includes(actual) || (!!expectedVisitNumber && actual.includes(expectedVisitNumber));
+}
+
 async function visitClaimDisplayedValue(display: Locator): Promise<string> {
-  const inputValueText = await display.locator("input:not([type=\"hidden\"])").first().inputValue().catch(() => "");
+  const input = display.locator("input:not([type=\"hidden\"])").first();
+  const inputValueText = await input.count().then(async (count) => (
+    count > 0 ? input.inputValue({ timeout: 250 }).catch(() => "") : ""
+  )).catch(() => "");
   if (inputValueText.trim()) return inputValueText.trim();
-  return textContent(display);
+  const text = (await display.textContent({ timeout: 250 }).catch(() => ""))?.replace(/\s+/g, " ").trim() ?? "";
+  return text;
 }
 
 async function lookupDisplayedValue(input: Locator): Promise<string> {
@@ -1874,10 +1951,34 @@ async function visibleOptionLabels(options: Locator): Promise<string[]> {
   return labels;
 }
 
-async function readDisplayedLineItems(page: Page, selectors: AdvancedMdSelectorConfig): Promise<DisplayedPaymentPostingLineItem[]> {
-  await paymentFrame(page).locator(selectors.paymentEntry.lineItemTable).first().waitFor({ state: "visible", timeout: 30000 });
+async function readDisplayedLineItems(
+  page: Page,
+  selectors: AdvancedMdSelectorConfig,
+  logField: AdvancedMdPaymentEntryFieldLogger,
+  inputRow: number,
+): Promise<DisplayedPaymentPostingLineItem[]> {
+  await logField({
+    level: "info",
+    message: `AdvancedMD row ${inputRow}: Waiting for line-item grid.`,
+    eventName: "payment_posting_advancedmd_line_item_grid_waiting",
+    meta: { field: "Line Item", gridSelector: selectors.paymentEntry.lineItemTable, rowSelector: selectors.lineItems.row },
+  });
+  const gridStart = Date.now();
+  await waitForLineItemGridReady(page, selectors, 30000);
+  await logField({
+    level: "info",
+    message: `AdvancedMD row ${inputRow}: Line-item grid ready after: ${Date.now() - gridStart} ms.`,
+    eventName: "payment_posting_advancedmd_line_item_grid_ready",
+    meta: { field: "Line Item", durationMs: Date.now() - gridStart },
+  });
   const rows = paymentFrame(page).locator(selectors.lineItems.row);
   const count = await rows.count();
+  await logField({
+    level: "info",
+    message: `AdvancedMD row ${inputRow}: Line-item rows found: ${count}.`,
+    eventName: "payment_posting_advancedmd_line_item_row_count",
+    meta: { field: "Line Item", rowCount: count },
+  });
   const lineItems: DisplayedPaymentPostingLineItem[] = [];
   for (let index = 0; index < count; index += 1) {
     const row = rows.nth(index);
@@ -1897,6 +1998,117 @@ async function readDisplayedLineItems(page: Page, selectors: AdvancedMdSelectorC
     });
   }
   return lineItems;
+}
+
+async function waitForLineItemGridReady(page: Page, selectors: AdvancedMdSelectorConfig, timeoutMs: number): Promise<void> {
+  const frame = paymentFrame(page);
+  const grid = frame.locator(selectors.paymentEntry.lineItemTable).first();
+  await grid.waitFor({ state: "visible", timeout: timeoutMs });
+  const rows = frame.locator(selectors.lineItems.row);
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const count = await rows.count().catch(() => 0);
+    if (count > 0) return;
+    await page.waitForTimeout(250);
+  }
+}
+
+async function logLineItemMatchDiagnostics(
+  logField: AdvancedMdPaymentEntryFieldLogger,
+  input: PaymentPostingInputRow,
+  displayedLineItems: DisplayedPaymentPostingLineItem[],
+): Promise<void> {
+  const normalizedExcelCpt = normalizeCpt(input.cpt);
+  const normalizedExcelCharge = formatNormalizedCurrencyForLog(input.chargeAmount);
+  await logField({
+    level: "info",
+    message: `AdvancedMD row ${input.inputRow}: Excel CPT raw: ${input.cpt}.`,
+    eventName: "payment_posting_advancedmd_line_item_excel_cpt_raw",
+    meta: { field: "Line Item", raw: input.cpt },
+  });
+  await logField({
+    level: "info",
+    message: `AdvancedMD row ${input.inputRow}: Excel CPT normalized: ${normalizedExcelCpt}.`,
+    eventName: "payment_posting_advancedmd_line_item_excel_cpt_normalized",
+    meta: { field: "Line Item", normalized: normalizedExcelCpt },
+  });
+  await logField({
+    level: "info",
+    message: `AdvancedMD row ${input.inputRow}: Excel Charge raw: ${input.chargeAmount}.`,
+    eventName: "payment_posting_advancedmd_line_item_excel_charge_raw",
+    meta: { field: "Line Item", raw: input.chargeAmount },
+  });
+  await logField({
+    level: "info",
+    message: `AdvancedMD row ${input.inputRow}: Excel Charge normalized: ${normalizedExcelCharge}.`,
+    eventName: "payment_posting_advancedmd_line_item_excel_charge_normalized",
+    meta: { field: "Line Item", normalized: normalizedExcelCharge },
+  });
+
+  for (let index = 0; index < displayedLineItems.length; index += 1) {
+    const line = displayedLineItems[index];
+    const normalizedLineCpt = normalizeCpt(line.code);
+    const normalizedLineCharge = formatNormalizedCurrencyForLog(line.charge);
+    const cptMatch = normalizedLineCpt === normalizedExcelCpt;
+    const chargeMatch = currencyAmountsEqual(line.charge, input.chargeAmount);
+    const finalMatch = cptMatch && chargeMatch;
+    const lineNumber = index + 1;
+    await logField({
+      level: "info",
+      message: `AdvancedMD row ${input.inputRow}: Line item ${lineNumber} CPT raw: ${line.code}.`,
+      eventName: "payment_posting_advancedmd_line_item_cpt_raw",
+      meta: { field: "Line Item", lineNumber, raw: line.code },
+    });
+    await logField({
+      level: "info",
+      message: `AdvancedMD row ${input.inputRow}: Line item ${lineNumber} CPT normalized: ${normalizedLineCpt}.`,
+      eventName: "payment_posting_advancedmd_line_item_cpt_normalized",
+      meta: { field: "Line Item", lineNumber, normalized: normalizedLineCpt },
+    });
+    await logField({
+      level: "info",
+      message: `AdvancedMD row ${input.inputRow}: Line item ${lineNumber} Charge raw: ${line.charge}.`,
+      eventName: "payment_posting_advancedmd_line_item_charge_raw",
+      meta: { field: "Line Item", lineNumber, raw: line.charge },
+    });
+    await logField({
+      level: "info",
+      message: `AdvancedMD row ${input.inputRow}: Line item ${lineNumber} Charge normalized: ${normalizedLineCharge}.`,
+      eventName: "payment_posting_advancedmd_line_item_charge_normalized",
+      meta: { field: "Line Item", lineNumber, normalized: normalizedLineCharge },
+    });
+    await logField({
+      level: "info",
+      message: `AdvancedMD row ${input.inputRow}: Line item ${lineNumber} CPT Match: ${cptMatch ? "Yes" : "No"}.`,
+      eventName: "payment_posting_advancedmd_line_item_cpt_match",
+      meta: { field: "Line Item", lineNumber, match: cptMatch },
+    });
+    await logField({
+      level: "info",
+      message: `AdvancedMD row ${input.inputRow}: Line item ${lineNumber} Charge Match: ${chargeMatch ? "Yes" : "No"}.`,
+      eventName: "payment_posting_advancedmd_line_item_charge_match",
+      meta: { field: "Line Item", lineNumber, match: chargeMatch },
+    });
+    await logField({
+      level: "info",
+      message: `AdvancedMD row ${input.inputRow}: Line item ${lineNumber} final match: ${finalMatch ? "Yes" : "No"}.`,
+      eventName: "payment_posting_advancedmd_line_item_final_match",
+      meta: { field: "Line Item", lineNumber, match: finalMatch },
+    });
+  }
+}
+
+function lineItemMatchFailureMessage(match: ReturnType<typeof findLineItemMatch>, displayedLineItemCount: number): string {
+  if (displayedLineItemCount === 0) return "Line Item Grid Not Ready / No Line Items Found";
+  if (match.type !== "no-match") return `AdvancedMD line item match failed: ${match.type}`;
+  if (match.cptMatched && !match.chargeMatched) return "Charge Not Matched";
+  if (!match.cptMatched && match.chargeMatched) return "CPT Not Matched";
+  return "CPT and Charge Not Matched";
+}
+
+function formatNormalizedCurrencyForLog(value: unknown): string {
+  const cents = normalizeCurrencyCents(value);
+  return cents === null ? "" : (cents / 100).toFixed(2);
 }
 
 async function applyDenialCode(
