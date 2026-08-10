@@ -42,6 +42,98 @@ function normalizePatientNameWithoutInitial(value) {
   return normalizePatientName(cleaned.replace(/\b[A-Z]\.?$/i, ""));
 }
 
+function splitPatientNameParts(value) {
+  const cleaned = String(value || "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!cleaned) {
+    return { firstWords: [], lastWords: [] };
+  }
+
+  if (cleaned.includes(",")) {
+    const [lastPart, ...firstParts] = cleaned.split(",");
+    return {
+      firstWords: extractNameWords(firstParts.join(" ")),
+      lastWords: extractNameWords(lastPart)
+    };
+  }
+
+  const words = extractNameWords(cleaned);
+  if (words.length <= 1) {
+    return { firstWords: words, lastWords: [] };
+  }
+
+  return {
+    firstWords: words.slice(0, -1),
+    lastWords: words.slice(-1)
+  };
+}
+
+function extractNameWords(value) {
+  return String(value || "")
+    .toUpperCase()
+    .split(/[^A-Z0-9]+/)
+    .map((word) => word.trim())
+    .filter((word) => word.length > 1);
+}
+
+function levenshteinDistance(left, right) {
+  if (left === right) return 0;
+  if (!left) return right.length;
+  if (!right) return left.length;
+
+  const previous = Array.from({ length: right.length + 1 }, (_, index) => index);
+  const current = new Array(right.length + 1);
+
+  for (let leftIndex = 1; leftIndex <= left.length; leftIndex += 1) {
+    current[0] = leftIndex;
+    for (let rightIndex = 1; rightIndex <= right.length; rightIndex += 1) {
+      const cost = left[leftIndex - 1] === right[rightIndex - 1] ? 0 : 1;
+      current[rightIndex] = Math.min(
+        current[rightIndex - 1] + 1,
+        previous[rightIndex] + 1,
+        previous[rightIndex - 1] + cost
+      );
+    }
+    for (let index = 0; index < previous.length; index += 1) {
+      previous[index] = current[index];
+    }
+  }
+
+  return previous[right.length];
+}
+
+function namesMatchAtNinetyPercent(left, right) {
+  if (!left || !right) return false;
+  if (left === right) return true;
+  if (Math.min(left.length, right.length) >= 3 && (left.startsWith(right) || right.startsWith(left))) {
+    return true;
+  }
+
+  const longestLength = Math.max(left.length, right.length);
+  const distance = levenshteinDistance(left, right);
+  return (longestLength - distance) / longestLength >= 0.9;
+}
+
+function hasMatchingNameWord(inputWords, portalWords) {
+  return inputWords.some((inputWord) => portalWords.some((portalWord) => namesMatchAtNinetyPercent(inputWord, portalWord)));
+}
+
+function patientNameWordsMatch(inputName, portalName) {
+  const inputParts = splitPatientNameParts(inputName);
+  const portalParts = splitPatientNameParts(portalName);
+  const hasInputFirst = inputParts.firstWords.length > 0;
+  const hasInputLast = inputParts.lastWords.length > 0;
+  const firstMatches = hasInputFirst && hasMatchingNameWord(inputParts.firstWords, portalParts.firstWords);
+  const lastMatches = hasInputLast && hasMatchingNameWord(inputParts.lastWords, portalParts.lastWords);
+
+  if (hasInputFirst && hasInputLast) {
+    return firstMatches && lastMatches;
+  }
+
+  return firstMatches || lastMatches;
+}
+
 function extractProviderTaxId(providerText) {
   const parts = String(providerText || "")
     .split(/\s+-\s+/)
@@ -401,8 +493,9 @@ async function processTriwestTricareServiceDateResults(page, row, provider, resu
   const inputMemberId = hasUsableValue(row.data["Subscriber No"]) ? normalizeMemberId(row.data["Subscriber No"]) : "";
   const inputPatientName = hasUsableValue(row.data["Patient Name"]) ? normalizePatientName(row.data["Patient Name"]) : "";
   const inputPatientNameWithoutInitial = hasUsableValue(row.data["Patient Name"]) ? normalizePatientNameWithoutInitial(row.data["Patient Name"]) : "";
+  const canFallbackToPatientName = options.projectId === "medrevenu" || options.projectId === "charm";
   const shouldMatchMemberId = options.projectId !== "medrevenu" || Boolean(inputMemberId);
-  const shouldMatchPatientName = options.projectId === "medrevenu" && !inputMemberId && Boolean(inputPatientName);
+  const shouldMatchPatientName = canFallbackToPatientName && !inputMemberId && Boolean(inputPatientName);
   let matchLabel = shouldMatchMemberId
     ? "Service Date + Billed Amount + Member ID"
     : shouldMatchPatientName
@@ -422,8 +515,8 @@ async function processTriwestTricareServiceDateResults(page, row, provider, resu
       && (!shouldMatchPatientName || normalizePatientName(result.patientName) === inputPatientName);
   });
 
-  if (matchedRows.length === 0 && options.projectId === "medrevenu" && inputMemberId && inputPatientName) {
-    logger.info("No TRIWEST-TRICARE Service Dates rows matched Medrevenu Member ID. Falling back to Patient Name match.");
+  if (matchedRows.length === 0 && canFallbackToPatientName && inputMemberId && inputPatientName) {
+    logger.info("No TRIWEST-TRICARE Service Dates rows matched Member ID. Falling back to Patient Name match.");
     matchedRows = resultRows.filter((result) => {
       return result.serviceDate === inputDate
         && normalizeMoney(result.billedAmount) === inputCharge
@@ -432,14 +525,24 @@ async function processTriwestTricareServiceDateResults(page, row, provider, resu
     matchLabel = "Service Date + Billed Amount + Patient Name";
   }
 
-  if (matchedRows.length === 0 && options.projectId === "medrevenu" && inputPatientNameWithoutInitial) {
-    logger.info("No TRIWEST-TRICARE Service Dates rows matched exact Medrevenu Patient Name. Falling back to Patient Name without trailing initial.");
+  if (matchedRows.length === 0 && canFallbackToPatientName && inputPatientNameWithoutInitial) {
+    logger.info("No TRIWEST-TRICARE Service Dates rows matched exact Patient Name. Falling back to Patient Name without trailing initial.");
     matchedRows = resultRows.filter((result) => {
       return result.serviceDate === inputDate
         && normalizeMoney(result.billedAmount) === inputCharge
         && normalizePatientNameWithoutInitial(result.patientName) === inputPatientNameWithoutInitial;
     });
     matchLabel = "Service Date + Billed Amount + Patient Name without initial";
+  }
+
+  if (matchedRows.length === 0 && canFallbackToPatientName && hasUsableValue(row.data["Patient Name"])) {
+    logger.info("No TRIWEST-TRICARE Service Dates rows matched patient name without trailing initial. Falling back to fuzzy Patient Name word match.");
+    matchedRows = resultRows.filter((result) => {
+      return result.serviceDate === inputDate
+        && normalizeMoney(result.billedAmount) === inputCharge
+        && patientNameWordsMatch(row.data["Patient Name"], result.patientName);
+    });
+    matchLabel = "Service Date + Billed Amount + fuzzy Patient Name words";
   }
 
   logger.info(`Matched ${matchedRows.length} TRIWEST-TRICARE Service Dates result row(s) by ${matchLabel}`);
@@ -451,7 +554,9 @@ async function processTriwestTricareServiceDateResults(page, row, provider, resu
     const returnedCount = resultSummary.total ?? (resultRows.length || "unknown");
     const matchCriteria = matchLabel === "Service Date + Billed Amount + Member ID"
       ? `Service Date ${row.data["Service Date"]}, Charges ${row.data.Charges}, and Member ID ${row.data["Subscriber No"]}`
-      : matchLabel === "Service Date + Billed Amount + Patient Name" || matchLabel === "Service Date + Billed Amount + Patient Name without initial"
+      : matchLabel === "Service Date + Billed Amount + Patient Name"
+        || matchLabel === "Service Date + Billed Amount + Patient Name without initial"
+        || matchLabel === "Service Date + Billed Amount + fuzzy Patient Name words"
         ? `Service Date ${row.data["Service Date"]}, Charges ${row.data.Charges}, and Patient Name ${row.data["Patient Name"]}`
         : `Service Date ${row.data["Service Date"]} and Charges ${row.data.Charges}`;
     const mismatchReason = `Portal returned ${returnedCount} rows in ${sourceTab} for provider ${provider}, but none matched input ${matchCriteria}. ${returnedRowsSummary}`;

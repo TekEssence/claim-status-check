@@ -3,12 +3,12 @@ import { betterAuthInstance } from "./better-auth";
 import { getActiveAuthUser, type AuthUser } from "./db";
 import { getActiveAutomationJobForUser } from "@/lib/automation-jobs/db";
 import { getActiveScrapeJobForUser } from "@/lib/scrape-jobs/db";
+import { AUTH_IDLE_TIMEOUT_MS, AUTH_IDLE_TIMEOUT_SECONDS } from "./session-config";
 
 export type AuthSession = AuthUser & {
   exp: number | null;
 };
 
-const IDLE_TIMEOUT_MS = 60 * 60 * 1000;
 const LAST_ACTIVITY_COOKIE = "claim-status.last_activity";
 
 function clearBetterAuthCookie(cookieStore: Awaited<ReturnType<typeof cookies>>, name: string): void {
@@ -27,6 +27,7 @@ function setLastActivityCookie(cookieStore: Awaited<ReturnType<typeof cookies>>,
     sameSite: "lax",
     secure: process.env.NODE_ENV === "production",
     path: "/",
+    maxAge: AUTH_IDLE_TIMEOUT_SECONDS,
   });
 }
 
@@ -68,7 +69,7 @@ export async function getSessionFromCookies(requestHeaders?: Headers): Promise<A
     const cookieStore = await cookies();
     const now = Date.now();
     const lastActivity = readLastActivity(cookieStore);
-    if (lastActivity && now - lastActivity > IDLE_TIMEOUT_MS && !(await hasActiveUserJob(activeUser.userId))) {
+    if (lastActivity && now - lastActivity > AUTH_IDLE_TIMEOUT_MS && !(await hasActiveUserJob(activeUser.userId))) {
       await clearSessionCookie();
       return null;
     }

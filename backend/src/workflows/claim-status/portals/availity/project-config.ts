@@ -27,6 +27,23 @@ function normalizeLookup(value: unknown): string {
   return String(value || "").replace(/[^a-z0-9]+/gi, "").toLowerCase();
 }
 
+function cleanCharmPatientName(value: string): string {
+  return String(value || "")
+    .replace(/\s*\[[^\]]*]\s*/g, " ")
+    .replace(/\s*,\s*/g, ", ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function cleanCharmProviderName(value: string): string {
+  return String(value || "")
+    .replace(/\s*\[[^\]]*$/, "")
+    .replace(/\s*\[[^\]]*]\s*/g, " ")
+    .replace(/\s*,\s*/g, ", ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function findDataValue(data: Record<string, string>, aliases: string[]): string {
   const wanted = new Set(aliases.map(normalizeLookup));
   for (const [key, value] of Object.entries(data)) {
@@ -75,8 +92,8 @@ export function getMfaConfigForProject(projectId: string): AvailityMfaConfig {
 
 export function applyProjectColumnMapping(projectId: string, data: Record<string, string>): Record<string, string> {
   if (projectId === "charm") {
-    const patientName = findDataValue(data, ["Patient Name"]) ||
-      [findDataValue(data, ["Patient first name"]), findDataValue(data, ["Patient last name"])].filter(Boolean).join(" ");
+    const patientName = cleanCharmPatientName(findDataValue(data, ["Patient Name"])) ||
+      [findDataValue(data, ["Patient first name"]), findDataValue(data, ["Patient last name"])].map(cleanCharmPatientName).filter(Boolean).join(" ");
 
     return {
       ...data,
@@ -222,9 +239,13 @@ export function getProviderOrderForRow(projectId: string, row: AvailityInputRow,
   }
 
   const group = findRowValue(row, ["Group", "Group Name", "Group Code", "Medical Group", "Medical Group Name", "Practice", "Organization Group"]);
-  const inputProviderName = findRowValue(row, ["Provider Name", "Provider", "Rendering Provider"]);
+  const rawInputProviderName = findRowValue(row, ["Provider Name", "Provider", "Rendering Provider"]);
+  const inputProviderName = projectId === "charm" ? cleanCharmProviderName(rawInputProviderName) : rawInputProviderName;
   if (!group && projectId === "charm") {
-    return inputProviderName ? [inputProviderName] : undefined;
+    if (inputProviderName) {
+      return [inputProviderName];
+    }
+    throw new Error("Charm Availity rows require either a Group mapped in Provider_mapping_ava.xlsx or a Provider Name value.");
   }
   if (!group) {
     throw new Error(`${projectId} Availity rows require a Group column value to select the provider.`);
@@ -237,7 +258,10 @@ export function getProviderOrderForRow(projectId: string, row: AvailityInputRow,
   });
 
   if (!match && projectId === "charm") {
-    return inputProviderName ? [inputProviderName] : undefined;
+    if (inputProviderName) {
+      return [inputProviderName];
+    }
+    throw new Error(`No Availity provider mapping found for charm group "${group}", and no Provider Name fallback was supplied. Update Provider_mapping_ava.xlsx.`);
   }
 
   if (!match) {

@@ -22,6 +22,8 @@ type AuthUser = {
   mustResetPassword: boolean;
 };
 
+const AUTH_USER_STORAGE_KEY = "claim-status-auth-user";
+
 const workflows = [
   {
     id: "claim-status",
@@ -70,7 +72,21 @@ export function WorkflowDashboardPage() {
 
   async function logout() {
     await fetch("/api/auth/logout", { method: "POST" }).catch(() => {});
+    try {
+      window.sessionStorage.removeItem(AUTH_USER_STORAGE_KEY);
+    } catch {
+      // Ignore storage failures.
+    }
     router.replace("/");
+  }
+
+  function openWorkflow(route: string) {
+    try {
+      window.sessionStorage.setItem(AUTH_USER_STORAGE_KEY, JSON.stringify(user));
+    } catch {
+      // Ignore storage failures.
+    }
+    router.push(route);
   }
 
   if (loading || !user) {
@@ -168,7 +184,7 @@ export function WorkflowDashboardPage() {
                 <button
                   key={workflow.id}
                   type="button"
-                  onClick={() => router.push(workflow.route)}
+                  onClick={() => openWorkflow(workflow.route)}
                   className="group flex min-h-52 flex-col border border-slate-200 bg-white p-6 text-left shadow-sm transition hover:border-blue-400 hover:shadow-md"
                 >
                   <span className={`flex h-11 w-11 items-center justify-center rounded-md ${workflow.iconClassName}`}>

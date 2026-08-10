@@ -305,7 +305,9 @@ async function runHipaaProviderSearch(page, row, providerOrder = PROVIDERS, opti
   let lastProviderFailure = "";
 
   for (const provider of providerOrder) {
-    await searchHipaaWithProvider(page, provider, row.data);
+    await searchHipaaWithProvider(page, provider, row.data, {
+      allowCharmProviderFallback: options.projectId === "charm"
+    });
 
     logger.info(`Waiting up to 5 seconds for ${provider} HIPAA results to settle`);
     const resultSummary = await waitForSearchResultsToSettle(page, 5000);

@@ -87,7 +87,9 @@ async function processClaim(page, row, options = {}) {
     logger.warn("Member search did not find a matching Service Date + Charges row. Falling back to HIPAA Standard search.");
     let hipaaResult;
     try {
-      hipaaResult = await runHipaaProviderSearch(page, row, providerOrder);
+      hipaaResult = await runHipaaProviderSearch(page, row, providerOrder, {
+        projectId: options.projectId
+      });
     } catch (error) {
       const message = error && error.message ? error.message : String(error);
       if (isRecoverableRowError(message)) {
@@ -129,7 +131,9 @@ async function processClaim(page, row, options = {}) {
     };
   }
 
-  return runHipaaProviderSearch(page, row, providerOrder);
+  return runHipaaProviderSearch(page, row, providerOrder, {
+    projectId: options.projectId
+  });
 }
 
 module.exports = {

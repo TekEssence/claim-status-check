@@ -97,7 +97,7 @@ describe("Charm project config", () => {
     const mapped = applyProjectColumnMapping("charm", {
       "Invoice #": "INV-100",
       "Payer Name": "Payer [ 99726 ] - Tricare | West Region",
-      "Patient Name": "DOE, JANE",
+      "Patient Name": "DOE [ PAT13778 ], JANE",
       "Date Of Birth": "01/02/1980",
       "Insured's ID": "SUB-123",
       "Date Of Service": "06/16/2026",
@@ -115,6 +115,15 @@ describe("Charm project config", () => {
     assert.equal(mapped.Charges, "$150.00");
     assert.equal(mapped["Provider Name"], "TEST PROVIDER");
     assert.equal(mapped.Group, "open mind");
+  });
+
+  it("removes bracketed Charm patient ids from separate first and last name fields", () => {
+    const mapped = applyProjectColumnMapping("charm", {
+      "Patient first name": "JANE [ PAT13778 ]",
+      "Patient last name": "CHARLENE [ PAT13778 ]",
+    });
+
+    assert.equal(mapped["Patient Name"], "JANE CHARLENE");
   });
 
   it("maps Charm group to Availity organization", () => {
@@ -169,5 +178,18 @@ describe("Charm project config", () => {
     };
 
     assert.deepEqual(getProviderOrderForRow("charm", row, []), ["INPUT PROVIDER"]);
+  });
+
+  it("cleans bracketed Charm input provider before using provider fallback", () => {
+    const row: AvailityInputRow = {
+      input_row_id: 1,
+      source_row_number: 2,
+      data: applyProjectColumnMapping("charm", {
+        Group: "open mind",
+        "Provider Name": "Jane Charlene [ abcd",
+      }),
+    };
+
+    assert.deepEqual(getProviderOrderForRow("charm", row, []), ["Jane Charlene"]);
   });
 });

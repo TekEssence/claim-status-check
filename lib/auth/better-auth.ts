@@ -6,6 +6,7 @@ import { username } from "better-auth/plugins/username";
 import { getDb } from "@/db";
 import * as betterAuthSchema from "@/db/schema/better-auth";
 import { hashPassword, verifyPassword } from "./password";
+import { AUTH_IDLE_TIMEOUT_SECONDS, AUTH_SESSION_REFRESH_AGE_SECONDS } from "./session-config";
 
 function getBaseUrl(): string {
   return (
@@ -66,6 +67,8 @@ export const betterAuthInstance = betterAuth({
   },
   session: {
     modelName: "authSessions",
+    expiresIn: AUTH_IDLE_TIMEOUT_SECONDS,
+    updateAge: AUTH_SESSION_REFRESH_AGE_SECONDS,
   },
   account: {
     modelName: "authAccounts",

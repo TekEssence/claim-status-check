@@ -147,6 +147,16 @@ function persistCachedAuthUser(user: AuthUser | null) {
     // Ignore storage failures.
   }
 }
+
+function loadCachedAuthUser(): AuthUser | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const cached = window.sessionStorage.getItem(AUTH_USER_STORAGE_KEY);
+    return cached ? JSON.parse(cached) as AuthUser : null;
+  } catch {
+    return null;
+  }
+}
 const PORTAL_UI_META: Record<
   PortalId,
   {
@@ -299,7 +309,7 @@ const PORTAL_WORKSPACE_META: Record<
     processingDescription: "Blue Shield requests are validated by group, encrypted during upload, and processed with checkpoint-aware automation.",
   },
   availity: {
-    heroDescription: "Upload your Availity login workbook and claim workbook to process Aetna, Anthem-CA, Blue Cross Blue Shield, Wellpoint, Wellcare, and Humana claim status checks.",
+    heroDescription: "Upload your Availity login workbook and claim workbook to process Aetna, Anthem-CA, Blue Cross Blue Shield, Wellpoint, Wellcare, Humana, Health Net, Molina, and TRIWEST-TRICARE claim status checks.",
     processingDescription: "Availity requests stream live status over SSE and automatically download the completed output workbook.",
   },
   uhc: {
@@ -708,8 +718,8 @@ async function writeIehpPostProcessedCheckpoint(
 export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: PortalId | null }) {
   const router = useRouter();
   const pathname = usePathname();
-  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
-  const [authLoading, setAuthLoading] = useState(true);
+  const [authUser, setAuthUser] = useState<AuthUser | null>(() => loadCachedAuthUser());
+  const [authLoading, setAuthLoading] = useState(() => !loadCachedAuthUser());
   const [authUsername, setAuthUsername] = useState("");
   const [authPassword, setAuthPassword] = useState("");
   const [authConfirmPassword, setAuthConfirmPassword] = useState("");
@@ -4001,7 +4011,6 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
                           key={portal.id}
                           type="button"
                           onClick={() => {
-                            setSelectedPortalId(portal.id as PortalId);
                             navigateToPortalRoute(portal.id as PortalId);
                             setStatus("");
                             setLogs([]);

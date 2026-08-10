@@ -49,6 +49,65 @@ function splitPatientName(patientName) {
   };
 }
 
+function normalizeProviderWord(value) {
+  return String(value || "").replace(/[^a-z0-9]/gi, "").toUpperCase();
+}
+
+function providerWords(value) {
+  return String(value || "")
+    .replace(/\s*\[[^\]]*$/, "")
+    .replace(/\s*\[[^\]]*]\s*/g, " ")
+    .split(/[\s,]+/)
+    .map(normalizeProviderWord)
+    .filter((word) => word.length >= 2);
+}
+
+function charmProviderNameParts(providerName) {
+  const cleaned = String(providerName || "")
+    .replace(/\s*\[[^\]]*$/, "")
+    .replace(/\s*\[[^\]]*]\s*/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (cleaned.includes(",")) {
+    const [lastPart, firstPart] = cleaned.split(",", 2);
+    return {
+      firstWords: providerWords(firstPart),
+      lastWords: providerWords(lastPart)
+    };
+  }
+
+  const words = providerWords(cleaned);
+  if (words.length < 2) {
+    return {
+      firstWords: words,
+      lastWords: []
+    };
+  }
+
+  return {
+    firstWords: [words[0]],
+    lastWords: [words[words.length - 1]]
+  };
+}
+
+function charmProviderOptionMatches(optionText, providerName) {
+  const { firstWords, lastWords } = charmProviderNameParts(providerName);
+  const optionWords = new Set(providerWords(optionText));
+  if (firstWords.length && !lastWords.length) {
+    return firstWords.some((word) => optionWords.has(word));
+  }
+  if (!firstWords.length || !lastWords.length) {
+    return false;
+  }
+
+  return firstWords.some((word) => optionWords.has(word)) && lastWords.some((word) => optionWords.has(word));
+}
+
+function extractProviderIdentifiers(providerText) {
+  return String(providerText || "").match(/\b\d{10}\b/g) || [];
+}
+
 async function selectAutocompleteOption(scope, inputLocator, value) {
   await inputLocator.scrollIntoViewIfNeeded().catch(() => {});
   await inputLocator.click({ force: true });
@@ -97,7 +156,6 @@ function providerStateMatchesProvider(state, providerName) {
   const hiddenValue = String(state.hiddenValue || "").trim();
   const inputValue = String(state.inputValue || "").trim().toUpperCase();
   const inputHasProviderIdentifier = /\d{10}/.test(state.inputValue || "");
-  const npiHasProviderIdentifier = /\d{10}/.test(state.providerNpi || "");
 
   // Typed text in the combobox is not enough. React Select keeps a hidden
   // provider value only after an option is actually selected. The MUI variant
@@ -106,7 +164,7 @@ function providerStateMatchesProvider(state, providerName) {
     expected
       && (
         (selectedText.includes(expected) && hiddenValue)
-        || (inputValue.includes(expected) && (inputHasProviderIdentifier || npiHasProviderIdentifier))
+        || (inputValue.includes(expected) && inputHasProviderIdentifier)
       )
   );
 }
@@ -131,7 +189,118 @@ async function waitForProviderSelection(frame, providerName, timeoutMs = 10000) 
   throw new Error(`HIPAA provider selection was not verified after ${timeoutMs} ms: ${stateText}`);
 }
 
-async function clickProviderOption(frame, providerName) {
+async function clickCharmFallbackProviderOption(frame, providerName) {
+  const clickedText = await frame.locator("[role='option'], [id^='react-select-'][id*='-option-'], .provider-select__option").evaluateAll(
+    (elements, expectedProviderName) => {
+      const normalizeProviderWord = (value) => String(value || "").replace(/[^a-z0-9]/gi, "").toUpperCase();
+      const providerWords = (value) => String(value || "")
+        .replace(/\s*\[[^\]]*$/, "")
+        .replace(/\s*\[[^\]]*]\s*/g, " ")
+        .split(/[\s,]+/)
+        .map(normalizeProviderWord)
+        .filter((word) => word.length >= 2);
+      const charmProviderNameParts = (providerName) => {
+        const cleaned = String(providerName || "")
+          .replace(/\s*\[[^\]]*$/, "")
+          .replace(/\s*\[[^\]]*]\s*/g, " ")
+          .replace(/\s+/g, " ")
+          .trim();
+
+        if (cleaned.includes(",")) {
+          const [lastPart, firstPart] = cleaned.split(",", 2);
+          return {
+            firstWords: providerWords(firstPart),
+            lastWords: providerWords(lastPart)
+          };
+        }
+
+        const words = providerWords(cleaned);
+        if (words.length < 2) {
+          return {
+            firstWords: words,
+            lastWords: []
+          };
+        }
+
+        return {
+          firstWords: [words[0]],
+          lastWords: [words[words.length - 1]]
+        };
+      };
+      const { firstWords, lastWords } = charmProviderNameParts(expectedProviderName);
+      if (!firstWords.length) {
+        return "";
+      }
+
+      const candidates = Array.from(elements);
+      const match = candidates.find((element) => {
+        const optionText = String(element.textContent || "").replace(/\s+/g, " ").trim();
+        const optionWords = new Set(providerWords(optionText));
+        if (!lastWords.length) {
+          return firstWords.some((word) => optionWords.has(word));
+        }
+        return firstWords.some((word) => optionWords.has(word)) && lastWords.some((word) => optionWords.has(word));
+      });
+
+      if (!match) {
+        return "";
+      }
+
+      const text = String(match.textContent || "").replace(/\s+/g, " ").trim();
+      match.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
+      match.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
+      match.click();
+      return text;
+    },
+    providerName
+  ).catch(() => "");
+
+  if (clickedText) {
+    logger.info(`Clicked Charm fuzzy HIPAA provider option "${clickedText}" for input provider "${providerName}".`);
+    await humanDelay(300, 600);
+    return clickedText;
+  }
+
+  return "";
+}
+
+async function clickFirstVisibleCharmProviderOption(frame, providerName) {
+  const optionSelectors = [
+    "[role='option']",
+    "[id^='react-select-'][id*='-option-']",
+    ".provider-select__option",
+    ".css-1n7v3ny-option",
+    ".css-9gakcf-option",
+    ".css-yt9ioa-option"
+  ];
+
+  for (const selector of optionSelectors) {
+    const options = frame.locator(selector);
+    const count = await options.count().catch(() => 0);
+    for (let index = 0; index < count; index += 1) {
+      const option = options.nth(index);
+      if (!await option.isVisible({ timeout: 300 }).catch(() => false)) {
+        continue;
+      }
+
+      const optionText = (await option.innerText({ timeout: 500 }).catch(() => "")).replace(/\s+/g, " ").trim();
+      if (!optionText) {
+        continue;
+      }
+
+      if (charmProviderOptionMatches(optionText, providerName) || providerWords(providerName).some((word) => providerWords(optionText).includes(word))) {
+        await option.click({ force: true });
+        logger.info(`Clicked first visible Charm HIPAA provider option "${optionText}" for input provider "${providerName}".`);
+        await humanDelay(300, 600);
+        return optionText;
+      }
+    }
+  }
+
+  return "";
+}
+
+async function clickProviderOption(frame, providerName, options = {}) {
   const providerText = String(providerName || "").trim();
   const deadline = Date.now() + 8000;
   let lastVisibleOptions = "";
@@ -145,9 +314,24 @@ async function clickProviderOption(frame, providerName) {
 
     for (const option of optionLocators) {
       if (await option.isVisible({ timeout: 500 }).catch(() => false)) {
+        const optionText = (await option.innerText({ timeout: 500 }).catch(() => "")).replace(/\s+/g, " ").trim();
         await option.click({ force: true });
         await humanDelay(300, 600);
-        return;
+        return optionText || providerText;
+      }
+    }
+
+    if (options.allowCharmProviderFallback) {
+      const clickedText = await clickCharmFallbackProviderOption(frame, providerName);
+      if (clickedText) {
+        return clickedText;
+      }
+    }
+
+    if (options.allowCharmProviderFallback) {
+      const clickedText = await clickFirstVisibleCharmProviderOption(frame, providerName);
+      if (clickedText) {
+        return clickedText;
       }
     }
 
@@ -269,7 +453,7 @@ async function selectHipaaTab(page) {
   );
 }
 
-async function selectProvider(page, providerName) {
+async function selectProvider(page, providerName, options = {}) {
   await withRetry(
     `Selecting HIPAA provider ${providerName}`,
     async () => {
@@ -296,9 +480,41 @@ async function selectProvider(page, providerName) {
       await frame.page().keyboard.press("Backspace");
       await frame.page().keyboard.type(String(providerName));
       await humanDelay(700, 1200);
-      await clickProviderOption(frame, providerName);
+      const clickedProviderOptionText = await clickProviderOption(frame, providerName, options);
+      const clickedProviderIdentifiers = extractProviderIdentifiers(clickedProviderOptionText);
 
-      const selectedState = await waitForProviderSelection(frame, providerName, 10000);
+      const selectedState = await waitForProviderSelection(frame, providerName, 10000).catch(async (error) => {
+        if (!options.allowCharmProviderFallback) {
+          throw error;
+        }
+
+        const state = await getProviderFieldState(frame);
+        const selectedProviderText = state.selectedText || "";
+        const selectedIdentifiers = [state.hiddenValue, state.providerNpi].filter(Boolean);
+        const matchedClickedIdentifier = clickedProviderIdentifiers.length > 0
+          && clickedProviderIdentifiers.some((identifier) => selectedIdentifiers.includes(identifier));
+
+        if (clickedProviderIdentifiers.length > 0 && !matchedClickedIdentifier) {
+          await providerInput.press("Enter").catch(() => {});
+          await humanDelay(500, 900);
+          const refreshedState = await getProviderFieldState(frame);
+          const refreshedIdentifiers = [refreshedState.hiddenValue, refreshedState.providerNpi].filter(Boolean);
+          if (clickedProviderIdentifiers.some((identifier) => refreshedIdentifiers.includes(identifier))) {
+            logger.info(`Charm fuzzy HIPAA provider selection verified by clicked option identifier: "${clickedProviderOptionText}".`);
+            return refreshedState;
+          }
+          throw error;
+        }
+
+        if (!charmProviderOptionMatches(selectedProviderText, providerName)) {
+          throw error;
+        }
+        if (!/\d{10}/.test(state.providerNpi || "") && !state.hiddenValue) {
+          throw error;
+        }
+        logger.info(`Charm fuzzy HIPAA provider selection verified: "${selectedProviderText}" matched "${providerName}".`);
+        return state;
+      });
       logger.info(
         `HIPAA provider selected state after select: input="${selectedState.inputValue}", selected="${selectedState.selectedText}", hidden="${selectedState.hiddenValue}", npi="${selectedState.providerNpi}"`
       );
@@ -476,10 +692,10 @@ async function submitHipaaSearch(page) {
   );
 }
 
-async function searchHipaaWithProvider(page, providerName, rowData) {
+async function searchHipaaWithProvider(page, providerName, rowData, options = {}) {
   logger.info(`HIPAA Standard search provider attempt: ${providerName}`);
   await selectHipaaTab(page);
-  await selectProvider(page, providerName);
+  await selectProvider(page, providerName, options);
   await fillHipaaSearchForm(page, rowData);
   await submitHipaaSearch(page);
 }
