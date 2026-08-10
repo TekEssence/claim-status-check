@@ -693,12 +693,7 @@ export async function prepareAdvancedMdPaymentPostingRow(options: {
   });
 
   await runPaymentEntryFieldStage(logField, row.inputRow, "Deposit Date", "Filling Deposit Date", "Deposit Date filled", "frame #frmPaymentEntry [data-pendo-id=\"eob-check-deposit-date-20240229\"] input", async () => {
-    const resolvedDepositDateInput = await paymentFrameInputByCandidates("EOB Deposit Date", [
-      paymentFrameInputByWrapperPendoId(page, "eob-check-deposit-date-20240229", "EOB Deposit Date"),
-      paymentFrame(page).locator("input[formcontrolname=\"eobDepositDate\"]").first(),
-    ]);
-    depositDateInput = resolvedDepositDateInput;
-    await fillValue(resolvedDepositDateInput, normalizeAdvancedMdDate(row.checkDate));
+    depositDateInput = await fastFillDepositDate(page, row, logField);
   });
 
   const patientSelected = await runPaymentEntryFieldStage(logField, row.inputRow, "Patient", "Selecting Patient", "Patient selected", paymentFrameWrapperPendoDescription("payment-entry-patient-search-input-20240229"), async () => (
@@ -720,12 +715,7 @@ export async function prepareAdvancedMdPaymentPostingRow(options: {
 
   let paymentAmountInput: Locator | null = null;
   await runPaymentEntryFieldStage(logField, row.inputRow, "Payment Amount", "Filling Payment Amount", "Payment Amount filled", "frame #frmPaymentEntry .pf-payment-data-section input[formcontrolname=\"amount\"]", async () => {
-    const resolvedPaymentAmountInput = await paymentFrameInputByCandidates("Payment Amount", [
-      paymentFrame(page).locator(".pf-payment-data-section input[formcontrolname=\"amount\"]").first(),
-      paymentFrame(page).locator(".pf-payment-data-section input[formcontrolname=\"paymentAmount\"]").first(),
-    ]);
-    paymentAmountInput = resolvedPaymentAmountInput;
-    await fillValue(resolvedPaymentAmountInput, formatCurrencyInput(row.paymentAmount));
+    paymentAmountInput = await fastFillTopPaymentAmount(page, row, logField);
   });
 
   const displayedLineItems = await readDisplayedLineItems(page, selectors);
@@ -2106,6 +2096,254 @@ async function fillValue(locator: Locator, value: string): Promise<void> {
     }, value).catch(() => {});
   }
   await locator.blur().catch(() => {});
+}
+
+async function fastFillDepositDate(
+  page: Page,
+  row: PaymentPostingInputRow,
+  logField: AdvancedMdPaymentEntryFieldLogger,
+): Promise<Locator> {
+  const expected = normalizeDepositDateForMaskedInput(row.checkDate);
+  const keyboardValue = depositDateKeyboardValue(expected);
+  const totalStart = Date.now();
+  const exactLocator = paymentFrame(page)
+    .locator("[data-pendo-id=\"eob-check-deposit-date-20240229\"] input[matinput][mask=\"00/00/0000\"]")
+    .first();
+
+  await logField({
+    level: "info",
+    message: `AdvancedMD row ${row.inputRow}: Deposit Date Excel value: ${row.checkDate}`,
+    eventName: "payment_posting_advancedmd_deposit_date_excel_value",
+    meta: { field: "Deposit Date", excelValue: row.checkDate },
+  });
+  await logField({
+    level: "info",
+    message: `AdvancedMD row ${row.inputRow}: Deposit Date normalized: ${expected}`,
+    eventName: "payment_posting_advancedmd_deposit_date_normalized",
+    meta: { field: "Deposit Date", normalized: expected },
+  });
+  await logField({
+    level: "info",
+    message: `AdvancedMD row ${row.inputRow}: Deposit Date keyboard value: ${keyboardValue}`,
+    eventName: "payment_posting_advancedmd_deposit_date_keyboard_value",
+    meta: { field: "Deposit Date", keyboardValue, expected },
+  });
+  const locatorStart = Date.now();
+  await exactLocator.waitFor({ state: "attached", timeout: 15000 });
+  await exactLocator.waitFor({ state: "visible", timeout: 15000 });
+  await logFillTiming(logField, row.inputRow, "Deposit Date", "locator resolved", Date.now() - locatorStart);
+
+  let lastError: unknown = null;
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    try {
+      await typeMaskedDepositDate(exactLocator, expected, keyboardValue, row.inputRow, logField, attempt === 1 ? 30 : 50);
+      await logFillTiming(logField, row.inputRow, "Deposit Date", "total fill duration", Date.now() - totalStart);
+      return exactLocator;
+    } catch (error) {
+      lastError = error;
+      if (attempt === 1) {
+        await logField({
+          level: "warn",
+          message: `AdvancedMD row ${row.inputRow}: Deposit Date typing attempt failed; retrying once. ${error instanceof Error ? error.message : String(error)}`,
+          eventName: "payment_posting_advancedmd_deposit_date_typing_retry",
+          meta: { field: "Deposit Date", attempt },
+        });
+      }
+    }
+  }
+  throw new Error(`Deposit Date fill failed after keyboard retry. ${lastError instanceof Error ? lastError.message : String(lastError)}`);
+}
+
+async function fastFillTopPaymentAmount(
+  page: Page,
+  row: PaymentPostingInputRow,
+  logField: AdvancedMdPaymentEntryFieldLogger,
+): Promise<Locator> {
+  const expected = formatCurrencyInput(row.paymentAmount);
+  const totalStart = Date.now();
+  const exactLocator = paymentFrame(page).locator("input[formcontrolname=\"paymentAmount\"]").first();
+  const fallback = async (error: unknown): Promise<Locator> => {
+    await logField({
+      level: "warn",
+      message: `AdvancedMD row ${row.inputRow}: Payment Amount fast fill failed; falling back to generic fillValue. ${error instanceof Error ? error.message : String(error)}`,
+      eventName: "payment_posting_advancedmd_payment_amount_fast_fill_fallback",
+      meta: { field: "Payment Amount" },
+    });
+    const fallbackLocator = await paymentFrameInputByCandidates("Payment Amount", [
+      paymentFrame(page).locator(".pf-payment-data-section input[formcontrolname=\"amount\"]").first(),
+      paymentFrame(page).locator(".pf-payment-data-section input[formcontrolname=\"paymentAmount\"]").first(),
+    ]);
+    await fillValue(fallbackLocator, expected);
+    await logFillTiming(logField, row.inputRow, "Payment Amount", "total fill duration", Date.now() - totalStart);
+    return fallbackLocator;
+  };
+
+  try {
+    const locatorStart = Date.now();
+    await exactLocator.waitFor({ state: "attached", timeout: 15000 });
+    await exactLocator.waitFor({ state: "visible", timeout: 15000 });
+    if (!await exactLocator.isEnabled({ timeout: 3000 }).catch(() => false)) {
+      throw new Error("exact Payment Amount input is not enabled");
+    }
+    await logFillTiming(logField, row.inputRow, "Payment Amount", "locator resolved", Date.now() - locatorStart);
+    await logField({
+      level: "info",
+      message: `AdvancedMD row ${row.inputRow}: Payment Amount input: ${expected}`,
+      eventName: "payment_posting_advancedmd_payment_amount_input",
+      meta: { field: "Payment Amount", expected },
+    });
+
+    const focusStart = Date.now();
+    await exactLocator.scrollIntoViewIfNeeded().catch(() => {});
+    await exactLocator.click();
+    await exactLocator.press(process.platform === "darwin" ? "Meta+A" : "Control+A");
+    await logFillTiming(logField, row.inputRow, "Payment Amount", "focus/click", Date.now() - focusStart);
+
+    const typingStart = Date.now();
+    await exactLocator.type(expected, { delay: 10, timeout: 15000 });
+    await logFillTiming(logField, row.inputRow, "Payment Amount", "typing", Date.now() - typingStart);
+
+    const verifyStart = Date.now();
+    const actual = await inputValue(exactLocator);
+    await logField({
+      level: "info",
+      message: `AdvancedMD row ${row.inputRow}: Payment Amount entered: ${actual}`,
+      eventName: "payment_posting_advancedmd_payment_amount_entered",
+      meta: { field: "Payment Amount", entered: actual, expected },
+    });
+    await logFillTiming(logField, row.inputRow, "Payment Amount", "verification", Date.now() - verifyStart);
+    if (!currencyInputsEquivalent(actual, expected)) {
+      throw new Error(`expected "${expected}", found "${actual}"`);
+    }
+
+    const commitStart = Date.now();
+    await exactLocator.blur().catch(() => {});
+    await logFillTiming(logField, row.inputRow, "Payment Amount", "commit/blur", Date.now() - commitStart);
+    await logFillTiming(logField, row.inputRow, "Payment Amount", "total fill duration", Date.now() - totalStart);
+    await logField({
+      level: "info",
+      message: `AdvancedMD row ${row.inputRow}: Payment Amount fill success.`,
+      eventName: "payment_posting_advancedmd_payment_amount_fill_success",
+      meta: { field: "Payment Amount", entered: actual },
+    });
+    return exactLocator;
+  } catch (error) {
+    return fallback(error);
+  }
+}
+
+async function typeMaskedDepositDate(
+  input: Locator,
+  expected: string,
+  keyboardValue: string,
+  inputRow: number,
+  logField: AdvancedMdPaymentEntryFieldLogger,
+  keyDelayMs: number,
+): Promise<void> {
+  const focusStart = Date.now();
+  await input.scrollIntoViewIfNeeded().catch(() => {});
+  await input.click();
+  await input.press(process.platform === "darwin" ? "Meta+A" : "Control+A");
+  await input.press("Backspace");
+  await input.page().waitForTimeout(200);
+  await logFillTiming(logField, inputRow, "Deposit Date", "focus/click", Date.now() - focusStart);
+
+  await logField({
+    level: "info",
+    message: `AdvancedMD row ${inputRow}: Deposit Date typing started.`,
+    eventName: "payment_posting_advancedmd_deposit_date_typing_started",
+    meta: { field: "Deposit Date", expected },
+  });
+  const typingStart = Date.now();
+  await input.type(keyboardValue, { delay: keyDelayMs, timeout: 15000 });
+  await logField({
+    level: "info",
+    message: `AdvancedMD row ${inputRow}: Deposit Date typed.`,
+    eventName: "payment_posting_advancedmd_deposit_date_typed",
+    meta: { field: "Deposit Date", keyboardValue, expected },
+  });
+  await logFillTiming(logField, inputRow, "Deposit Date", "typing", Date.now() - typingStart);
+
+  const verifyStart = Date.now();
+  const typedValue = await inputValue(input);
+  await logField({
+    level: "info",
+    message: `AdvancedMD row ${inputRow}: Deposit Date displayed after typing: ${typedValue}`,
+    eventName: "payment_posting_advancedmd_deposit_date_typed_value",
+    meta: { field: "Deposit Date", typedValue, expected },
+  });
+  await logFillTiming(logField, inputRow, "Deposit Date", "verification", Date.now() - verifyStart);
+  if (!datesEquivalent(typedValue, expected)) {
+    throw new Error(`Deposit Date typed value mismatch: expected "${expected}", found "${typedValue}".`);
+  }
+
+  const commitStart = Date.now();
+  await input.blur().catch(() => {});
+  await logFillTiming(logField, inputRow, "Deposit Date", "commit/blur", Date.now() - commitStart);
+  const committedValue = await inputValue(input);
+  await logField({
+    level: "info",
+    message: `AdvancedMD row ${inputRow}: Deposit Date committed: ${committedValue}`,
+    eventName: "payment_posting_advancedmd_deposit_date_committed_value",
+    meta: { field: "Deposit Date", committedValue, expected },
+  });
+  if (!datesEquivalent(committedValue, expected)) {
+    throw new Error(`Deposit Date committed value mismatch: expected "${expected}", found "${committedValue}".`);
+  }
+  await logField({
+    level: "info",
+    message: `AdvancedMD row ${inputRow}: Deposit Date success.`,
+    eventName: "payment_posting_advancedmd_deposit_date_fill_success",
+    meta: { field: "Deposit Date", committedValue },
+  });
+}
+
+async function logFillTiming(
+  logField: AdvancedMdPaymentEntryFieldLogger,
+  inputRow: number,
+  field: "Deposit Date" | "Payment Amount",
+  step: string,
+  durationMs: number,
+): Promise<void> {
+  await logField({
+    level: "info",
+    message: `AdvancedMD row ${inputRow}: ${field} ${step}: ${durationMs} ms`,
+    eventName: "payment_posting_advancedmd_fast_fill_timing",
+    meta: { field, step, durationMs },
+  });
+}
+
+function currencyInputsEquivalent(actual: string, expected: string): boolean {
+  const actualCents = normalizeCurrencyCents(actual);
+  const expectedCents = normalizeCurrencyCents(expected);
+  return actualCents !== null && expectedCents !== null && actualCents === expectedCents;
+}
+
+function datesEquivalent(actual: string, expected: string): boolean {
+  return normalizeDepositDateForMaskedInput(actual) === normalizeDepositDateForMaskedInput(expected);
+}
+
+function depositDateKeyboardValue(normalizedDate: string): string {
+  const match = normalizedDate.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (!match) {
+    throw new Error(`Deposit Date could not be normalized to MM/DD/YYYY: "${normalizedDate}".`);
+  }
+  return `${match[1]}${match[2]}${match[3]}`;
+}
+
+function normalizeDepositDateForMaskedInput(value: unknown): string {
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return normalizeAdvancedMdDate(value);
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return normalizeAdvancedMdDate(value);
+  }
+  const text = String(value ?? "").trim();
+  const isoMatch = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (isoMatch) {
+    return `${isoMatch[2].padStart(2, "0")}/${isoMatch[3].padStart(2, "0")}/${isoMatch[1]}`;
+  }
+  return normalizeAdvancedMdDate(value);
 }
 
 async function inputValue(locator: Locator): Promise<string> {
