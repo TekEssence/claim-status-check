@@ -416,6 +416,8 @@ export class AdvancedMdPatientNotSelectedError extends Error {
 
 const ADVANCEDMD_PAYMENT_ENTRY_READY_TIMEOUT_MS = 210000;
 const ADVANCEDMD_EOB_CHECK_NUMBER_PENDO_ID = "eob-checknumber-single-search-input-20250104";
+const ADVANCEDMD_HUMAN_STAGE_PAUSE_BEFORE_MS = { min: 450, max: 900 };
+const ADVANCEDMD_HUMAN_STAGE_PAUSE_AFTER_MS = { min: 300, max: 700 };
 
 export function getMissingAdvancedMdSelectors(selectors: AdvancedMdSelectorConfig): string[] {
   return REQUIRED_ADVANCEDMD_SELECTOR_KEYS.filter((key) => !readSelector(selectors, key));
@@ -861,6 +863,7 @@ async function runPaymentEntryFieldStage<T>(
   });
 
   try {
+    await humanPaymentEntryPause(logField, inputRow, field, "before");
     const result = await action();
     await logField({
       level: "info",
@@ -868,6 +871,7 @@ async function runPaymentEntryFieldStage<T>(
       eventName: "payment_posting_advancedmd_field_filled",
       meta: { field, locator: locatorDescription },
     });
+    await humanPaymentEntryPause(logField, inputRow, field, "after");
     return result;
   } catch (error) {
     await logField({
@@ -878,6 +882,27 @@ async function runPaymentEntryFieldStage<T>(
     });
     throw error;
   }
+}
+
+async function humanPaymentEntryPause(
+  logField: AdvancedMdPaymentEntryFieldLogger,
+  inputRow: number,
+  field: string,
+  phase: "before" | "after",
+): Promise<void> {
+  const range = phase === "before" ? ADVANCEDMD_HUMAN_STAGE_PAUSE_BEFORE_MS : ADVANCEDMD_HUMAN_STAGE_PAUSE_AFTER_MS;
+  const durationMs = randomIntegerInRange(range.min, range.max);
+  await logField({
+    level: "info",
+    message: `AdvancedMD row ${inputRow}: Human pacing pause ${phase} ${field}: ${durationMs} ms.`,
+    eventName: "payment_posting_advancedmd_human_pacing_pause",
+    meta: { field, phase, durationMs },
+  });
+  await new Promise((resolve) => setTimeout(resolve, durationMs));
+}
+
+function randomIntegerInRange(min: number, max: number): number {
+  return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
 function requireResolvedLocator(locator: Locator | null, label: string): Locator {
@@ -2111,6 +2136,15 @@ function formatNormalizedCurrencyForLog(value: unknown): string {
   return cents === null ? "" : (cents / 100).toFixed(2);
 }
 
+type ReasonsPopupState = {
+  popupVisible: boolean;
+  paymentReasonsTabVisible: boolean;
+  remarkCodesTabVisible: boolean;
+  saveButtonVisible: boolean;
+  cancelButtonVisible: boolean;
+  blockingOverlayVisible: boolean;
+};
+
 async function applyDenialCode(
   page: Page,
   matchedRow: Locator,
@@ -2124,21 +2158,31 @@ async function applyDenialCode(
 
   await matchedRow.locator(selectors.lineItems.paymentReasonButton).first().click();
   await logField({ level: "info", message: "CARC/RARC clicked.", eventName: "payment_posting_advancedmd_carc_rarc_clicked", meta: { field: "CARC/RARC" } });
+  await logField({ level: "info", message: "CARC/RARC click completed.", eventName: "payment_posting_advancedmd_carc_rarc_click_completed", meta: { field: "CARC/RARC" } });
 
   const frame = paymentFrame(page);
   const paymentReasonsTab = frame.locator("a[mat-tab-link]").filter({ hasText: /^Payment Reasons$/ }).first();
   const remarkCodesTab = frame.locator("a[mat-tab-link]").filter({ hasText: /^Remark Codes$/ }).first();
-  await Promise.race([
-    paymentReasonsTab.waitFor({ state: "visible", timeout: 15000 }),
-    remarkCodesTab.waitFor({ state: "visible", timeout: 15000 }),
-  ]);
+  const popupState = await waitForReasonsPopupVisible(page, 15000);
+  await logReasonsPopupState(logField, popupState);
+  if (!popupState.popupVisible) {
+    if (popupState.blockingOverlayVisible) {
+      await logField({
+        level: "error",
+        message: "CARC/RARC popup failed to render; blocking overlay detected.",
+        eventName: "payment_posting_advancedmd_reasons_popup_orphaned_overlay",
+        meta: popupState,
+      });
+    }
+    throw new Error("CARC/RARC popup failed to open");
+  }
   await logField({ level: "info", message: "Payment Reasons / Remark Codes popup opened.", eventName: "payment_posting_advancedmd_reasons_popup_opened", meta: { field: "CARC/RARC" } });
 
   await logField({ level: "info", message: "Clicking Remark Codes tab.", eventName: "payment_posting_advancedmd_remark_codes_tab_clicking", meta: { field: "CARC/RARC" } });
   await remarkCodesTab.click();
   await logField({ level: "info", message: "Remark Codes tab clicked.", eventName: "payment_posting_advancedmd_remark_codes_tab_clicked", meta: { field: "CARC/RARC" } });
   const remarkBody = frame.locator(".rarc-body").first();
-  await remarkBody.waitFor({ state: "visible", timeout: 15000 });
+  await waitForRemarkCodesBodyOrApplicationError(page, remarkBody, logField, 15000);
   await logField({ level: "info", message: "Remark Codes body visible.", eventName: "payment_posting_advancedmd_remark_codes_body_visible", meta: { field: "CARC/RARC" } });
 
   await logField({ level: "info", message: `Denial Code input: ${denialCode}.`, eventName: "payment_posting_advancedmd_remark_code_input_value", meta: { denialCode } });
@@ -2188,6 +2232,84 @@ async function applyDenialCode(
     popupStatus: "Opened",
     saveStatus: "Saved",
   };
+}
+
+async function waitForReasonsPopupVisible(page: Page, timeoutMs: number): Promise<ReasonsPopupState> {
+  const deadline = Date.now() + timeoutMs;
+  let latest = await reasonsPopupState(page);
+  while (Date.now() < deadline) {
+    latest = await reasonsPopupState(page);
+    if (latest.popupVisible) return latest;
+    await page.waitForTimeout(100);
+  }
+  return latest;
+}
+
+async function reasonsPopupState(page: Page): Promise<ReasonsPopupState> {
+  const frame = paymentFrame(page);
+  const paymentReasonsTabVisible = await frame.locator("a[mat-tab-link]").filter({ hasText: /^Payment Reasons$/ }).first().isVisible({ timeout: 250 }).catch(() => false);
+  const remarkCodesTabVisible = await frame.locator("a[mat-tab-link]").filter({ hasText: /^Remark Codes$/ }).first().isVisible({ timeout: 250 }).catch(() => false);
+  const saveButtonVisible = await frame.locator("[data-pendo-id=\"save-panel-reasons-20240229\"]").first().isVisible({ timeout: 250 }).catch(() => false);
+  const cancelButtonVisible = await frame.locator("[data-pendo-id=\"close-panel-reasons-20240229\"]").first().isVisible({ timeout: 250 }).catch(() => false);
+  const blockingOverlayVisible = await page.locator(".cdk-overlay-backdrop, .cdk-global-overlay-wrapper").first().isVisible({ timeout: 250 }).catch(() => false);
+  return {
+    popupVisible: (paymentReasonsTabVisible || remarkCodesTabVisible) && (saveButtonVisible || cancelButtonVisible),
+    paymentReasonsTabVisible,
+    remarkCodesTabVisible,
+    saveButtonVisible,
+    cancelButtonVisible,
+    blockingOverlayVisible,
+  };
+}
+
+async function logReasonsPopupState(logField: AdvancedMdPaymentEntryFieldLogger, state: ReasonsPopupState): Promise<void> {
+  await logField({ level: "info", message: `Reasons popup visible: ${state.popupVisible ? "Yes" : "No"}.`, eventName: "payment_posting_advancedmd_reasons_popup_visible_state", meta: state });
+  await logField({ level: "info", message: `Remark Codes tab visible: ${state.remarkCodesTabVisible ? "Yes" : "No"}.`, eventName: "payment_posting_advancedmd_reasons_remark_tab_visible_state", meta: state });
+  await logField({ level: "info", message: `Reasons Save button visible: ${state.saveButtonVisible ? "Yes" : "No"}.`, eventName: "payment_posting_advancedmd_reasons_save_visible_state", meta: state });
+  await logField({ level: "info", message: `Reasons Cancel button visible: ${state.cancelButtonVisible ? "Yes" : "No"}.`, eventName: "payment_posting_advancedmd_reasons_cancel_visible_state", meta: state });
+  await logField({ level: state.blockingOverlayVisible && !state.popupVisible ? "warn" : "info", message: `Blocking CDK overlay visible: ${state.blockingOverlayVisible ? "Yes" : "No"}.`, eventName: "payment_posting_advancedmd_reasons_blocking_overlay_state", meta: state });
+}
+
+async function waitForRemarkCodesBodyOrApplicationError(
+  page: Page,
+  remarkBody: Locator,
+  logField: AdvancedMdPaymentEntryFieldLogger,
+  timeoutMs: number,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await remarkBody.isVisible({ timeout: 250 }).catch(() => false)) return;
+    const appError = await advancedMdApplicationErrorText(page);
+    if (appError) {
+      await logField({
+        level: "error",
+        message: `AdvancedMD application error detected: ${appError}`,
+        eventName: "payment_posting_advancedmd_carc_rarc_application_error_detected",
+        meta: { field: "CARC/RARC", applicationError: appError },
+      });
+      throw new Error(`AdvancedMD application error during CARC/RARC: ${appError}`);
+    }
+    await page.waitForTimeout(250);
+  }
+  throw new Error("Remark Codes body did not become visible after CARC/RARC popup opened");
+}
+
+async function advancedMdApplicationErrorText(page: Page): Promise<string> {
+  const candidates = page.locator([
+    ".toast",
+    ".toast-message",
+    ".notification",
+    ".alert",
+    ".mat-snack-bar-container",
+    ".cdk-overlay-pane",
+    "[role=\"alert\"]",
+  ].join(", "));
+  const count = Math.min(await candidates.count().catch(() => 0), 20);
+  for (let index = 0; index < count; index += 1) {
+    const text = (await candidates.nth(index).textContent({ timeout: 250 }).catch(() => ""))?.replace(/\s+/g, " ").trim() ?? "";
+    if (/\b(Cannot read properties of|TypeError|application error)\b/i.test(text) || /\bundefined\b/i.test(text)) return text;
+  }
+  return "";
 }
 
 async function applyLineItemStatus(
