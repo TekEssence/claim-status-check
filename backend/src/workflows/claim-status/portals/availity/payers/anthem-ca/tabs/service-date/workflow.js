@@ -58,7 +58,13 @@ async function selectAutocompleteOption(scope, inputLocator, value) {
   await humanDelay(500, 1000);
 
   const option = scope.getByText(value, { exact: true }).last();
-  if (await option.isVisible({ timeout: 3000 }).catch(() => false)) {
+  let optionVisible = await option.isVisible({ timeout: 3000 }).catch(() => false);
+  if (!optionVisible) {
+    await humanDelay(900, 1200);
+    optionVisible = await option.isVisible({ timeout: 3000 }).catch(() => false);
+  }
+
+  if (optionVisible) {
     await option.click();
   } else {
     await inputLocator.press("Enter");
@@ -79,7 +85,13 @@ async function fillProviderTaxId(frame, taxId) {
   await humanDelay(400, 800);
 
   const exactOption = frame.getByText(taxId, { exact: true }).last();
-  if (await exactOption.isVisible({ timeout: 2000 }).catch(() => false)) {
+  let exactOptionVisible = await exactOption.isVisible({ timeout: 2000 }).catch(() => false);
+  if (!exactOptionVisible) {
+    await humanDelay(900, 1200);
+    exactOptionVisible = await exactOption.isVisible({ timeout: 2000 }).catch(() => false);
+  }
+
+  if (exactOptionVisible) {
     await exactOption.click();
   } else {
     await taxIdInput.press("Enter").catch(() => {});
