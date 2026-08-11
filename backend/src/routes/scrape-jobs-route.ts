@@ -46,22 +46,30 @@ function ensurePersistenceListenerRegistered() {
 }
 
 export async function POST(req: Request) {
+  let startupStage = "initializing";
+  let portalId = "iehp";
   try {
+    startupStage = "registering persistence listener";
     ensurePersistenceListenerRegistered();
+    startupStage = "checking auth session";
     const session = await getSessionFromCookies();
     if (!session) {
       return Response.json({ error: "Authentication required." }, { status: 401 });
     }
 
+    startupStage = "reading form data";
     const formData = await req.formData();
-    const portalId = getPortalId(formData);
-    const scraper = getClaimStatusScraper(portalId);
+    portalId = getPortalId(formData);
+    startupStage = `loading ${portalId} scraper`;
+    const scraper = await getClaimStatusScraper(portalId);
+    startupStage = `validating ${portalId} input`;
     const input = scraper.validateInput(formData);
     const requestedJobId = getRequestedJobId(formData);
     const totalRows = getTotalRows(formData);
     const startIndex = getStartIndex(formData);
 
     if (requestedJobId) {
+      startupStage = "checking requested claim-status job";
       const existingActiveJob = await getNormalizedActiveScrapeJobForUser(session.userId);
       if (!existingActiveJob || existingActiveJob.jobId !== requestedJobId) {
         return Response.json({ error: "The requested run is no longer active for this user." }, { status: 409 });
@@ -72,7 +80,9 @@ export async function POST(req: Request) {
       }
     }
 
+    startupStage = "creating in-memory job";
     const job = createScrapeJob(requestedJobId || undefined);
+    startupStage = "creating persistent automation job";
     await createPersistentScrapeJob({
       jobId: job.id,
       userId: session.userId,
@@ -86,6 +96,7 @@ export async function POST(req: Request) {
       console.error("Upload claim-status input files to S3 failed", error);
     });
 
+    startupStage = `starting ${portalId} automation`;
     scraper.run(input, {
       jobId: job.id,
       portalId,
@@ -139,12 +150,20 @@ export async function POST(req: Request) {
 
     return Response.json({ jobId: job.id, portalId });
   } catch (error) {
-    console.error("Start scrape job failed", error);
+    console.error("Start scrape job failed", { portalId, startupStage, error });
     if (isScrapeJobDbConnectionError(error)) {
-      return Response.json({ error: "Scrape job database connection timed out. Check DATABASE_URL and restart the dev server." }, { status: 503 });
+      return Response.json({
+        error: "Scrape job database connection timed out. Check DATABASE_URL and restart the dev server.",
+        portalId,
+        stage: startupStage,
+      }, { status: 503 });
     }
 
-    return Response.json({ error: error instanceof Error ? error.message : "Failed to start scrape job." }, { status: 500 });
+    return Response.json({
+      error: error instanceof Error ? error.message : "Failed to start scrape job.",
+      portalId,
+      stage: startupStage,
+    }, { status: 500 });
   }
 }
 

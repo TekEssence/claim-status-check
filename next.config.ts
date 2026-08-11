@@ -1,13 +1,20 @@
 import type { NextConfig } from "next";
 
+const automationRuntimeFiles = [
+  "node_modules/@sparticuz/chromium/bin/**/*",
+  "node_modules/playwright-core/**/*",
+];
+
 const nextConfig: NextConfig = {
   output: process.env.STATIC_EXPORT === "true" ? "export" : "standalone",
   images: {
     unoptimized: process.env.STATIC_EXPORT === "true",
   },
-  serverExternalPackages: ["@sparticuz/chromium"],
+  serverExternalPackages: ["@sparticuz/chromium", "playwright-core"],
   outputFileTracingIncludes: {
-    "/api/scrape-jobs": ["node_modules/@sparticuz/chromium/bin/**/*"],
+    "/api/scrape-jobs": automationRuntimeFiles,
+    "/api/automation-jobs": automationRuntimeFiles,
+    "/api/process-claims": automationRuntimeFiles,
   },
   turbopack: {
     // Stub out Node.js built-ins that ExcelJS references but aren't needed in the browser

@@ -28,6 +28,7 @@ import optumLogo from "../../Assets/optum-logo.svg";
 import regalLogo from "../../Assets/channels4_profile (1).jpg";
 import availityLogo from "../../Assets/availity-logo.jpg";
 import { applyClaimRowUpdateToWorksheet, postProcessWorksheet } from "./portals/iehp/workbook";
+import { applyUhcRowUpdateToWorksheet, parseUhcClaimRows, postProcessUhcWorksheet } from "./portals/uhc/workbook";
 import {
   cancelScrapeJob as cancelScrapeJobRequest,
   getActiveScrapeJobErrorId,
@@ -56,6 +57,8 @@ import { BlueShieldInputForm } from "./portals/blue-shield/BlueShieldInputForm";
 import { BlueShieldResultView } from "./portals/blue-shield/BlueShieldResultView";
 import { AvailityInputForm } from "./portals/availity/AvailityInputForm";
 import { AvailityResultView } from "./portals/availity/AvailityResultView";
+import { UhcInputForm } from "./portals/uhc/UhcInputForm";
+import { UhcResultView, type UhcProviderPrompt } from "./portals/uhc/UhcResultView";
 import { OptumProInputForm } from "../../portals/optum-pro/OptumProInputForm";
 import { OptumProResultView } from "../../portals/optum-pro/OptumProResultView";
 import {
@@ -66,6 +69,7 @@ import {
   iehpFrontendPortalConfig,
   optumProFrontendPortalConfig,
   regalFrontendPortalConfig,
+  uhcFrontendPortalConfig,
 } from "./registry";
 
 type AuthUser = {
@@ -100,7 +104,14 @@ type IehpWorkbookBundle = {
   worksheet: ExcelJS.Worksheet;
 };
 
-export type PortalId = "iehp" | "aerial" | "regal" | "blue-shield" | "availity" | "optum-pro";
+type UhcWorkbookBundle = {
+  claimRows: ReturnType<typeof parseUhcClaimRows>;
+  totalRows: number;
+  excelWb: ExcelJS.Workbook;
+  worksheet: ExcelJS.Worksheet;
+};
+
+export type PortalId = "iehp" | "aerial" | "regal" | "blue-shield" | "availity" | "optum-pro" | "uhc";
 type DownloadFile = {
   filename: string;
   bytes: Uint8Array;
@@ -125,10 +136,11 @@ const PORTAL_ROUTE_MAP: Record<PortalId, string> = {
   "blue-shield": "/blue-shield",
   availity: "/availity",
   "optum-pro": "/optum-pro",
+  uhc: "/uhc",
 };
 
 function isPortalId(value: string): value is PortalId {
-  return value === "iehp" || value === "aerial" || value === "regal" || value === "blue-shield" || value === "availity" || value === "optum-pro";
+  return value === "iehp" || value === "aerial" || value === "regal" || value === "blue-shield" || value === "availity" || value === "optum-pro" || value === "uhc";
 }
 
 function isTerminalWorkflowStatus(status: string): boolean {
@@ -157,30 +169,6 @@ function canRestoreCurrentJob(job: CurrentScrapeJob): job is CurrentScrapeJob & 
   return job.portalId === "iehp" && job.status === "waiting_resume";
 }
 
-function isAuthUser(value: unknown): value is AuthUser {
-  if (!value || typeof value !== "object") return false;
-  const candidate = value as Record<string, unknown>;
-  return (
-    typeof candidate.userId === "string" &&
-    typeof candidate.username === "string" &&
-    typeof candidate.email === "string" &&
-    (candidate.role === "ADMIN" || candidate.role === "USER") &&
-    typeof candidate.mustResetPassword === "boolean"
-  );
-}
-
-function readCachedAuthUser(): AuthUser | null {
-  if (typeof window === "undefined") return null;
-  try {
-    const raw = window.sessionStorage.getItem(AUTH_USER_STORAGE_KEY);
-    if (!raw) return null;
-    const parsed: unknown = JSON.parse(raw);
-    return isAuthUser(parsed) ? parsed : null;
-  } catch {
-    return null;
-  }
-}
-
 function persistCachedAuthUser(user: AuthUser | null) {
   if (typeof window === "undefined") return;
   try {
@@ -191,6 +179,16 @@ function persistCachedAuthUser(user: AuthUser | null) {
     }
   } catch {
     // Ignore storage failures.
+  }
+}
+
+function loadCachedAuthUser(): AuthUser | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const cached = window.sessionStorage.getItem(AUTH_USER_STORAGE_KEY);
+    return cached ? JSON.parse(cached) as AuthUser : null;
+  } catch {
+    return null;
   }
 }
 const PORTAL_UI_META: Record<
@@ -285,6 +283,23 @@ const PORTAL_UI_META: Record<
       height: 32,
     },
   },
+  uhc: {
+    shortCode: "UHC",
+    logoClassName: "bg-white text-blue-800",
+    logoSrc: "/uhc-logo.svg",
+    cardLogoFrameClassName: "h-10 w-[6.6rem] rounded-[1rem] px-2",
+    cardLogoImageClassName: "h-7 w-full object-contain",
+    cardLogoSize: {
+      width: 94,
+      height: 28,
+    },
+    heroLogoFrameClassName: "h-14 w-[8.5rem] rounded-[1.15rem] px-3",
+    heroLogoImageClassName: "h-9 w-full object-contain",
+    heroLogoSize: {
+      width: 120,
+      height: 36,
+    },
+  },
   "optum-pro": {
     shortCode: "OP",
     logoClassName: "bg-white text-orange-600",
@@ -330,6 +345,10 @@ const PORTAL_WORKSPACE_META: Record<
   availity: {
     heroDescription: "Upload your Availity login workbook and claim workbook to process Aetna, Anthem-CA, Blue Cross Blue Shield, Wellpoint, Wellcare, Humana, Health Net, Molina, and TRIWEST-TRICARE claim status checks.",
     processingDescription: "Availity requests stream live status over SSE and automatically download the completed output workbook.",
+  },
+  uhc: {
+    heroDescription: "Upload your UHC login workbook and claim workbook to process UnitedHealthcare claim status checks for Minimax or MedRevenu.",
+    processingDescription: "UHC requests stream live status, prompt for OTP or provider selection when needed, and update the selected workbook in place.",
   },
   "optum-pro": {
     heroDescription: "Upload the One Healthcare ID login workbook and Optum Pro claim workbook, then enter OTP when prompted.",
@@ -489,6 +508,35 @@ function downloadBase64File(filename: string, base64: string, type: string): voi
   downloadBlob(filename, new Blob([arrayBuffer], { type }));
 }
 
+function getEventRowIndex(eventData: ScrapeJobEvent): number {
+  if (typeof eventData.index === "number") return eventData.index;
+  if (typeof eventData.rowIndex === "number") return Math.max(0, eventData.rowIndex - 1);
+  return -1;
+}
+
+function screenshotsFromArtifacts(currentJob: CurrentScrapeJob): ErrorScreenshot[] {
+  return (currentJob.artifacts ?? [])
+    .filter((artifact) => artifact.artifactType === "error_screenshot" && artifact.contentBase64)
+    .map((artifact) => ({
+      index: artifact.rowIndex === null || artifact.rowIndex === undefined ? -1 : artifact.rowIndex,
+      image: artifact.contentBase64 ?? "",
+    }));
+}
+
+function downloadDebugHtmlArtifacts(currentJob: CurrentScrapeJob): void {
+  for (const artifact of currentJob.artifacts ?? []) {
+    if (artifact.artifactType !== "debug_html" || !artifact.contentText) continue;
+    const artifactKey = `${artifact.artifactType}:${artifact.id}:${artifact.filename || artifact.createdAt}`;
+    if (hasDownloadedArtifact(currentJob.jobId, artifactKey)) continue;
+    downloadTextFile(
+      artifact.filename || `debug_dom_line_${artifact.rowIndex === null || artifact.rowIndex === undefined ? "unknown" : artifact.rowIndex + 1}.html`,
+      artifact.contentText,
+      artifact.mimeType || "text/html",
+    );
+    rememberDownloadedArtifact(currentJob.jobId, artifactKey);
+  }
+}
+
 function getDownloadedArtifactsKey(jobId: string): string {
   return `${DOWNLOADED_ARTIFACTS_PREFIX}${jobId}`;
 }
@@ -523,7 +571,7 @@ function hasDownloadedArtifact(jobId: string, artifactKey: string): boolean {
 function buildDownloadArtifactKey(eventData: ScrapeJobEvent): string {
   return [
     eventData.type ?? "",
-    typeof eventData.index === "number" ? String(eventData.index) : "",
+    String(getEventRowIndex(eventData)),
     eventData.filename ?? "",
     eventData.path ?? "",
   ].join("|");
@@ -634,6 +682,38 @@ async function loadIehpWorkbookBundle(
   };
 }
 
+async function loadUhcWorkbookBundle(claimFileHandle: FileSystemFileHandle, groupId: string): Promise<UhcWorkbookBundle> {
+  const currentPermission = await claimFileHandle.queryPermission({ mode: "readwrite" }).catch(() => "prompt" as const);
+  if (currentPermission !== "granted") {
+    if ((await claimFileHandle.requestPermission({ mode: "readwrite" }).catch(() => "denied" as const)) !== "granted") {
+      throw new Error("Write permission denied. Cannot update UHC Excel file.");
+    }
+  }
+
+  const file = await claimFileHandle.getFile();
+  const arrayBuffer = await file.arrayBuffer();
+  const excelWb = new ExcelJS.Workbook();
+  await excelWb.xlsx.load(arrayBuffer);
+  const worksheet = excelWb.getWorksheet(1);
+  if (!worksheet) {
+    throw new Error("UHC claim Excel file does not contain a worksheet.");
+  }
+
+  const claimRows = parseUhcClaimRows(worksheet, {
+    requirePatientDob: groupId !== "medrevenu",
+  });
+  if (claimRows.length === 0) {
+    throw new Error("UHC claim Excel file contains no rows to process.");
+  }
+
+  return {
+    claimRows,
+    totalRows: claimRows.length,
+    excelWb,
+    worksheet,
+  };
+}
+
 async function writeWorkbookToClaimFile(claimFileHandle: FileSystemFileHandle, excelWb: ExcelJS.Workbook): Promise<void> {
   const permission = await claimFileHandle.queryPermission({ mode: "readwrite" });
   if (permission !== "granted") {
@@ -649,11 +729,32 @@ async function writeWorkbookToClaimFile(claimFileHandle: FileSystemFileHandle, e
   await writable.close();
 }
 
+async function cloneWorkbook(excelWb: ExcelJS.Workbook): Promise<ExcelJS.Workbook> {
+  const buffer = await excelWb.xlsx.writeBuffer();
+  const clonedWb = new ExcelJS.Workbook();
+  await clonedWb.xlsx.load(buffer);
+  return clonedWb;
+}
+
+async function writeIehpPostProcessedCheckpoint(
+  claimFileHandle: FileSystemFileHandle,
+  excelWb: ExcelJS.Workbook,
+): Promise<void> {
+  const checkpointWb = await cloneWorkbook(excelWb);
+  const checkpointWorksheet = checkpointWb.getWorksheet(1);
+  if (!checkpointWorksheet) {
+    throw new Error("Claim Excel file does not contain a worksheet.");
+  }
+  postProcessWorksheet(checkpointWorksheet);
+  await writeWorkbookToClaimFile(claimFileHandle, checkpointWb);
+}
+
 export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: PortalId | null }) {
   const router = useRouter();
   const pathname = usePathname();
-  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
-  const [authLoading, setAuthLoading] = useState(true);
+  const cachedAuthUser = isCognitoMode() ? null : loadCachedAuthUser();
+  const [authUser, setAuthUser] = useState<AuthUser | null>(() => cachedAuthUser);
+  const [authLoading, setAuthLoading] = useState(() => cachedAuthUser === null);
   const [authUsername, setAuthUsername] = useState("");
   const [authPassword, setAuthPassword] = useState("");
   const [authConfirmPassword, setAuthConfirmPassword] = useState("");
@@ -693,6 +794,15 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
   const [availityJobId, setAvailityJobId] = useState<string>("");
   const [availityOtpRequest, setAvailityOtpRequest] = useState<{ inputName: string; label: string; message: string } | null>(null);
   const [availityOtpValue, setAvailityOtpValue] = useState<string>("");
+  const [uhcLoginFile, setUhcLoginFile] = useState<File | null>(null);
+  const [uhcClaimFileHandle, setUhcClaimFileHandle] = useState<FileSystemFileHandle | null>(null);
+  const [uhcClaimFileName, setUhcClaimFileName] = useState<string>("");
+  const [uhcGroupId, setUhcGroupId] = useState("minimax");
+  const [uhcBrowserType, setUhcBrowserType] = useState<"chrome" | "firefox">("chrome");
+  const [uhcJobId, setUhcJobId] = useState<string>("");
+  const [uhcOtpRequest, setUhcOtpRequest] = useState<{ inputName: string; label: string; message: string } | null>(null);
+  const [uhcOtpValue, setUhcOtpValue] = useState<string>("");
+  const [uhcProviderPrompt, setUhcProviderPrompt] = useState<UhcProviderPrompt | null>(null);
   const [optumProLoginFile, setOptumProLoginFile] = useState<File | null>(null);
   const [optumProInputFile, setOptumProInputFile] = useState<File | null>(null);
   const [optumProJobId, setOptumProJobId] = useState<string>("");
@@ -765,6 +875,8 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
               ? availityFrontendPortalConfig
               : effectivePortalId === "optum-pro"
                 ? optumProFrontendPortalConfig
+                : effectivePortalId === "uhc"
+                  ? uhcFrontendPortalConfig
             : null;
   const selectedPortalUiMeta = effectivePortalId ? PORTAL_UI_META[effectivePortalId] : null;
   const filteredPortals = useMemo(() => {
@@ -830,6 +942,10 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     () => Boolean(availityProjectId && availityCredentialFile && availityInputFile && canStartAnotherRun),
     [availityProjectId, availityCredentialFile, availityInputFile, canStartAnotherRun],
   );
+  const canSubmitUhc = useMemo(
+    () => Boolean(uhcLoginFile && uhcClaimFileHandle && canStartAnotherRun),
+    [uhcClaimFileHandle, uhcLoginFile, canStartAnotherRun],
+  );
   const canSubmitOptumPro = useMemo(
     () => Boolean(optumProLoginFile && optumProInputFile && canStartAnotherRun),
     [optumProLoginFile, optumProInputFile, canStartAnotherRun],
@@ -855,6 +971,8 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
               ? canSubmitAvaility
               : effectivePortalId === "optum-pro"
                 ? canSubmitOptumPro
+                : effectivePortalId === "uhc"
+                  ? canSubmitUhc
             : false;
   const portalWorkflowMeta = effectivePortalId ? PORTAL_WORKSPACE_META[effectivePortalId] : null;
   const portalFileState = useMemo(() => {
@@ -891,6 +1009,15 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
         claimReady: Boolean(availityInputFile),
         loginFileLabel: availityCredentialFile?.name ?? "",
         loginReady: Boolean(availityCredentialFile),
+      };
+    }
+
+    if (effectivePortalId === "uhc") {
+      return {
+        claimFileLabel: uhcClaimFileName,
+        claimReady: Boolean(uhcClaimFileHandle),
+        loginFileLabel: uhcLoginFile?.name ?? "",
+        loginReady: Boolean(uhcLoginFile),
       };
     }
 
@@ -932,6 +1059,9 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     optumProLoginFile,
     regalClaimFile,
     regalLoginFile,
+    uhcClaimFileHandle,
+    uhcClaimFileName,
+    uhcLoginFile,
   ]);
   const portalWorkflowStepIndex = useMemo(() => {
     const normalizedStatus = status.toLowerCase();
@@ -1049,14 +1179,10 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
         if (cancelled || !currentJob) return;
         if (!canRestoreCurrentJob(currentJob)) return;
 
-        setErrorScreenshots(
-          (currentJob.artifacts ?? [])
-            .filter((artifact) => artifact.artifactType === "error_screenshot" && artifact.contentBase64)
-            .map((artifact) => ({
-              index: artifact.rowIndex ?? -1,
-              image: artifact.contentBase64 ?? "",
-            })),
-        );
+        setErrorScreenshots(screenshotsFromArtifacts(currentJob));
+        if (currentJob.portalId === "iehp") {
+          downloadDebugHtmlArtifacts(currentJob);
+        }
         setProgress(
           currentJob.totalRows > 0
             ? { completed: currentJob.currentCompleted, total: currentJob.totalRows }
@@ -1329,6 +1455,10 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     setAvailityJobId("");
     setAvailityOtpRequest(null);
     setAvailityOtpValue("");
+    setUhcJobId("");
+    setUhcOtpRequest(null);
+    setUhcOtpValue("");
+    setUhcProviderPrompt(null);
     setRegalJobId("");
     setRegalMfaRequest(null);
     setRegalMfaValue("");
@@ -1376,6 +1506,10 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     setPendingRegalRestoreJob(null);
     setPendingBlueShieldRestoreJob(null);
     setRegalJobId("");
+    setUhcJobId("");
+    setUhcOtpRequest(null);
+    setUhcOtpValue("");
+    setUhcProviderPrompt(null);
     setRegalMfaRequest(null);
     setRegalMfaValue("");
     setRegalOtpRequest(null);
@@ -1907,12 +2041,13 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
               handleWriteFailure(writeErr);
             }
           });
-          } else if (eventData.type === "error_screenshot" && typeof eventData.index === "number" && eventData.image) {
-            setErrorScreenshots((prev) => [...prev, { index: eventData.index ?? -1, image: eventData.image ?? "" }]);
-          } else if (eventData.type === "debug_html" && typeof eventData.index === "number" && eventData.html) {
+          } else if (eventData.type === "error_screenshot" && eventData.image) {
+            setErrorScreenshots((prev) => [...prev, { index: getEventRowIndex(eventData), image: eventData.image ?? "" }]);
+          } else if (eventData.type === "debug_html" && eventData.html) {
             const artifactKey = buildDownloadArtifactKey(eventData);
             if (!hasDownloadedArtifact(subscribedJobId, artifactKey)) {
-              downloadTextFile(`debug_dom_row_${eventData.index + 1}.html`, eventData.html, "text/html");
+              const rowIndex = getEventRowIndex(eventData);
+              downloadTextFile(eventData.filename || `debug_dom_line_${rowIndex >= 0 ? rowIndex + 1 : "unknown"}.html`, eventData.html, "text/html");
               rememberDownloadedArtifact(subscribedJobId, artifactKey);
             }
           } else if (eventData.type === "pdf_download" && eventData.filename && eventData.base64) {
@@ -1963,6 +2098,15 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
         });
 
         await writeQueue;
+        if (!chunkHasError) {
+          try {
+            setStatus(`Saving IEHP checkpoint after row ${currentCompleted}...`);
+            await writeIehpPostProcessedCheckpoint(options.claimFileHandle, excelWb);
+          } catch (checkpointError) {
+            console.error("Failed to write IEHP checkpoint:", checkpointError);
+            handleWriteFailure(checkpointError);
+          }
+        }
       } catch (error) {
         if (writeFailure) {
           console.error("Processing stopped because Excel write failed", writeFailure);
@@ -2718,6 +2862,215 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
       setStatus("Availity verification code submitted.");
     } catch (error) {
       setStatus(`Failed to submit Availity OTP: ${getErrorMessage(error)}`);
+    }
+  }
+
+  async function selectUhcClaimFile() {
+    try {
+      const handle = await selectExcelFileHandle();
+      if (!handle) return;
+      const file = await handle.getFile();
+      setUhcClaimFileHandle(handle);
+      setUhcClaimFileName(file.name);
+    } catch (error) {
+      setStatus(`Unable to select UHC claim file: ${getErrorMessage(error)}`);
+    }
+  }
+
+  async function submitUhcOtp() {
+    if (!uhcJobId || !uhcOtpRequest || !uhcOtpValue.trim()) return;
+
+    try {
+      await submitScrapeJobInput({
+        jobId: uhcJobId,
+        inputName: uhcOtpRequest.inputName,
+        value: uhcOtpValue.trim(),
+      });
+      setUhcOtpRequest(null);
+      setUhcOtpValue("");
+      setStatus("UHC verification code submitted.");
+    } catch (error) {
+      setStatus(`Failed to submit UHC OTP: ${getErrorMessage(error)}`);
+    }
+  }
+
+  async function submitUhcProviderSelection() {
+    if (!uhcJobId || !uhcProviderPrompt?.value) return;
+
+    const value = uhcProviderPrompt.providerStage === "corporate"
+      ? JSON.stringify({ corporateTaxIdOwner: uhcProviderPrompt.value })
+      : JSON.stringify({ careProvider: uhcProviderPrompt.value });
+
+    try {
+      await submitScrapeJobInput({
+        jobId: uhcJobId,
+        inputName: uhcProviderPrompt.inputName,
+        value,
+      });
+      setUhcProviderPrompt(null);
+      setStatus("UHC provider selection submitted.");
+    } catch (error) {
+      setStatus(`Failed to submit UHC provider selection: ${getErrorMessage(error)}`);
+    }
+  }
+
+  async function submitUhc(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+
+    if (!uhcLoginFile || !uhcClaimFileHandle) {
+      setStatus("Please provide both the UHC login Excel and claim Excel files.");
+      return;
+    }
+
+    resetRunState("Starting UHC scraper...");
+    setSelectedPortalId("uhc");
+
+    let workbookBundle: UhcWorkbookBundle;
+    try {
+      workbookBundle = await loadUhcWorkbookBundle(uhcClaimFileHandle, uhcGroupId);
+    } catch (error) {
+      setStatus(`Unable to read UHC claim workbook: ${getErrorMessage(error)}`);
+      setIsProcessing(false);
+      return;
+    }
+
+    const formData = new FormData();
+    formData.append("portalId", "uhc");
+    formData.append("loginExcel", uhcLoginFile);
+    formData.append("loginFileName", uhcLoginFile.name);
+    formData.append("claimFileName", uhcClaimFileName);
+    formData.append("claimRows", JSON.stringify(workbookBundle.claimRows));
+    formData.append("startIndex", "0");
+    formData.append("attempt", "1");
+    formData.append("browserType", uhcBrowserType);
+    formData.append("clientType", uhcGroupId);
+
+    let hasError = false;
+    let wasCancelled = false;
+    let finalErrorMessage = "";
+    let subscribedJobId = "";
+    let writeQueue = Promise.resolve();
+    let uhcRowsSinceCheckpoint = 0;
+    const streamAbortController = new AbortController();
+
+    const failForWriteError = (error: unknown) => {
+      const message = `UHC Excel update failed. Close Excel, verify file access, and run again. Details: ${getErrorMessage(error)}`;
+      hasError = true;
+      setStatus(`Error: ${message}`);
+      streamAbortController.abort();
+      if (subscribedJobId) {
+        void cancelScrapeJobRequest(subscribedJobId).catch((cancelError) => {
+          console.error("Failed to cancel UHC job after Excel write failure", cancelError);
+        });
+      }
+      window.alert(message);
+    };
+
+    const handleJobEvent = async (eventData: ScrapeJobEvent) => {
+      if (eventData.type === "log" && eventData.message) {
+        setLogs((prev) => [...prev, eventData.message ?? ""]);
+      } else if (eventData.type === "progress" && typeof eventData.completed === "number" && typeof eventData.total === "number") {
+        setProgress({ completed: eventData.completed, total: eventData.total });
+      } else if (eventData.type === "row_update") {
+        applyUhcRowUpdateToWorksheet(workbookBundle.worksheet, eventData);
+        uhcRowsSinceCheckpoint += 1;
+        const shouldWriteFullUhcCheckpoint = uhcRowsSinceCheckpoint >= 10;
+        if (shouldWriteFullUhcCheckpoint) {
+          uhcRowsSinceCheckpoint = 0;
+        }
+        writeQueue = writeQueue.then(async () => {
+          try {
+            if (shouldWriteFullUhcCheckpoint) {
+              postProcessUhcWorksheet(workbookBundle.worksheet);
+            }
+            await writeWorkbookToClaimFile(uhcClaimFileHandle, workbookBundle.excelWb);
+          } catch (writeError) {
+            failForWriteError(writeError);
+          }
+        });
+      } else if (eventData.type === "error_screenshot" && typeof eventData.index === "number" && eventData.image) {
+        setErrorScreenshots((prev) => [...prev, { index: eventData.index ?? -1, image: eventData.image ?? "" }]);
+      } else if (eventData.type === "debug_html" && typeof eventData.index === "number" && eventData.html) {
+        const artifactKey = buildDownloadArtifactKey(eventData);
+        if (!hasDownloadedArtifact(subscribedJobId, artifactKey)) {
+          const rowIndex = getEventRowIndex(eventData);
+          downloadTextFile(eventData.filename || `uhc_debug_line_${rowIndex >= 0 ? rowIndex + 1 : "unknown"}.html`, eventData.html, "text/html");
+          rememberDownloadedArtifact(subscribedJobId, artifactKey);
+        }
+      } else if (eventData.type === "otp_request" && eventData.inputName) {
+        setUhcOtpRequest({
+          inputName: eventData.inputName,
+          label: eventData.label || "UHC OTP",
+          message: eventData.message || "Enter the UHC verification code.",
+        });
+        setUhcOtpValue("");
+        setStatus(eventData.message || "Enter the UHC verification code.");
+      } else if (eventData.type === "provider_options" && eventData.inputName) {
+        const providerStage = eventData.providerStage === "care" ? "care" : "corporate";
+        const options = providerStage === "corporate" ? eventData.corporateTaxIdOwners ?? [] : eventData.careProviders ?? [];
+        setUhcProviderPrompt({
+          inputName: eventData.inputName,
+          providerStage,
+          corporateTaxIdOwners: eventData.corporateTaxIdOwners ?? [],
+          careProviders: eventData.careProviders ?? [],
+          value: options[0] ?? "",
+          label: eventData.label || (providerStage === "corporate" ? "Corporate Tax ID Owner" : "Care Provider"),
+          message: eventData.message || "Select an option to continue UHC automation.",
+        });
+        setStatus(eventData.message || "Select an option to continue UHC automation.");
+      } else if (eventData.type === "error" && eventData.message) {
+        finalErrorMessage = eventData.message;
+        setLogs((prev) => [...prev, `ERROR: ${eventData.message}`]);
+        setStatus(`Error: ${eventData.message}`);
+        hasError = true;
+      } else if (eventData.type === "cancelled") {
+        wasCancelled = true;
+        setLogs((prev) => [...prev, eventData.message || "Processing cancelled."]);
+        setStatus(eventData.message || "Processing cancelled.");
+      }
+    };
+
+    try {
+      const jobId = await startScrapeJob(formData);
+      subscribedJobId = jobId;
+      setActiveJobId(jobId);
+      setUhcJobId(jobId);
+      await subscribeToScrapeJobEvents({
+        jobId,
+        signal: streamAbortController.signal,
+        onEvent: handleJobEvent,
+        onStreamError(error) {
+          console.error("UHC stream error:", error);
+          finalErrorMessage = getErrorMessage(error);
+          setLogs((prev) => [...prev, `STREAM ERROR: ${finalErrorMessage}`]);
+          setStatus(`Stream error: ${finalErrorMessage}`);
+          hasError = true;
+        },
+      });
+
+      await writeQueue;
+      if (!hasError && !wasCancelled) {
+        postProcessUhcWorksheet(workbookBundle.worksheet);
+        await writeWorkbookToClaimFile(uhcClaimFileHandle, workbookBundle.excelWb);
+      } else if (uhcRowsSinceCheckpoint > 0) {
+        postProcessUhcWorksheet(workbookBundle.worksheet);
+        await writeWorkbookToClaimFile(uhcClaimFileHandle, workbookBundle.excelWb);
+        uhcRowsSinceCheckpoint = 0;
+      }
+
+      setStatus(
+        wasCancelled
+          ? "UHC processing cancelled."
+          : hasError
+            ? `UHC processing finished with errors${finalErrorMessage ? `: ${finalErrorMessage}` : "."}`
+            : "UHC processing completed.",
+      );
+    } catch (error) {
+      setStatus(`Failed to process UHC claims: ${getErrorMessage(error)}`);
+    } finally {
+      setIsProcessing(false);
+      setActiveJobId("");
+      setUhcJobId("");
     }
   }
 
@@ -4038,7 +4391,6 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
                           key={portal.id}
                           type="button"
                           onClick={() => {
-                            setSelectedPortalId(portal.id as PortalId);
                             navigateToPortalRoute(portal.id as PortalId);
                             setStatus("");
                             setLogs([]);
@@ -4229,6 +4581,20 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
                       onProjectChange={setAvailityProjectId}
                       onSubmit={submitAvaility}
                     />
+                  ) : effectivePortalId === "uhc" ? (
+                    <UhcInputForm
+                      browserType={uhcBrowserType}
+                      canSubmit={canSubmitUhc}
+                      claimFileName={uhcClaimFileName}
+                      groupId={uhcGroupId}
+                      isProcessing={isProcessing}
+                      loginFileName={uhcLoginFile?.name ?? ""}
+                      onBrowserTypeChange={setUhcBrowserType}
+                      onClaimFileSelect={selectUhcClaimFile}
+                      onGroupChange={setUhcGroupId}
+                      onLoginFileChange={setUhcLoginFile}
+                      onSubmit={submitUhc}
+                    />
                   ) : effectivePortalId === "optum-pro" ? (
                     <OptumProInputForm
                       canSubmit={canSubmitOptumPro}
@@ -4304,6 +4670,22 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
                     otpRequest={availityOtpRequest}
                     otpValue={availityOtpValue}
                     progress={progress}
+                    status={status}
+                  />
+                </div>
+              ) : effectivePortalId === "uhc" ? (
+                <div className="mt-5">
+                  <UhcResultView
+                    errorScreenshots={errorScreenshots}
+                    logs={logs}
+                    onOtpChange={setUhcOtpValue}
+                    onOtpSubmit={submitUhcOtp}
+                    onProviderChange={(value) => setUhcProviderPrompt((current) => current ? { ...current, value } : current)}
+                    onProviderSubmit={submitUhcProviderSelection}
+                    otpRequest={uhcOtpRequest}
+                    otpValue={uhcOtpValue}
+                    progress={progress}
+                    providerPrompt={uhcProviderPrompt}
                     status={status}
                   />
                 </div>

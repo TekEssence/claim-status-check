@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 520 135" role="img" aria-labelledby="title">
+  <title id="title">UnitedHealthcare</title>
+  <rect width="520" height="135" fill="#fff"/>
+  <g fill="#003DA5">
+    <path d="M28 15h18v66c0 23 17 37 42 37 24 0 42-14 42-37V15h18v67c0 33-25 53-60 53S28 115 28 82V15z"/>
+    <path d="M54 15h15v64c0 12 8 20 19 20s19-8 19-20V15h15v64c0 20-14 33-34 33S54 99 54 79V15z"/>
+    <path d="M80 15h14v61c0 5 3 8 7 8s7-3 7-8V15h14v61c0 13-9 22-21 22s-21-9-21-22V15z"/>
+  </g>
+  <text x="175" y="55" fill="#003DA5" font-family="Georgia, 'Times New Roman', serif" font-size="42" font-weight="600">United</text>
+  <text x="175" y="101" fill="#003DA5" font-family="Georgia, 'Times New Roman', serif" font-size="42" font-weight="600">Healthcare</text>
+</svg>

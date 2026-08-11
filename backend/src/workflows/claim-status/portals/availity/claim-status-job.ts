@@ -4,7 +4,7 @@ import type { ScraperContext } from "../../types";
 import { launchAvailityBrowser } from "./browser";
 import { parseAvailityInput, readAvailityPayerMapping } from "./input";
 import { createAvailityOutputWorkbookBuffer } from "./output-writer";
-import { getOrganizationForRow, getProviderOrderForRow, readAvailityProviderMapping } from "./project-config";
+import { getMfaConfigForProject, getOrganizationForRow, getProviderOrderForRow, readAvailityProviderMapping } from "./project-config";
 import { applyProjectOutputStrategy } from "./project-output";
 import type { AvailityAuditRow, AvailityErrorRow, AvailityInputRow, AvailityOutputRow, AvailityProviderMapping } from "./types";
 
@@ -156,7 +156,20 @@ async function selectAutocompleteValue(scope: any, inputLocator: any, value: str
   await scope.page().waitForTimeout(600).catch(() => {});
 
   const option = scope.getByText(value, { exact: true }).last();
-  if (await option.isVisible({ timeout: 5000 }).catch(() => false)) {
+  const clickedExactOption = await scope.evaluate((expected: string) => {
+    const normalize = (text: unknown) => String(text || "").replace(/\s+/g, " ").trim();
+    const candidates = Array.from(document.querySelectorAll("[role='option'], [id*='option'], .Select-option, .select__option"));
+    const match = candidates.find((element) => normalize(element.textContent) === normalize(expected));
+    if (!match) return false;
+    match.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
+    match.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
+    (match as HTMLElement).click();
+    return true;
+  }, value).catch(() => false);
+
+  if (clickedExactOption) {
+    await scope.page().waitForTimeout(500).catch(() => {});
+  } else if (await option.isVisible({ timeout: 5000 }).catch(() => false)) {
     await option.click();
   } else {
     await inputLocator.press("Enter").catch(() => {});
@@ -165,14 +178,107 @@ async function selectAutocompleteValue(scope: any, inputLocator: any, value: str
   await scope.page().waitForTimeout(500).catch(() => {});
 }
 
-async function selectOrganization(page: Page, organization: string): Promise<void> {
-  const frame = await getClaimStatusFrame(page);
-  const organizationInput = frame.locator("input#orgSelect[role='combobox'], input#orgSelect").first();
-  await selectAutocompleteValue(frame, organizationInput, organization);
+async function firstVisibleLocator(locators: any[], timeoutMs = 5000): Promise<any> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    for (const locator of locators) {
+      if (await locator.isVisible({ timeout: 500 }).catch(() => false)) {
+        return locator;
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
 
-  const selectedValue = await organizationInput.inputValue({ timeout: 5000 }).catch(() => "");
-  if (selectedValue.trim() !== organization) {
-    throw new Error(`Availity organization "${organization}" was not selected. Current value: "${selectedValue || "(blank)"}".`);
+  throw new Error("No visible Availity input was found for the requested selector group.");
+}
+
+function normalizeUiText(value: unknown): string {
+  return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+async function getOrganizationSelectedText(frame: any): Promise<string> {
+  return normalizeUiText(await frame.evaluate(() => {
+    const isVisible = (element: Element) => {
+      const rect = element.getBoundingClientRect();
+      const style = window.getComputedStyle(element);
+      return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+    };
+    const selectedValues = Array.from(document.querySelectorAll(
+      "#orgSelect .organization-select__single-value, .organization-select__single-value"
+    ));
+    return selectedValues.find(isVisible)?.textContent || "";
+  }).catch(() => ""));
+}
+
+async function clickExactOrganizationOption(frame: any, organization: string): Promise<boolean> {
+  return Boolean(await frame.evaluate((expected: string) => {
+    const normalize = (text: unknown) => String(text || "").replace(/\s+/g, " ").trim();
+    const expectedText = normalize(expected);
+    const candidates = Array.from(document.querySelectorAll(
+      "[role='option'], [id^='react-select-'][id*='-option-'], .organization-select__option"
+    ));
+    const match = candidates.find((element) => normalize(element.textContent) === expectedText);
+    if (!match) return false;
+
+    match.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
+    match.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
+    (match as HTMLElement).click();
+    return true;
+  }, organization).catch(() => false));
+}
+
+async function selectOrganization(page: Page, organization: string): Promise<void> {
+  let frame = await getClaimStatusFrame(page);
+  let organizationContainer = await firstVisibleLocator([
+    frame.locator("#orgSelect").first(),
+    frame.locator(".organization-select__control").first(),
+    frame.locator("label").filter({ hasText: /^Organization$/ }).first()
+      .locator("xpath=following::*[contains(@class,'organization-select__control') or @id='orgSelect'][1]"),
+  ], 15000).catch(async () => {
+    await openClaimStatus(page, { forceOpen: true });
+    frame = await getClaimStatusFrame(page);
+    return firstVisibleLocator([
+      frame.locator("#orgSelect").first(),
+      frame.locator(".organization-select__control").first(),
+      frame.locator("label").filter({ hasText: /^Organization$/ }).first()
+        .locator("xpath=following::*[contains(@class,'organization-select__control') or @id='orgSelect'][1]"),
+    ], 30000);
+  });
+  const currentSelectedText = await getOrganizationSelectedText(frame);
+  if (currentSelectedText === organization) {
+    return;
+  }
+
+  await organizationContainer.click({ force: true }).catch(() => {});
+  const organizationLabelInput = frame.locator("label").filter({ hasText: /^Organization$/ }).first()
+    .locator("xpath=following::input[@role='combobox'][1]");
+  const organizationInput = await firstVisibleLocator([
+    organizationContainer.locator("input[role='combobox']").first(),
+    frame.locator("input#organization[role='combobox'], input#organization").first(),
+    frame.locator("input#orgSelect[role='combobox'], input#orgSelect").first(),
+    organizationLabelInput,
+  ], 15000);
+  await organizationInput.waitFor({ state: "visible", timeout: 30000 });
+  await organizationInput.scrollIntoViewIfNeeded().catch(() => {});
+  await organizationInput.click({ force: true });
+  await organizationInput.press(process.platform === "darwin" ? "Meta+A" : "Control+A").catch(() => {});
+  await organizationInput.press("Backspace").catch(() => {});
+  await organizationInput.fill(organization);
+  await page.waitForTimeout(700).catch(() => {});
+
+  if (!(await clickExactOrganizationOption(frame, organization))) {
+    const option = frame.getByText(organization, { exact: true }).last();
+    if (await option.isVisible({ timeout: 5000 }).catch(() => false)) {
+      await option.click({ force: true });
+    } else {
+      await organizationInput.press("Enter").catch(() => {});
+    }
+  }
+
+  await page.waitForTimeout(700).catch(() => {});
+  const selectedValue = await getOrganizationSelectedText(frame);
+  if (selectedValue !== organization) {
+    throw new Error(`Availity organization "${organization}" was not selected. Current value: "${selectedValue || currentSelectedText || "(blank)"}".`);
   }
 }
 
@@ -181,7 +287,7 @@ async function loginToAvaility(page: Page, input: Awaited<ReturnType<typeof pars
   await page.goto(input.credentials.loginUrl, { waitUntil: "domcontentloaded" });
   await page.waitForLoadState("networkidle").catch(() => {});
   await submitLogin(page, input.credentials.username, input.credentials.password);
-  await handleMfa(page, input.credentials.totpSecret, 2, 0, 20);
+  await handleMfa(page, input.credentials.totpSecret, 2, 0, 20, getMfaConfigForProject(input.projectId));
 
   if (input.credentials.successUrlFragment) {
     await page.waitForURL(`**${input.credentials.successUrlFragment}**`, { timeout: 30000 }).catch(() => {});

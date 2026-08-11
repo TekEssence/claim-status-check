@@ -69,6 +69,55 @@ async function waitForClaimStatusPage(page) {
   throw new Error("Claim Status page indicators were not detected in the main page or frames.");
 }
 
+async function areClaimStatusControlsReady(page) {
+  const frame = await getClaimStatusFrame(page, 5000).catch(() => null);
+  if (!frame) {
+    return false;
+  }
+
+  return Boolean(await frame.evaluate(() => {
+    const isVisible = (selector) => {
+      return Array.from(document.querySelectorAll(selector)).some((element) => {
+        const rect = element.getBoundingClientRect();
+        const style = window.getComputedStyle(element);
+        return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+      });
+    };
+
+    const organizationReady = isVisible("#orgSelect")
+      || isVisible(".organization-select__control")
+      || isVisible("input#organization[role='combobox']");
+    const payerReady = isVisible("input#payer[role='combobox']")
+      || isVisible("input#payerSelect[role='combobox']")
+      || isVisible(".payer-select__control");
+
+    return organizationReady && payerReady;
+  }).catch(() => false));
+}
+
+async function waitForClaimStatusControlsReady(page, totalTimeoutMs = 30000, chunkMs = 3000) {
+  const attempts = Math.max(1, Math.ceil(totalTimeoutMs / chunkMs));
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    if (await areClaimStatusControlsReady(page)) {
+      logger.info("Availity Claim Status controls are ready.");
+      return;
+    }
+
+    if (attempt < attempts) {
+      logger.info(`Availity Claim Status controls not ready after ${(attempt - 1) * chunkMs} ms. Waiting another ${chunkMs / 1000} seconds.`);
+      await humanDelay(chunkMs, chunkMs + 200);
+    }
+  }
+
+  if (await areClaimStatusControlsReady(page)) {
+    logger.info("Availity Claim Status controls are ready.");
+    return;
+  }
+
+  throw new Error(`Availity Claim Status controls were not ready after ${totalTimeoutMs / 1000} seconds.`);
+}
+
 async function waitForHomeNavigation(page) {
   await page.waitForSelector(SELECTORS.claimsPaymentsMenu, { state: "visible", timeout: 45000 });
 }
@@ -122,6 +171,7 @@ async function openClaimStatus(page, options = {}) {
   await acceptCookiesIfPresent(page, 5000);
 
   if (!forceOpen && await isClaimStatusPageOpen(page, 3000)) {
+    await waitForClaimStatusControlsReady(page);
     return;
   }
 
@@ -164,6 +214,8 @@ async function openClaimStatus(page, options = {}) {
     },
     { retries: 2, retryDelayMs: 1500 }
   );
+
+  await waitForClaimStatusControlsReady(page);
 }
 
 async function logoutIfPresent(page, timeoutMs = 5000) {

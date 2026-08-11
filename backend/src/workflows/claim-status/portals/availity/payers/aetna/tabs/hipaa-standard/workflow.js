@@ -26,7 +26,9 @@ async function processClaim(page, row, options = {}) {
   const providerOrder = Array.isArray(options.providerOrder) && options.providerOrder.length
     ? options.providerOrder
     : AETNA_PROVIDER_ORDER;
-  return runHipaaProviderSearch(page, row, providerOrder);
+  return runHipaaProviderSearch(page, row, providerOrder, {
+    projectId: options.projectId
+  });
 }
 
 module.exports = {

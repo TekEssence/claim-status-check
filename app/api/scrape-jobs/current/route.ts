@@ -66,6 +66,16 @@ export async function GET() {
               contentBase64: fs.readFileSync(artifact.pathOrKey).toString("base64"),
             };
           }
+          if (
+            artifact.artifactType === "debug_html" &&
+            artifact.pathOrKey &&
+            fs.existsSync(artifact.pathOrKey)
+          ) {
+            return {
+              ...artifact,
+              contentText: fs.readFileSync(artifact.pathOrKey, "utf8"),
+            };
+          }
           return artifact;
         });
     }

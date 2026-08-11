@@ -416,7 +416,7 @@ export async function main(): Promise<void> {
   const portalId = requiredEnv("PORTAL_ID");
   const userId = optionalEnv("USER_ID");
   const formData = await buildFormData(portalId);
-  const scraper = getClaimStatusScraper(portalId);
+  const scraper = await getClaimStatusScraper(portalId);
   const input = scraper.validateInput(formData);
   const job = createScrapeJob(jobId);
   const cancellation = startCancellationPoll(jobId);

@@ -18,25 +18,29 @@ export async function captureRowDiagnostics(options: {
   sendEvent: (data: StreamEvent) => Promise<void>;
   log: (message: string) => Promise<void>;
 }): Promise<void> {
-  const { jobId, page, rowIndex, rowNumber, reason, sendEvent, log } = options;
+  const { jobId, page, rowNumber, reason, sendEvent, log } = options;
   const artifactDir = getJobDataPath(jobId, "screenshots");
-  const baseName = safeArtifactName(`row-${rowNumber}-${reason}-${Date.now()}`);
+  const baseName = safeArtifactName(`line-${rowNumber}-${reason}-${Date.now()}`);
 
   try {
     const screenshot = await page.screenshot({ type: "jpeg", quality: 60 });
-    const screenshotPath = path.join(artifactDir, `${baseName}.jpg`);
+    const screenshotFilename = `${baseName}.jpg`;
+    const screenshotPath = path.join(artifactDir, screenshotFilename);
     fs.writeFileSync(screenshotPath, screenshot);
     await sendEvent({
       type: "error_screenshot",
-      index: rowIndex,
+      index: rowNumber - 1,
+      rowIndex: rowNumber,
+      filename: screenshotFilename,
       image: screenshot.toString("base64"),
       path: screenshotPath,
     });
 
     const html = await page.evaluate(() => document.documentElement.outerHTML);
-    const htmlPath = path.join(artifactDir, `${baseName}.html`);
+    const htmlFilename = `${baseName}.html`;
+    const htmlPath = path.join(artifactDir, htmlFilename);
     fs.writeFileSync(htmlPath, html, "utf8");
-    await sendEvent({ type: "debug_html", index: rowIndex, html, path: htmlPath });
+    await sendEvent({ type: "debug_html", index: rowNumber - 1, rowIndex: rowNumber, filename: htmlFilename, html, path: htmlPath });
     await log(`Row ${rowNumber}: Saved diagnostics to ${artifactDir}.`);
   } catch {
     await log(`Row ${rowNumber}: Failed to capture row error diagnostics.`);
