@@ -20,7 +20,7 @@ export async function startAutomationJob(formData: FormData): Promise<string> {
   const response = await fetch("/api/automation-jobs", { method: "POST", body: formData });
   const body = await response.json().catch(() => ({})) as { jobId?: string; error?: string };
   if (!response.ok || !body.jobId) {
-    throw new Error(body.error || `Failed to start eligibility run: ${response.status}`);
+    throw new Error(body.error || `Failed to start automation workflow: ${response.status}`);
   }
   return body.jobId;
 }
@@ -41,7 +41,7 @@ export async function getCurrentAutomationJob() {
     } | null;
     error?: string;
   };
-  if (!response.ok) throw new Error(body.error || "Unable to load the active eligibility run.");
+  if (!response.ok) throw new Error(body.error || "Unable to load the active automation workflow.");
   return body.job ?? null;
 }
 
@@ -62,7 +62,23 @@ export async function cancelAutomationJob(jobId: string): Promise<void> {
   });
   if (!response.ok) {
     const body = await response.json().catch(() => ({})) as { error?: string };
-    throw new Error(body.error || "Unable to cancel the eligibility run.");
+    throw new Error(body.error || "Unable to cancel the automation workflow.");
+  }
+}
+
+export async function submitAutomationJobInput(options: {
+  jobId: string;
+  inputName: string;
+  value: string;
+}): Promise<void> {
+  const response = await fetch("/api/automation-jobs", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(options),
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({})) as { error?: string };
+    throw new Error(body.error || "Unable to submit automation workflow input.");
   }
 }
 

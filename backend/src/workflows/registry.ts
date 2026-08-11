@@ -1,6 +1,8 @@
 import { UnknownPortalError } from "../core/errors";
 import { getClaimStatusRunner } from "./claim-status/registry";
 import { getEligibilityRunner } from "./eligibility-verification/registry";
+import { getPaymentEobRunner } from "./payment-eob-download/registry";
+import { getPaymentPostingRunner } from "./payment-posting/registry";
 import type { AutomationRunner, WorkflowDefinition, WorkflowId } from "./types";
 
 export const workflowRegistry = {
@@ -13,6 +15,16 @@ export const workflowRegistry = {
     id: "eligibility-verification",
     name: "Eligibility Verification",
     getRunner: getEligibilityRunner,
+  },
+  "payment-eob-download": {
+    id: "payment-eob-download",
+    name: "Payment EOB Download",
+    getRunner: getPaymentEobRunner,
+  },
+  "payment-posting": {
+    id: "payment-posting",
+    name: "Payment Posting",
+    getRunner: getPaymentPostingRunner,
   },
 } satisfies Record<WorkflowId, WorkflowDefinition>;
 

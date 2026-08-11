@@ -22,9 +22,9 @@ import { regalFrontendPortalConfig } from "../workflows/claim-status/portals/reg
 import { BlueShieldInputForm } from "../workflows/claim-status/portals/blue-shield/BlueShieldInputForm";
 import { BlueShieldResultView } from "../workflows/claim-status/portals/blue-shield/BlueShieldResultView";
 import { blueShieldFrontendPortalConfig } from "../workflows/claim-status/portals/blue-shield/portal-config";
-import { OptumProInputForm } from "../portals/optum-pro/OptumProInputForm";
-import { OptumProResultView } from "../portals/optum-pro/OptumProResultView";
-import { optumProFrontendPortalConfig } from "../portals/optum-pro/portal-config";
+import { OptumProInputForm } from "../workflows/claim-status/portals/optum-pro/OptumProInputForm";
+import { OptumProResultView } from "../workflows/claim-status/portals/optum-pro/OptumProResultView";
+import { optumProFrontendPortalConfig } from "../workflows/claim-status/portals/optum-pro/portal-config";
 
 type AuthUser = {
   userId: string;

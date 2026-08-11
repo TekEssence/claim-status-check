@@ -158,8 +158,6 @@ async function optumProLaunchArgs(browserChoice: OptumProBrowserChoice, environm
 
   const args = [
     "--disable-blink-features=AutomationControlled",
-    "--use-gl=desktop",
-    "--enable-webgl",
   ];
 
   if (environment === "vercel") {

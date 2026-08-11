@@ -23,8 +23,12 @@ import {
 import claimStatusHeroImage from "../../Assets/ChatGPT Image Jun 30, 2026, 12_47_57 PM.png";
 import dashboardWelcomeImage from "../../Assets/ChatGPT Image Jul 1, 2026, 10_55_01 AM.png";
 import blueShieldCaliforniaLogo from "../../Assets/customerlogo-blue-shield-california-clr.svg";
+import cignaLogo from "../../Assets/cigna-healthcare-logo.svg";
 import iehpLogo from "../../Assets/channels4_profile.jpg";
+import kaiserLogo from "../../Assets/kaiser-permanente-logo.svg";
+import myFamilyLogo from "../../Assets/my-family-medical-group-logo.svg";
 import optumLogo from "../../Assets/optum-logo.svg";
+import physiciansLogo from "../../Assets/physicians-health-network-logo.svg";
 import regalLogo from "../../Assets/channels4_profile (1).jpg";
 import availityLogo from "../../Assets/availity-logo.jpg";
 import { applyClaimRowUpdateToWorksheet, postProcessWorksheet } from "./portals/iehp/workbook";
@@ -66,8 +70,16 @@ import { AstronaInputForm } from "./portals/astrona/AstronaInputForm";
 import { AstronaResultView } from "./portals/astrona/AstronaResultView";
 import { AllCareInputForm } from "./portals/all-care/AllCareInputForm";
 import { AllCareResultView } from "./portals/all-care/AllCareResultView";
-import { OptumProInputForm } from "../../portals/optum-pro/OptumProInputForm";
-import { OptumProResultView } from "../../portals/optum-pro/OptumProResultView";
+import { CignaInputForm } from "./portals/cigna/CignaInputForm";
+import { CignaResultView } from "./portals/cigna/CignaResultView";
+import { KaiserInputForm } from "./portals/kaiser/KaiserInputForm";
+import { KaiserResultView } from "./portals/kaiser/KaiserResultView";
+import { MyFamilyInputForm } from "./portals/my_family/MyFamilyInputForm";
+import { MyFamilyResultView } from "./portals/my_family/MyFamilyResultView";
+import { OptumProInputForm } from "./portals/optum-pro/OptumProInputForm";
+import { OptumProResultView } from "./portals/optum-pro/OptumProResultView";
+import { PhysiciansInputForm } from "./portals/physicians/PhysiciansInputForm";
+import { PhysiciansResultView } from "./portals/physicians/PhysiciansResultView";
 import {
   aerialFrontendPortalConfig,
   allCareFrontendPortalConfig,
@@ -75,8 +87,12 @@ import {
   availityFrontendPortalConfig,
   blueShieldFrontendPortalConfig,
   claimStatusPortalRegistry,
+  cignaFrontendPortalConfig,
   iehpFrontendPortalConfig,
+  kaiserFrontendPortalConfig,
+  myFamilyFrontendPortalConfig,
   optumProFrontendPortalConfig,
+  physiciansFrontendPortalConfig,
   regalFrontendPortalConfig,
   uhcFrontendPortalConfig,
 } from "./registry";
@@ -120,7 +136,7 @@ type UhcWorkbookBundle = {
   worksheet: ExcelJS.Worksheet;
 };
 
-export type PortalId = "iehp" | "aerial" | "all-care" | "astrona" | "regal" | "blue-shield" | "availity" | "optum-pro" | "uhc";
+export type PortalId = "iehp" | "aerial" | "all-care" | "astrona" | "regal" | "blue-shield" | "availity" | "cigna" | "kaiser" | "my-family" | "optum-pro" | "physicians" | "uhc";
 type DownloadFile = {
   filename: string;
   bytes: Uint8Array;
@@ -146,12 +162,16 @@ const PORTAL_ROUTE_MAP: Record<PortalId, string> = {
   regal: "/regal",
   "blue-shield": "/blue-shield",
   availity: "/availity",
+  cigna: "/cigna",
+  kaiser: "/kaiser",
+  "my-family": "/my-family",
   "optum-pro": "/optum-pro",
+  physicians: "/physicians",
   uhc: "/uhc",
 };
 
 function isPortalId(value: string): value is PortalId {
-  return value === "iehp" || value === "aerial" || value === "all-care" || value === "astrona" || value === "regal" || value === "blue-shield" || value === "availity" || value === "optum-pro" || value === "uhc";
+  return value === "iehp" || value === "aerial" || value === "all-care" || value === "astrona" || value === "regal" || value === "blue-shield" || value === "availity" || value === "cigna" || value === "kaiser" || value === "my-family" || value === "optum-pro" || value === "physicians" || value === "uhc";
 }
 
 function isTerminalWorkflowStatus(status: string): boolean {
@@ -297,21 +317,55 @@ const PORTAL_UI_META: Record<
       height: 32,
     },
   },
-  uhc: {
-    shortCode: "UHC",
-    logoClassName: "bg-white text-blue-800",
-    logoSrc: "/uhc-logo.svg",
-    cardLogoFrameClassName: "h-10 w-[6.6rem] rounded-[1rem] px-2",
+  cigna: {
+    shortCode: "CG",
+    logoClassName: "bg-white text-blue-700",
+    logoSrc: cignaLogo,
+    cardLogoFrameClassName: "h-10 w-[5.6rem] rounded-[1rem] px-2",
     cardLogoImageClassName: "h-7 w-full object-contain",
     cardLogoSize: {
-      width: 94,
-      height: 28,
-    },
-    heroLogoFrameClassName: "h-14 w-[8.5rem] rounded-[1.15rem] px-3",
-    heroLogoImageClassName: "h-9 w-full object-contain",
-    heroLogoSize: {
-      width: 120,
+      width: 82,
       height: 36,
+    },
+    heroLogoFrameClassName: "h-14 w-[8rem] rounded-[1.15rem] px-3",
+    heroLogoImageClassName: "h-10 w-full object-contain",
+    heroLogoSize: {
+      width: 116,
+      height: 52,
+    },
+  },
+  kaiser: {
+    shortCode: "KP",
+    logoClassName: "bg-white text-cyan-700",
+    logoSrc: kaiserLogo,
+    cardLogoFrameClassName: "h-10 w-[8.6rem] rounded-[1rem] px-2",
+    cardLogoImageClassName: "h-6 w-full object-contain",
+    cardLogoSize: {
+      width: 124,
+      height: 24,
+    },
+    heroLogoFrameClassName: "h-14 w-[12rem] rounded-[1.15rem] px-3",
+    heroLogoImageClassName: "h-8 w-full object-contain",
+    heroLogoSize: {
+      width: 176,
+      height: 32,
+    },
+  },
+  "my-family": {
+    shortCode: "MF",
+    logoClassName: "bg-[#111827] text-cyan-700",
+    logoSrc: myFamilyLogo,
+    cardLogoFrameClassName: "h-10 w-[8.8rem] rounded-[1rem] px-1.5",
+    cardLogoImageClassName: "h-full w-full object-contain",
+    cardLogoSize: {
+      width: 132,
+      height: 40,
+    },
+    heroLogoFrameClassName: "h-14 w-[12.5rem] rounded-[1.15rem] px-2",
+    heroLogoImageClassName: "h-full w-full object-contain",
+    heroLogoSize: {
+      width: 184,
+      height: 55,
     },
   },
   "optum-pro": {
@@ -329,6 +383,40 @@ const PORTAL_UI_META: Record<
     heroLogoSize: {
       width: 96,
       height: 32,
+    },
+  },
+  physicians: {
+    shortCode: "PHN",
+    logoClassName: "bg-white text-red-700",
+    logoSrc: physiciansLogo,
+    cardLogoFrameClassName: "h-10 w-[9.4rem] rounded-[1rem] px-2",
+    cardLogoImageClassName: "h-7 w-full object-contain",
+    cardLogoSize: {
+      width: 136,
+      height: 37,
+    },
+    heroLogoFrameClassName: "h-14 w-[13rem] rounded-[1.15rem] px-3",
+    heroLogoImageClassName: "h-10 w-full object-contain",
+    heroLogoSize: {
+      width: 190,
+      height: 52,
+    },
+  },
+  uhc: {
+    shortCode: "UHC",
+    logoClassName: "bg-white text-blue-800",
+    logoSrc: "/uhc-logo.svg",
+    cardLogoFrameClassName: "h-10 w-[6.6rem] rounded-[1rem] px-2",
+    cardLogoImageClassName: "h-7 w-full object-contain",
+    cardLogoSize: {
+      width: 94,
+      height: 28,
+    },
+    heroLogoFrameClassName: "h-14 w-[8.5rem] rounded-[1.15rem] px-3",
+    heroLogoImageClassName: "h-9 w-full object-contain",
+    heroLogoSize: {
+      width: 120,
+      height: 36,
     },
   },
 };
@@ -368,13 +456,29 @@ const PORTAL_WORKSPACE_META: Record<
     heroDescription: "Upload your Availity login workbook and claim workbook to process Aetna, Anthem-CA, Blue Cross Blue Shield, Wellpoint, Wellcare, Humana, Health Net, Molina, and TRIWEST-TRICARE claim status checks.",
     processingDescription: "Availity requests stream live status over SSE and automatically download the completed output workbook.",
   },
-  uhc: {
-    heroDescription: "Upload your UHC login workbook and claim workbook to process UnitedHealthcare claim status checks for Minimax or MedRevenu.",
-    processingDescription: "UHC requests stream live status, prompt for OTP or provider selection when needed, and update the selected workbook in place.",
+  cigna: {
+    heroDescription: "Upload the Cigna login workbook and claim workbook to search Cigna for Health Care Professionals by patient ID, patient name, DOS, and CPT.",
+    processingDescription: "Cigna rows stream live progress and download an output workbook with claim, payment, procedure, and remark-code details.",
+  },
+  kaiser: {
+    heroDescription: "Upload the Kaiser EpicLink login workbook and claim workbook to search claim status by Member ID, DOS, and CPT.",
+    processingDescription: "Kaiser rows stream live progress and download an output workbook with claim, payment, service, and denial details.",
+  },
+  "my-family": {
+    heroDescription: "Upload the My family EZ-NET login workbook and claim workbook to search claims by Member ID or patient name and service date.",
+    processingDescription: "My family rows stream live progress and download an output workbook with claim, status, payment, and service-line details.",
   },
   "optum-pro": {
     heroDescription: "Upload the One Healthcare ID login workbook and Optum Pro claim workbook, then enter OTP when prompted.",
     processingDescription: "Optum Pro streams progress, supports manual OTP entry, and downloads full or partial output workbooks.",
+  },
+  physicians: {
+    heroDescription: "Upload the PHN QuickCap login workbook and claim workbook to search claims by Member ID and service date.",
+    processingDescription: "Physicians rows stream live progress and download an output workbook with claim, payment, service-line, and authorization details.",
+  },
+  uhc: {
+    heroDescription: "Upload your UHC login workbook and claim workbook to process UnitedHealthcare claim status checks for Minimax or MedRevenu.",
+    processingDescription: "UHC requests stream live status, prompt for OTP or provider selection when needed, and update the selected workbook in place.",
   },
 };
 
@@ -830,8 +934,19 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
   const [uhcOtpRequest, setUhcOtpRequest] = useState<{ inputName: string; label: string; message: string } | null>(null);
   const [uhcOtpValue, setUhcOtpValue] = useState<string>("");
   const [uhcProviderPrompt, setUhcProviderPrompt] = useState<UhcProviderPrompt | null>(null);
+  const [cignaCredentialFile, setCignaCredentialFile] = useState<File | null>(null);
+  const [cignaInputFile, setCignaInputFile] = useState<File | null>(null);
+  const [cignaJobId, setCignaJobId] = useState<string>("");
+  const [cignaOtpRequest, setCignaOtpRequest] = useState<{ inputName: string; label: string; message: string } | null>(null);
+  const [cignaOtpValue, setCignaOtpValue] = useState<string>("");
+  const [kaiserCredentialFile, setKaiserCredentialFile] = useState<File | null>(null);
+  const [kaiserInputFile, setKaiserInputFile] = useState<File | null>(null);
+  const [myFamilyCredentialFile, setMyFamilyCredentialFile] = useState<File | null>(null);
+  const [myFamilyInputFile, setMyFamilyInputFile] = useState<File | null>(null);
   const [optumProLoginFile, setOptumProLoginFile] = useState<File | null>(null);
   const [optumProInputFile, setOptumProInputFile] = useState<File | null>(null);
+  const [physiciansCredentialFile, setPhysiciansCredentialFile] = useState<File | null>(null);
+  const [physiciansInputFile, setPhysiciansInputFile] = useState<File | null>(null);
   const [optumProJobId, setOptumProJobId] = useState<string>("");
   const [optumProOtpRequest, setOptumProOtpRequest] = useState<{ inputName: string; label: string; message: string } | null>(null);
   const [optumProOtpValue, setOptumProOtpValue] = useState<string>("");
@@ -904,10 +1019,18 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
             ? blueShieldFrontendPortalConfig
             : effectivePortalId === "availity"
               ? availityFrontendPortalConfig
+              : effectivePortalId === "cigna"
+                ? cignaFrontendPortalConfig
+              : effectivePortalId === "kaiser"
+                ? kaiserFrontendPortalConfig
+              : effectivePortalId === "my-family"
+                ? myFamilyFrontendPortalConfig
               : effectivePortalId === "optum-pro"
                 ? optumProFrontendPortalConfig
-                : effectivePortalId === "uhc"
-                  ? uhcFrontendPortalConfig
+              : effectivePortalId === "physicians"
+                ? physiciansFrontendPortalConfig
+              : effectivePortalId === "uhc"
+                ? uhcFrontendPortalConfig
             : null;
   const selectedPortalUiMeta = effectivePortalId ? PORTAL_UI_META[effectivePortalId] : null;
   const filteredPortals = useMemo(() => {
@@ -991,9 +1114,25 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     () => Boolean(allCareCredentialFile && allCareInputFile && canStartAnotherRun),
     [allCareCredentialFile, allCareInputFile, canStartAnotherRun],
   );
+  const canSubmitCigna = useMemo(
+    () => Boolean(cignaCredentialFile && cignaInputFile && canStartAnotherRun),
+    [cignaCredentialFile, cignaInputFile, canStartAnotherRun],
+  );
+  const canSubmitKaiser = useMemo(
+    () => Boolean(kaiserCredentialFile && kaiserInputFile && canStartAnotherRun),
+    [kaiserCredentialFile, kaiserInputFile, canStartAnotherRun],
+  );
+  const canSubmitMyFamily = useMemo(
+    () => Boolean(myFamilyCredentialFile && myFamilyInputFile && canStartAnotherRun),
+    [myFamilyCredentialFile, myFamilyInputFile, canStartAnotherRun],
+  );
   const canSubmitOptumPro = useMemo(
     () => Boolean(optumProLoginFile && optumProInputFile && canStartAnotherRun),
     [optumProLoginFile, optumProInputFile, canStartAnotherRun],
+  );
+  const canSubmitPhysicians = useMemo(
+    () => Boolean(physiciansCredentialFile && physiciansInputFile && canStartAnotherRun),
+    [physiciansCredentialFile, physiciansInputFile, canStartAnotherRun],
   );
   const canSubmitRegal = useMemo(
     () => Boolean(regalClaimFile && canStartAnotherRun),
@@ -1018,10 +1157,18 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
             ? canSubmitBlueShield
             : effectivePortalId === "availity"
               ? canSubmitAvaility
+              : effectivePortalId === "cigna"
+                ? canSubmitCigna
+              : effectivePortalId === "kaiser"
+                ? canSubmitKaiser
+              : effectivePortalId === "my-family"
+                ? canSubmitMyFamily
               : effectivePortalId === "optum-pro"
                 ? canSubmitOptumPro
-                : effectivePortalId === "uhc"
-                  ? canSubmitUhc
+              : effectivePortalId === "physicians"
+                ? canSubmitPhysicians
+              : effectivePortalId === "uhc"
+                ? canSubmitUhc
             : false;
   const portalWorkflowMeta = effectivePortalId ? PORTAL_WORKSPACE_META[effectivePortalId] : null;
   const portalFileState = useMemo(() => {
@@ -1088,12 +1235,48 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
       };
     }
 
+    if (effectivePortalId === "cigna") {
+      return {
+        claimFileLabel: cignaInputFile?.name ?? "",
+        claimReady: Boolean(cignaInputFile),
+        loginFileLabel: cignaCredentialFile?.name ?? "",
+        loginReady: Boolean(cignaCredentialFile),
+      };
+    }
+
+    if (effectivePortalId === "kaiser") {
+      return {
+        claimFileLabel: kaiserInputFile?.name ?? "",
+        claimReady: Boolean(kaiserInputFile),
+        loginFileLabel: kaiserCredentialFile?.name ?? "",
+        loginReady: Boolean(kaiserCredentialFile),
+      };
+    }
+
+    if (effectivePortalId === "my-family") {
+      return {
+        claimFileLabel: myFamilyInputFile?.name ?? "",
+        claimReady: Boolean(myFamilyInputFile),
+        loginFileLabel: myFamilyCredentialFile?.name ?? "",
+        loginReady: Boolean(myFamilyCredentialFile),
+      };
+    }
+
     if (effectivePortalId === "blue-shield") {
       return {
         claimFileLabel: blueShieldInputFile?.name ?? "",
         claimReady: Boolean(blueShieldInputFile),
         loginFileLabel: blueShieldCredentialFile?.name ?? "",
         loginReady: Boolean(blueShieldCredentialFile),
+      };
+    }
+
+    if (effectivePortalId === "physicians") {
+      return {
+        claimFileLabel: physiciansInputFile?.name ?? "",
+        claimReady: Boolean(physiciansInputFile),
+        loginFileLabel: physiciansCredentialFile?.name ?? "",
+        loginReady: Boolean(physiciansCredentialFile),
       };
     }
 
@@ -1123,11 +1306,19 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     astronaInputFile,
     blueShieldCredentialFile,
     blueShieldInputFile,
+    cignaCredentialFile,
+    cignaInputFile,
     claimFileName,
     effectivePortalId,
     iehpLoginFile,
+    kaiserCredentialFile,
+    kaiserInputFile,
+    myFamilyCredentialFile,
+    myFamilyInputFile,
     optumProInputFile,
     optumProLoginFile,
+    physiciansCredentialFile,
+    physiciansInputFile,
     regalClaimFile,
     regalLoginFile,
     uhcClaimFileHandle,
@@ -1335,6 +1526,14 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
           await reconnectDownloadOnlyRun(currentJob, "availity", "Availity");
         } else if (currentJob.portalId === "astrona") {
           await reconnectDownloadOnlyRun(currentJob, "astrona", "Astrona");
+        } else if (currentJob.portalId === "cigna") {
+          await reconnectDownloadOnlyRun(currentJob, "cigna", "Cigna");
+        } else if (currentJob.portalId === "kaiser") {
+          await reconnectDownloadOnlyRun(currentJob, "kaiser", "Kaiser");
+        } else if (currentJob.portalId === "my-family") {
+          await reconnectDownloadOnlyRun(currentJob, "my-family", "My family");
+        } else if (currentJob.portalId === "physicians") {
+          await reconnectDownloadOnlyRun(currentJob, "physicians", "Physicians");
         } else if (currentJob.portalId === "regal") {
           await reconnectRegalRun(currentJob);
         } else if (currentJob.portalId === "optum-pro") {
@@ -1560,6 +1759,9 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     setBlueShieldJobId("");
     setBlueShieldOtpRequest(null);
     setBlueShieldOtpValue("");
+    setCignaJobId("");
+    setCignaOtpRequest(null);
+    setCignaOtpValue("");
     setOptumProJobId("");
     setOptumProOtpRequest(null);
     setOptumProOtpValue("");
@@ -1611,6 +1813,17 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     setBlueShieldJobId("");
     setBlueShieldOtpRequest(null);
     setBlueShieldOtpValue("");
+    setCignaJobId("");
+    setCignaOtpRequest(null);
+    setCignaOtpValue("");
+    setCignaCredentialFile(null);
+    setCignaInputFile(null);
+    setKaiserCredentialFile(null);
+    setKaiserInputFile(null);
+    setMyFamilyCredentialFile(null);
+    setMyFamilyInputFile(null);
+    setPhysiciansCredentialFile(null);
+    setPhysiciansInputFile(null);
     setOptumProJobId("");
     setOptumProOtpRequest(null);
     setOptumProOtpValue("");
@@ -1763,6 +1976,17 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     setBlueShieldJobId("");
     setBlueShieldOtpRequest(null);
     setBlueShieldOtpValue("");
+    setCignaCredentialFile(null);
+    setCignaInputFile(null);
+    setCignaJobId("");
+    setCignaOtpRequest(null);
+    setCignaOtpValue("");
+    setKaiserCredentialFile(null);
+    setKaiserInputFile(null);
+    setMyFamilyCredentialFile(null);
+    setMyFamilyInputFile(null);
+    setPhysiciansCredentialFile(null);
+    setPhysiciansInputFile(null);
     setOptumProLoginFile(null);
     setOptumProInputFile(null);
     setOptumProJobId("");
@@ -1786,7 +2010,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
   }
 
   async function cancelActiveJob() {
-    const jobId = pendingBlueShieldRestoreJob?.jobId || pendingIehpRestoreJob?.jobId || activeJobId || regalJobId || optumProJobId;
+    const jobId = pendingBlueShieldRestoreJob?.jobId || pendingIehpRestoreJob?.jobId || activeJobId || regalJobId || cignaJobId || optumProJobId;
     if (!jobId || isCancellingJob) return;
 
     setIsCancellingJob(true);
@@ -1800,6 +2024,9 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
       setRegalJobId("");
       setRegalOtpRequest(null);
       setRegalOtpValue("");
+      setCignaJobId("");
+      setCignaOtpRequest(null);
+      setCignaOtpValue("");
       setOptumProJobId("");
       setOptumProOtpRequest(null);
       setOptumProOtpValue("");
@@ -3264,6 +3491,364 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
       );
     } catch (error) {
       setStatus(`Failed to process Availity claims: ${getErrorMessage(error)}`);
+    } finally {
+      setIsProcessing(false);
+      setActiveJobId("");
+    }
+  }
+
+  async function submitKaiser(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+
+    if (!kaiserCredentialFile || !kaiserInputFile) {
+      setStatus("Please provide both the Kaiser login Excel and claim Excel files.");
+      return;
+    }
+
+    resetRunState("Starting Kaiser scraper...");
+
+    const formData = new FormData();
+    formData.append("portalId", "kaiser");
+    formData.append("credentialExcel", kaiserCredentialFile);
+    formData.append("inputExcel", kaiserInputFile);
+    formData.append("loginFileName", kaiserCredentialFile.name);
+    formData.append("claimFileName", kaiserInputFile.name);
+
+    let hasError = false;
+    let wasCancelled = false;
+    let finalErrorMessage = "";
+    let subscribedJobId = "";
+    const streamAbortController = new AbortController();
+
+    const handleJobEvent = async (eventData: ScrapeJobEvent) => {
+      if (eventData.type === "log" && eventData.message) {
+        setLogs((prev) => [...prev, eventData.message ?? ""]);
+      } else if (eventData.type === "progress" && typeof eventData.completed === "number" && typeof eventData.total === "number") {
+        setProgress({ completed: eventData.completed, total: eventData.total });
+      } else if (eventData.type === "error_screenshot" && typeof eventData.index === "number" && eventData.image) {
+        setErrorScreenshots((prev) => [...prev, { index: eventData.index ?? -1, image: eventData.image ?? "" }]);
+      } else if (eventData.type === "file_download" && eventData.filename && eventData.base64) {
+        const artifactKey = buildDownloadArtifactKey(eventData);
+        if (!hasDownloadedArtifact(subscribedJobId, artifactKey)) {
+          downloadBase64File(eventData.filename, eventData.base64, eventData.mimeType || "application/octet-stream");
+          rememberDownloadedArtifact(subscribedJobId, artifactKey);
+          setStatus(`Downloaded ${eventData.filename}`);
+        }
+      } else if (eventData.type === "warning" && eventData.message) {
+        setLogs((prev) => [...prev, eventData.message ?? ""]);
+        setStatus(eventData.message);
+      } else if (eventData.type === "error" && eventData.message) {
+        finalErrorMessage = eventData.message;
+        setLogs((prev) => [...prev, `ERROR: ${eventData.message}`]);
+        setStatus(`Error: ${eventData.message}`);
+        hasError = true;
+      } else if (eventData.type === "cancelled") {
+        wasCancelled = true;
+        setLogs((prev) => [...prev, eventData.message || "Processing cancelled."]);
+        setStatus(eventData.message || "Processing cancelled.");
+      }
+    };
+
+    try {
+      const jobId = await startScrapeJob(formData);
+      subscribedJobId = jobId;
+      setActiveJobId(jobId);
+      await subscribeToScrapeJobEvents({
+        jobId,
+        signal: streamAbortController.signal,
+        onEvent: handleJobEvent,
+        onStreamError(error) {
+          console.error("Kaiser stream error:", error);
+          finalErrorMessage = getErrorMessage(error);
+          setLogs((prev) => [...prev, `STREAM ERROR: ${finalErrorMessage}`]);
+          setStatus(`Stream error: ${finalErrorMessage}`);
+          hasError = true;
+        },
+      });
+      setStatus(
+        wasCancelled
+          ? "Kaiser processing cancelled."
+          : hasError
+            ? `Kaiser processing finished with errors${finalErrorMessage ? `: ${finalErrorMessage}` : "."}`
+            : "Kaiser processing completed.",
+      );
+    } catch (error) {
+      setStatus(`Failed to process Kaiser claims: ${getErrorMessage(error)}`);
+    } finally {
+      setIsProcessing(false);
+      setActiveJobId("");
+    }
+  }
+
+  async function submitCigna(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+
+    if (!cignaCredentialFile || !cignaInputFile) {
+      setStatus("Please provide both the Cigna login Excel and claim Excel files.");
+      return;
+    }
+
+    resetRunState("Starting Cigna scraper...");
+
+    const formData = new FormData();
+    formData.append("portalId", "cigna");
+    formData.append("credentialExcel", cignaCredentialFile);
+    formData.append("inputExcel", cignaInputFile);
+    formData.append("loginFileName", cignaCredentialFile.name);
+    formData.append("claimFileName", cignaInputFile.name);
+
+    let hasError = false;
+    let wasCancelled = false;
+    let finalErrorMessage = "";
+    let subscribedJobId = "";
+    const streamAbortController = new AbortController();
+
+    const handleJobEvent = async (eventData: ScrapeJobEvent) => {
+      if (eventData.type === "log" && eventData.message) {
+        setLogs((prev) => [...prev, eventData.message ?? ""]);
+      } else if (eventData.type === "progress" && typeof eventData.completed === "number" && typeof eventData.total === "number") {
+        setProgress({ completed: eventData.completed, total: eventData.total });
+      } else if (eventData.type === "input_request" && eventData.inputName) {
+        setCignaOtpRequest({
+          inputName: eventData.inputName,
+          label: eventData.label || "Cigna verification code",
+          message: eventData.message || "Enter the 6-digit Cigna email verification code.",
+        });
+        setCignaOtpValue("");
+        setStatus(eventData.message || "Waiting for Cigna verification code.");
+      } else if (eventData.type === "error_screenshot" && typeof eventData.index === "number" && eventData.image) {
+        setErrorScreenshots((prev) => [...prev, { index: eventData.index ?? -1, image: eventData.image ?? "" }]);
+      } else if (eventData.type === "file_download" && eventData.filename && eventData.base64) {
+        const artifactKey = buildDownloadArtifactKey(eventData);
+        if (!hasDownloadedArtifact(subscribedJobId, artifactKey)) {
+          downloadBase64File(eventData.filename, eventData.base64, eventData.mimeType || "application/octet-stream");
+          rememberDownloadedArtifact(subscribedJobId, artifactKey);
+          setStatus(`Downloaded ${eventData.filename}`);
+        }
+      } else if (eventData.type === "warning" && eventData.message) {
+        setLogs((prev) => [...prev, eventData.message ?? ""]);
+        setStatus(eventData.message);
+      } else if (eventData.type === "error" && eventData.message) {
+        finalErrorMessage = eventData.message;
+        setLogs((prev) => [...prev, `ERROR: ${eventData.message}`]);
+        setStatus(`Error: ${eventData.message}`);
+        hasError = true;
+      } else if (eventData.type === "cancelled") {
+        wasCancelled = true;
+        setLogs((prev) => [...prev, eventData.message || "Processing cancelled."]);
+        setStatus(eventData.message || "Processing cancelled.");
+      }
+    };
+
+    try {
+      const jobId = await startScrapeJob(formData);
+      subscribedJobId = jobId;
+      setCignaJobId(jobId);
+      setActiveJobId(jobId);
+      await subscribeToScrapeJobEvents({
+        jobId,
+        signal: streamAbortController.signal,
+        onEvent: handleJobEvent,
+        onStreamError(error) {
+          console.error("Cigna stream error:", error);
+          finalErrorMessage = getErrorMessage(error);
+          setLogs((prev) => [...prev, `STREAM ERROR: ${finalErrorMessage}`]);
+          setStatus(`Stream error: ${finalErrorMessage}`);
+          hasError = true;
+        },
+      });
+      setStatus(
+        wasCancelled
+          ? "Cigna processing cancelled."
+          : hasError
+            ? `Cigna processing finished with errors${finalErrorMessage ? `: ${finalErrorMessage}` : "."}`
+            : "Cigna processing completed.",
+      );
+    } catch (error) {
+      setStatus(`Failed to process Cigna claims: ${getErrorMessage(error)}`);
+    } finally {
+      setIsProcessing(false);
+      setActiveJobId("");
+    }
+  }
+
+  async function submitCignaOtp() {
+    if (!cignaJobId || !cignaOtpRequest || !cignaOtpValue.trim()) return;
+
+    try {
+      await submitScrapeJobInput({
+        jobId: cignaJobId,
+        inputName: cignaOtpRequest.inputName,
+        value: cignaOtpValue.trim(),
+      });
+      setCignaOtpRequest(null);
+      setCignaOtpValue("");
+      setStatus("Cigna verification code submitted.");
+    } catch (error) {
+      setStatus(`Failed to submit Cigna OTP: ${getErrorMessage(error)}`);
+    }
+  }
+
+  async function submitMyFamily(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+
+    if (!myFamilyCredentialFile || !myFamilyInputFile) {
+      setStatus("Please provide both the My family login Excel and claim Excel files.");
+      return;
+    }
+
+    resetRunState("Starting My family scraper...");
+
+    const formData = new FormData();
+    formData.append("portalId", "my-family");
+    formData.append("credentialExcel", myFamilyCredentialFile);
+    formData.append("inputExcel", myFamilyInputFile);
+    formData.append("loginFileName", myFamilyCredentialFile.name);
+    formData.append("claimFileName", myFamilyInputFile.name);
+
+    let hasError = false;
+    let wasCancelled = false;
+    let finalErrorMessage = "";
+    let subscribedJobId = "";
+    const streamAbortController = new AbortController();
+
+    const handleJobEvent = async (eventData: ScrapeJobEvent) => {
+      if (eventData.type === "log" && eventData.message) {
+        setLogs((prev) => [...prev, eventData.message ?? ""]);
+      } else if (eventData.type === "progress" && typeof eventData.completed === "number" && typeof eventData.total === "number") {
+        setProgress({ completed: eventData.completed, total: eventData.total });
+      } else if (eventData.type === "error_screenshot" && typeof eventData.index === "number" && eventData.image) {
+        setErrorScreenshots((prev) => [...prev, { index: eventData.index ?? -1, image: eventData.image ?? "" }]);
+      } else if (eventData.type === "file_download" && eventData.filename && eventData.base64) {
+        const artifactKey = buildDownloadArtifactKey(eventData);
+        if (!hasDownloadedArtifact(subscribedJobId, artifactKey)) {
+          downloadBase64File(eventData.filename, eventData.base64, eventData.mimeType || "application/octet-stream");
+          rememberDownloadedArtifact(subscribedJobId, artifactKey);
+          setStatus(`Downloaded ${eventData.filename}`);
+        }
+      } else if (eventData.type === "warning" && eventData.message) {
+        setLogs((prev) => [...prev, eventData.message ?? ""]);
+        setStatus(eventData.message);
+      } else if (eventData.type === "error" && eventData.message) {
+        finalErrorMessage = eventData.message;
+        setLogs((prev) => [...prev, `ERROR: ${eventData.message}`]);
+        setStatus(`Error: ${eventData.message}`);
+        hasError = true;
+      } else if (eventData.type === "cancelled") {
+        wasCancelled = true;
+        setLogs((prev) => [...prev, eventData.message || "Processing cancelled."]);
+        setStatus(eventData.message || "Processing cancelled.");
+      }
+    };
+
+    try {
+      const jobId = await startScrapeJob(formData);
+      subscribedJobId = jobId;
+      setActiveJobId(jobId);
+      await subscribeToScrapeJobEvents({
+        jobId,
+        signal: streamAbortController.signal,
+        onEvent: handleJobEvent,
+        onStreamError(error) {
+          console.error("My family stream error:", error);
+          finalErrorMessage = getErrorMessage(error);
+          setLogs((prev) => [...prev, `STREAM ERROR: ${finalErrorMessage}`]);
+          setStatus(`Stream error: ${finalErrorMessage}`);
+          hasError = true;
+        },
+      });
+      setStatus(
+        wasCancelled
+          ? "My family processing cancelled."
+          : hasError
+            ? `My family processing finished with errors${finalErrorMessage ? `: ${finalErrorMessage}` : "."}`
+            : "My family processing completed.",
+      );
+    } catch (error) {
+      setStatus(`Failed to process My family claims: ${getErrorMessage(error)}`);
+    } finally {
+      setIsProcessing(false);
+      setActiveJobId("");
+    }
+  }
+
+  async function submitPhysicians(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+
+    if (!physiciansCredentialFile || !physiciansInputFile) {
+      setStatus("Please provide both the Physicians login Excel and claim Excel files.");
+      return;
+    }
+
+    resetRunState("Starting Physicians scraper...");
+
+    const formData = new FormData();
+    formData.append("portalId", "physicians");
+    formData.append("credentialExcel", physiciansCredentialFile);
+    formData.append("inputExcel", physiciansInputFile);
+    formData.append("loginFileName", physiciansCredentialFile.name);
+    formData.append("claimFileName", physiciansInputFile.name);
+
+    let hasError = false;
+    let wasCancelled = false;
+    let finalErrorMessage = "";
+    let subscribedJobId = "";
+    const streamAbortController = new AbortController();
+
+    const handleJobEvent = async (eventData: ScrapeJobEvent) => {
+      if (eventData.type === "log" && eventData.message) {
+        setLogs((prev) => [...prev, eventData.message ?? ""]);
+      } else if (eventData.type === "progress" && typeof eventData.completed === "number" && typeof eventData.total === "number") {
+        setProgress({ completed: eventData.completed, total: eventData.total });
+      } else if (eventData.type === "error_screenshot" && typeof eventData.index === "number" && eventData.image) {
+        setErrorScreenshots((prev) => [...prev, { index: eventData.index ?? -1, image: eventData.image ?? "" }]);
+      } else if (eventData.type === "file_download" && eventData.filename && eventData.base64) {
+        const artifactKey = buildDownloadArtifactKey(eventData);
+        if (!hasDownloadedArtifact(subscribedJobId, artifactKey)) {
+          downloadBase64File(eventData.filename, eventData.base64, eventData.mimeType || "application/octet-stream");
+          rememberDownloadedArtifact(subscribedJobId, artifactKey);
+          setStatus(`Downloaded ${eventData.filename}`);
+        }
+      } else if (eventData.type === "warning" && eventData.message) {
+        setLogs((prev) => [...prev, eventData.message ?? ""]);
+        setStatus(eventData.message);
+      } else if (eventData.type === "error" && eventData.message) {
+        finalErrorMessage = eventData.message;
+        setLogs((prev) => [...prev, `ERROR: ${eventData.message}`]);
+        setStatus(`Error: ${eventData.message}`);
+        hasError = true;
+      } else if (eventData.type === "cancelled") {
+        wasCancelled = true;
+        setLogs((prev) => [...prev, eventData.message || "Processing cancelled."]);
+        setStatus(eventData.message || "Processing cancelled.");
+      }
+    };
+
+    try {
+      const jobId = await startScrapeJob(formData);
+      subscribedJobId = jobId;
+      setActiveJobId(jobId);
+      await subscribeToScrapeJobEvents({
+        jobId,
+        signal: streamAbortController.signal,
+        onEvent: handleJobEvent,
+        onStreamError(error) {
+          console.error("Physicians stream error:", error);
+          finalErrorMessage = getErrorMessage(error);
+          setLogs((prev) => [...prev, `STREAM ERROR: ${finalErrorMessage}`]);
+          setStatus(`Stream error: ${finalErrorMessage}`);
+          hasError = true;
+        },
+      });
+      setStatus(
+        wasCancelled
+          ? "Physicians processing cancelled."
+          : hasError
+            ? `Physicians processing finished with errors${finalErrorMessage ? `: ${finalErrorMessage}` : "."}`
+            : "Physicians processing completed.",
+      );
+    } catch (error) {
+      setStatus(`Failed to process Physicians claims: ${getErrorMessage(error)}`);
     } finally {
       setIsProcessing(false);
       setActiveJobId("");
@@ -4806,6 +5391,46 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
                       onInputFileChange={setAllCareInputFile}
                       onSubmit={submitAllCare}
                     />
+                  ) : effectivePortalId === "cigna" ? (
+                    <CignaInputForm
+                      canSubmit={canSubmitCigna}
+                      credentialFileName={cignaCredentialFile?.name ?? ""}
+                      inputFileName={cignaInputFile?.name ?? ""}
+                      isProcessing={blockPortalFormForProcessing}
+                      onCredentialFileChange={setCignaCredentialFile}
+                      onInputFileChange={setCignaInputFile}
+                      onSubmit={submitCigna}
+                    />
+                  ) : effectivePortalId === "kaiser" ? (
+                    <KaiserInputForm
+                      canSubmit={canSubmitKaiser}
+                      credentialFileName={kaiserCredentialFile?.name ?? ""}
+                      inputFileName={kaiserInputFile?.name ?? ""}
+                      isProcessing={blockPortalFormForProcessing}
+                      onCredentialFileChange={setKaiserCredentialFile}
+                      onInputFileChange={setKaiserInputFile}
+                      onSubmit={submitKaiser}
+                    />
+                  ) : effectivePortalId === "my-family" ? (
+                    <MyFamilyInputForm
+                      canSubmit={canSubmitMyFamily}
+                      credentialFileName={myFamilyCredentialFile?.name ?? ""}
+                      inputFileName={myFamilyInputFile?.name ?? ""}
+                      isProcessing={blockPortalFormForProcessing}
+                      onCredentialFileChange={setMyFamilyCredentialFile}
+                      onInputFileChange={setMyFamilyInputFile}
+                      onSubmit={submitMyFamily}
+                    />
+                  ) : effectivePortalId === "physicians" ? (
+                    <PhysiciansInputForm
+                      canSubmit={canSubmitPhysicians}
+                      credentialFileName={physiciansCredentialFile?.name ?? ""}
+                      inputFileName={physiciansInputFile?.name ?? ""}
+                      isProcessing={blockPortalFormForProcessing}
+                      onCredentialFileChange={setPhysiciansCredentialFile}
+                      onInputFileChange={setPhysiciansInputFile}
+                      onSubmit={submitPhysicians}
+                    />
                   ) : effectivePortalId === "optum-pro" ? (
                     <OptumProInputForm
                       canSubmit={canSubmitOptumPro}
@@ -4907,6 +5532,31 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
               ) : effectivePortalId === "all-care" ? (
                 <div className="mt-5">
                   <AllCareResultView errorScreenshots={errorScreenshots} logs={logs} progress={progress} status={status} />
+                </div>
+              ) : effectivePortalId === "cigna" ? (
+                <div className="mt-5">
+                  <CignaResultView
+                    errorScreenshots={errorScreenshots}
+                    logs={logs}
+                    onOtpChange={setCignaOtpValue}
+                    onOtpSubmit={submitCignaOtp}
+                    otpRequest={cignaOtpRequest}
+                    otpValue={cignaOtpValue}
+                    progress={progress}
+                    status={status}
+                  />
+                </div>
+              ) : effectivePortalId === "kaiser" ? (
+                <div className="mt-5">
+                  <KaiserResultView errorScreenshots={errorScreenshots} logs={logs} progress={progress} status={status} />
+                </div>
+              ) : effectivePortalId === "my-family" ? (
+                <div className="mt-5">
+                  <MyFamilyResultView errorScreenshots={errorScreenshots} logs={logs} progress={progress} status={status} />
+                </div>
+              ) : effectivePortalId === "physicians" ? (
+                <div className="mt-5">
+                  <PhysiciansResultView errorScreenshots={errorScreenshots} logs={logs} progress={progress} status={status} />
                 </div>
               ) : effectivePortalId === "optum-pro" ? (
                 <div className="mt-5">

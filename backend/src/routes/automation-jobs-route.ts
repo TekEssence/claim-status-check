@@ -7,7 +7,7 @@
   submitScrapeJobInput,
 } from "@/backend/src/jobs/job-store";
 import { getAutomationRunner } from "@/backend/src/workflows/registry";
-import type { WorkflowId } from "@/backend/src/workflows/types";
+import { isAutomationWorkflowId, type AutomationWorkflowId } from "@/backend/src/workflows/types";
 import { getSessionFromCookies } from "@/lib/auth/session";
 import { isAuthDbConnectionError } from "@/lib/auth/db";
 import {
@@ -36,7 +36,8 @@ function ensurePersistenceListener() {
   if (persistenceListenerRegistered) return;
   persistenceListenerRegistered = true;
   registerScrapeJobEmitListener((jobId, event) => {
-    if (getScrapeJob(jobId)?.workflowId !== "eligibility-verification") return;
+    const workflowId = getScrapeJob(jobId)?.workflowId;
+    if (workflowId !== "eligibility-verification" && workflowId !== "payment-eob-download" && workflowId !== "payment-posting") return;
     void persistEvent(jobId, event);
   });
 }
@@ -48,38 +49,39 @@ export async function POST(req: Request) {
     if (!session) return Response.json({ error: "Authentication required." }, { status: 401 });
 
     const formData = await req.formData();
-    const workflowId = getRequiredString(formData, "workflowId") as WorkflowId;
+    const workflowId = getRequiredString(formData, "workflowId");
     const portalId = getRequiredString(formData, "portalId");
     const payerId = getOptionalString(formData, "payerId");
-    if (workflowId !== "eligibility-verification") {
+    if (!isAutomationWorkflowId(workflowId)) {
       return Response.json(
-        { error: "Use /api/scrape-jobs for existing claim-status runs." },
+        { error: "Unsupported automation workflow." },
         { status: 400 },
       );
     }
+    const automationWorkflowId: AutomationWorkflowId = workflowId;
 
     const activeJob = await getBlockingActiveAutomationJobForUser(session.userId);
     if (activeJob) {
       return Response.json(
-        { error: "Another eligibility run is active.", jobId: activeJob.jobId },
+        { error: "Another automation workflow run is active.", jobId: activeJob.jobId },
         { status: 409 },
       );
     }
 
-    const runner = getAutomationRunner(workflowId, portalId, payerId);
+    const runner = getAutomationRunner(automationWorkflowId, portalId, payerId);
     const input = runner.validateInput(formData);
-    const job = createScrapeJob(undefined, workflowId);
-    const inputFile = formData.get("inputFile");
-    const credentialFile = formData.get("credentialFile");
+    const job = createScrapeJob(undefined, automationWorkflowId);
+    const inputFile = getFirstFile(formData, ["inputFile", "inputExcel", "referenceExcel"]);
+    const credentialFile = getFirstFile(formData, ["credentialFile", "credentialExcel"]);
     await createPersistentAutomationJob({
       jobId: job.id,
       userId: session.userId,
-      workflowId,
+      workflowId: automationWorkflowId,
       portalId,
       payerId,
       totalItems: getNumber(formData, "totalItems"),
-      primaryInputFileName: inputFile instanceof File ? inputFile.name : "",
-      credentialFileName: credentialFile instanceof File ? credentialFile.name : "",
+      primaryInputFileName: inputFile?.name ?? "",
+      credentialFileName: credentialFile?.name ?? "",
     });
     await uploadEligibilityInputs(job.id, inputFile, credentialFile).catch((error) => {
       console.error("Upload eligibility input files to S3 failed", error);
@@ -87,7 +89,7 @@ export async function POST(req: Request) {
 
     void runner.run(input, {
       jobId: job.id,
-      workflowId,
+      workflowId: automationWorkflowId,
       portalId,
       payerId,
       emit: async (event) => emitScrapeJobEvent(job.id, event),
@@ -112,14 +114,14 @@ export async function POST(req: Request) {
       }).catch(() => {});
       scheduleTaskShutdownAfterWorkflow(cancelled ? "eligibility-verification:cancelled" : "eligibility-verification:completed");
     }).catch(async (error) => {
-      const message = error instanceof Error ? error.message : "Eligibility automation failed.";
+      const message = error instanceof Error ? error.message : "Automation workflow failed.";
       emitScrapeJobEvent(job.id, { type: "error", message });
       emitScrapeJobEvent(job.id, { type: "done" });
       await updateAutomationJob({ jobId: job.id, status: "failed" }).catch(() => {});
       scheduleTaskShutdownAfterWorkflow("eligibility-verification:failed");
     });
 
-    return Response.json({ jobId: job.id, workflowId, portalId, payerId });
+    return Response.json({ jobId: job.id, workflowId: automationWorkflowId, portalId, payerId });
   } catch (error) {
     console.error("Start automation job failed", error);
     if (isAuthDbConnectionError(error)) {
@@ -176,7 +178,7 @@ export async function DELETE(req: Request) {
   if (!(await getAutomationJobForUser(jobId, session.userId))) {
     return Response.json({ error: "Run not found." }, { status: 404 });
   }
-  cancelScrapeJob(jobId, "Eligibility run cancellation requested.");
+  cancelScrapeJob(jobId, "Automation workflow cancellation requested.");
   emitScrapeJobEvent(jobId, { type: "cancelled" });
   emitScrapeJobEvent(jobId, { type: "done" });
   await updateAutomationJob({ jobId, status: "cancelled" });
@@ -302,6 +304,14 @@ function getOptionalString(formData: FormData, key: string): string {
 function getNumber(formData: FormData, key: string): number {
   const value = Number(getOptionalString(formData, key));
   return Number.isFinite(value) && value >= 0 ? value : 0;
+}
+
+function getFirstFile(formData: FormData, keys: string[]): File | null {
+  for (const key of keys) {
+    const value = formData.get(key);
+    if (value instanceof File) return value;
+  }
+  return null;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

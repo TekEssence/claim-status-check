@@ -1,6 +1,6 @@
 import type { FormEvent } from "react";
 import { FileSpreadsheet, KeyRound, Play } from "lucide-react";
-import { PortalUploadCard } from "../../components/portal-workflow/PortalUploadCard";
+import { PortalUploadCard } from "../../../../components/portal-workflow/PortalUploadCard";
 
 export function OptumProInputForm({
   canSubmit,

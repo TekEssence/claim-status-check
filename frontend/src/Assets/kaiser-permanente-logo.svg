@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 112" role="img" aria-labelledby="title desc">
+  <title id="title">Kaiser Permanente logo</title>
+  <desc id="desc">Kaiser Permanente blue sunburst mark and wordmark.</desc>
+  <rect width="760" height="112" fill="#ffffff"/>
+  <g fill="none" stroke="#0077b6" stroke-linecap="round">
+    <path d="M16 87 C29 48, 56 30, 91 25" stroke-width="4"/>
+    <path d="M18 89 C34 54, 58 37, 90 34" stroke-width="4"/>
+    <path d="M21 91 C38 62, 60 47, 91 44" stroke-width="4"/>
+    <path d="M25 93 C42 70, 64 56, 92 54" stroke-width="4"/>
+    <path d="M30 95 C47 77, 67 66, 94 64" stroke-width="4"/>
+    <path d="M36 97 C53 84, 72 75, 96 74" stroke-width="4"/>
+    <path d="M42 99 C58 90, 76 84, 98 84" stroke-width="4"/>
+  </g>
+  <g fill="#0077b6">
+    <circle cx="50" cy="22" r="8"/>
+    <circle cx="73" cy="17" r="7"/>
+    <circle cx="94" cy="28" r="8"/>
+    <path d="M15 87 h95 v10 h-95z"/>
+    <path d="M43 31 c-10 7-18 20-23 37 h14 c3-14 9-25 18-32z"/>
+    <path d="M71 28 c-9 9-14 23-16 40 h13 c1-16 5-28 12-36z"/>
+    <path d="M95 39 c-6 7-10 17-11 29 h13 c1-10 4-18 9-24z"/>
+  </g>
+  <text x="145" y="76" fill="#0077b6" font-family="Arial, Helvetica, sans-serif" font-size="46" font-weight="700" letter-spacing="1.5">KAISER PERMANENTE</text>
+  <text x="725" y="42" fill="#0077b6" font-family="Arial, Helvetica, sans-serif" font-size="15" font-weight="700">&#174;</text>
+</svg>

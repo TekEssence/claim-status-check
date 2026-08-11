@@ -1,5 +1,6 @@
-﻿import { cookies, headers as nextHeaders } from "next/headers";
+import { cookies, headers as nextHeaders } from "next/headers";
 import { betterAuthInstance } from "./better-auth";
+import { runBetterAuthWithDbRetry } from "./better-auth-retry";
 import { getActiveAuthUser, isAuthDbConnectionError, type AuthUser } from "./db";
 import { getActiveAutomationJobForUser } from "@/lib/automation-jobs/db";
 import { getActiveScrapeJobForUser } from "@/lib/scrape-jobs/db";
@@ -53,14 +54,9 @@ async function hasActiveUserJob(userId: string): Promise<boolean> {
 export async function getSessionFromCookies(requestHeaders?: Headers): Promise<AuthSession | null> {
   const sessionHeaders = requestHeaders ?? new Headers(await nextHeaders());
   try {
-    let authResult;
-    try {
-      authResult = await betterAuthInstance.api.getSession({ headers: sessionHeaders });
-    } catch (error) {
-      if (!isAuthDbConnectionError(error)) throw error;
-      await new Promise((resolve) => setTimeout(resolve, 300));
-      authResult = await betterAuthInstance.api.getSession({ headers: sessionHeaders });
-    }
+    const authResult = await runBetterAuthWithDbRetry(() =>
+      betterAuthInstance.api.getSession({ headers: sessionHeaders }),
+    );
 
     if (!authResult?.session || !authResult?.user) {
       return null;

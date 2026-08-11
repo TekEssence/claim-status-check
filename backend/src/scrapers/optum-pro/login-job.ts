@@ -53,6 +53,24 @@ async function isVisible(page: Page, selector: string, timeout = 1500): Promise<
   return page.locator(selector).first().isVisible({ timeout }).catch(() => false);
 }
 
+async function waitForActionableInput(page: Page, selector: string, timeout = 30000): Promise<void> {
+  await page.waitForFunction((inputSelector) => {
+    const element = document.querySelector(inputSelector);
+    if (!(element instanceof HTMLInputElement)) return false;
+
+    const style = window.getComputedStyle(element);
+    const rect = element.getBoundingClientRect();
+    const ariaDisabled = element.getAttribute("aria-disabled") === "true";
+
+    return rect.width > 0
+      && rect.height > 0
+      && style.display !== "none"
+      && style.visibility !== "hidden"
+      && !element.disabled
+      && !ariaDisabled;
+  }, selector, { timeout });
+}
+
 function maskLogin(value: string): string {
   const trimmed = value.trim();
   if (trimmed.length <= 4) return "*".repeat(trimmed.length);
@@ -284,7 +302,7 @@ async function navigateAndWaitForOptumLoginInitialization(
     addCappedDiagnosticValue(diagnostics.timeoutMessages ||= [], diagnostic);
     await stageLog("warn", "open-login", `Network idle timed out after DOM content loaded; continuing with UI wait. ${errorMessage(error)}`);
   });
-  await page.locator(optumProConfig.selectors.username).first().waitFor({ state: "visible", timeout: 45000 }).catch((error) => {
+  await waitForActionableInput(page, optumProConfig.selectors.username, 45000).catch((error) => {
     const diagnostic = `username wait ${sanitizeDiagnosticUrl(page.url())} | ${errorMessage(error)}`;
     addCappedDiagnosticValue(diagnostics.timeoutMessages ||= [], diagnostic);
     throw error;

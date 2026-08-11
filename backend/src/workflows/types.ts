@@ -4,13 +4,21 @@ export type LogEvent = {
   level: "debug" | "info" | "warn" | "error";
   message: string;
   eventName?: string;
-  rowIndex?: number;
+  rowIndex?: number | string;
   meta?: Record<string, unknown>;
 };
 
-export const WORKFLOW_IDS = ["claim-status", "eligibility-verification"] as const;
+export const WORKFLOW_IDS = ["claim-status", "eligibility-verification", "payment-eob-download", "payment-posting"] as const;
 
 export type WorkflowId = (typeof WORKFLOW_IDS)[number];
+
+export const AUTOMATION_WORKFLOW_IDS = ["eligibility-verification", "payment-eob-download", "payment-posting"] as const;
+
+export type AutomationWorkflowId = (typeof AUTOMATION_WORKFLOW_IDS)[number];
+
+export function isAutomationWorkflowId(value: string): value is AutomationWorkflowId {
+  return (AUTOMATION_WORKFLOW_IDS as readonly string[]).includes(value);
+}
 
 export type AutomationContext = {
   jobId: string;
