@@ -13,6 +13,13 @@ export function WaystarResultView(props: {
   resultRows?: Array<Record<string, string>>;
   onDownload: (filename: string, base64: string, mimeType: string) => void;
 }) {
+  const visibleResultHeaders = props.resultRows?.[0]
+    ? Object.keys(props.resultRows[0]).filter((header) => !header.startsWith("__"))
+    : [];
+  const liveErrors = props.resultRows
+    ?.map((row) => row.__error)
+    .filter(Boolean) ?? [];
+
   return (
     <div className="rounded-[1.7rem] border border-sky-100 bg-white/92 p-5 shadow-[0_16px_38px_rgba(148,163,184,0.12)]">
       <p className="text-[0.7rem] font-semibold uppercase tracking-[0.22em] text-sky-600">Run Activity</p>
@@ -36,18 +43,24 @@ export function WaystarResultView(props: {
         <div className="mt-5 overflow-x-auto rounded-xl border border-sky-100">
           <table className="min-w-max text-left text-sm">
             <thead className="bg-sky-50 text-slate-700">
-              <tr>{Object.keys(props.resultRows[0]).map((header) => <th key={header} className="whitespace-nowrap border-b border-sky-100 px-3 py-2 font-semibold">{header}</th>)}</tr>
+              <tr>{visibleResultHeaders.map((header) => <th key={header} className="whitespace-nowrap border-b border-sky-100 px-3 py-2 font-semibold">{header}</th>)}</tr>
             </thead>
             <tbody>
               {props.resultRows.map((row, index) => (
                 <tr key={index} className="bg-white">
-                  {Object.keys(props.resultRows![0]).map((header) => <td key={header} className="whitespace-nowrap border-b border-sky-50 px-3 py-2 text-slate-700">{row[header] || ""}</td>)}
+                  {visibleResultHeaders.map((header) => <td key={header} className="whitespace-nowrap border-b border-sky-50 px-3 py-2 text-slate-700">{row[header] || ""}</td>)}
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
-      ) : null}      <ScreenshotViewer screenshots={props.errorScreenshots} />
+      ) : null}
+      {liveErrors.length > 0 ? (
+        <div className="mt-4 rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">
+          {liveErrors.map((message, index) => <p key={`${index}-${message}`}>{message}</p>)}
+        </div>
+      ) : null}
+      <ScreenshotViewer screenshots={props.errorScreenshots} />
       <LogsPanel logs={props.logs} />
       {!props.status && !props.progress && props.logs.length === 0 && props.errorScreenshots.length === 0 ? <p className="mt-4 text-sm text-slate-400">No activity yet.</p> : null}
     </div>

@@ -201,6 +201,8 @@ export async function submitWaystarInquiry(options: {
   payerName: string;
   serviceTypeCode?: string;
   patientLookupCode?: string;
+  isCancelled?: () => boolean;
+  onWaiting?: (elapsedSeconds: number) => Promise<void>;
   row: EligibilityInputRow;
 }): Promise<WaystarInquiryPayload> {
   const { page, credentials, payerName, row } = options;
@@ -254,7 +256,15 @@ export async function submitWaystarInquiry(options: {
   ]);
 
   await inquiryPage.waitForTimeout(500);
-  const outcome = await waitForWaystarEligibilityOutcome(inquiryPage, 900000);
+  const outcome = await waitForWaystarEligibilityOutcome(
+    inquiryPage,
+    180000,
+    options.isCancelled,
+    options.onWaiting,
+  );
+  if (outcome === "cancelled") {
+    throw new Error("Waystar eligibility cancellation requested.");
+  }
   if (outcome === "timeout") {
     await inquiryPage.getByRole("button", { name: "New Inquiry", exact: true }).click()
       .catch(() => inquiryPage.getByText("New Inquiry", { exact: true }).click());
@@ -1105,10 +1115,19 @@ if (normalized.includes("united healthcare") && normalized.includes("all states"
 async function waitForWaystarEligibilityOutcome(
   page: Page,
   timeoutMs: number,
-): Promise<"response" | "timeout" | "login" | "stalled"> {
-  const deadline = Date.now() + timeoutMs;
+  isCancelled?: () => boolean,
+  onWaiting?: (elapsedSeconds: number) => Promise<void>,
+): Promise<"response" | "timeout" | "login" | "stalled" | "cancelled"> {
+  const startedAt = Date.now();
+  const deadline = startedAt + timeoutMs;
+  let nextHeartbeatAt = startedAt + 15000;
   while (Date.now() < deadline) {
+    if (isCancelled?.()) return "cancelled";
     if (page.isClosed()) return "stalled";
+    if (onWaiting && Date.now() >= nextHeartbeatAt) {
+      await onWaiting(Math.round((Date.now() - startedAt) / 1000));
+      nextHeartbeatAt = Date.now() + 15000;
+    }
     const state = await page.evaluate(({ overallStatusSelector, sectionStatusSelector }) => {
       const bodyText = document.body?.innerText || "";
       if (/Eligibility Inquiry Timed Out/i.test(bodyText)) return "timeout";

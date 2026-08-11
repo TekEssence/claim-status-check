@@ -67,9 +67,7 @@ export async function buildWaystarOutputWorkbook(options: {
   const sheet = workbook.worksheets[0];
   if (!sheet) throw new Error("The eligibility workbook does not contain a worksheet.");
 
-  const outputColumns = [...options.results.values()].some((result) => result.payerId === "bcbs-ppo" || result.payerId === "cigna-open-access-plus" || result.payerId === "baycare-plus-medicare-advantage" || result.payerId === "aetna" || result.payerId === "aetna-medicare-ppo" || result.payerId === "united-healthcare-all-states" || result.payerId === "aarp-medicare-complete" || result.payerId === "umr" || result.payerId === "humana-medicare-ppo" || result.payerId === "av-med")
-    ? BCBS_OUTPUT_COLUMNS
-    : LEGACY_OUTPUT_COLUMNS;
+  const outputColumns = BCBS_OUTPUT_COLUMNS;
   const outputStartColumn = sheet.columnCount + 1;
   const headerRow = sheet.getRow(1);
   outputColumns.forEach((column, offset) => {

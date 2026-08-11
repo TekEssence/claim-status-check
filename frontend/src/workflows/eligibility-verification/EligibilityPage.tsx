@@ -111,11 +111,17 @@ export function EligibilityPage() {
     if (event.type === "error_screenshot" && typeof event.image === "string" && event.image) {
       setErrorScreenshots((current) => [...current, { index: typeof event.index === "number" ? event.index : -1, image: event.image! }]);
     }
-    if ((event.type === "eligibility_availity_result" || event.type === "eligibility_uhc_result") && event.update) {
+    if ((event.type === "eligibility_availity_result" || event.type === "eligibility_uhc_result" || event.type === "eligibility_waystar_result") && event.update) {
       const result = Object.fromEntries(
         Object.entries(event.update).map(([key, value]) => [key, value == null ? "" : String(value)]),
       );
-      setResultRows((current) => [...current, result]);
+      setResultRows((current) => {
+        const rowKey = result.__rowKey || result.Row || result.rowIndex || "";
+        if (!rowKey) return [...current, result];
+        const existingIndex = current.findIndex((row) => (row.__rowKey || row.Row || row.rowIndex || "") === rowKey);
+        if (existingIndex < 0) return [...current, result];
+        return current.map((row, index) => index === existingIndex ? result : row);
+      });
     }
     if (event.type === "file_download" && event.filename && event.base64) {
       const artifact = {
