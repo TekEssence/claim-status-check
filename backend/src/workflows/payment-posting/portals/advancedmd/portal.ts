@@ -414,6 +414,16 @@ export class AdvancedMdPatientNotSelectedError extends Error {
   }
 }
 
+export class AdvancedMdPatientMultipleMatchesError extends Error {
+  constructor(
+    readonly matchCount: number,
+    readonly matches: string[],
+  ) {
+    super(`${matchCount} Matches found`);
+    this.name = "AdvancedMdPatientMultipleMatchesError";
+  }
+}
+
 const ADVANCEDMD_PAYMENT_ENTRY_READY_TIMEOUT_MS = 210000;
 const ADVANCEDMD_EOB_CHECK_NUMBER_PENDO_ID = "eob-checknumber-single-search-input-20250104";
 const ADVANCEDMD_HUMAN_STAGE_PAUSE_BEFORE_MS = { min: 450, max: 900 };
@@ -1144,6 +1154,9 @@ async function findPatientDropdownSelectionFast(
     }
 
     const exactNameMatches = visibleCandidates.filter(({ label }) => patientNameExactlyMatches(label, row.patientName));
+    if (exactNameMatches.length > 1) {
+      throw new AdvancedMdPatientMultipleMatchesError(exactNameMatches.length, exactNameMatches.map(({ label }) => label));
+    }
     const idMatch = exactNameMatches.find(({ label }) => row.patientId && label.toLowerCase().includes(row.patientId.toLowerCase()));
     const controlMatch = exactNameMatches.find(({ label }) => row.patientControlNumber && label.toLowerCase().includes(row.patientControlNumber.toLowerCase()));
     const selected = idMatch ?? controlMatch ?? (exactNameMatches.length === 1 ? exactNameMatches[0] : null);
@@ -1317,7 +1330,6 @@ async function selectPatientByNameAndId(
   //      reported as ambiguous rather than guessed.
   let selected: Locator | null = null;
   let selectedLabel = "";
-  let ambiguous = false;
   const nameOnlyMatches: { option: Locator; label: string }[] = [];
 
   for (let index = 0; index < count; index += 1) {
@@ -1334,27 +1346,22 @@ async function selectPatientByNameAndId(
     const labelLower = label.toLowerCase();
     const patientIdMatches = row.patientId ? labelLower.includes(row.patientId.toLowerCase()) : false;
     const controlNumberMatches = row.patientControlNumber ? labelLower.includes(row.patientControlNumber.toLowerCase()) : false;
-    if (patientIdMatches || controlNumberMatches) {
-      selected = option;
-      selectedLabel = label;
-      break;
-    }
     if (patientValuesMatch(label, row.patientName)) {
       nameOnlyMatches.push({ option, label });
     }
-  }
-
-  if (!selected) {
-    if (nameOnlyMatches.length === 1) {
-      selected = nameOnlyMatches[0].option;
-      selectedLabel = nameOnlyMatches[0].label;
-    } else if (nameOnlyMatches.length > 1) {
-      ambiguous = true;
+    if (!selected && (patientIdMatches || controlNumberMatches)) {
+      selected = option;
+      selectedLabel = label;
     }
   }
 
-  if (ambiguous) {
-    throw new AdvancedMdPatientNotFoundError(`Patient Ambiguous. Multiple dropdown results named "${row.patientName}" and no Patient ID / Control Number was displayed to tell them apart.`);
+  if (nameOnlyMatches.length > 1) {
+    throw new AdvancedMdPatientMultipleMatchesError(nameOnlyMatches.length, nameOnlyMatches.map(({ label }) => label));
+  }
+
+  if (!selected && nameOnlyMatches.length === 1) {
+    selected = nameOnlyMatches[0].option;
+    selectedLabel = nameOnlyMatches[0].label;
   }
   if (!selected) {
     throw new AdvancedMdPatientNotFoundError(`Patient Not Found. No dropdown result matched "${row.patientName}".`);

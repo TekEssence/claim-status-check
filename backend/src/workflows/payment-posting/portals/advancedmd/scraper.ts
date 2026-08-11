@@ -19,6 +19,7 @@ import { createPaymentPostingOutputWorkbookBuffer } from "./output-builder";
 import {
   ADVANCEDMD_PAYMENT_POSTING_SELECTORS,
   AdvancedMdMissingSelectorError,
+  AdvancedMdPatientMultipleMatchesError,
   AdvancedMdPatientNotFoundError,
   AdvancedMdPatientNotSelectedError,
   AdvancedMdPaymentEntryReadinessTimeoutError,
@@ -296,6 +297,11 @@ async function runPortalRows(
             await logFailureRoutingDiagnostics(context, page, row.inputRow, failureStage, carcRarcAttempted);
             if (error instanceof AdvancedMdVisitClaimNotFoundError) {
               results.push(await handleVisitClaimNotFoundRowFailure(context, page, screenshotFolder, row, error, startedAt, recoveryAttempts));
+              rowCompleted = true;
+              continue;
+            }
+            if (error instanceof AdvancedMdPatientMultipleMatchesError) {
+              results.push(await handlePatientMultipleMatchesRowFailure(context, page, screenshotFolder, row, error, startedAt, recoveryAttempts));
               rowCompleted = true;
               continue;
             }
@@ -592,6 +598,43 @@ async function handleVisitClaimNotFoundRowFailure(
   return automationFailedRow(context, page, screenshotFolder, row, error, startedAt);
 }
 
+async function handlePatientMultipleMatchesRowFailure(
+  context: AutomationContext,
+  page: Page,
+  screenshotFolder: string,
+  row: Awaited<ReturnType<typeof readAdvancedMdPaymentPostingInput>>[number],
+  error: AdvancedMdPatientMultipleMatchesError,
+  startedAt: string,
+  recoveryAttempts: number,
+): Promise<PaymentPostingResultRow> {
+  await context.log({
+    level: "warn",
+    message: `${error.matchCount} Matches found. Patient selection skipped; no dropdown option selected.`,
+    eventName: "payment_posting_advancedmd_patient_multiple_matches_handled",
+    rowIndex: row.inputRow,
+    meta: { matchCount: error.matchCount, matches: error.matches },
+  });
+  await dismissPatientOverlayIfPresent(page);
+  await context.log({
+    level: "info",
+    message: "Patient dropdown dismissed.",
+    eventName: "payment_posting_advancedmd_patient_dropdown_dismissed",
+    rowIndex: row.inputRow,
+  });
+  const cleanupHealth = await checkPaymentEntryHealth(page);
+  await context.log({
+    level: cleanupHealth.state === "healthy" ? "info" : "warn",
+    message: `Payment Entry health after patient-match cleanup: ${cleanupHealth.state.toUpperCase()}.`,
+    eventName: "payment_posting_advancedmd_patient_multiple_matches_cleanup_health",
+    rowIndex: row.inputRow,
+    meta: cleanupHealth,
+  });
+  if (cleanupHealth.state === "broken" && recoveryAttempts < 1) {
+    await recoverAdvancedMdPaymentEntry(context, page, screenshotFolder, row.inputRow, cleanupHealth, recoveryAttempts + 1);
+  }
+  return automationFailedRow(context, page, screenshotFolder, row, error, startedAt);
+}
+
 async function closePaymentReasonsOverlayIfPresent(context: AutomationContext, page: Page, inputRow: number): Promise<void> {
   const frame = page.frameLocator(PAYMENT_ENTRY_IFRAME_SELECTOR);
   const state = await paymentReasonsPopupHealthState(page);
@@ -689,6 +732,11 @@ async function dismissVisitClaimOverlayIfPresent(page: Page): Promise<void> {
     if (!await visitClaimOverlayVisible(page)) return;
     await page.waitForTimeout(100);
   }
+}
+
+async function dismissPatientOverlayIfPresent(page: Page): Promise<void> {
+  await page.keyboard.press("Escape").catch(() => {});
+  await page.waitForTimeout(250);
 }
 
 async function visitClaimOverlayVisible(page: Page): Promise<boolean> {
@@ -929,6 +977,7 @@ async function automationFailedRow(
 }
 
 function paymentPostingFailureResult(error: unknown): PaymentPostingResultRow["result"] {
+  if (error instanceof AdvancedMdPatientMultipleMatchesError) return "Patient Not Found";
   if (error instanceof AdvancedMdPatientNotFoundError) return "Patient Not Found";
   if (error instanceof AdvancedMdPatientNotSelectedError) return "Patient Not Selected";
   if (error instanceof AdvancedMdVisitClaimNotFoundError) return "Visit/Claim Not Found";
@@ -937,6 +986,7 @@ function paymentPostingFailureResult(error: unknown): PaymentPostingResultRow["r
 }
 
 function paymentPostingFailureBotMessage(error: unknown): string {
+  if (error instanceof AdvancedMdPatientMultipleMatchesError) return `${error.matchCount} Matches found. No patient was selected and no payment was submitted.`;
   if (error instanceof AdvancedMdPatientNotFoundError) return "Patient Not Found. No payment was submitted.";
   if (error instanceof AdvancedMdPatientNotSelectedError) return "Patient Not Selected. No payment was submitted.";
   if (error instanceof AdvancedMdVisitClaimNotFoundError && error.message.includes("no visit options")) return "No Visit/Claim options were available for the selected patient.";
