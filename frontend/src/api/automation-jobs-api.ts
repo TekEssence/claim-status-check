@@ -54,8 +54,11 @@ export async function subscribeToAutomationJob(options: {
       onmessage(message) {
         if (message.data) options.onEvent(JSON.parse(message.data) as ScrapeJobEvent);
       },
+      onclose() {
+        if (!options.signal.aborted) throw new Error("Automation event stream closed before completion.");
+      },
       onerror(error) {
-        options.onError(error);
+        if (!options.signal.aborted) options.onError(error);
         return 2000;
       },
     },

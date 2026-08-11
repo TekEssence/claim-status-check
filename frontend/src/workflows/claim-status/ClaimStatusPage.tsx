@@ -40,16 +40,18 @@ import {
   startScrapeJob,
   subscribeToScrapeJobEvents,
   submitScrapeJobInput,
+  ScrapeJobAuthError,
   type CurrentScrapeJob,
   type ScrapeJobSummary,
 } from "../../api/scrape-jobs-api";
-import { getCognitoAccessToken, isCognitoMode, redirectToCognitoLogout } from "../../api/cognito-auth";
+import { clearCognitoAccessToken, getCognitoAccessToken, isCognitoMode, redirectToCognitoLogin, redirectToCognitoLogout, storeCognitoTokenFromHash } from "../../api/cognito-auth";
 import { clearStoredRunContext, loadClaimFileHandle, loadIehpLoginFile, saveClaimFileHandle, saveIehpLoginFile } from "../../lib/run-context-store";
 import type { FileSystemFileHandle, WindowWithFilePicker } from "../../types/file-system-access";
 import type { ClaimRow, ErrorScreenshot, JobProgressValue, ScrapeJobEvent } from "../../types/job";
 import { IehpInputForm } from "./portals/iehp/IehpInputForm";
 import { IehpResultView } from "./portals/iehp/IehpResultView";
-import { AerialInputForm } from "./portals/aerial/AerialInputForm";
+import { AerialInputForm, type AerialSubportal } from "./portals/aerial/AerialInputForm";
+import { getAerialSubportal } from "./portals/aerial/subportals/registry";
 import { AerialResultView } from "./portals/aerial/AerialResultView";
 import { RegalInputForm } from "./portals/regal/RegalInputForm";
 import { RegalResultView } from "./portals/regal/RegalResultView";
@@ -59,10 +61,16 @@ import { AvailityInputForm } from "./portals/availity/AvailityInputForm";
 import { AvailityResultView } from "./portals/availity/AvailityResultView";
 import { UhcInputForm } from "./portals/uhc/UhcInputForm";
 import { UhcResultView, type UhcProviderPrompt } from "./portals/uhc/UhcResultView";
+import { AstronaInputForm } from "./portals/astrona/AstronaInputForm";
+import { AstronaResultView } from "./portals/astrona/AstronaResultView";
+import { AllCareInputForm } from "./portals/all-care/AllCareInputForm";
+import { AllCareResultView } from "./portals/all-care/AllCareResultView";
 import { OptumProInputForm } from "../../portals/optum-pro/OptumProInputForm";
 import { OptumProResultView } from "../../portals/optum-pro/OptumProResultView";
 import {
   aerialFrontendPortalConfig,
+  allCareFrontendPortalConfig,
+  astronaFrontendPortalConfig,
   availityFrontendPortalConfig,
   blueShieldFrontendPortalConfig,
   claimStatusPortalRegistry,
@@ -111,7 +119,7 @@ type UhcWorkbookBundle = {
   worksheet: ExcelJS.Worksheet;
 };
 
-export type PortalId = "iehp" | "aerial" | "regal" | "blue-shield" | "availity" | "optum-pro" | "uhc";
+export type PortalId = "iehp" | "aerial" | "all-care" | "astrona" | "regal" | "blue-shield" | "availity" | "optum-pro" | "uhc";
 type DownloadFile = {
   filename: string;
   bytes: Uint8Array;
@@ -132,6 +140,8 @@ const DOWNLOADED_ARTIFACTS_PREFIX = "iehp-downloaded-artifacts:";
 const PORTAL_ROUTE_MAP: Record<PortalId, string> = {
   iehp: "/iehp",
   aerial: "/aerial",
+  "all-care": "/all-care",
+  astrona: "/astrona",
   regal: "/regal",
   "blue-shield": "/blue-shield",
   availity: "/availity",
@@ -140,7 +150,7 @@ const PORTAL_ROUTE_MAP: Record<PortalId, string> = {
 };
 
 function isPortalId(value: string): value is PortalId {
-  return value === "iehp" || value === "aerial" || value === "regal" || value === "blue-shield" || value === "availity" || value === "optum-pro" || value === "uhc";
+  return value === "iehp" || value === "aerial" || value === "all-care" || value === "astrona" || value === "regal" || value === "blue-shield" || value === "availity" || value === "optum-pro" || value === "uhc";
 }
 
 function isTerminalWorkflowStatus(status: string): boolean {
@@ -231,6 +241,14 @@ const PORTAL_UI_META: Record<
   aerial: {
     shortCode: "AC",
     logoClassName: "bg-[linear-gradient(180deg,#e0ecff_0%,#c7ddff_100%)] text-blue-700",
+  },
+  "all-care": {
+    shortCode: "AC",
+    logoClassName: "bg-[linear-gradient(180deg,#e0f2fe_0%,#bae6fd_100%)] text-sky-700",
+  },
+  astrona: {
+    shortCode: "AS",
+    logoClassName: "bg-[linear-gradient(180deg,#dff7f3_0%,#bdece4_100%)] text-teal-700",
   },
   regal: {
     shortCode: "RP",
@@ -333,6 +351,14 @@ const PORTAL_WORKSPACE_META: Record<
   aerial: {
     heroDescription: "Upload your login workbook and claim details workbook to begin automated claim status verification.",
     processingDescription: "The platform validates workbook structure, secures the upload, and starts payer automation with live status tracking.",
+  },
+  "all-care": {
+    heroDescription: "Upload All Care Group/Payer credentials and claim rows for DOS- and CPT-specific status checks.",
+    processingDescription: "All Care routes each row to the matching Group and Responsible Payer login, then reads the matching service line.",
+  },
+  astrona: {
+    heroDescription: "Upload Astrona Group/Payer credentials and member claim rows to begin automated claim-status verification.",
+    processingDescription: "Astrona isolates each Group and Payer login, selects the matching IPA, and extracts every available claim and service CPT.",
   },
   regal: {
     heroDescription: "Upload the Regal workbook package to start a guided automation workflow with secure validation and live progress tracking.",
@@ -788,12 +814,18 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
   const [claimFileName, setClaimFileName] = useState<string>("");
   const [aerialCredentialFile, setAerialCredentialFile] = useState<File | null>(null);
   const [aerialInputFile, setAerialInputFile] = useState<File | null>(null);
+  const [aerialSubportal, setAerialSubportal] = useState<AerialSubportal | null>(null);
   const [availityProjectId, setAvailityProjectId] = useState("minimax");
   const [availityCredentialFile, setAvailityCredentialFile] = useState<File | null>(null);
   const [availityInputFile, setAvailityInputFile] = useState<File | null>(null);
   const [availityJobId, setAvailityJobId] = useState<string>("");
   const [availityOtpRequest, setAvailityOtpRequest] = useState<{ inputName: string; label: string; message: string } | null>(null);
   const [availityOtpValue, setAvailityOtpValue] = useState<string>("");
+  const [astronaCredentialFile, setAstronaCredentialFile] = useState<File | null>(null);
+  const [astronaInputFile, setAstronaInputFile] = useState<File | null>(null);
+  const [astronaResults, setAstronaResults] = useState<Record<string, unknown>[]>([]);
+  const [allCareCredentialFile, setAllCareCredentialFile] = useState<File | null>(null);
+  const [allCareInputFile, setAllCareInputFile] = useState<File | null>(null);
   const [uhcLoginFile, setUhcLoginFile] = useState<File | null>(null);
   const [uhcClaimFileHandle, setUhcClaimFileHandle] = useState<FileSystemFileHandle | null>(null);
   const [uhcClaimFileName, setUhcClaimFileName] = useState<string>("");
@@ -857,7 +889,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
   const isProtectedRoute = pathname !== "/";
   const awsWorkflowMode = isAwsWorkflowMode();
   const workflowRunTrackingEnabled = Boolean(authUser);
-  const effectivePortalId = forcedPortalId ?? selectedPortalId;
+  const effectivePortalId = forcedPortalId ?? (pathname === "/claim-status" ? null : selectedPortalId);
   const availablePortals = useMemo(
     () => claimStatusPortalRegistry,
     [],
@@ -867,6 +899,10 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
       ? iehpFrontendPortalConfig
       : effectivePortalId === "aerial"
         ? aerialFrontendPortalConfig
+        : effectivePortalId === "all-care"
+          ? allCareFrontendPortalConfig
+        : effectivePortalId === "astrona"
+          ? astronaFrontendPortalConfig
         : effectivePortalId === "regal"
           ? regalFrontendPortalConfig
           : effectivePortalId === "blue-shield"
@@ -934,9 +970,15 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     () => Boolean(iehpLoginFile && claimFileHandle && canStartAnotherRun),
     [iehpLoginFile, claimFileHandle, canStartAnotherRun],
   );
+  const selectedAerialSubportal = getAerialSubportal(aerialSubportal);
   const canSubmitAerial = useMemo(
-    () => Boolean(aerialInputFile && canStartAnotherRun),
-    [aerialInputFile, canStartAnotherRun],
+    () => Boolean(
+      selectedAerialSubportal
+      && aerialInputFile
+      && (!selectedAerialSubportal.requiresCredentialFile || aerialCredentialFile)
+      && canStartAnotherRun,
+    ),
+    [aerialCredentialFile, aerialInputFile, selectedAerialSubportal, canStartAnotherRun],
   );
   const canSubmitAvaility = useMemo(
     () => Boolean(availityProjectId && availityCredentialFile && availityInputFile && canStartAnotherRun),
@@ -945,6 +987,14 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
   const canSubmitUhc = useMemo(
     () => Boolean(uhcLoginFile && uhcClaimFileHandle && canStartAnotherRun),
     [uhcClaimFileHandle, uhcLoginFile, canStartAnotherRun],
+  );
+  const canSubmitAstrona = useMemo(
+    () => Boolean(astronaCredentialFile && astronaInputFile && canStartAnotherRun),
+    [astronaCredentialFile, astronaInputFile, canStartAnotherRun],
+  );
+  const canSubmitAllCare = useMemo(
+    () => Boolean(allCareCredentialFile && allCareInputFile && canStartAnotherRun),
+    [allCareCredentialFile, allCareInputFile, canStartAnotherRun],
   );
   const canSubmitOptumPro = useMemo(
     () => Boolean(optumProLoginFile && optumProInputFile && canStartAnotherRun),
@@ -963,6 +1013,10 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
       ? canSubmitIehp
       : effectivePortalId === "aerial"
         ? canSubmitAerial
+        : effectivePortalId === "all-care"
+          ? canSubmitAllCare
+        : effectivePortalId === "astrona"
+          ? canSubmitAstrona
         : effectivePortalId === "regal"
           ? canSubmitRegal
           : effectivePortalId === "blue-shield"
@@ -1021,6 +1075,24 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
       };
     }
 
+    if (effectivePortalId === "astrona") {
+      return {
+        claimFileLabel: astronaInputFile?.name ?? "",
+        claimReady: Boolean(astronaInputFile),
+        loginFileLabel: astronaCredentialFile?.name ?? "",
+        loginReady: Boolean(astronaCredentialFile),
+      };
+    }
+
+    if (effectivePortalId === "all-care") {
+      return {
+        claimFileLabel: allCareInputFile?.name ?? "",
+        claimReady: Boolean(allCareInputFile),
+        loginFileLabel: allCareCredentialFile?.name ?? "",
+        loginReady: Boolean(allCareCredentialFile),
+      };
+    }
+
     if (effectivePortalId === "blue-shield") {
       return {
         claimFileLabel: blueShieldInputFile?.name ?? "",
@@ -1048,8 +1120,12 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
   }, [
     aerialCredentialFile,
     aerialInputFile,
+    allCareCredentialFile,
+    allCareInputFile,
     availityCredentialFile,
     availityInputFile,
+    astronaCredentialFile,
+    astronaInputFile,
     blueShieldCredentialFile,
     blueShieldInputFile,
     claimFileName,
@@ -1088,16 +1164,31 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     "Completed",
   ];
 
-  function navigateToPortalRoute(portalId: PortalId) {
+  function navigateToPortalRoute(portalId: PortalId, replace = false) {
     const targetRoute = PORTAL_ROUTE_MAP[portalId];
     if (pathname !== targetRoute) {
-      router.replace(targetRoute);
+      if (replace) {
+        router.replace(targetRoute);
+      } else {
+        router.push(targetRoute);
+      }
     }
   }
 
   function updateAuthUser(nextUser: AuthUser | null) {
     setAuthUser(nextUser);
     persistCachedAuthUser(nextUser);
+  }
+
+  function handleAwsAuthFailure(error: unknown): boolean {
+    if (!isCognitoMode() || !(error instanceof ScrapeJobAuthError)) return false;
+    clearCognitoAccessToken();
+    updateAuthUser(null);
+    setWorkflowRuns([]);
+    setWorkflowRunsError("");
+    setIsProcessing(false);
+    redirectToCognitoLogin();
+    return true;
   }
 
   function markSkipJobRestoreOnce() {
@@ -1110,7 +1201,8 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
 
   useEffect(() => {
     if (isCognitoMode()) {
-      if (getCognitoAccessToken()) {
+      const hasToken = storeCognitoTokenFromHash() || Boolean(getCognitoAccessToken());
+      if (hasToken) {
         updateAuthUser({
           userId: "cognito",
           username: "Cognito user",
@@ -1178,6 +1270,8 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
         const currentJob = await getCurrentScrapeJob();
         if (cancelled || !currentJob) return;
         if (!canRestoreCurrentJob(currentJob)) return;
+        if (pathname === "/claim-status") return;
+        if (forcedPortalId && currentJob.portalId !== forcedPortalId) return;
 
         setErrorScreenshots(screenshotsFromArtifacts(currentJob));
         if (currentJob.portalId === "iehp") {
@@ -1203,7 +1297,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
         setIsProcessing(true);
         setActiveJobId(currentJob.jobId);
         setSelectedPortalId(currentJob.portalId as PortalId);
-        navigateToPortalRoute(currentJob.portalId as PortalId);
+        navigateToPortalRoute(currentJob.portalId as PortalId, true);
         setActiveView("portal-selection");
 
         if (currentJob.portalId === "iehp") {
@@ -1244,6 +1338,8 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
           await reconnectAerialRun(currentJob);
         } else if (currentJob.portalId === "availity") {
           await reconnectDownloadOnlyRun(currentJob, "availity", "Availity");
+        } else if (currentJob.portalId === "astrona") {
+          await reconnectDownloadOnlyRun(currentJob, "astrona", "Astrona");
         } else if (currentJob.portalId === "regal") {
           await reconnectRegalRun(currentJob);
         } else if (currentJob.portalId === "optum-pro") {
@@ -1272,7 +1368,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     return () => {
       cancelled = true;
     };
-  }, [authUser]);
+  }, [authUser, forcedPortalId, pathname]);
 
   useEffect(() => {
     if (!authUser) {
@@ -1315,7 +1411,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
       const storedPortalId = window.localStorage.getItem(SELECTED_PORTAL_STORAGE_KEY);
       if (storedPortalId && isPortalId(storedPortalId)) {
         setSelectedPortalId(storedPortalId);
-        navigateToPortalRoute(storedPortalId);
+        navigateToPortalRoute(storedPortalId, true);
       }
     } catch {
       // Ignore storage failures.
@@ -1380,6 +1476,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
         runningJobs: jobs.filter((job) => !isTerminalWorkflowStatus(job.status)).length,
       }));
     } catch (error) {
+      if (handleAwsAuthFailure(error)) return;
       setWorkflowRunsError(getErrorMessage(error));
     } finally {
       if (!options?.silent) {
@@ -1451,6 +1548,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     setLogs([]);
     setErrorScreenshots([]);
     setProgress(null);
+    setAstronaResults([]);
     setActiveJobId("");
     setAvailityJobId("");
     setAvailityOtpRequest(null);
@@ -1485,7 +1583,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
         // Ignore storage failures.
       }
       markSkipJobRestoreOnce();
-      router.push("/claim-status");
+      window.location.replace("/claim-status");
       return;
     }
     setSelectedPortalId(null);
@@ -1499,6 +1597,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     setLogs([]);
     setErrorScreenshots([]);
     setProgress(null);
+    setAstronaResults([]);
     setIsProcessing(false);
     setIsCancellingJob(false);
     setActiveJobId("");
@@ -1660,6 +1759,9 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     setClaimFileName("");
     setAerialCredentialFile(null);
     setAerialInputFile(null);
+    setAerialSubportal(null);
+    setAstronaCredentialFile(null);
+    setAstronaInputFile(null);
     setBlueShieldCredentialFile(null);
     setBlueShieldInputFile(null);
     setBlueShieldResetCheckpoint(false);
@@ -1679,6 +1781,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     setLogs([]);
     setErrorScreenshots([]);
     setProgress(null);
+    setAstronaResults([]);
     setActiveJobId("");
     setWorkflowRuns([]);
     setWorkflowRunsError("");
@@ -1795,6 +1898,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     setLogs([]);
     setErrorScreenshots([]);
     setProgress(null);
+    setAstronaResults([]);
     setActiveJobId("");
     setPendingBlueShieldRestoreJob(null);
     setIsProcessing(false);
@@ -2026,7 +2130,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
             setLogs((prev) => [...prev, eventData.message ?? ""]);
           } else if (eventData.type === "progress" && typeof eventData.completed === "number" && typeof eventData.total === "number") {
             currentCompleted = eventData.completed;
-            setProgress({ completed: eventData.completed, total: eventData.total });
+            setProgress({ completed: eventData.completed, total: eventData.total, currentRow: eventData.currentRow });
           } else if (eventData.type === "row_update") {
           applyClaimRowUpdateToWorksheet(worksheet, {
             index: eventData.index ?? 0,
@@ -2199,7 +2303,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
           if (eventData.type === "log" && eventData.message) {
             setLogs((prev) => [...prev, eventData.message ?? ""]);
           } else if (eventData.type === "progress" && typeof eventData.completed === "number" && typeof eventData.total === "number") {
-            setProgress({ completed: eventData.completed, total: eventData.total });
+            setProgress({ completed: eventData.completed, total: eventData.total, currentRow: eventData.currentRow });
           } else if (eventData.type === "error_screenshot" && typeof eventData.index === "number" && eventData.image) {
             setErrorScreenshots((prev) => [...prev, { index: eventData.index ?? -1, image: eventData.image ?? "" }]);
           } else if (eventData.type === "file_download" && eventData.filename && eventData.base64) {
@@ -2274,7 +2378,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
           if (eventData.type === "log" && eventData.message) {
             setLogs((prev) => [...prev, eventData.message ?? ""]);
           } else if (eventData.type === "progress" && typeof eventData.completed === "number" && typeof eventData.total === "number") {
-            setProgress({ completed: eventData.completed, total: eventData.total });
+            setProgress({ completed: eventData.completed, total: eventData.total, currentRow: eventData.currentRow });
           } else if (eventData.type === "error_screenshot" && typeof eventData.index === "number" && eventData.image) {
             setErrorScreenshots((prev) => [...prev, { index: eventData.index ?? -1, image: eventData.image ?? "" }]);
           } else if (eventData.type === "file_download" && eventData.filename && eventData.base64) {
@@ -2353,7 +2457,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
           if (eventData.type === "log" && eventData.message) {
             setLogs((prev) => [...prev, eventData.message ?? ""]);
           } else if (eventData.type === "progress" && typeof eventData.completed === "number" && typeof eventData.total === "number") {
-            setProgress({ completed: eventData.completed, total: eventData.total });
+            setProgress({ completed: eventData.completed, total: eventData.total, currentRow: eventData.currentRow });
           } else if (eventData.type === "input_request" && eventData.inputName) {
             setBlueShieldOtpRequest({
               inputName: eventData.inputName,
@@ -2579,7 +2683,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     if (eventData.type === "log" && eventData.message) {
       setLogs((prev) => [...prev, eventData.message ?? ""]);
     } else if (eventData.type === "progress" && typeof eventData.completed === "number" && typeof eventData.total === "number") {
-      setProgress({ completed: eventData.completed, total: eventData.total });
+      setProgress({ completed: eventData.completed, total: eventData.total, currentRow: eventData.currentRow });
     } else if (eventData.type === "input_request" && eventData.inputName) {
       if (eventData.inputName === "regal_mfa_method") {
         const options = eventData.options ?? [];
@@ -2666,7 +2770,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     if (eventData.type === "log" && eventData.message) {
       setLogs((prev) => [...prev, eventData.message ?? ""]);
     } else if (eventData.type === "progress" && typeof eventData.completed === "number" && typeof eventData.total === "number") {
-      setProgress({ completed: eventData.completed, total: eventData.total });
+      setProgress({ completed: eventData.completed, total: eventData.total, currentRow: eventData.currentRow });
     } else if (eventData.type === "job_metadata") {
       const metadata = eventData as Record<string, unknown>;
       if (typeof metadata.processedRows !== "number" || typeof metadata.totalRows !== "number") return;
@@ -2760,10 +2864,22 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
       return;
     }
 
+    if (!aerialSubportal) {
+      setStatus("Please select PMG or Citrus Valley.");
+      return;
+    }
+
+    const subportalDefinition = getAerialSubportal(aerialSubportal);
+    if (subportalDefinition?.requiresCredentialFile && !aerialCredentialFile) {
+      setStatus(`Please provide the Aerial login Excel containing the ${subportalDefinition.label} row.`);
+      return;
+    }
+
     resetRunState("Starting Aerial scraper...");
 
     const formData = new FormData();
     formData.append("portalId", "aerial");
+    formData.append("aerialSubportal", aerialSubportal);
     if (aerialCredentialFile) {
       formData.append("credentialExcel", aerialCredentialFile);
     }
@@ -2779,7 +2895,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
       if (eventData.type === "log" && eventData.message) {
         setLogs((prev) => [...prev, eventData.message ?? ""]);
       } else if (eventData.type === "progress" && typeof eventData.completed === "number" && typeof eventData.total === "number") {
-        setProgress({ completed: eventData.completed, total: eventData.total });
+        setProgress({ completed: eventData.completed, total: eventData.total, currentRow: eventData.currentRow });
       } else if (eventData.type === "error_screenshot" && typeof eventData.index === "number" && eventData.image) {
         setErrorScreenshots((prev) => [...prev, { index: eventData.index ?? -1, image: eventData.image ?? "" }]);
       } else if (eventData.type === "otp_request" && eventData.inputName) {
@@ -3100,7 +3216,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
       if (eventData.type === "log" && eventData.message) {
         setLogs((prev) => [...prev, eventData.message ?? ""]);
       } else if (eventData.type === "progress" && typeof eventData.completed === "number" && typeof eventData.total === "number") {
-        setProgress({ completed: eventData.completed, total: eventData.total });
+        setProgress({ completed: eventData.completed, total: eventData.total, currentRow: eventData.currentRow });
       } else if (eventData.type === "error_screenshot" && typeof eventData.index === "number" && eventData.image) {
         setErrorScreenshots((prev) => [...prev, { index: eventData.index ?? -1, image: eventData.image ?? "" }]);
       } else if (eventData.type === "file_download" && eventData.filename && eventData.base64) {
@@ -3161,6 +3277,79 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
 
 
 
+  async function submitAstrona(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    const isAllCare = effectivePortalId === "all-care";
+    const credentialFile = isAllCare ? allCareCredentialFile : astronaCredentialFile;
+    const inputFile = isAllCare ? allCareInputFile : astronaInputFile;
+    const portalId = isAllCare ? "all-care" : "astrona";
+    const portalName = isAllCare ? "All Care" : "Astrona";
+    if (!credentialFile || !inputFile) {
+      setStatus(`Please provide both the ${portalName} login Excel and claim Excel files.`);
+      return;
+    }
+
+    resetRunState(`Starting ${portalName} scraper...`);
+    const formData = new FormData();
+    formData.append("portalId", portalId);
+    formData.append("credentialExcel", credentialFile);
+    formData.append("inputExcel", inputFile);
+    let hasError = false;
+    let wasCancelled = false;
+    let finalErrorMessage = "";
+    let subscribedJobId = "";
+    const streamAbortController = new AbortController();
+
+    try {
+      const jobId = await startScrapeJob(formData);
+      subscribedJobId = jobId;
+      setActiveJobId(jobId);
+      await subscribeToScrapeJobEvents({
+        jobId,
+        signal: streamAbortController.signal,
+        onEvent: async (eventData) => {
+          if (eventData.type === "log" && eventData.message) {
+            setLogs((prev) => [...prev, eventData.message ?? ""]);
+            setStatus(eventData.message);
+          }
+          else if (eventData.type === "progress" && typeof eventData.completed === "number" && typeof eventData.total === "number") setProgress({ completed: eventData.completed, total: eventData.total, currentRow: eventData.currentRow });
+          else if (eventData.type === "astrona_result" && eventData.rows?.length) setAstronaResults((previous) => [...previous, ...(eventData.rows ?? [])]);
+          else if (eventData.type === "error_screenshot" && typeof eventData.index === "number" && eventData.image) setErrorScreenshots((prev) => [...prev, { index: eventData.index ?? -1, image: eventData.image ?? "" }]);
+          else if (eventData.type === "file_download" && eventData.filename && eventData.base64) {
+            const artifactKey = buildDownloadArtifactKey(eventData);
+            if (!hasDownloadedArtifact(subscribedJobId, artifactKey)) {
+              downloadBase64File(eventData.filename, eventData.base64, eventData.mimeType || "application/octet-stream");
+              rememberDownloadedArtifact(subscribedJobId, artifactKey);
+              setStatus(`Downloaded ${eventData.filename}`);
+            }
+          } else if (eventData.type === "warning" && eventData.message) {
+            setLogs((prev) => [...prev, eventData.message ?? ""]);
+            setStatus(eventData.message);
+          } else if (eventData.type === "error" && eventData.message) {
+            hasError = true;
+            finalErrorMessage = eventData.message;
+            setLogs((prev) => [...prev, `ERROR: ${eventData.message}`]);
+          } else if (eventData.type === "cancelled") wasCancelled = true;
+        },
+        onStreamError(error) {
+          hasError = true;
+          finalErrorMessage = getErrorMessage(error);
+          setLogs((prev) => [...prev, `STREAM ERROR: ${finalErrorMessage}`]);
+        },
+      });
+      setStatus(wasCancelled ? `${portalName} processing cancelled.` : hasError ? `${portalName} processing finished with errors${finalErrorMessage ? `: ${finalErrorMessage}` : "."}` : `${portalName} processing completed.`);
+    } catch (error) {
+      setStatus(`Failed to process ${portalName} claims: ${getErrorMessage(error)}`);
+    } finally {
+      setIsProcessing(false);
+      setActiveJobId("");
+    }
+  }
+
+  function submitAllCare(e: FormEvent<HTMLFormElement>) {
+    void submitAstrona(e);
+  }
+
   async function submitBlueShield(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
 
@@ -3206,7 +3395,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
       if (eventData.type === "log" && eventData.message) {
         setLogs((prev) => [...prev, eventData.message ?? ""]);
       } else if (eventData.type === "progress" && typeof eventData.completed === "number" && typeof eventData.total === "number") {
-        setProgress({ completed: eventData.completed, total: eventData.total });
+        setProgress({ completed: eventData.completed, total: eventData.total, currentRow: eventData.currentRow });
       } else if (eventData.type === "input_request" && eventData.inputName) {
         setBlueShieldOtpRequest({
           inputName: eventData.inputName,
@@ -4283,7 +4472,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
               >
                 <div className="max-w-[25rem]">
                   <h1 className="text-[2rem] font-semibold tracking-[-0.05em] text-slate-950">
-                    Welcome Back, <span className="text-[#2563EB]">{userDisplayName || "Afrin"}</span> 👋
+                    Welcome Back, <span className="text-[#2563EB]">{userDisplayName || "Afrin"}</span> ðŸ‘‹
                   </h1>
                   <p className="mt-3 max-w-md text-sm leading-6 text-slate-600">
                     Select a healthcare payer portal to automate claim status verification.
@@ -4396,6 +4585,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
                             setLogs([]);
                             setErrorScreenshots([]);
                             setProgress(null);
+    setAstronaResults([]);
                           }}
                           className={`group rounded-[1.35rem] border border-sky-100 bg-[linear-gradient(180deg,rgba(255,255,255,0.99)_0%,rgba(246,250,255,0.97)_100%)] p-4 text-left shadow-[0_16px_36px_rgba(148,163,184,0.12)] transition hover:-translate-y-0.5 hover:border-blue-400 hover:shadow-[0_22px_44px_rgba(59,130,246,0.14)] ${
                             portalLayout === "list" ? "flex items-start gap-4" : ""
@@ -4555,8 +4745,10 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
                       credentialFileName={aerialCredentialFile?.name ?? ""}
                       inputFileName={aerialInputFile?.name ?? ""}
                       isProcessing={blockPortalFormForProcessing}
+                      selectedSubportal={aerialSubportal}
                       onCredentialFileChange={setAerialCredentialFile}
                       onInputFileChange={setAerialInputFile}
+                      onSubportalChange={setAerialSubportal}
                       onSubmit={submitAerial}
                     />
                   ) : effectivePortalId === "regal" ? (
@@ -4587,13 +4779,33 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
                       canSubmit={canSubmitUhc}
                       claimFileName={uhcClaimFileName}
                       groupId={uhcGroupId}
-                      isProcessing={isProcessing}
+                      isProcessing={blockPortalFormForProcessing}
                       loginFileName={uhcLoginFile?.name ?? ""}
                       onBrowserTypeChange={setUhcBrowserType}
                       onClaimFileSelect={selectUhcClaimFile}
                       onGroupChange={setUhcGroupId}
                       onLoginFileChange={setUhcLoginFile}
                       onSubmit={submitUhc}
+                    />
+                  ) : effectivePortalId === "astrona" ? (
+                    <AstronaInputForm
+                      canSubmit={canSubmitAstrona}
+                      credentialFileName={astronaCredentialFile?.name ?? ""}
+                      inputFileName={astronaInputFile?.name ?? ""}
+                      isProcessing={blockPortalFormForProcessing}
+                      onCredentialFileChange={setAstronaCredentialFile}
+                      onInputFileChange={setAstronaInputFile}
+                      onSubmit={submitAstrona}
+                    />
+                  ) : effectivePortalId === "all-care" ? (
+                    <AllCareInputForm
+                      canSubmit={canSubmitAllCare}
+                      credentialFileName={allCareCredentialFile?.name ?? ""}
+                      inputFileName={allCareInputFile?.name ?? ""}
+                      isProcessing={blockPortalFormForProcessing}
+                      onCredentialFileChange={setAllCareCredentialFile}
+                      onInputFileChange={setAllCareInputFile}
+                      onSubmit={submitAllCare}
                     />
                   ) : effectivePortalId === "optum-pro" ? (
                     <OptumProInputForm
@@ -4689,6 +4901,14 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
                     status={status}
                   />
                 </div>
+              ) : effectivePortalId === "astrona" ? (
+                <div className="mt-5">
+                  <AstronaResultView errorScreenshots={errorScreenshots} isProcessing={isProcessing} logs={logs} progress={progress} rows={astronaResults} status={status} />
+                </div>
+              ) : effectivePortalId === "all-care" ? (
+                <div className="mt-5">
+                  <AllCareResultView errorScreenshots={errorScreenshots} logs={logs} progress={progress} status={status} />
+                </div>
               ) : effectivePortalId === "optum-pro" ? (
                 <div className="mt-5">
                   <OptumProResultView
@@ -4728,8 +4948,3 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     </main>
   );
 }
-
-
-
-
-

@@ -217,7 +217,7 @@ export async function downloadJob(event: ApiEvent) {
     const job = await getWorkflowJobForUser(jobId, userId);
     if (!job) return jsonResponse(404, { error: "Job not found." });
     const artifacts = await listArtifactsForJob(jobId);
-    const artifact = artifacts[0];
+    const artifact = artifacts.find((item) => item.artifactType === "output_snapshot" || item.artifactType === "file_download") ?? artifacts[0];
     if (!artifact) return jsonResponse(404, { error: "No output is available yet." });
     if (!artifact.bucket) return jsonResponse(500, { error: "Output artifact is missing its S3 bucket." });
     const downloadUrl = await createDownloadUrl({ bucket: artifact.bucket, key: artifact.s3Key });

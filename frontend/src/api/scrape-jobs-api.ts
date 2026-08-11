@@ -54,6 +54,13 @@ export class ActiveScrapeJobError extends Error {
   }
 }
 
+export class ScrapeJobAuthError extends Error {
+  constructor(message = "Your session expired. Please sign in again.") {
+    super(message);
+    this.name = "ScrapeJobAuthError";
+  }
+}
+
 const AWS_API_URL = process.env.NEXT_PUBLIC_WORKFLOW_API_URL?.replace(/\/+$/, "") || "";
 const AWS_WS_URL = process.env.NEXT_PUBLIC_WORKFLOW_WS_URL || "";
 
@@ -68,6 +75,20 @@ function isAwsMode(): boolean {
 function authHeaders(): HeadersInit {
   const token = getCognitoAccessToken();
   return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+function requireAwsAuthHeaders(): HeadersInit {
+  const headers = authHeaders();
+  if (!("Authorization" in headers)) {
+    throw new ScrapeJobAuthError();
+  }
+  return headers;
+}
+
+async function throwForAwsAuthResponse(response: Response): Promise<void> {
+  if (response.status === 401 || response.status === 403) {
+    throw new ScrapeJobAuthError();
+  }
 }
 
 function getStringField(formData: FormData, key: string): string {
@@ -188,7 +209,7 @@ async function startAwsScrapeJob(formData: FormData): Promise<string> {
 
   const createResponse = await fetch(`${AWS_API_URL}/jobs`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", ...authHeaders() },
+    headers: { "Content-Type": "application/json", ...requireAwsAuthHeaders() },
     body: JSON.stringify({
       portalId: getStringField(formData, "portalId") || "iehp",
       files: fileDescriptors,
@@ -202,6 +223,7 @@ async function startAwsScrapeJob(formData: FormData): Promise<string> {
       },
     }),
   });
+  await throwForAwsAuthResponse(createResponse);
   if (!createResponse.ok) {
     const body = await createResponse.json().catch(() => ({})) as { error?: string; jobId?: string };
     if (createResponse.status === 409 && body.jobId) throw new ActiveScrapeJobError(body.error || "Another job is already active.", body.jobId);
@@ -226,8 +248,9 @@ async function startAwsScrapeJob(formData: FormData): Promise<string> {
 
   const confirmResponse = await fetch(`${AWS_API_URL}/jobs/${encodeURIComponent(createBody.jobId)}/confirm`, {
     method: "POST",
-    headers: { ...authHeaders() },
+    headers: { ...requireAwsAuthHeaders() },
   });
+  await throwForAwsAuthResponse(confirmResponse);
   if (!confirmResponse.ok) {
     const body = await confirmResponse.json().catch(() => ({})) as { error?: string };
     throw new Error(body.error || `Failed to start AWS worker: ${confirmResponse.status}`);
@@ -240,9 +263,10 @@ export async function submitScrapeJobInput(options: { jobId: string; inputName: 
   if (isAwsMode()) {
     const response = await fetch(`${AWS_API_URL}/jobs/${encodeURIComponent(options.jobId)}/otp`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...authHeaders() },
+      headers: { "Content-Type": "application/json", ...requireAwsAuthHeaders() },
       body: JSON.stringify({ inputName: options.inputName, otp: options.value }),
     });
+    await throwForAwsAuthResponse(response);
     if (!response.ok) {
       const body = await response.json().catch(() => null) as { error?: string } | null;
       throw new Error(body?.error || `Failed to submit job input: ${response.status}`);
@@ -280,8 +304,9 @@ export async function cancelScrapeJob(jobId: string): Promise<void> {
   if (isAwsMode()) {
     const response = await fetch(`${AWS_API_URL}/jobs/${encodeURIComponent(jobId)}/cancel`, {
       method: "POST",
-      headers: { ...authHeaders() },
+      headers: { ...requireAwsAuthHeaders() },
     });
+    await throwForAwsAuthResponse(response);
     if (!response.ok) {
       const body = await response.json().catch(() => ({}));
       throw new Error(body.error || `Failed to cancel scrape job: ${response.status}`);
@@ -337,8 +362,9 @@ export async function listScrapeJobs(limit = 25): Promise<ScrapeJobSummary[]> {
   }
 
   const response = await fetch(`${AWS_API_URL}/jobs?limit=${encodeURIComponent(String(limit))}`, {
-    headers: { ...authHeaders() },
+    headers: { ...requireAwsAuthHeaders() },
   });
+  await throwForAwsAuthResponse(response);
   if (!response.ok) {
     const body = await response.json().catch(() => ({})) as { error?: string };
     throw new Error(body.error || `Failed to load jobs: ${response.status}`);
@@ -361,8 +387,9 @@ export async function getScrapeJobDetails(jobId: string): Promise<ScrapeJobDetai
   }
 
   const response = await fetch(`${AWS_API_URL}/jobs/${encodeURIComponent(jobId)}`, {
-    headers: { ...authHeaders() },
+    headers: { ...requireAwsAuthHeaders() },
   });
+  await throwForAwsAuthResponse(response);
   if (!response.ok) {
     const body = await response.json().catch(() => ({})) as { error?: string };
     throw new Error(body.error || `Failed to load scrape job: ${response.status}`);
@@ -397,8 +424,9 @@ export async function getScrapeJobDownload(jobId: string): Promise<{ filename: s
   }
 
   const response = await fetch(`${AWS_API_URL}/jobs/${encodeURIComponent(jobId)}/download`, {
-    headers: { ...authHeaders() },
+    headers: { ...requireAwsAuthHeaders() },
   });
+  await throwForAwsAuthResponse(response);
   if (!response.ok) {
     const body = await response.json().catch(() => ({})) as { error?: string };
     throw new Error(body.error || `Failed to create download URL: ${response.status}`);
@@ -446,9 +474,10 @@ async function subscribeToAwsScrapeJobEvents(options: {
   while (!options.signal.aborted) {
     try {
       const response = await fetch(`${AWS_API_URL}/jobs/${encodeURIComponent(options.jobId)}?after=${after}`, {
-        headers: { ...authHeaders() },
+        headers: { ...requireAwsAuthHeaders() },
         signal: options.signal,
       });
+      await throwForAwsAuthResponse(response);
       if (response.ok) {
         const body = await response.json() as {
           job?: { status?: string };

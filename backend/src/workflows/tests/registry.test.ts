@@ -10,6 +10,22 @@ test("claim status portals resolve through the workflow registry", () => {
   assert.equal(runner.name, "IEHP Claim Status");
 });
 
+test("claim status resolves Astrona as an independent portal", () => {
+  const runner = getAutomationRunner("claim-status", "astrona");
+
+  assert.equal(runner.workflowId, "claim-status");
+  assert.equal(runner.portalId, "astrona");
+  assert.equal(runner.name, "Astrona Claim Status");
+});
+
+test("claim status resolves All Care as an independent portal", () => {
+  const runner = getAutomationRunner("claim-status", "all-care");
+
+  assert.equal(runner.workflowId, "claim-status");
+  assert.equal(runner.portalId, "all-care");
+  assert.equal(runner.name, "All Care Claim Status");
+});
+
 test("eligibility resolves Waystar without requiring a payer selection", () => {
   const runner = getAutomationRunner("eligibility-verification", "waystar");
 
@@ -18,3 +34,60 @@ test("eligibility resolves Waystar without requiring a payer selection", () => {
   assert.equal(runner.payerId, undefined);
   assert.equal(runner.name, "Waystar Eligibility Verification");
 });
+
+test("eligibility resolves Availity independently from claim status", () => {
+  const runner = getAutomationRunner("eligibility-verification", "availity");
+
+  assert.equal(runner.workflowId, "eligibility-verification");
+  assert.equal(runner.portalId, "availity");
+  assert.equal(runner.name, "Availity Eligibility Verification");
+});
+
+test("eligibility resolves UHC with the UHC/Wellmed payer", () => {
+  const runner = getAutomationRunner("eligibility-verification", "uhc", "uhc-wellmed");
+
+  assert.equal(runner.workflowId, "eligibility-verification");
+  assert.equal(runner.portalId, "uhc");
+  assert.equal(runner.payerId, "uhc-wellmed");
+  assert.equal(runner.name, "UHC/Wellmed Eligibility Verification");
+});
+
+test("eligibility resolves AARP Medicare Advantage Wellmed through the shared UHC workflow", () => {
+  const runner = getAutomationRunner(
+    "eligibility-verification",
+    "uhc",
+    "aarp-medicare-advantage-wellmed",
+  );
+
+  assert.equal(runner.workflowId, "eligibility-verification");
+  assert.equal(runner.portalId, "uhc");
+  assert.equal(runner.payerId, "aarp-medicare-advantage-wellmed");
+  assert.equal(runner.name, "AARP Medicare Advantage Wellmed Eligibility Verification");
+});
+
+test("eligibility resolves United Healthcare Dual Complete through the shared UHC workflow", () => {
+  const runner = getAutomationRunner(
+    "eligibility-verification",
+    "uhc",
+    "united-healthcare-dual-complete",
+  );
+
+  assert.equal(runner.workflowId, "eligibility-verification");
+  assert.equal(runner.portalId, "uhc");
+  assert.equal(runner.payerId, "united-healthcare-dual-complete");
+  assert.equal(runner.name, "United Healthcare Dual Complete Eligibility Verification");
+});
+
+for (const payer of [
+  { id: "united-health-care", name: "United Health Care" },
+  { id: "uhc-medicare-advantage", name: "UHC Medicare Advantage" },
+]) {
+  test(`eligibility resolves ${payer.name} through the shared UHC workflow`, () => {
+    const runner = getAutomationRunner("eligibility-verification", "uhc", payer.id);
+
+    assert.equal(runner.workflowId, "eligibility-verification");
+    assert.equal(runner.portalId, "uhc");
+    assert.equal(runner.payerId, payer.id);
+    assert.equal(runner.name, `${payer.name} Eligibility Verification`);
+  });
+}

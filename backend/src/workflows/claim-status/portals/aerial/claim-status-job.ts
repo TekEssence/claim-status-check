@@ -4,7 +4,7 @@ import type { Browser, Page } from "playwright-core";
 import { closeAutomationResources } from "@/backend/src/core/runtime-config";
 import type { ScraperContext } from "../../types";
 import { launchAerialBrowser } from "./browser";
-import { parseAerialInput, type AerialInput } from "./input";
+import { AERIAL_SUBPORTAL_LABELS, parseAerialInput, type AerialInput } from "./input";
 import { createAerialOutputWorkbookBuffer, readAerialInputWorkbookFromBuffer, type AerialInputRow } from "./workbook";
 import { formatAerialLog, saveAerialLogFile } from "./log-file";
 import { loadAerialEnvironment } from "./env";
@@ -17,9 +17,9 @@ type AerialLoginModule = {
 
 type AerialClaimsPageModule = {
   verifyClaimsSearchForm(page: Page): Promise<void>;
-  searchClaims(page: Page, search: { subscriberNo: string; serviceDate: string }): Promise<void>;
+  searchClaims(page: Page, search: { subscriberNo: string; serviceDate: string; startDate?: string; endDate?: string }): Promise<void>;
   getOpenRecordCount(page: Page): Promise<number>;
-  getMatchingOpenRecordIndexes(page: Page, criteria: { subscriberNo: string; serviceDate: string }): Promise<number[]>;
+  getMatchingOpenRecordIndexes(page: Page, criteria: { subscriberNo: string; serviceDate: string; matchSummaryDate?: boolean }): Promise<number[]>;
   openClaimDetailPopup(page: Page, index?: number): Promise<Page>;
   getPaginationState(page: Page): Promise<{ currentPage: number; nextEnabled: boolean }>;
   goToNextResultsPage(page: Page): Promise<boolean>;
@@ -81,6 +81,18 @@ function baseOutputRow(inputRow: AerialInputRow): Record<string, any> {
   };
 }
 
+export function buildAerialNoDataOutputRow(inputRow: AerialInputRow): Record<string, any> {
+  return {
+    ...baseOutputRow(inputRow),
+    memberId: inputRow.normalized.subscriberNo,
+    claimStatus: "NO DATA",
+    finalStatus: "No data found in portal.",
+    result: "no_data",
+    notes: "No claim data found in portal.",
+    extractedAt: new Date().toISOString(),
+  };
+}
+
 function moneyToNumber(value: unknown): number {
   const amount = Number(String(value || "").replace(/[$,\s]/g, ""));
   return Number.isFinite(amount) ? amount : 0;
@@ -135,7 +147,7 @@ function addAudit(
 function addError(
   state: AerialRunState,
   runId: string,
-  inputRow: AerialInputRow,
+  inputRow: AerialInputRow | null,
   page: Page | null,
   failureStage: string,
   failureReason: string,
@@ -145,10 +157,10 @@ function addError(
   state.errorRows.push({
     run_id: runId,
     timestamp: new Date().toISOString(),
-    input_row_id: inputRow.input_row_id,
-    input_claim_no: inputRow["Claim No"] ?? "",
-    subscriber_no: inputRow.normalized?.subscriberNo ?? inputRow["Subscriber No"],
-    service_date: inputRow.normalized?.serviceDate ?? inputRow["Service Date"],
+    input_row_id: inputRow?.input_row_id ?? "",
+    input_claim_no: inputRow?.["Claim No"] ?? "",
+    subscriber_no: inputRow?.normalized?.subscriberNo ?? inputRow?.["Subscriber No"] ?? "",
+    service_date: inputRow?.normalized?.serviceDate ?? inputRow?.["Service Date"] ?? "",
     failure_stage: failureStage,
     failure_reason: failureReason,
     human_message: humanMessage,
@@ -239,7 +251,8 @@ async function processEyeIconResult(
   runId: string,
   state: AerialRunState,
   context: ScraperContext,
-): Promise<Record<string, any>> {
+  matchDetailServiceDate: boolean,
+): Promise<Record<string, any> | null> {
   await context.log({ level: "info", message: `Opening Aerial claim detail popup ${resultIndex + 1}.`, rowIndex: inputRow.input_row_id });
   addAudit(state, runId, inputRow, page, "eye_icon_popup_open_started", "started", `Opening result ${resultIndex + 1}`);
   const detailPopup = await openClaimDetailPopup(page, resultIndex);
@@ -247,6 +260,12 @@ async function processEyeIconResult(
   try {
     addAudit(state, runId, inputRow, detailPopup, "detail_extraction_started", "started", `Extracting result ${resultIndex + 1}`);
     const details = await openEobAndExtractDetails(detailPopup);
+    if (matchDetailServiceDate) {
+      const matchingLines = aerialServiceLinesForDate(details.serviceLines, inputRow.normalized.serviceDate);
+      await context.log({ level: "info", message: `Citrus Valley detail: ${details.serviceLines?.length || 0} service line(s), ${matchingLines.length} matched input DOS ${inputRow.normalized.serviceDate}.`, rowIndex: inputRow.input_row_id });
+      if (!matchingLines.length) return null;
+      details.serviceLines = matchingLines;
+    }
     addAudit(state, runId, inputRow, detailPopup, "detail_extraction_completed", "completed", `Extracted result ${resultIndex + 1}`);
     await context.log({ level: "info", message: `Aerial claim status: ${details.claimStatus || "unknown"}.`, rowIndex: inputRow.input_row_id });
     return outputRowFromDetails(inputRow, details, resultIndex);
@@ -272,11 +291,13 @@ async function processCurrentResultsPage(
   runId: string,
   state: AerialRunState,
   context: ScraperContext,
+  matchDetailServiceDate: boolean,
 ): Promise<Record<string, any>[]> {
   const resultCount = await getOpenRecordCount(page);
   const matchingIndexes = await getMatchingOpenRecordIndexes(page, {
     subscriberNo: inputRow.normalized.subscriberNo,
     serviceDate: inputRow.normalized.serviceDate,
+    matchSummaryDate: !matchDetailServiceDate,
   });
   const paginationState = await getPaginationState(page);
   addAudit(
@@ -291,7 +312,8 @@ async function processCurrentResultsPage(
 
   const rows: Record<string, any>[] = [];
   for (const resultIndex of matchingIndexes) {
-    rows.push(await processEyeIconResult(page, inputRow, resultIndex, runId, state, context));
+    const result = await processEyeIconResult(page, inputRow, resultIndex, runId, state, context, matchDetailServiceDate);
+    if (result) rows.push(result);
   }
   return rows;
 }
@@ -302,6 +324,7 @@ async function processInputRow(
   runId: string,
   state: AerialRunState,
   context: ScraperContext,
+  matchDetailServiceDate: boolean,
 ): Promise<Record<string, any>[]> {
   await context.log({
     level: "info",
@@ -313,15 +336,21 @@ async function processInputRow(
   await searchClaims(page, {
     subscriberNo: inputRow.normalized.subscriberNo,
     serviceDate: inputRow.normalized.serviceDate,
+    startDate: matchDetailServiceDate ? inputRow.normalized.serviceDate : undefined,
+    endDate: matchDetailServiceDate ? addDaysToAerialDate(inputRow.normalized.serviceDate, 6) : undefined,
   });
 
   const resultCount = await getOpenRecordCount(page);
   addAudit(state, runId, inputRow, page, "row_search_completed", "completed", `Found ${resultCount} eye icon(s)`);
 
   if (resultCount === 0) {
-    const snapshotPath = await captureAerialDiagnostics(context, page, inputRow, "no-claim-results");
-    addError(state, runId, inputRow, page, "claims_search", "no_claims_or_no_eye_icons_found", "No open-record eye icons found after search.", snapshotPath);
-    return [{ ...baseOutputRow(inputRow), result: "failed", notes: "No open-record eye icons found after search.", extractedAt: new Date().toISOString() }];
+    addAudit(state, runId, inputRow, page, "claims_search_no_data", "completed", "No claim data found in portal.");
+    await context.log({
+      level: "info",
+      message: `No Aerial claim data found for row ${inputRow.input_row_id}.`,
+      rowIndex: inputRow.input_row_id,
+    });
+    return [buildAerialNoDataOutputRow(inputRow)];
   }
 
   let rows: Record<string, any>[] = [];
@@ -329,15 +358,27 @@ async function processInputRow(
   const maxResultPages = numberEnv("PORTAL_AERIAL_MAX_RESULT_PAGES", 25);
 
   while (processedPages < maxResultPages) {
-    rows = rows.concat(await processCurrentResultsPage(page, inputRow, runId, state, context));
+    rows = rows.concat(await processCurrentResultsPage(page, inputRow, runId, state, context, matchDetailServiceDate));
     processedPages += 1;
     if (!(await goToNextResultsPage(page))) break;
   }
 
   if (!rows.length) {
-    const snapshotPath = await captureAerialDiagnostics(context, page, inputRow, "no-matching-results");
-    addError(state, runId, inputRow, page, "claims_search", "no_matching_result_rows", "Result rows were returned, but none matched Member ID and Date of Service.", snapshotPath);
-    return [{ ...baseOutputRow(inputRow), result: "failed", notes: "No result rows matched Member ID and Date of Service.", extractedAt: new Date().toISOString() }];
+    addAudit(
+      state,
+      runId,
+      inputRow,
+      page,
+      "claims_search_no_matching_data",
+      "completed",
+      "Portal rows were returned, but none matched Member ID and Date of Service.",
+    );
+    await context.log({
+      level: "info",
+      message: `No matching Aerial claim data found for row ${inputRow.input_row_id}.`,
+      rowIndex: inputRow.input_row_id,
+    });
+    return [buildAerialNoDataOutputRow(inputRow)];
   }
 
   return rows;
@@ -361,9 +402,34 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function canonicalAerialDate(value: unknown): string {
+  const match = String(value || "").match(/\b(\d{1,2})[\/-](\d{1,2})[\/-](\d{2,4})\b/);
+  if (!match) return "";
+  const year = match[3]!.length === 2 ? Number(match[3]) + 2000 : Number(match[3]);
+  return `${year}-${match[1]!.padStart(2, "0")}-${match[2]!.padStart(2, "0")}`;
+}
+
+export function aerialServiceLinesForDate(serviceLines: Array<Record<string, any>> | undefined, serviceDate: string): Array<Record<string, any>> {
+  const wanted = canonicalAerialDate(serviceDate);
+  return (serviceLines || []).filter((line) => canonicalAerialDate(line.serviceDate || line.dateOfService || line.from) === wanted);
+}
+
+function addDaysToAerialDate(serviceDate: string, days: number): string {
+  const canonical = canonicalAerialDate(serviceDate);
+  if (!canonical) return serviceDate;
+  const date = new Date(`${canonical}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return `${String(date.getUTCMonth() + 1).padStart(2, "0")}/${String(date.getUTCDate()).padStart(2, "0")}/${date.getUTCFullYear()}`;
+}
+
+export function shouldDownloadAerialRunLog(errorRows: Record<string, unknown>[], fatalError = false): boolean {
+  return fatalError || errorRows.length > 0;
+}
+
 async function emitAerialArtifacts(
   context: ScraperContext,
   state: AerialRunState,
+  options: { fatalError?: boolean } = {},
 ): Promise<void> {
   const workbookBuffer = createAerialOutputWorkbookBuffer(state.outputRows, {
     errorRows: state.errorRows,
@@ -374,57 +440,75 @@ async function emitAerialArtifacts(
   const logContent = formatAerialLog(state.auditRows, state.errorRows);
   const logPath = await saveAerialLogFile(context.jobId, logContent);
   await context.log({ level: "info", message: `Aerial log saved: ${logPath}` });
-  await context.emit(downloadableFileEvent("aerial-run.log", Buffer.from(logContent, "utf8"), "text/plain"));
+  if (shouldDownloadAerialRunLog(state.errorRows, options.fatalError)) {
+    await context.emit(downloadableFileEvent("aerial-run.log", Buffer.from(logContent, "utf8"), "text/plain"));
+  }
 }
 
 export async function runAerialClaimStatusJob(formData: FormData, context: ScraperContext): Promise<void> {
   loadAerialEnvironment();
-  const input: AerialInput = await parseAerialInput(formData);
   const state: AerialRunState = { outputRows: [], errorRows: [], auditRows: [] };
   const runId = createRunId();
   let browser: Browser | undefined;
   let page: Page | undefined;
 
   try {
+    const input: AerialInput = await parseAerialInput(formData);
+    const subportalLabel = AERIAL_SUBPORTAL_LABELS[input.subportal];
     const rows = readAerialInputWorkbookFromBuffer(input.inputWorkbookBuffer);
-    const validRows = rows.filter((row) => row.validation_status === "valid");
-    await context.log({ level: "info", message: `Aerial input loaded: ${rows.length} row(s), ${validRows.length} valid.` });
+    const usesGroupedCredentials = input.credentialGroups.length > 0;
+    const missingGroupRows = usesGroupedCredentials ? rows.filter((row) => row.validation_status === "valid" && !row.Group.trim()) : [];
+    const validRows = rows.filter((row) => row.validation_status === "valid" && !missingGroupRows.includes(row));
+    await context.log({ level: "info", message: `Aerial / ${subportalLabel} input loaded: ${rows.length} row(s), ${validRows.length} valid.` });
     await context.emit({ type: "progress", completed: 0, total: rows.length });
 
-    const browserSession = await launchAerialBrowser((message) => context.log({ level: "info", message }));
-    browser = browserSession.browser;
-    page = await browserSession.context.newPage();
-
-    addAudit(state, runId, null, page, "job_started", "started", "Aerial automation started");
-    await loginToAerial(page, input.credentials);
-    addAudit(state, runId, null, page, "login_completed", "completed", "Login verified");
-    await goToClaims(page, input.credentials);
-    await verifyClaimsSearchForm(page);
-    addAudit(state, runId, null, page, "claims_navigation_completed", "completed", "Claims search form verified");
-
     let completed = 0;
-    for (const invalidRow of rows.filter((row) => row.validation_status !== "valid")) {
-      addError(state, runId, invalidRow, page, "validation", "input_validation_failed", invalidRow.validation_message || "Input validation failed.");
-      state.outputRows.push({ ...baseOutputRow(invalidRow), result: "failed", notes: invalidRow.validation_message || "Input validation failed." });
+    for (const invalidRow of [...rows.filter((row) => row.validation_status !== "valid"), ...missingGroupRows]) {
+      const validationMessage = invalidRow.validation_message || (usesGroupedCredentials && !invalidRow.Group.trim() ? `Missing Group for ${subportalLabel} credential routing.` : "Input validation failed.");
+      addError(state, runId, invalidRow, page ?? null, "validation", "input_validation_failed", validationMessage);
+      state.outputRows.push({ ...baseOutputRow(invalidRow), result: "failed", notes: validationMessage });
       completed += 1;
       await context.emit({ type: "progress", completed, total: rows.length });
     }
 
-    for (const inputRow of validRows) {
-      try {
-        addAudit(state, runId, inputRow, page, "row_started", "started", "Row processing started");
-        const rowOutputRows = await processInputRow(page, inputRow, runId, state, context);
-        state.outputRows.push(...rowOutputRows);
-        addAudit(state, runId, inputRow, page, "row_completed", "completed", "Row processing completed");
-      } catch (error) {
-        const message = errorMessage(error);
-        const snapshotPath = await captureAerialDiagnostics(context, page, inputRow, "row-processing");
-        addError(state, runId, inputRow, page, "row_processing", "row_processing_failed", message, snapshotPath);
-        state.outputRows.push({ ...baseOutputRow(inputRow), result: "failed", notes: `Row processing failed: ${message}` });
-      }
+    const normalizeGroup = (value: string) => value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "");
+    const batches = usesGroupedCredentials
+      ? input.credentialGroups.map((entry) => ({ ...entry, rows: validRows.filter((row) => normalizeGroup(row.Group) === normalizeGroup(entry.group)) }))
+      : [{ group: "PMG", credentials: input.credentials, rows: validRows }];
 
-      completed += 1;
-      await context.emit({ type: "progress", completed, total: rows.length });
+    for (const batch of batches.filter((entry) => entry.rows.length)) {
+      try {
+        await context.log({ level: "info", message: `Aerial / ${subportalLabel}: logging in for Group ${batch.group} (${batch.rows.length} row(s)).` });
+        const browserSession = await launchAerialBrowser((message) => context.log({ level: "info", message }));
+        browser = browserSession.browser;
+        page = await browserSession.context.newPage();
+        addAudit(state, runId, null, page, "job_started", "started", `Aerial / ${subportalLabel} / Group ${batch.group} automation started`);
+        await loginToAerial(page, batch.credentials);
+        addAudit(state, runId, null, page, "login_completed", "completed", `Login verified for Group ${batch.group}`);
+        await goToClaims(page, batch.credentials);
+        await verifyClaimsSearchForm(page);
+        addAudit(state, runId, null, page, "claims_navigation_completed", "completed", `Claims search form verified for Group ${batch.group}`);
+
+        for (const inputRow of batch.rows) {
+          try {
+            addAudit(state, runId, inputRow, page, "row_started", "started", "Row processing started");
+            const rowOutputRows = await processInputRow(page, inputRow, runId, state, context, input.subportal === "citrus-valley");
+            state.outputRows.push(...rowOutputRows);
+            addAudit(state, runId, inputRow, page, "row_completed", "completed", "Row processing completed");
+          } catch (error) {
+            const message = errorMessage(error);
+            const snapshotPath = await captureAerialDiagnostics(context, page, inputRow, "row-processing");
+            addError(state, runId, inputRow, page, "row_processing", "row_processing_failed", message, snapshotPath);
+            state.outputRows.push({ ...baseOutputRow(inputRow), result: "failed", notes: `Row processing failed: ${message}` });
+          }
+          completed += 1;
+          await context.emit({ type: "progress", completed, total: rows.length });
+        }
+      } finally {
+        await closeAutomationResources({ browser, page, log: (message) => context.log({ level: "info", message }) });
+        browser = undefined;
+        page = undefined;
+      }
     }
 
     await emitAerialArtifacts(context, state);
@@ -438,8 +522,9 @@ export async function runAerialClaimStatusJob(formData: FormData, context: Scrap
   } catch (error) {
     const message = errorMessage(error);
     addAudit(state, runId, null, page ?? null, "job_failed", "failed", message);
+    addError(state, runId, null, page ?? null, "aerial_run", "fatal_run_error", message);
     await context.log({ level: "error", message: `Aerial run failed: ${message}` });
-    await emitAerialArtifacts(context, state).catch((artifactError) => {
+    await emitAerialArtifacts(context, state, { fatalError: true }).catch((artifactError) => {
       void context.log({ level: "error", message: `Failed to create Aerial partial output/log: ${errorMessage(artifactError)}` });
     });
     await context.emit({ type: "error", message });

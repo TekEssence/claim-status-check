@@ -1,4 +1,4 @@
-import * as XLSX from "xlsx";
+﻿import * as XLSX from "xlsx";
 import type {
   EligibilityInputRow,
   EligibilityPayerBatch,
@@ -21,11 +21,11 @@ export const INSURANCE_HEADER_ALIASES = [
   "insurance payer",
   "insurance payer state",
   "insurance",
-  "primary ins subscriber no",
 ] as const;
 
 const MEMBER_ID_HEADER_ALIASES = [
   "member id",
+  "id",
   "member number",
   "member no",
   "member #",
@@ -56,6 +56,7 @@ const SUBSCRIBER_ID_HEADER_ALIASES = [
 
 const FIRST_NAME_HEADER_ALIASES = [
   "patient first name",
+  "patient f name",
   "first name",
   "pat f name",
   "pat first name",
@@ -68,6 +69,7 @@ const FIRST_NAME_HEADER_ALIASES = [
 
 const LAST_NAME_HEADER_ALIASES = [
   "patient last name",
+  "patient l name",
   "last name",
   "pat l name",
   "pat last name",
@@ -87,6 +89,13 @@ const FULL_NAME_HEADER_ALIASES = [
   "patient",
 ] as const;
 
+const RELATIONSHIP_HEADER_ALIASES = [
+  "relationship to subscriber",
+  "patient relationship to subscriber",
+  "relationship",
+  "patient relationship",
+  "relation to subscriber",
+] as const;
 const DATE_OF_BIRTH_HEADER_ALIASES = [
   "date of birth",
   "dob",
@@ -97,6 +106,7 @@ const DATE_OF_BIRTH_HEADER_ALIASES = [
   "member dob",
   "subscriber dob",
   "birth date",
+  "birthdate",
 ] as const;
 
 const DATE_OF_SERVICE_HEADER_ALIASES = [
@@ -113,6 +123,8 @@ const SERVICE_TYPE_HEADER_ALIASES = [
 ] as const;
 
 export const BCBS_PAYER_MAPPINGS_SHEET = "BCBS_Payer_Mappings";
+export const WAYSTAR_PAYER_MAPPINGS_SHEET = "Waystar_Payer_Mappings";
+export const PAYER_MAPPINGS_SHEET = "Payer_Mappings";
 
 export type WaystarPayerPortalMapping = {
   inputInsurancePayerState: string;
@@ -135,6 +147,7 @@ export type WaystarRoutingOptions = {
 
 export async function readWaystarEligibilityWorkbook(
   file: File,
+  payerMappingFile?: File,
 ): Promise<WaystarWorkbookRouting> {
   const workbook = XLSX.read(await file.arrayBuffer(), { type: "array" });
   const sheet = workbook.Sheets[workbook.SheetNames[0]];
@@ -144,8 +157,12 @@ export async function readWaystarEligibilityWorkbook(
     defval: "",
     raw: false,
   });
+  const inputMappings = readWaystarPayerMappings(workbook);
+  const credentialMappings = payerMappingFile
+    ? readWaystarPayerMappings(XLSX.read(await payerMappingFile.arrayBuffer(), { type: "array" }))
+    : [];
   return routeWaystarRowsByPayer(rows, {
-    payerMappings: readBcbsPayerMappings(workbook),
+    payerMappings: credentialMappings.length > 0 ? credentialMappings : inputMappings,
   });
 }
 
@@ -184,6 +201,7 @@ export function routeWaystarRowsByPayer(
       subscriberId,
       patientFirstName: parsedName.firstName,
       patientLastName: parsedName.lastName,
+      relationshipToSubscriber: findValue(raw, RELATIONSHIP_HEADER_ALIASES),
       dateOfBirth: findValue(raw, DATE_OF_BIRTH_HEADER_ALIASES),
       dateOfService: findValue(raw, DATE_OF_SERVICE_HEADER_ALIASES),
       serviceType: findValue(raw, SERVICE_TYPE_HEADER_ALIASES),
@@ -250,9 +268,10 @@ export function splitPatientName(fullName?: string): {
   };
 }
 
-function readBcbsPayerMappings(workbook: XLSX.WorkBook): WaystarPayerPortalMapping[] {
-  const sheetName = workbook.SheetNames.find(
-    (name) => normalizeHeader(name) === normalizeHeader(BCBS_PAYER_MAPPINGS_SHEET),
+function readWaystarPayerMappings(workbook: XLSX.WorkBook): WaystarPayerPortalMapping[] {
+  const supportedSheetNames = [PAYER_MAPPINGS_SHEET, WAYSTAR_PAYER_MAPPINGS_SHEET, BCBS_PAYER_MAPPINGS_SHEET].map(normalizeHeader);
+  const sheetName = workbook.SheetNames.find((name) =>
+    supportedSheetNames.includes(normalizeHeader(name))
   );
   const sheet = sheetName ? workbook.Sheets[sheetName] : null;
   if (!sheet) return [];
@@ -279,6 +298,8 @@ function resolveWaystarPayer(
     (entry) => normalizeHeader(entry.inputInsurancePayerState) === normalizedInsuranceName,
   );
   if (mapping) {
+    // A configured mapping is authoritative. Never silently fall back to the
+    // input payer, because that can select a different Waystar payer.
     return matchWaystarPayerByPortalName(mapping.payerPortal);
   }
 
@@ -315,3 +336,4 @@ function asText(value: unknown): string {
   if (value === null || value === undefined) return "";
   return String(value).trim();
 }
+

@@ -1,4 +1,4 @@
-import {
+﻿import {
   cancelScrapeJob,
   createScrapeJob,
   emitScrapeJobEvent,
@@ -9,6 +9,7 @@ import {
 import { getAutomationRunner } from "@/backend/src/workflows/registry";
 import type { WorkflowId } from "@/backend/src/workflows/types";
 import { getSessionFromCookies } from "@/lib/auth/session";
+import { isAuthDbConnectionError } from "@/lib/auth/db";
 import {
   appendAutomationJobArtifact,
   appendAutomationJobLog,
@@ -97,7 +98,12 @@ export async function POST(req: Request) {
     }).then(async () => {
       const current = getScrapeJob(job.id);
       const cancelled = current?.cancelRequested || current?.status === "cancelled";
-      emitScrapeJobEvent(job.id, cancelled ? { type: "cancelled" } : { type: "done" });
+      if (cancelled) {
+        emitScrapeJobEvent(job.id, { type: "cancelled" });
+        emitScrapeJobEvent(job.id, { type: "done" });
+      } else {
+        emitScrapeJobEvent(job.id, { type: "done" });
+      }
       await updateAutomationJob({
         jobId: job.id,
         status: cancelled ? "cancelled" : "completed",
@@ -115,6 +121,12 @@ export async function POST(req: Request) {
     return Response.json({ jobId: job.id, workflowId, portalId, payerId });
   } catch (error) {
     console.error("Start automation job failed", error);
+    if (isAuthDbConnectionError(error)) {
+      return Response.json(
+        { error: "Authentication database is temporarily unavailable. Please retry." },
+        { status: 503 },
+      );
+    }
     return Response.json(
       { error: error instanceof Error ? error.message : "Failed to start automation job." },
       { status: 500 },
@@ -271,3 +283,4 @@ function getNumber(formData: FormData, key: string): number {
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
+

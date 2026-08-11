@@ -1,5 +1,17 @@
 const TOKEN_KEY = "cognito_access_token";
 
+function decodeJwtPayload(token: string): { exp?: number } | null {
+  try {
+    const payload = token.split(".")[1];
+    if (!payload) return null;
+    const normalized = payload.replace(/-/g, "+").replace(/_/g, "/");
+    const padded = normalized.padEnd(normalized.length + ((4 - normalized.length % 4) % 4), "=");
+    return JSON.parse(window.atob(padded)) as { exp?: number };
+  } catch {
+    return null;
+  }
+}
+
 export function isCognitoMode(): boolean {
   return Boolean(
     process.env.NEXT_PUBLIC_COGNITO_DOMAIN &&
@@ -9,7 +21,14 @@ export function isCognitoMode(): boolean {
 
 export function getCognitoAccessToken(): string {
   if (typeof window === "undefined") return "";
-  return window.sessionStorage.getItem(TOKEN_KEY) || window.localStorage.getItem(TOKEN_KEY) || "";
+  const token = window.sessionStorage.getItem(TOKEN_KEY) || window.localStorage.getItem(TOKEN_KEY) || "";
+  if (!token) return "";
+  const payload = decodeJwtPayload(token);
+  if (typeof payload?.exp === "number" && payload.exp * 1000 <= Date.now() + 30000) {
+    clearCognitoAccessToken();
+    return "";
+  }
+  return token;
 }
 
 export function clearCognitoAccessToken(): void {

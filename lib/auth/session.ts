@@ -1,6 +1,6 @@
-import { cookies, headers as nextHeaders } from "next/headers";
+﻿import { cookies, headers as nextHeaders } from "next/headers";
 import { betterAuthInstance } from "./better-auth";
-import { getActiveAuthUser, type AuthUser } from "./db";
+import { getActiveAuthUser, isAuthDbConnectionError, type AuthUser } from "./db";
 import { getActiveAutomationJobForUser } from "@/lib/automation-jobs/db";
 import { getActiveScrapeJobForUser } from "@/lib/scrape-jobs/db";
 import { AUTH_IDLE_TIMEOUT_MS, AUTH_IDLE_TIMEOUT_SECONDS } from "./session-config";
@@ -51,10 +51,16 @@ async function hasActiveUserJob(userId: string): Promise<boolean> {
 }
 
 export async function getSessionFromCookies(requestHeaders?: Headers): Promise<AuthSession | null> {
+  const sessionHeaders = requestHeaders ?? new Headers(await nextHeaders());
   try {
-    const authResult = await betterAuthInstance.api.getSession({
-      headers: requestHeaders ?? new Headers(await nextHeaders()),
-    });
+    let authResult;
+    try {
+      authResult = await betterAuthInstance.api.getSession({ headers: sessionHeaders });
+    } catch (error) {
+      if (!isAuthDbConnectionError(error)) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      authResult = await betterAuthInstance.api.getSession({ headers: sessionHeaders });
+    }
 
     if (!authResult?.session || !authResult?.user) {
       return null;
@@ -79,7 +85,8 @@ export async function getSessionFromCookies(requestHeaders?: Headers): Promise<A
       ...activeUser,
       exp: Math.floor(new Date(authResult.session.expiresAt).getTime() / 1000),
     };
-  } catch {
+  } catch (error) {
+    if (isAuthDbConnectionError(error)) throw error;
     return null;
   }
 }

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import * as XLSX from "xlsx";
-import { readWaystarCredentials } from "../credentials";
+import { findWaystarCredentialsForPayer, readWaystarCredentialProfiles, readWaystarCredentials } from "../credentials";
 
 function workbookFile(options: {
   credentialsRows: Record<string, unknown>[];
@@ -53,4 +53,41 @@ test("reads Waystar credentials and verification answers from workbook", async (
     { question: "What was the first car you owned?", answer: "Dzire" },
     { question: "First Job", answer: "Biller" },
   ]);
+});
+
+test("selects the credential row matching the routed payer", async () => {
+  const profiles = await readWaystarCredentialProfiles(workbookFile({
+    credentialsRows: [
+      { URL: "https://waystar.example.com", "User Name": "med-user", Password: "med-pass", Portal: "Waystar", Payer: "Medicare" },
+      { URL: "https://waystar.example.com", "User Name": "bcbs-user", Password: "bcbs-pass", Portal: "Waystar", Payer: "BCBS PPO" },
+    ],
+  }));
+
+  const selected = findWaystarCredentialsForPayer(profiles, {
+    id: "bcbs-ppo",
+    name: "BCBS PPO",
+    portalPayerName: "BCBS Florida (SB590)",
+    insuranceNameAliases: ["bcbs ppo"],
+  });
+
+  assert.equal(selected?.username, "bcbs-user");
+  assert.equal(selected?.payer, "BCBS PPO");
+});
+
+test("does not silently use another payer credential row", async () => {
+  const profiles = await readWaystarCredentialProfiles(workbookFile({
+    credentialsRows: [
+      { URL: "https://waystar.example.com", "User Name": "med-user", Password: "med-pass", Portal: "Waystar", Payer: "Medicare" },
+      { URL: "https://waystar.example.com", "User Name": "fl-user", Password: "fl-pass", Portal: "Waystar", Payer: "BCBS Texas" },
+    ],
+  }));
+
+  const selected = findWaystarCredentialsForPayer(profiles, {
+    id: "bcbs-ppo",
+    name: "BCBS PPO",
+    portalPayerName: "BCBS Florida (SB590)",
+    insuranceNameAliases: ["bcbs ppo"],
+  });
+
+  assert.equal(selected, null);
 });

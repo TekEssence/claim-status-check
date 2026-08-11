@@ -27,8 +27,8 @@ async function fillClaimsSearch(page, search) {
   await verifyClaimsSearchForm(page);
 
   await page.locator(CLAIMS_SELECTORS.dateFilterType).selectOption("0");
-  await page.locator(CLAIMS_SELECTORS.startDate).fill(search.serviceDate);
-  await page.locator(CLAIMS_SELECTORS.endDate).fill(search.serviceDate);
+  await page.locator(CLAIMS_SELECTORS.startDate).fill(search.startDate || search.serviceDate);
+  await page.locator(CLAIMS_SELECTORS.endDate).fill(search.endDate || search.serviceDate);
   await page.locator(CLAIMS_SELECTORS.memberIdFilter).fill(search.subscriberNo);
 }
 
@@ -66,7 +66,8 @@ async function getMatchingOpenRecordIndexes(page, criteria) {
       const memberId = normalize(cells[4] ? cells[4].innerText : "");
       const serviceDate = normalize(cells[10] ? cells[10].innerText : "");
 
-      if (normalizeMemberId(memberId) === normalizeMemberId(expected.subscriberNo) && serviceDate === expected.serviceDate) {
+      const memberMatches = normalizeMemberId(memberId) === normalizeMemberId(expected.subscriberNo);
+      if (memberMatches && (expected.matchSummaryDate === false || serviceDate === expected.serviceDate)) {
         matches.push(openRecordIndex);
       }
 

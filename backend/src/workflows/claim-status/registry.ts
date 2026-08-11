@@ -6,6 +6,8 @@ type PortalScraperLoader = () => Promise<PortalScraper>;
 
 const claimStatusPortalLoaders = {
   aerial: async () => (await import("./portals/aerial/scraper")).aerialScraper,
+  "all-care": async () => (await import("./portals/all-care/scraper")).allCareScraper,
+  astrona: async () => (await import("./portals/astrona/scraper")).astronaScraper,
   availity: async () => (await import("./portals/availity/scraper")).availityScraper,
   "blue-shield": async () => (await import("./portals/blue-shield/scraper")).blueShieldScraper,
   iehp: async () => (await import("./portals/iehp/scraper")).iehpScraper,
@@ -16,6 +18,8 @@ const claimStatusPortalLoaders = {
 
 const claimStatusPortalNames = {
   aerial: "Aerial Care Claim Status",
+  "all-care": "All Care Claim Status",
+  astrona: "Astrona Claim Status",
   availity: "Availity Claim Status",
   "blue-shield": "Blue Shield Claim Status",
   iehp: "IEHP Claim Status",

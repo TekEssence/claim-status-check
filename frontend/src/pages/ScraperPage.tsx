@@ -12,7 +12,8 @@ import type { ClaimRow, ErrorScreenshot, JobProgressValue, ScrapeJobEvent } from
 import { IehpInputForm } from "../workflows/claim-status/portals/iehp/IehpInputForm";
 import { IehpResultView } from "../workflows/claim-status/portals/iehp/IehpResultView";
 import { iehpFrontendPortalConfig } from "../workflows/claim-status/portals/iehp/portal-config";
-import { AerialInputForm } from "../workflows/claim-status/portals/aerial/AerialInputForm";
+import { AerialInputForm, type AerialSubportal } from "../workflows/claim-status/portals/aerial/AerialInputForm";
+import { getAerialSubportal } from "../workflows/claim-status/portals/aerial/subportals/registry";
 import { AerialResultView } from "../workflows/claim-status/portals/aerial/AerialResultView";
 import { aerialFrontendPortalConfig } from "../workflows/claim-status/portals/aerial/portal-config";
 import { RegalInputForm } from "../workflows/claim-status/portals/regal/RegalInputForm";
@@ -289,6 +290,7 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
   const [claimFileName, setClaimFileName] = useState<string>("");
   const [aerialCredentialFile, setAerialCredentialFile] = useState<File | null>(null);
   const [aerialInputFile, setAerialInputFile] = useState<File | null>(null);
+  const [aerialSubportal, setAerialSubportal] = useState<AerialSubportal | null>(null);
   const [blueShieldCredentialFile, setBlueShieldCredentialFile] = useState<File | null>(null);
   const [blueShieldInputFile, setBlueShieldInputFile] = useState<File | null>(null);
   const [blueShieldGroup, setBlueShieldGroup] = useState("Posada");
@@ -330,9 +332,15 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
     () => Boolean(iehpLoginFile && claimFileHandle && !isProcessing),
     [iehpLoginFile, claimFileHandle, isProcessing],
   );
+  const selectedAerialSubportal = getAerialSubportal(aerialSubportal);
   const canSubmitAerial = useMemo(
-    () => Boolean(aerialInputFile && !isProcessing),
-    [aerialInputFile, isProcessing],
+    () => Boolean(
+      selectedAerialSubportal
+      && aerialInputFile
+      && (!selectedAerialSubportal.requiresCredentialFile || aerialCredentialFile)
+      && !isProcessing,
+    ),
+    [aerialCredentialFile, aerialInputFile, selectedAerialSubportal, isProcessing],
   );
   const canSubmitRegal = useMemo(
     () => Boolean(regalClaimFile && !isProcessing),
@@ -682,6 +690,7 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
     setClaimFileName("");
     setAerialCredentialFile(null);
     setAerialInputFile(null);
+    setAerialSubportal(null);
     setBlueShieldCredentialFile(null);
     setBlueShieldInputFile(null);
     setBlueShieldGroup("Posada");
@@ -1419,10 +1428,22 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
       return;
     }
 
+    if (!aerialSubportal) {
+      setStatus("Please select PMG or Citrus Valley.");
+      return;
+    }
+
+    const subportalDefinition = getAerialSubportal(aerialSubportal);
+    if (subportalDefinition?.requiresCredentialFile && !aerialCredentialFile) {
+      setStatus(`Please provide the Aerial login Excel containing the ${subportalDefinition.label} row.`);
+      return;
+    }
+
     resetRunState("Starting Aerial scraper...");
 
     const formData = new FormData();
     formData.append("portalId", "aerial");
+    formData.append("aerialSubportal", aerialSubportal);
     if (aerialCredentialFile) {
       formData.append("credentialExcel", aerialCredentialFile);
     }
@@ -2189,8 +2210,10 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
                   <AerialInputForm
                     canSubmit={canSubmitAerial}
                     isProcessing={isProcessing}
+                    selectedSubportal={aerialSubportal}
                     onCredentialFileChange={setAerialCredentialFile}
                     onInputFileChange={setAerialInputFile}
+                    onSubportalChange={setAerialSubportal}
                     onSubmit={submitAerial}
                   />
                   <AerialResultView errorScreenshots={errorScreenshots} logs={logs} status={status} />

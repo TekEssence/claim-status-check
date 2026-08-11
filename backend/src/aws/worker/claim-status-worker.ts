@@ -21,7 +21,6 @@ import {
   appendWorkflowEvent,
   appendWorkflowArtifact,
   consumePendingWorkflowCommands,
-  listArtifactsForJob,
   updateWorkflowJob,
   type AwsWorkflowJobStatus,
 } from "@/backend/src/aws/runtime/workflow-db";
@@ -477,13 +476,12 @@ export async function main(): Promise<void> {
     const uploadedIehpOutput = portalId === "iehp"
       ? await uploadIehpOutputWorkbook(jobId, iehpOutputWorkbook)
       : false;
-    const artifactCount = hasDatabase() ? await listArtifactsForJob(jobId).then((artifacts) => artifacts.length).catch(() => 0) : 0;
     const status: PersistentScrapeJobStatus = cancellation.isCancelled()
       ? "cancelled"
       : total > 0 && completed < total
         ? "waiting_resume"
         : "completed";
-    if (status === "completed" && portalId === "iehp" && !uploadedIehpOutput && artifactCount === 0) {
+    if (status === "completed" && portalId === "iehp" && !uploadedIehpOutput) {
       throw new Error("IEHP worker completed without producing an output workbook artifact.");
     }
     const awsStatus: AwsWorkflowJobStatus = status === "waiting_resume" ? "failed" : status;

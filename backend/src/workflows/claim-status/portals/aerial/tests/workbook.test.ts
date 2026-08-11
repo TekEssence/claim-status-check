@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 import test from "node:test";
 import * as XLSX from "xlsx";
-import { buildAerialFinalStatus } from "../claim-status-job";
+import { buildAerialFinalStatus, buildAerialNoDataOutputRow, shouldDownloadAerialRunLog } from "../claim-status-job";
 import { createAerialOutputWorkbookBuffer, readAerialInputWorkbookFromBuffer } from "../workbook";
 
 const require = createRequire(import.meta.url);
@@ -44,6 +44,42 @@ test("Aerial carries input Claim No column A into output workbook", () => {
   const outputRows = XLSX.utils.sheet_to_json(outputWorkbook.Sheets.Output) as Record<string, unknown>[];
 
   assert.equal(outputRows[0].input_claim_no, "CLM-1001");
+});
+
+test("Aerial writes portal no-data as a business outcome with input identifiers", () => {
+  const inputWorkbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(
+    inputWorkbook,
+    XLSX.utils.aoa_to_sheet([
+      ["Claim No", "Member ID", "Service Date"],
+      ["CLM-NO-DATA", "MEMBER-100", "07/14/2026"],
+    ]),
+    "Input",
+  );
+
+  const inputBuffer = XLSX.write(inputWorkbook, { type: "buffer", bookType: "xlsx" }) as Buffer;
+  const inputArrayBuffer = inputBuffer.buffer.slice(inputBuffer.byteOffset, inputBuffer.byteOffset + inputBuffer.byteLength) as ArrayBuffer;
+  const [inputRow] = readAerialInputWorkbookFromBuffer(inputArrayBuffer);
+  const noDataRow = buildAerialNoDataOutputRow(inputRow);
+  const outputBuffer = createAerialOutputWorkbookBuffer([noDataRow], { errorRows: [], auditRows: [] });
+  const outputWorkbook = XLSX.read(outputBuffer, { type: "buffer" });
+  const [outputRow] = XLSX.utils.sheet_to_json(outputWorkbook.Sheets.Output) as Record<string, unknown>[];
+
+  assert.equal(outputRow.input_claim_no, "CLM-NO-DATA");
+  assert.equal(outputRow.subscriber_no, "MEMBER-100");
+  assert.equal(outputRow.member_id, "MEMBER-100");
+  assert.equal(outputRow.service_date, "07/14/2026");
+  assert.equal(outputRow.result, "no_data");
+  assert.equal(outputRow.claim_status, "NO DATA");
+  assert.equal(outputRow.final_status, "No data found in portal.");
+  assert.equal(outputRow.notes, "No claim data found in portal.");
+  assert.equal(XLSX.utils.sheet_to_json(outputWorkbook.Sheets.Error).length, 0);
+});
+
+test("Aerial downloads the run log only for real errors", () => {
+  assert.equal(shouldDownloadAerialRunLog([]), false);
+  assert.equal(shouldDownloadAerialRunLog([{ failure_reason: "row_processing_failed" }]), true);
+  assert.equal(shouldDownloadAerialRunLog([], true), true);
 });
 
 test("Aerial finds Subscriber No and Service Date by column header names", () => {
@@ -116,6 +152,7 @@ test("Aerial output workbook includes total_paid and final_status columns", () =
 test("Aerial final_status uses paid wording only when claim status is APPROVED", () => {
   const inputRow = {
     input_row_id: 2,
+    Group: "",
     "Claim No": "CLM-5005",
     "Subscriber No": "123456789",
     "Service Date": "10/09/2025",

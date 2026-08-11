@@ -13,10 +13,7 @@ test("routes a mixed workbook to payer batches using Primary Insurance Name", ()
       "Primary Insurance Name": "Traditional Medicare Part B",
       "Member ID": "MED-1",
     },
-    {
-      "Primary Insurance Name": "ARP Health Plan",
-      "Member ID": "ARP-1",
-    },
+
     {
       "Primary Insurance Name": "Medicare",
       "Member ID": "MED-2",
@@ -24,23 +21,23 @@ test("routes a mixed workbook to payer batches using Primary Insurance Name", ()
   ]);
 
   assert.equal(routing.payerHeader, "Primary Insurance Name");
-  assert.equal(routing.totalRows, 3);
+  assert.equal(routing.totalRows, 2);
   assert.deepEqual(
     routing.batches.map((batch) => [batch.payerId, batch.rows.length]),
-    [["medicare", 2], ["arp", 1]],
+    [["medicare", 2]],
   );
   assert.deepEqual(
     routing.batches[0].rows.map((row) => row.originalIndex),
-    [2, 4],
+    [2, 3],
   );
 });
 
 test("accepts normalized payer and insurance name header variants", () => {
   const payerRouting = routeWaystarRowsByPayer([{ PAYER: "MEDICARE ADVANTAGE" }]);
-  const insuranceRouting = routeWaystarRowsByPayer([{ "Insurance-Name": "ARP" }]);
+  const insuranceRouting = routeWaystarRowsByPayer([{ "Insurance-Name": "Medicare" }]);
 
   assert.equal(payerRouting.batches[0].payerId, "medicare");
-  assert.equal(insuranceRouting.batches[0].payerId, "arp");
+  assert.equal(insuranceRouting.batches[0].payerId, "medicare");
 });
 
 test("reads abbreviated patient and subscriber headers from the workbook", () => {
@@ -62,6 +59,32 @@ test("reads abbreviated patient and subscriber headers from the workbook", () =>
   assert.equal(row?.patientLastName, "Doe");
   assert.equal(row?.dateOfBirth, "01/02/1950");
   assert.equal(row?.dateOfService, "07/09/2026");
+});
+
+test("accepts all requested eligibility input header aliases", () => {
+  const cases = [
+    { payerHeader: "Primary Insurance Name", memberHeader: "Primary Ins Subscriber No", firstHeader: "First Name", lastHeader: "Last Name", dobHeader: "DOB" },
+    { payerHeader: "Insurance Name", memberHeader: "Subscriber ID", firstHeader: "Patient F Name", lastHeader: "Patient Last Name", dobHeader: "Date of Birth" },
+    { payerHeader: "Insurance", memberHeader: "Member ID", firstHeader: "Patient First Name", lastHeader: "Patient L Name", dobHeader: "Pat Birthdate" },
+    { payerHeader: "Payer", memberHeader: "Subscriber No", firstHeader: "Pat F Name", lastHeader: "Pat L Name", dobHeader: "Patient Birthdate" },
+    { payerHeader: "Primary Insurance Name", memberHeader: "ID", firstHeader: "First Name", lastHeader: "Last Name", dobHeader: "Patient DOB" },
+    { payerHeader: "Primary Insurance Name", memberHeader: "Member ID", firstHeader: "First Name", lastHeader: "Last Name", dobHeader: "Birthdate" },
+  ];
+
+  for (const aliases of cases) {
+    const row = {
+      [aliases.payerHeader]: "Medicare",
+      [aliases.memberHeader]: "SUB-999",
+      [aliases.firstHeader]: "Jane",
+      [aliases.lastHeader]: "Doe",
+      [aliases.dobHeader]: "02/03/1960",
+    };
+    const parsed = routeWaystarRowsByPayer([row]).batches[0]?.rows[0];
+    assert.equal(parsed?.memberId, "SUB-999", aliases.memberHeader);
+    assert.equal(parsed?.patientFirstName, "Jane", aliases.firstHeader);
+    assert.equal(parsed?.patientLastName, "Doe", aliases.lastHeader);
+    assert.equal(parsed?.dateOfBirth, "02/03/1960", aliases.dobHeader);
+  }
 });
 
 test("reads common Medicare-style headers including Patient Name and Patient DOB", () => {
@@ -93,69 +116,143 @@ test("splits space-delimited patient names when separate first and last name col
 
 test("detects flexible payer or insurance column names", () => {
   const payerStateRouting = routeWaystarRowsByPayer([
-    { "Primary Insurance Payer State": "Blue Cross and Blue Shield of Texas" },
+    { "Primary Insurance Payer State": "BCBS PPO" },
   ]);
   const planRouting = routeWaystarRowsByPayer([
     { "Current Insurance Plan": "Medicare Advantage" },
   ]);
 
   assert.equal(payerStateRouting.payerHeader, "Primary Insurance Payer State");
-  assert.equal(payerStateRouting.batches[0].payerId, "blue-cross-blue-shield-texas");
+  assert.equal(payerStateRouting.batches[0].payerId, "bcbs-ppo");
   assert.equal(planRouting.payerHeader, "Current Insurance Plan");
   assert.equal(planRouting.batches[0].payerId, "medicare");
 });
 
-test("routes Blue Cross Blue Shield aliases to the correct Waystar payer option", () => {
+test("routes BCBS names through the single BCBS PPO Waystar payer", () => {
   const routing = routeWaystarRowsByPayer([
-    { Payer: "Blue Cross and Blue Shield of Texas" },
-    { Payer: "BCBS Florida" },
-    { Payer: "Florida Blue" },
+    { Payer: "BCBS PPO", "Member ID": "PPO-123" },
+    { Payer: "BCBS Florida", "Member ID": "FL-456" },
   ]);
 
-  assert.deepEqual(
-    routing.batches.map((batch) => [batch.payerId, batch.rows.length]),
-    [
-      ["blue-cross-blue-shield-texas", 1],
-      ["blue-cross-blue-shield-florida", 2],
-    ],
-  );
+  assert.deepEqual(routing.batches.map((batch) => [batch.payerId, batch.rows.length]), [
+    ["bcbs-ppo", 2],
+  ]);
+  assert.equal(routing.unsupportedRows.length, 0);
 });
+test("routes every BCBS PPO input alias through the same payer implementation", () => {
+  const aliases = [
+    "Anthem BCBS",
+    "Florida Blue Options",
+    "Florida Blue Medicare/PPO",
+    "BCBS/of All States/Commercial/Federal",
+    "BCBS",
+    "BCBS MI- MCR Plus PPO",
+  ];
+  const routing = routeWaystarRowsByPayer(
+    aliases.map((payer, index) => ({ Payer: payer, "Member ID": `PPO-${index + 1}` })),
+  );
 
+  assert.deepEqual(routing.batches.map((batch) => [batch.payerId, batch.payerName, batch.rows.length]), [
+    ["bcbs-ppo", "BCBS PPO", aliases.length],
+  ]);
+  assert.equal(routing.unsupportedRows.length, 0);
+});
 test("groups mixed payer rows so each payer can use its own portal flow", () => {
   const routing = routeWaystarRowsByPayer([
     { "Insurance Name": "Medicare" },
-    { "Insurance Name": "Blue Cross and Blue Shield of Texas" },
-    { "Insurance Name": "ARP Health Plan" },
-    { "Insurance Name": "Blue Cross and Blue Shield of Florida" },
+    { "Insurance Name": "BCBS PPO" },
   ]);
 
   assert.deepEqual(
     routing.batches.map((batch) => [batch.payerId, batch.rows.length]),
     [
       ["medicare", 1],
-      ["blue-cross-blue-shield-texas", 1],
-      ["arp", 1],
-      ["blue-cross-blue-shield-florida", 1],
+      ["bcbs-ppo", 1],
     ],
   );
 });
 
-test("accepts Primary Ins Subscriber No as a BCBS payer source column", () => {
+test("routes Cigna Open Access Plus independently from BCBS PPO", () => {
   const routing = routeWaystarRowsByPayer([
-    { "Primary Ins Subscriber No": "Blue Cross and Blue Shield of Texas" },
+    { Payer: "Cigna Open Access Plus", "Member ID": "CIGNA-1" },
+    { Payer: "BCBS PPO", "Member ID": "BCBS-1" },
   ]);
 
-  assert.equal(routing.payerHeader, "Primary Ins Subscriber No");
-  assert.equal(routing.batches[0].payerId, "blue-cross-blue-shield-texas");
+  assert.deepEqual(routing.batches.map((batch) => [batch.payerId, batch.payerName]), [
+    ["cigna-open-access-plus", "Cigna Open Access Plus"],
+    ["bcbs-ppo", "BCBS PPO"],
+  ]);
+});
+test("routes every Cigna alias through the same Open Access Plus implementation", () => {
+  const aliases = [
+    "Cigna",
+    "Cigna Baycare Exclusive Network",
+    "Cigna BayCare Share",
+    "Cigna PPO",
+    "Cigna BayCare Premium",
+  ];
+  const routing = routeWaystarRowsByPayer(
+    aliases.map((payer, index) => ({ Payer: payer, "Member ID": `CIGNA-${index + 1}` })),
+  );
+
+  assert.deepEqual(routing.batches.map((batch) => [batch.payerId, batch.payerName, batch.rows.length]), [
+    ["cigna-open-access-plus", "Cigna Open Access Plus", aliases.length],
+  ]);
+  assert.equal(routing.unsupportedRows.length, 0);
+});
+test("routes AV Med to the AvMed 59274 Waystar payer", () => {
+  const routing = routeWaystarRowsByPayer([
+    { Payer: "AV Med", "Member ID": "AVMED-1" },
+  ]);
+
+  assert.deepEqual(routing.batches.map((batch) => [batch.payerId, batch.payerName]), [
+    ["av-med", "AV Med"],
+  ]);
 });
 
-test("routes BCBS rows using the BCBS_Payer_Mappings workbook sheet", async () => {
+test("routes HUMANA MEDICARE PPO to the Humana 61101 Waystar payer", () => {
+  const routing = routeWaystarRowsByPayer([
+    { Payer: "HUMANA MEDICARE PPO", "Member ID": "HUMANA-1" },
+  ]);
+
+  assert.deepEqual(routing.batches.map((batch) => [batch.payerId, batch.payerName]), [
+    ["humana-medicare-ppo", "HUMANA MEDICARE PPO"],
+  ]);
+});
+
+test("routes AETNA separately from Aetna Medicare PPO", () => {
+  const routing = routeWaystarRowsByPayer([
+    { Payer: "AETNA", "Member ID": "AETNA-1" },
+    { Payer: "Aetna Medicare PPO", "Member ID": "AETNA-MA-1" },
+  ]);
+
+  assert.deepEqual(routing.batches.map((batch) => [batch.payerId, batch.payerName]), [
+    ["aetna", "AETNA"],
+    ["aetna-medicare-ppo", "Aetna Medicare PPO"],
+  ]);
+});
+test("routes AETNA INSURANCE through the existing AETNA implementation", () => {
+  const routing = routeWaystarRowsByPayer([
+    { Payer: "AETNA INSURANCE", "Member ID": "AETNA-INS-1" },
+  ]);
+
+  assert.deepEqual(routing.batches.map((batch) => [batch.payerId, batch.payerName]), [
+    ["aetna", "AETNA"],
+  ]);
+  assert.equal(routing.unsupportedRows.length, 0);
+});
+test("does not confuse Primary Ins Subscriber No with the payer column", () => {
+  assert.throws(() => routeWaystarRowsByPayer([
+    { "Primary Ins Subscriber No": "SUB-123" },
+  ]), /missing payer column/i);
+});
+
+test("maps BCBS PPO to the BCBS Florida portal option", async () => {
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(
     workbook,
     XLSX.utils.json_to_sheet([
-      { "Primary Ins Subscriber No": "Blue Cross and Blue Shield of Texas" },
-      { "Primary Ins Subscriber No": "Blue Cross and Blue Shield of Florida" },
+      { "Primary Insurance Name": "BCBS PPO", "Primary Ins Subscriber No": "PPO-123" },
     ]),
     "Eligibility",
   );
@@ -163,11 +260,7 @@ test("routes BCBS rows using the BCBS_Payer_Mappings workbook sheet", async () =
     workbook,
     XLSX.utils.json_to_sheet([
       {
-        "INPUT_Insurance payer_state": "Blue Cross and Blue Shield of Texas",
-        "Payer portal": "BCBS Texas(SB900)",
-      },
-      {
-        "INPUT_Insurance payer_state": "Blue Cross and Blue Shield of Florida",
+        "INPUT_Insurance payer_state": "BCBS PPO",
         "Payer portal": "BCBS Florida(SB590)",
       },
     ]),
@@ -180,15 +273,10 @@ test("routes BCBS rows using the BCBS_Payer_Mappings workbook sheet", async () =
   );
   const routing = await readWaystarEligibilityWorkbook(file);
 
-  assert.deepEqual(
-    routing.batches.map((batch) => [batch.payerId, batch.rows.length]),
-    [
-      ["blue-cross-blue-shield-texas", 1],
-      ["blue-cross-blue-shield-florida", 1],
-    ],
-  );
+  assert.deepEqual(routing.batches.map((batch) => [batch.payerId, batch.rows.length]), [
+    ["bcbs-ppo", 1],
+  ]);
 });
-
 test("reports unsupported insurance rows without mixing them into payer batches", () => {
   const routing = routeWaystarRowsByPayer([
     { Payer: "Unknown Health Plan" },
@@ -208,4 +296,128 @@ test("requires a recognized insurance header", () => {
     () => routeWaystarRowsByPayer([{ Member: "123" }]),
     /missing payer column/i,
   );
+});
+test("reads Relationship to Subscriber for dependent-patient inquiries", () => {
+  const routing = routeWaystarRowsByPayer([{
+    "Primary Insurance Name": "BCBS PPO",
+    "Member ID": "SUB-100",
+    "Patient First Name": "Dependent",
+    "Patient Last Name": "Member",
+    "Patient DOB": "01/02/2010",
+    "Relationship to Subscriber": "Child",
+  }]);
+
+  assert.equal(routing.batches[0]?.rows[0]?.relationshipToSubscriber, "Child");
+});
+
+test("routes Excel-configured Van Lang IPA rows to Amerigroup Wellpoint", async () => {
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(
+    workbook,
+    XLSX.utils.json_to_sheet([
+      { "Primary Insurance Name": "Van Lang IPA", "Primary Ins Subscriber No": "VL-123" },
+    ]),
+    "Eligibility",
+  );
+  XLSX.utils.book_append_sheet(
+    workbook,
+    XLSX.utils.json_to_sheet([
+      {
+        "INPUT_Insurance payer_state": "Van Lang IPA",
+        "Payer portal": "Amerigroup Wellpoint (WLPNT)",
+      },
+    ]),
+    "Payer_Mappings",
+  );
+
+  const file = new File(
+    [XLSX.write(workbook, { type: "buffer", bookType: "xlsx" })],
+    "eligibility.xlsx",
+  );
+  const routing = await readWaystarEligibilityWorkbook(file);
+
+  assert.deepEqual(
+    routing.batches.map((batch) => [batch.payerId, batch.rows.length]),
+    [["amerigroup-wellpoint", 1]],
+  );
+});
+test("reads Payer_Mappings from the separate login workbook", async () => {
+  const inputWorkbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(
+    inputWorkbook,
+    XLSX.utils.json_to_sheet([
+      { "Primary Insurance Name": "VICARE Health IPA", "Primary Ins Subscriber No": "VI-123" },
+      { "Primary Insurance Name": "Integranet", "Primary Ins Subscriber No": "IN-456" },
+    ]),
+    "Eligibility",
+  );
+
+  const loginWorkbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(
+    loginWorkbook,
+    XLSX.utils.json_to_sheet([{ Portal: "Waystar", Payer: "Amerigroup" }]),
+    "Credentials",
+  );
+  XLSX.utils.book_append_sheet(
+    loginWorkbook,
+    XLSX.utils.json_to_sheet([
+      { "INPUT_Insurance payer_state": "VICARE Health IPA", "Payer portal": "Amerigroup Wellpoint(WLPNT)" },
+      { "INPUT_Insurance payer_state": "Integranet", "Payer portal": "Amerigroup Wellpoint(WLPNT)" },
+    ]),
+    "Payer_Mappings",
+  );
+
+  const inputFile = new File(
+    [XLSX.write(inputWorkbook, { type: "buffer", bookType: "xlsx" })],
+    "eligibility.xlsx",
+  );
+  const loginFile = new File(
+    [XLSX.write(loginWorkbook, { type: "buffer", bookType: "xlsx" })],
+    "login.xlsx",
+  );
+  const routing = await readWaystarEligibilityWorkbook(inputFile, loginFile);
+
+  assert.deepEqual(
+    routing.batches.map((batch) => [batch.payerId, batch.rows.length]),
+    [["amerigroup-wellpoint", 2]],
+  );
+  assert.equal(routing.unsupportedRows.length, 0);
+});
+test("uses Payer_Mappings to distinguish AARP from United Healthcare with the same 87726 id", () => {
+  const rows = [
+    { "Primary Insurance Name": "AARP Medicare Complete", "Primary Ins Subscriber No": "AARP-1" },
+    { "Primary Insurance Name": "United Healthcare of All States", "Primary Ins Subscriber No": "UHC-1" },
+  ];
+  const routing = routeWaystarRowsByPayer(rows, {
+    payerMappings: [
+      {
+        inputInsurancePayerState: "AARP Medicare Complete",
+        payerPortal: "AARP Medicare Advantage Choice Plan (87726)",
+      },
+      {
+        inputInsurancePayerState: "United Healthcare of All States",
+        payerPortal: "United Healthcare(87726)",
+      },
+    ],
+  });
+
+  assert.deepEqual(routing.batches.map((batch) => batch.payerId), [
+    "aarp-medicare-complete",
+    "united-healthcare-all-states",
+  ]);
+});
+
+test("does not bypass an invalid configured payer mapping", () => {
+  const routing = routeWaystarRowsByPayer(
+    [{ "Primary Insurance Name": "AARP Medicare Complete", "Primary Ins Subscriber No": "AARP-1" }],
+    {
+      payerMappings: [{
+        inputInsurancePayerState: "AARP Medicare Complete",
+        payerPortal: "Wrong Unsupported Portal Payer",
+      }],
+    },
+  );
+
+  assert.equal(routing.batches.length, 0);
+  assert.equal(routing.unsupportedRows.length, 1);
 });

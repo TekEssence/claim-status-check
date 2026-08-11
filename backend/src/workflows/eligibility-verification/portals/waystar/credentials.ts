@@ -6,6 +6,9 @@ export type WaystarSecurityQuestion = {
 };
 
 export type WaystarCredentials = {
+  portal?: string;
+  payer?: string;
+  project?: string;
   loginUrl: string;
   username: string;
   password: string;
@@ -19,6 +22,11 @@ const DEFAULT_LOGIN_URL = "https://www.waystar.com/";
 const DEFAULT_SERVICE_TYPE_CODE = "30";
 
 export async function readWaystarCredentials(file: File): Promise<WaystarCredentials> {
+  const credentials = await readWaystarCredentialProfiles(file);
+  return credentials[0];
+}
+
+export async function readWaystarCredentialProfiles(file: File): Promise<WaystarCredentials[]> {
   const workbook = XLSX.read(await file.arrayBuffer(), { type: "array" });
   const sheet = workbook.Sheets[workbook.SheetNames[0]];
   if (!sheet) {
@@ -29,13 +37,17 @@ export async function readWaystarCredentials(file: File): Promise<WaystarCredent
     defval: "",
     raw: false,
   });
-  for (const row of rows) {
+  const verificationAnswers = readVerificationSheet(workbook);
+  const credentials = rows.flatMap((row): WaystarCredentials[] => {
     const rawLoginUrl = findValue(row, ["url", "login url", "portal url", "waystar login url"]);
     const username = findValue(row, ["user name", "username", "login name", "waystar username"]);
     const password = findValue(row, ["password", "waystar password"]);
-    if (!username || !password) continue;
+    if (!username || !password) return [];
 
-    return {
+    return [{
+      portal: findValue(row, ["portal", "portal name"]),
+      payer: findValue(row, ["payer", "payer name", "insurance", "insurance name"]),
+      project: findValue(row, ["project", "project name"]),
       loginUrl: normalizeLoginUrl(rawLoginUrl || DEFAULT_LOGIN_URL),
       username,
       password,
@@ -44,13 +56,34 @@ export async function readWaystarCredentials(file: File): Promise<WaystarCredent
       serviceTypeCode: normalizeServiceTypeCode(
         findValue(row, ["service type code", "service type", "ddlstccode"]) || DEFAULT_SERVICE_TYPE_CODE,
       ),
-      verificationAnswers: readVerificationSheet(workbook),
-    };
-  }
+      verificationAnswers,
+    }];
+  });
+
+  if (credentials.length > 0) return credentials;
 
   throw new Error(
-    "Missing Waystar credentials. Upload a credential workbook with User Name/Username and Password columns.",
+    "Missing Waystar credentials. Upload a credential workbook with URL, User Name, Password, Portal, and Payer columns.",
   );
+}
+
+export function findWaystarCredentialsForPayer(
+  credentials: WaystarCredentials[],
+  payer: { id: string; name: string; portalPayerName: string; insuranceNameAliases: string[]; credentialProject?: string },
+): WaystarCredentials | null {
+  const portalMatches = credentials.filter((entry) => (!entry.portal || normalizeHeader(entry.portal).includes("waystar")) && (!payer.credentialProject || normalizeHeader(entry.project ?? "") === normalizeHeader(payer.credentialProject)));
+  const exact = portalMatches.find((entry) => {
+    const credentialPayer = normalizeHeader(entry.payer ?? "");
+    if (!credentialPayer) return false;
+    return [payer.id, payer.name, payer.portalPayerName, ...payer.insuranceNameAliases]
+      .map(normalizeHeader)
+      .some((candidate) => credentialPayer === candidate || credentialPayer.includes(candidate) || candidate.includes(credentialPayer));
+  });
+  if (exact) return exact;
+  if (payer.credentialProject && portalMatches.length > 0) return portalMatches[0];
+
+  const unscoped = portalMatches.filter((entry) => !entry.payer);
+  return credentials.length === 1 && unscoped.length === 1 ? unscoped[0] : null;
 }
 
 function readVerificationSheet(workbook: XLSX.WorkBook): WaystarSecurityQuestion[] {

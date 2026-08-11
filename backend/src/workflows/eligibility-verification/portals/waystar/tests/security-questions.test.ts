@@ -39,3 +39,14 @@ test("matches the Waystar Medicare payer when formatting differs but payer id is
     false,
   );
 });
+
+test("matches the three-digit BCBS SB900 payer id", () => {
+  assert.equal(
+    isExactWaystarPayerMatch("Blue Cross Blue Shield Texas (SB900)", "BCBS Texas(SB900)"),
+    true,
+  );
+  assert.equal(
+    isExactWaystarPayerMatch("Blue Cross Blue Shield Florida (SB590)", "BCBS Texas(SB900)"),
+    false,
+  );
+});

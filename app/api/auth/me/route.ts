@@ -1,4 +1,4 @@
-import { getActiveAuthUser, isAuthDbConnectionError } from "@/lib/auth/db";
+import { isAuthDbConnectionError } from "@/lib/auth/db";
 import { getSessionFromCookies } from "@/lib/auth/session";
 
 export const runtime = "nodejs";
@@ -11,18 +11,13 @@ export async function GET(req: Request) {
       return Response.json({ user: null }, { status: 401 });
     }
 
-    const user = await getActiveAuthUser(session.userId);
-    if (!user) {
-      return Response.json({ user: null }, { status: 401 });
-    }
-
     return Response.json({
       user: {
-        userId: user.userId,
-        username: user.username,
-        email: user.email,
-        role: user.role,
-        mustResetPassword: user.mustResetPassword,
+        userId: session.userId,
+        username: session.username,
+        email: session.email,
+        role: session.role,
+        mustResetPassword: session.mustResetPassword,
       },
     });
   } catch (error) {

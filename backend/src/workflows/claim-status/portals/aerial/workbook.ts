@@ -17,6 +17,7 @@ const { validateInputRow } = require("./legacy/validation.js") as AerialLegacyVa
 
 export type AerialInputRow = Record<string, unknown> & {
   input_row_id: number;
+  Group: string;
   "Claim No": string;
   "Subscriber No": string;
   "Service Date": string;
@@ -27,6 +28,7 @@ export type AerialInputRow = Record<string, unknown> & {
 };
 
 const FALLBACK_EXCEL_COLUMNS = {
+  group: -1,
   claimNo: 0,
   subscriberNo: 7,
   serviceDate: 10,
@@ -64,6 +66,7 @@ export function readAerialInputWorkbookFromBuffer(buffer: ArrayBuffer): AerialIn
   }) as unknown[][];
   const headerRow = matrix[0] ?? [];
   const columns = {
+    group: findHeaderIndex(headerRow, ["Group", "Group Name", "Medical Group"], FALLBACK_EXCEL_COLUMNS.group),
     claimNo: findHeaderIndex(headerRow, ["Claim No", "Claim Number"], FALLBACK_EXCEL_COLUMNS.claimNo),
     subscriberNo: findHeaderIndex(headerRow, ["Subscriber No", "Subscriber Number", "Member ID"], FALLBACK_EXCEL_COLUMNS.subscriberNo),
     serviceDate: findHeaderIndex(headerRow, ["Service Date", "Date of Service", "DOS"], FALLBACK_EXCEL_COLUMNS.serviceDate),
@@ -73,6 +76,7 @@ export function readAerialInputWorkbookFromBuffer(buffer: ArrayBuffer): AerialIn
     .slice(1)
     .map((row, index) => ({
       input_row_id: index + 2,
+      Group: columns.group >= 0 ? String(row[columns.group] || "").trim() : "",
       "Claim No": String(row[columns.claimNo] || ""),
       "Subscriber No": String(row[columns.subscriberNo] || ""),
       "Service Date": String(row[columns.serviceDate] || ""),

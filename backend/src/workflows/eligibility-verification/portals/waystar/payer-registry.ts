@@ -1,17 +1,31 @@
 import { UnknownPortalError } from "../../../../core/errors";
-import { arpPayer } from "./payers/arp";
-import {
-  blueCrossBlueShieldFloridaPayer,
-  blueCrossBlueShieldTexasPayer,
-} from "./payers/blue-cross-blue-shield";
+import { aetnaMedicarePpoPayer } from "./payers/aetna-medicare-ppo";
+import { aetnaPayer } from "./payers/aetna";
+import { aarpMedicareCompletePayer } from "./payers/aarp-medicare-complete";
+import { unitedHealthcareAllStatesPayer } from "./payers/united-healthcare-all-states";
+import { amerigroupWellpointPayer } from "./payers/amerigroup";
+import { bayCarePlusMedicareAdvantagePayer } from "./payers/baycare-plus-medicare-advantage";
+import { bcbsPpoPayer } from "./payers/bcbs-ppo";
+import { cignaOpenAccessPlusPayer } from "./payers/cigna-open-access-plus";
 import { medicarePayer } from "./payers/medicare";
+import { avMedPayer } from "./payers/av-med";
+import { humanaMedicarePpoPayer } from "./payers/humana-medicare-ppo";
+import { umrPayer } from "./payers/umr";
 import type { WaystarPayerHandler } from "./payers/types";
 
 export const waystarPayerRegistry = {
   medicare: medicarePayer,
-  arp: arpPayer,
-  "blue-cross-blue-shield-texas": blueCrossBlueShieldTexasPayer,
-  "blue-cross-blue-shield-florida": blueCrossBlueShieldFloridaPayer,
+  "av-med": avMedPayer,
+  "humana-medicare-ppo": humanaMedicarePpoPayer,
+  "aetna-medicare-ppo": aetnaMedicarePpoPayer,
+  aetna: aetnaPayer,
+  "aarp-medicare-complete": aarpMedicareCompletePayer,
+  "united-healthcare-all-states": unitedHealthcareAllStatesPayer,
+  "amerigroup-wellpoint": amerigroupWellpointPayer,
+  "baycare-plus-medicare-advantage": bayCarePlusMedicareAdvantagePayer,
+  "bcbs-ppo": bcbsPpoPayer,
+  "cigna-open-access-plus": cignaOpenAccessPlusPayer,
+  umr: umrPayer,
 } satisfies Record<string, WaystarPayerHandler>;
 
 export function getWaystarPayer(payerId: string): WaystarPayerHandler {
@@ -26,11 +40,18 @@ export function matchWaystarPayer(insuranceName: string): WaystarPayerHandler | 
   const normalizedName = normalizeLookupValue(insuranceName);
   if (!normalizedName) return null;
 
-  return Object.values(waystarPayerRegistry).find((payer) =>
+const payers = Object.values(waystarPayerRegistry);
+  const exact = payers.find((payer) =>
+    [payer.id, payer.name, payer.portalPayerName, ...payer.insuranceNameAliases]
+      .map(normalizeLookupValue)
+      .includes(normalizedName)
+  );
+  if (exact) return exact;
+
+  return payers.find((payer) =>
     payer.insuranceNameAliases.some((alias) => {
       const normalizedAlias = normalizeLookupValue(alias);
-      return normalizedName === normalizedAlias ||
-        normalizedName.startsWith(`${normalizedAlias} `) ||
+      return normalizedName.startsWith(`${normalizedAlias} `) ||
         normalizedName.endsWith(` ${normalizedAlias}`) ||
         normalizedName.includes(` ${normalizedAlias} `);
     }),
@@ -41,9 +62,12 @@ export function matchWaystarPayerByPortalName(portalPayerName: string): WaystarP
   const normalizedPortalName = normalizeLookupValue(portalPayerName);
   if (!normalizedPortalName) return null;
 
-  return Object.values(waystarPayerRegistry).find(
-    (payer) => normalizeLookupValue(payer.portalPayerName) === normalizedPortalName,
-  ) ?? null;
+  return Object.values(waystarPayerRegistry).find((payer) => {
+    const registeredPortalName = normalizeLookupValue(payer.portalPayerName);
+    return registeredPortalName === normalizedPortalName ||
+      registeredPortalName.startsWith(`${normalizedPortalName} `) ||
+      normalizedPortalName.startsWith(`${registeredPortalName} `);
+  }) ?? null;
 }
 
 function normalizeLookupValue(value: string): string {
@@ -53,3 +77,5 @@ function normalizeLookupValue(value: string): string {
     .trim()
     .replace(/\s+/g, " ");
 }
+
+

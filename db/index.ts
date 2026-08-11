@@ -43,8 +43,30 @@ export function getDb(): NodePgDatabase<typeof schema> {
 }
 
 export function isRetryableDbError(error: unknown): boolean {
-  const code = typeof error === "object" && error !== null && "code" in error ? String((error as { code?: unknown }).code ?? "") : "";
-  return ["ECONNRESET", "ETIMEDOUT", "ECONNREFUSED", "57P01"].includes(code);
+  const retryableCodes = new Set(["ECONNRESET", "ETIMEDOUT", "ECONNREFUSED", "57P01"]);
+  const retryableMessages = [
+    "connection timeout",
+    "connection terminated",
+    "terminating connection",
+    "query read timeout",
+  ];
+
+  let current: unknown = error;
+  const visited = new Set<unknown>();
+  for (let depth = 0; current && depth < 8 && !visited.has(current); depth++) {
+    visited.add(current);
+    const code = typeof current === "object" && "code" in current
+      ? String((current as { code?: unknown }).code ?? "")
+      : "";
+    const message = current instanceof Error ? current.message.toLowerCase() : String(current).toLowerCase();
+    if (retryableCodes.has(code) || retryableMessages.some((part) => message.includes(part))) {
+      return true;
+    }
+    current = typeof current === "object" && current !== null && "cause" in current
+      ? (current as { cause?: unknown }).cause
+      : null;
+  }
+  return false;
 }
 
 export async function resetDbPool(): Promise<void> {

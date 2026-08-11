@@ -1,53 +1,74 @@
 import type { FormEvent } from "react";
-import { FileSpreadsheet, KeyRound, Play } from "lucide-react";
-import { PortalUploadCard } from "../../../../components/portal-workflow/PortalUploadCard";
+import { Play } from "lucide-react";
+import { AerialSharedInputFields } from "./common/AerialSharedInputFields";
+import type { AerialSubportal } from "./common/types";
+import { aerialSubportals, getAerialSubportal } from "./subportals/registry";
+
+export type { AerialSubportal } from "./common/types";
 
 export function AerialInputForm({
   canSubmit,
   credentialFileName,
   inputFileName,
   isProcessing,
+  selectedSubportal,
   onCredentialFileChange,
   onInputFileChange,
+  onSubportalChange,
   onSubmit,
 }: {
   canSubmit: boolean;
   credentialFileName?: string;
   inputFileName?: string;
   isProcessing: boolean;
+  selectedSubportal: AerialSubportal | null;
   onCredentialFileChange: (file: File | null) => void;
   onInputFileChange: (file: File | null) => void;
+  onSubportalChange: (subportal: AerialSubportal) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
 }) {
+  const selectedSubportalDefinition = getAerialSubportal(selectedSubportal);
+
   return (
     <form className="space-y-5" onSubmit={onSubmit}>
-      <div className="grid gap-5 xl:grid-cols-2">
-        <PortalUploadCard
-          mode="file"
-          accept=".xlsx,.xls,.csv"
-          acceptedFormats=".xlsx, .xls, .csv"
-          description="Upload the credential workbook used to access the payer portal securely."
-          fileName={credentialFileName}
-          helperText="Server environment credentials remain supported if you do not need to replace them."
-          icon={KeyRound}
-          inputId="aerialCredentialExcel"
-          onFileSelect={onCredentialFileChange}
-          sizeHint="10 MB"
-          title="Upload Login File"
+      <fieldset disabled={isProcessing}>
+        <legend className="text-sm font-semibold text-slate-800">Select Aerial subportal</legend>
+        <p className="mt-1 text-sm text-slate-500">The selected row in the login workbook will be used only for this run.</p>
+        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+          {aerialSubportals.map((subportal) => {
+            const selected = selectedSubportal === subportal.id;
+            return (
+              <button
+                key={subportal.id}
+                type="button"
+                aria-pressed={selected}
+                onClick={() => onSubportalChange(subportal.id)}
+                className={`rounded-[1.1rem] border px-4 py-3 text-left transition ${
+                  selected
+                    ? "border-blue-500 bg-blue-50 text-blue-800 shadow-sm"
+                    : "border-slate-200 bg-white text-slate-700 hover:border-blue-300 hover:bg-blue-50/40"
+                }`}
+              >
+                <span className="block text-sm font-semibold">{subportal.label}</span>
+                <span className="mt-1 block text-xs text-slate-500">{subportal.description}</span>
+              </button>
+            );
+          })}
+        </div>
+      </fieldset>
+      {selectedSubportalDefinition ? (
+        <AerialSharedInputFields
+          credentialFileName={credentialFileName}
+          inputFileName={inputFileName}
+          onCredentialFileChange={onCredentialFileChange}
+          onInputFileChange={onInputFileChange}
+          subportal={selectedSubportalDefinition}
         />
-        <PortalUploadCard
-          mode="file"
-          accept=".xlsx,.xls,.csv"
-          acceptedFormats=".xlsx, .xls, .csv"
-          description="Upload the claim details workbook that will be validated and processed automatically."
-          fileName={inputFileName}
-          icon={FileSpreadsheet}
-          inputId="aerialInputExcel"
-          onFileSelect={onInputFileChange}
-          sizeHint="25 MB"
-          title="Upload Claim File"
-        />
-      </div>
+      ) : (
+        <div className="rounded-[1.1rem] border border-dashed border-slate-300 bg-slate-50 px-5 py-6 text-center text-sm text-slate-600">
+          Choose PMG or Citrus Valley to continue with the file uploads.
+        </div>
+      )}
       <button
         type="submit"
         disabled={!canSubmit}
