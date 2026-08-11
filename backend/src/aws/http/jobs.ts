@@ -1,6 +1,6 @@
 import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { jsonResponse, parseJsonBody, getAuthUserId, getJobId, createJobId, type ApiEvent } from "../runtime/http";
-import { runWorkerTask, stopWorkerTask } from "../runtime/ecs";
+import { describeWorkerTask, runWorkerTask, stopWorkerTask } from "../runtime/ecs";
 import { buildWorkflowKey, createDownloadUrl, createUploadUrl } from "../runtime/s3";
 import {
   appendWorkflowEvent,
@@ -21,6 +21,7 @@ type CreateJobBody = {
 
 const uploadFields = new Set(["claimExcel", "loginExcel", "inputExcel", "credentialExcel", "claimRows"]);
 let s3Client: S3Client | null = null;
+const activeJobStatuses = new Set(["queued", "running", "waiting_otp"]);
 
 function s3(): S3Client {
   if (!s3Client) s3Client = new S3Client({});
@@ -35,6 +36,51 @@ function required(name: string): string {
 
 function workflowId() {
   return "claim-status";
+}
+
+function isActiveJobStatus(status: string): boolean {
+  return activeJobStatuses.has(status);
+}
+
+async function reconcileAwsJobRuntime(job: Awaited<ReturnType<typeof getWorkflowJobForUser>>) {
+  if (!job || !isActiveJobStatus(job.status)) return job;
+
+  const updatedAtMs = Date.parse(String(job.updatedAt));
+  const ageMs = Number.isFinite(updatedAtMs) ? Date.now() - updatedAtMs : 0;
+  if (!job.ecsTaskArn) {
+    if ((job.status === "queued" || job.status === "running") && ageMs > 15 * 60 * 1000) {
+      const message = "AWS worker task was not started or no longer exists for this job.";
+      await updateWorkflowJob({ jobId: job.jobId, status: "failed", errorMessage: message });
+      await appendWorkflowEvent(job.jobId, "failed", { type: "failed", message }).catch(() => {});
+      return { ...job, status: "failed", errorMessage: message, finishedAt: new Date().toISOString() };
+    }
+    return job;
+  }
+
+  const task = await describeWorkerTask(job.ecsTaskArn).catch(() => null);
+  if (!task) return job;
+  if (task.lastStatus === "STOPPED") {
+    const stoppedReason = task.stoppedReason || task.containers?.find((container) => container.reason)?.reason || "";
+    const exitCode = task.containers?.find((container) => typeof container.exitCode === "number")?.exitCode;
+    const status = exitCode === 0 ? "completed" : "failed";
+    const message = status === "completed"
+      ? undefined
+      : stoppedReason || `AWS worker task stopped${typeof exitCode === "number" ? ` with exit code ${exitCode}` : ""}.`;
+    await updateWorkflowJob({ jobId: job.jobId, status, errorMessage: message });
+    await appendWorkflowEvent(job.jobId, status, { type: status, ...(message ? { message } : {}) }).catch(() => {});
+    return {
+      ...job,
+      status,
+      errorMessage: message ?? job.errorMessage,
+      finishedAt: new Date().toISOString(),
+    };
+  }
+
+  return job;
+}
+
+async function reconcileAwsJobsRuntime<T extends Awaited<ReturnType<typeof listWorkflowJobsForUser>>[number]>(jobs: T[]) {
+  return Promise.all(jobs.map((job) => reconcileAwsJobRuntime(job)));
 }
 
 export async function createJob(event: ApiEvent) {
@@ -124,7 +170,7 @@ export async function getJob(event: ApiEvent) {
   try {
     const userId = getAuthUserId(event);
     const jobId = getJobId(event);
-    const job = await getWorkflowJobForUser(jobId, userId);
+    const job = await reconcileAwsJobRuntime(await getWorkflowJobForUser(jobId, userId));
     if (!job) return jsonResponse(404, { error: "Job not found." });
     const events = await listWorkflowEvents(jobId, Number(event.queryStringParameters?.after || 0));
     const artifacts = await listArtifactsForJob(jobId);
@@ -138,7 +184,7 @@ export async function listJobs(event: ApiEvent) {
   try {
     const userId = getAuthUserId(event);
     const rawLimit = Number(event.queryStringParameters?.limit || 25);
-    const jobs = await listWorkflowJobsForUser(userId, Number.isFinite(rawLimit) ? rawLimit : 25);
+    const jobs = await reconcileAwsJobsRuntime(await listWorkflowJobsForUser(userId, Number.isFinite(rawLimit) ? rawLimit : 25));
     const jobsWithArtifacts = await Promise.all(
       jobs.map(async (job) => {
         const artifacts = await listArtifactsForJob(job.jobId).catch(() => []);

@@ -170,6 +170,22 @@ export async function getAutomationJobForUser(
   return rows[0] ? hydrateJob(rows[0]) : null;
 }
 
+export async function listAutomationJobsForUser(
+  userId: string,
+  limit = 25,
+): Promise<PersistentAutomationJob[]> {
+  const safeLimit = Math.max(1, Math.min(limit, 100));
+  const rows = await runDbWithRetry((db) =>
+    db
+      .select()
+      .from(automationJobs)
+      .where(and(eq(automationJobs.userId, userId), eq(automationJobs.workflowId, "eligibility-verification")))
+      .orderBy(desc(automationJobs.updatedAt))
+      .limit(safeLimit),
+  );
+  return Promise.all(rows.map((row) => hydrateJob(row)));
+}
+
 export async function appendAutomationJobLog(params: {
   jobId: string;
   level?: string;

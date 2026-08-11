@@ -1,6 +1,21 @@
 import { fetchEventSource } from "@microsoft/fetch-event-source";
 import type { ScrapeJobEvent } from "../types/job";
 
+export type AutomationJobSummary = {
+  jobId: string;
+  workflowId: string;
+  portalId: string;
+  payerId: string | null;
+  status: string;
+  currentCompleted: number;
+  totalItems: number;
+  primaryInputFileName: string;
+  credentialFileName: string;
+  createdAt: string;
+  updatedAt: string;
+  finishedAt: string | null;
+};
+
 export async function startAutomationJob(formData: FormData): Promise<string> {
   const response = await fetch("/api/automation-jobs", { method: "POST", body: formData });
   const body = await response.json().catch(() => ({})) as { jobId?: string; error?: string };
@@ -28,6 +43,17 @@ export async function getCurrentAutomationJob() {
   };
   if (!response.ok) throw new Error(body.error || "Unable to load the active eligibility run.");
   return body.job ?? null;
+}
+
+export async function listAutomationJobs(limit = 25): Promise<AutomationJobSummary[]> {
+  const response = await fetch(`/api/automation-jobs/list?limit=${encodeURIComponent(String(limit))}`);
+  if (response.status === 401) return [];
+  const body = await response.json().catch(() => ({})) as {
+    jobs?: AutomationJobSummary[];
+    error?: string;
+  };
+  if (!response.ok) throw new Error(body.error || `Failed to load eligibility jobs: ${response.status}`);
+  return body.jobs ?? [];
 }
 
 export async function cancelAutomationJob(jobId: string): Promise<void> {

@@ -29,6 +29,8 @@ import { WaystarInputForm } from "./portals/waystar/WaystarInputForm";
 import { WaystarResultView } from "./portals/waystar/WaystarResultView";
 import { AvailityInputForm } from "./portals/availity/AvailityInputForm";
 import { UhcInputForm } from "./portals/uhc/UhcInputForm";
+import { getCognitoAccessToken, isCognitoMode, redirectToCognitoLogin, redirectToCognitoLogout, storeCognitoTokenFromHash } from "../../api/cognito-auth";
+import { ActiveWorkflowRunsPanel } from "../../components/workflow-runs/ActiveWorkflowRunsPanel";
 
 type AuthUser = {
   username: string;
@@ -78,6 +80,21 @@ export function EligibilityPage() {
   const canStart = Boolean(portal && inputFile && credentialFile && !isRunning);
 
   useEffect(() => {
+    if (isCognitoMode()) {
+      const hasToken = storeCognitoTokenFromHash() || Boolean(getCognitoAccessToken());
+      if (!hasToken) {
+        redirectToCognitoLogin();
+        return;
+      }
+      setUser({
+        username: "Cognito user",
+        email: "Signed in with Cognito",
+        mustResetPassword: false,
+      });
+      setAuthLoading(false);
+      return;
+    }
+
     let active = true;
     fetch("/api/auth/me")
       .then(async (response) => {
@@ -221,6 +238,10 @@ export function EligibilityPage() {
   }
 
   async function logout() {
+    if (isCognitoMode()) {
+      redirectToCognitoLogout();
+      return;
+    }
     await fetch("/api/auth/logout", { method: "POST" }).catch(() => {});
     router.replace("/");
   }
@@ -322,6 +343,8 @@ export function EligibilityPage() {
                     </div>
                   </div>
                 </motion.div>
+
+                <ActiveWorkflowRunsPanel />
 
                 <div className="mt-5 rounded-[1.5rem] border border-sky-100 bg-white/88 p-5 shadow-[0_16px_34px_rgba(148,163,184,0.1)]">
                   <div className="flex flex-wrap items-center gap-3 md:flex-nowrap">

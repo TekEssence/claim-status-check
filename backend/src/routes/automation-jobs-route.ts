@@ -30,6 +30,7 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
 let persistenceListenerRegistered = false;
+const LOCAL_STALE_JOB_MS = 20 * 60 * 1000;
 
 function ensurePersistenceListener() {
   if (persistenceListenerRegistered) return;
@@ -57,7 +58,7 @@ export async function POST(req: Request) {
       );
     }
 
-    const activeJob = await getActiveAutomationJobForUser(session.userId);
+    const activeJob = await getBlockingActiveAutomationJobForUser(session.userId);
     if (activeJob) {
       return Response.json(
         { error: "Another eligibility run is active.", jobId: activeJob.jobId },
@@ -181,6 +182,29 @@ export async function DELETE(req: Request) {
   await updateAutomationJob({ jobId, status: "cancelled" });
   scheduleTaskShutdownAfterWorkflow("eligibility-verification:cancelled");
   return Response.json({ ok: true });
+}
+
+async function getBlockingActiveAutomationJobForUser(userId: string) {
+  const activeJob = await getActiveAutomationJobForUser(userId);
+  if (!activeJob) return null;
+
+  const runtimeJob = getScrapeJob(activeJob.jobId);
+  const updatedAt = Date.parse(activeJob.updatedAt);
+  const isStaleByAge = Number.isFinite(updatedAt) && Date.now() - updatedAt > LOCAL_STALE_JOB_MS;
+  const runtimeTerminal =
+    runtimeJob?.status === "done" ||
+    runtimeJob?.status === "error" ||
+    runtimeJob?.status === "cancelled";
+
+  if (activeJob.status === "waiting_resume" || !runtimeJob || runtimeTerminal || isStaleByAge) {
+    await updateAutomationJob({
+      jobId: activeJob.jobId,
+      status: runtimeJob?.status === "cancelled" ? "cancelled" : "failed",
+    }).catch(() => {});
+    return null;
+  }
+
+  return activeJob;
 }
 
 async function persistEvent(jobId: string, event: Record<string, unknown>) {

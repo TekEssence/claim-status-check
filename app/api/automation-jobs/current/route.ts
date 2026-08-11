@@ -11,11 +11,15 @@ export async function GET() {
     const session = await getSessionFromCookies();
     if (!session) return Response.json({ job: null }, { status: 401 });
 
-    let job = await getActiveAutomationJobForUser(session.userId);
-    if (job?.status === "running" && !getScrapeJob(job.jobId)) {
+    const job = await getActiveAutomationJobForUser(session.userId);
+    if (!job) return Response.json({ job: null });
+
+    const runtimeJob = getScrapeJob(job.jobId);
+    if (job.status === "waiting_resume" || !runtimeJob) {
       await updateAutomationJob({ jobId: job.jobId, status: "failed" }).catch(() => {});
-      job = null;
+      return Response.json({ job: null });
     }
+
     return Response.json({ job });
   } catch (error) {
     if (isAuthDbConnectionError(error)) {

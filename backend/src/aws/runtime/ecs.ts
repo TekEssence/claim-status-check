@@ -1,4 +1,4 @@
-import { ECSClient, RunTaskCommand, StopTaskCommand } from "@aws-sdk/client-ecs";
+import { DescribeTasksCommand, ECSClient, RunTaskCommand, StopTaskCommand } from "@aws-sdk/client-ecs";
 
 let client: ECSClient | null = null;
 
@@ -102,4 +102,12 @@ export async function stopWorkerTask(taskArn: string, reason: string) {
     task: taskArn,
     reason,
   }));
+}
+
+export async function describeWorkerTask(taskArn: string) {
+  const result = await ecs().send(new DescribeTasksCommand({
+    cluster: env("WORKER_CLUSTER_ARN"),
+    tasks: [taskArn],
+  }));
+  return result.tasks?.[0] ?? null;
 }

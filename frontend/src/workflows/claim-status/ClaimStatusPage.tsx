@@ -48,6 +48,7 @@ import { clearCognitoAccessToken, getCognitoAccessToken, isCognitoMode, redirect
 import { clearStoredRunContext, loadClaimFileHandle, loadIehpLoginFile, saveClaimFileHandle, saveIehpLoginFile } from "../../lib/run-context-store";
 import type { FileSystemFileHandle, WindowWithFilePicker } from "../../types/file-system-access";
 import type { ClaimRow, ErrorScreenshot, JobProgressValue, ScrapeJobEvent } from "../../types/job";
+import { ActiveWorkflowRunsPanel } from "../../components/workflow-runs/ActiveWorkflowRunsPanel";
 import { IehpInputForm } from "./portals/iehp/IehpInputForm";
 import { IehpResultView } from "./portals/iehp/IehpResultView";
 import { AerialInputForm, type AerialSubportal } from "./portals/aerial/AerialInputForm";
@@ -157,6 +158,10 @@ function isTerminalWorkflowStatus(status: string): boolean {
   return status === "completed" || status === "failed" || status === "cancelled";
 }
 
+function isLiveWorkflowStatus(status: string): boolean {
+  return status === "queued" || status === "running" || status === "waiting_otp";
+}
+
 function formatShortJobId(jobId: string): string {
   return jobId ? jobId.slice(0, 8) : "";
 }
@@ -192,15 +197,6 @@ function persistCachedAuthUser(user: AuthUser | null) {
   }
 }
 
-function loadCachedAuthUser(): AuthUser | null {
-  if (typeof window === "undefined") return null;
-  try {
-    const cached = window.sessionStorage.getItem(AUTH_USER_STORAGE_KEY);
-    return cached ? JSON.parse(cached) as AuthUser : null;
-  } catch {
-    return null;
-  }
-}
 const PORTAL_UI_META: Record<
   PortalId,
   {
@@ -778,9 +774,8 @@ async function writeIehpPostProcessedCheckpoint(
 export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: PortalId | null }) {
   const router = useRouter();
   const pathname = usePathname();
-  const cachedAuthUser = isCognitoMode() ? null : loadCachedAuthUser();
-  const [authUser, setAuthUser] = useState<AuthUser | null>(() => cachedAuthUser);
-  const [authLoading, setAuthLoading] = useState(() => cachedAuthUser === null);
+  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
   const [authUsername, setAuthUsername] = useState("");
   const [authPassword, setAuthPassword] = useState("");
   const [authConfirmPassword, setAuthConfirmPassword] = useState("");
@@ -935,13 +930,13 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
   const visibleWorkflowRuns = useMemo(
     () =>
       workflowRuns.filter((job) =>
-        !isTerminalWorkflowStatus(job.status) &&
+        isLiveWorkflowStatus(job.status) &&
         (!effectivePortalId || job.portalId === effectivePortalId),
       ),
     [effectivePortalId, workflowRuns],
   );
   const runningWorkflowRunCount = useMemo(
-    () => workflowRuns.filter((job) => !isTerminalWorkflowStatus(job.status)).length,
+    () => workflowRuns.filter((job) => isLiveWorkflowStatus(job.status)).length,
     [workflowRuns],
   );
   const userDisplayName = useMemo(() => {
@@ -1473,7 +1468,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
       setWorkflowRunsError("");
       setDashboardStatsData((current) => ({
         ...current,
-        runningJobs: jobs.filter((job) => !isTerminalWorkflowStatus(job.status)).length,
+        runningJobs: jobs.filter((job) => isLiveWorkflowStatus(job.status)).length,
       }));
     } catch (error) {
       if (handleAwsAuthFailure(error)) return;
@@ -1508,7 +1503,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
   useEffect(() => {
     if (!selectedWorkflowRunId) return;
     const selectedRun = workflowRuns.find((job) => job.jobId === selectedWorkflowRunId);
-    if (!selectedRun || isTerminalWorkflowStatus(selectedRun.status)) return;
+    if (!selectedRun || !isLiveWorkflowStatus(selectedRun.status)) return;
 
     let cancelled = false;
     const load = async () => {
@@ -3758,7 +3753,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
                 const progressPercent = job.totalRows > 0
                   ? Math.min(100, Math.round((job.currentCompleted / job.totalRows) * 100))
                   : 0;
-                const isActiveStatus = !isTerminalWorkflowStatus(job.status);
+                const isActiveStatus = isLiveWorkflowStatus(job.status);
                 const statusClassName =
                   job.status === "completed"
                     ? "bg-emerald-50 text-emerald-700"
@@ -4169,7 +4164,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
               {effectivePortalId && !authUser.mustResetPassword ? (
                 <button
                   type="button"
-                  disabled={isProcessing}
+                  disabled={blockPortalFormForProcessing}
                   onClick={resetPortalSelection}
                   className="flex w-full items-center gap-3 rounded-[1rem] px-3 py-2.5 text-left text-sm font-medium text-slate-600 transition hover:bg-sky-50 hover:text-slate-900 disabled:cursor-not-allowed disabled:text-slate-400"
                 >
@@ -4198,7 +4193,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
               <button
                 type="button"
                 onClick={logout}
-                disabled={isProcessing}
+                disabled={blockPortalFormForProcessing}
                 className="flex w-full items-center gap-3 rounded-[1rem] px-3 py-2.5 text-left text-sm font-medium text-slate-600 transition hover:bg-sky-50 hover:text-slate-900 disabled:cursor-not-allowed disabled:text-slate-400"
               >
                 <LogOut className="h-4 w-4" strokeWidth={2} />
@@ -4489,6 +4484,8 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
                 </div>
               </motion.div>
 
+              {workflowRunTrackingEnabled ? <ActiveWorkflowRunsPanel /> : null}
+
               {workflowRunsPanel}
 
               <div className="mt-5">
@@ -4707,6 +4704,8 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
                   })}
                 </div>
               </div>
+
+              {workflowRunTrackingEnabled ? <ActiveWorkflowRunsPanel /> : null}
 
               {workflowRunsPanel}
 
