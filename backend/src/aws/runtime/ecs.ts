@@ -42,6 +42,7 @@ function parseAwsIdList(value: string | undefined, name: string): string[] {
 export async function runWorkerTask(params: {
   jobId: string;
   userId: string;
+  workflowId: string;
   portalId: string;
   inputBucket: string;
   outputBucket: string;
@@ -53,6 +54,7 @@ export async function runWorkerTask(params: {
   const overrides = [
     { name: "JOB_ID", value: params.jobId },
     { name: "USER_ID", value: params.userId },
+    { name: "WORKFLOW_ID", value: params.workflowId },
     { name: "PORTAL_ID", value: params.portalId },
     { name: "WORKFLOW_INPUTS_BUCKET", value: params.inputBucket },
     { name: "WORKFLOW_OUTPUTS_BUCKET", value: params.outputBucket },
@@ -60,6 +62,9 @@ export async function runWorkerTask(params: {
     { name: "LOGIN_EXCEL_S3_KEY", value: params.inputKeys.loginExcel ?? "" },
     { name: "INPUT_EXCEL_S3_KEY", value: params.inputKeys.inputExcel ?? "" },
     { name: "CREDENTIAL_EXCEL_S3_KEY", value: params.inputKeys.credentialExcel ?? "" },
+    { name: "INPUT_FILE_S3_KEY", value: params.inputKeys.inputFile ?? "" },
+    { name: "CREDENTIAL_FILE_S3_KEY", value: params.inputKeys.credentialFile ?? "" },
+    { name: "REFERENCE_EXCEL_S3_KEY", value: params.inputKeys.referenceExcel ?? "" },
     { name: "CLAIM_ROWS_S3_KEY", value: params.inputKeys.claimRows ?? "" },
     { name: "FORM_FIELDS_JSON", value: JSON.stringify(params.formFields ?? {}) },
   ];

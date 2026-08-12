@@ -26,6 +26,7 @@ export type CurrentScrapeJob = {
 
 export type ScrapeJobSummary = {
   jobId: string;
+  workflowId?: string;
   portalId: string;
   status: "queued" | "running" | "waiting_otp" | "waiting_resume" | "completed" | "failed" | "cancelled";
   currentCompleted: number;
@@ -97,7 +98,7 @@ function getStringField(formData: FormData, key: string): string {
 }
 
 function getUploadFiles(formData: FormData) {
-  const fields = ["claimExcel", "loginExcel", "inputExcel", "credentialExcel"] as const;
+  const fields = ["claimExcel", "loginExcel", "inputExcel", "credentialExcel", "inputFile", "credentialFile", "referenceExcel"] as const;
   return fields.flatMap((field) => {
     const value = formData.get(field);
     if (!(value instanceof File) || value.size === 0) return [];
@@ -212,8 +213,12 @@ async function startAwsScrapeJob(formData: FormData): Promise<string> {
     headers: { "Content-Type": "application/json", ...requireAwsAuthHeaders() },
     body: JSON.stringify({
       portalId: getStringField(formData, "portalId") || "iehp",
+      workflowId: getStringField(formData, "workflowId") || "claim-status",
       files: fileDescriptors,
       formFields: {
+        workflowId: getStringField(formData, "workflowId"),
+        payerId: getStringField(formData, "payerId"),
+        totalItems: getStringField(formData, "totalItems"),
         startIndex: getStringField(formData, "startIndex"),
         projectId: getStringField(formData, "projectId"),
         checkpointId: getStringField(formData, "checkpointId"),

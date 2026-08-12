@@ -10,7 +10,9 @@ import {
   startAutomationJob,
   subscribeToAutomationJob,
 } from "../../api/automation-jobs-api";
+import { ActiveWorkflowRunsPanel } from "../../components/workflow-runs/ActiveWorkflowRunsPanel";
 import type { JobProgressValue, ScrapeJobEvent } from "../../types/job";
+import { getCognitoAccessToken, isCognitoMode, redirectToCognitoLogin, redirectToCognitoLogout, storeCognitoTokenFromHash } from "../../api/cognito-auth";
 import { getPaymentPostingPortal, paymentPostingPortals } from "./registry";
 import { AdvancedMdPaymentPostingInputForm } from "./portals/advancedmd/AdvancedMdPaymentPostingInputForm";
 import { AdvancedMdPaymentPostingResultView } from "./portals/advancedmd/AdvancedMdPaymentPostingResultView";
@@ -124,6 +126,21 @@ export function PaymentPostingPage() {
   }, [handleEvent]);
 
   useEffect(() => {
+    if (isCognitoMode()) {
+      const hasToken = storeCognitoTokenFromHash() || Boolean(getCognitoAccessToken());
+      if (!hasToken) {
+        redirectToCognitoLogin();
+        return;
+      }
+      setUser({
+        username: "Cognito user",
+        email: "Signed in with Cognito",
+        mustResetPassword: false,
+      });
+      setAuthLoading(false);
+      return;
+    }
+
     let active = true;
     fetch("/api/auth/me")
       .then(async (response) => {
@@ -205,6 +222,10 @@ export function PaymentPostingPage() {
   }
 
   async function logout() {
+    if (isCognitoMode()) {
+      redirectToCognitoLogout();
+      return;
+    }
     await fetch("/api/auth/logout", { method: "POST" }).catch(() => {});
     router.replace("/");
   }
@@ -254,6 +275,11 @@ export function PaymentPostingPage() {
             {selectedPortalId ? "Portals" : "Back"}
           </button>
         </div>
+
+        <ActiveWorkflowRunsPanel
+          currentWorkflowId={WORKFLOW_ID}
+          currentPortalId={selectedPortalId ?? undefined}
+        />
 
         {!selectedPortalId ? (
           <div className="mt-6 grid gap-5 md:grid-cols-2">

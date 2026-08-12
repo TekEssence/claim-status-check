@@ -1,6 +1,7 @@
 .git
 .gitignore
 .next
+.next-static-build
 .sst
 node_modules
 coverage

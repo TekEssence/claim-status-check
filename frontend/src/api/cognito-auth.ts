@@ -1,4 +1,5 @@
 const TOKEN_KEY = "cognito_access_token";
+const RETURN_PATH_KEY = "cognito_return_path";
 
 function decodeJwtPayload(token: string): { exp?: number } | null {
   try {
@@ -49,11 +50,22 @@ export function storeCognitoTokenFromHash(): boolean {
   return true;
 }
 
+export function consumeCognitoReturnPath(): string {
+  if (typeof window === "undefined") return "";
+  const value = window.sessionStorage.getItem(RETURN_PATH_KEY) || "";
+  window.sessionStorage.removeItem(RETURN_PATH_KEY);
+  return value.startsWith("/") ? value : "";
+}
+
 export function redirectToCognitoLogin(): void {
   if (typeof window === "undefined") return;
   const domain = process.env.NEXT_PUBLIC_COGNITO_DOMAIN;
   const clientId = process.env.NEXT_PUBLIC_COGNITO_CLIENT_ID;
   if (!domain || !clientId) return;
+  const returnPath = `${window.location.pathname}${window.location.search}`;
+  if (returnPath && returnPath !== "/") {
+    window.sessionStorage.setItem(RETURN_PATH_KEY, returnPath);
+  }
   const url = new URL(`${domain.replace(/\/+$/, "")}/login`);
   url.searchParams.set("client_id", clientId);
   url.searchParams.set("response_type", "token");

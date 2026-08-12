@@ -1,11 +1,12 @@
 import { EligibilityPage } from "@/frontend/src/workflows/eligibility-verification/EligibilityPage";
+import { eligibilityPortals } from "@/frontend/src/workflows/eligibility-verification/registry";
+
+export const dynamicParams = false;
 
 export function generateStaticParams() {
-  return [
-    { portalId: "availity" },
-    { portalId: "uhc" },
-    { portalId: "waystar" },
-  ];
+  return eligibilityPortals.map((portal) => ({ portalId: portal.id }));
 }
 
-export default EligibilityPage;
+export default function EligibilityPortalPage() {
+  return <EligibilityPage />;
+}

@@ -1,4 +1,5 @@
 import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { WORKFLOW_IDS, type WorkflowId } from "@/backend/src/workflows/types";
 import { jsonResponse, parseJsonBody, getAuthUserId, getJobId, createJobId, type ApiEvent } from "../runtime/http";
 import { describeWorkerTask, runWorkerTask, stopWorkerTask } from "../runtime/ecs";
 import { buildWorkflowKey, createDownloadUrl, createUploadUrl } from "../runtime/s3";
@@ -14,12 +15,13 @@ import {
 } from "../runtime/workflow-db";
 
 type CreateJobBody = {
+  workflowId?: string;
   portalId?: string;
   files?: Array<{ field: string; filename: string; contentType?: string }>;
   formFields?: Record<string, unknown>;
 };
 
-const uploadFields = new Set(["claimExcel", "loginExcel", "inputExcel", "credentialExcel", "claimRows"]);
+const uploadFields = new Set(["claimExcel", "loginExcel", "inputExcel", "credentialExcel", "inputFile", "credentialFile", "referenceExcel", "claimRows"]);
 let s3Client: S3Client | null = null;
 const activeJobStatuses = new Set(["queued", "running", "waiting_otp"]);
 
@@ -34,8 +36,8 @@ function required(name: string): string {
   return value;
 }
 
-function workflowId() {
-  return "claim-status";
+function normalizeWorkflowId(value: string | undefined): WorkflowId {
+  return (WORKFLOW_IDS as readonly string[]).includes(value || "") ? value as WorkflowId : "claim-status";
 }
 
 function isActiveJobStatus(status: string): boolean {
@@ -87,19 +89,20 @@ export async function createJob(event: ApiEvent) {
   try {
     const userId = getAuthUserId(event);
     const body = parseJsonBody<CreateJobBody>(event);
+    const workflowId = normalizeWorkflowId(body.workflowId);
     const portalId = body.portalId?.trim() || "iehp";
     const jobId = createJobId();
     const inputBucket = required("WORKFLOW_INPUTS_BUCKET");
     const outputBucket = required("WORKFLOW_OUTPUTS_BUCKET");
-    const inputPrefix = `${workflowId()}/${new Date().toISOString().slice(0, 10)}/${jobId}/input`;
-    const outputPrefix = `${workflowId()}/${new Date().toISOString().slice(0, 10)}/${jobId}/output`;
+    const inputPrefix = `${workflowId}/${new Date().toISOString().slice(0, 10)}/${jobId}/input`;
+    const outputPrefix = `${workflowId}/${new Date().toISOString().slice(0, 10)}/${jobId}/output`;
     const uploads: Array<{ field: string; filename: string; key: string; uploadUrl: string }> = [];
     const inputKeys: Record<string, string> = {};
 
     for (const file of body.files ?? []) {
       if (!uploadFields.has(file.field)) continue;
       const key = buildWorkflowKey({
-        workflowId: workflowId(),
+        workflowId,
         jobId,
         area: "input",
         filename: `${file.field}-${file.filename}`,
@@ -116,17 +119,17 @@ export async function createJob(event: ApiEvent) {
     await createWorkflowJob({
       jobId,
       userId,
-      workflowId: workflowId(),
+      workflowId,
       portalId,
       inputBucket,
       outputBucket,
       inputPrefix,
       outputPrefix,
-      claimFileName: body.files?.find((file) => file.field === "claimExcel" || file.field === "inputExcel")?.filename,
-      loginFileName: body.files?.find((file) => file.field === "loginExcel" || file.field === "credentialExcel")?.filename,
+      claimFileName: body.files?.find((file) => file.field === "claimExcel" || file.field === "inputExcel" || file.field === "inputFile" || file.field === "referenceExcel")?.filename,
+      loginFileName: body.files?.find((file) => file.field === "loginExcel" || file.field === "credentialExcel" || file.field === "credentialFile")?.filename,
       metadata: { inputKeys, formFields: body.formFields ?? {} },
     });
-    await appendWorkflowEvent(jobId, "job_created", { type: "job_started", portalId });
+    await appendWorkflowEvent(jobId, "job_created", { type: "job_started", workflowId, portalId });
 
     return jsonResponse(200, { jobId, uploads });
   } catch (error) {
@@ -147,6 +150,7 @@ export async function confirmJob(event: ApiEvent) {
     const taskArn = await runWorkerTask({
       jobId,
       userId,
+      workflowId: job.workflowId,
       portalId: job.portalId,
       inputBucket: job.inputBucket || required("WORKFLOW_INPUTS_BUCKET"),
       outputBucket: job.outputBucket || required("WORKFLOW_OUTPUTS_BUCKET"),

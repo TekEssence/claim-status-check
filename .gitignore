@@ -41,6 +41,7 @@ yarn-error.log*
 # local build/deploy tooling caches
 .sst/
 .tmp/
+.next-static-build/
 .npm-cache/
 .turbo/
 

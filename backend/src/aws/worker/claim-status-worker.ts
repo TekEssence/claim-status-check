@@ -8,8 +8,10 @@ import { cancelScrapeJob, createScrapeJob, emitScrapeJobEvent, getScrapeJob, sub
 import {
   uploadWorkflowArtifact,
 } from "@/backend/src/core/workflow-s3-storage";
+import { getAutomationRunner } from "@/backend/src/workflows/registry";
 import { getClaimStatusScraper } from "@/backend/src/workflows/claim-status/registry";
 import type { ScraperContext } from "@/backend/src/workflows/claim-status/types";
+import type { AutomationContext, AutomationWorkflowId } from "@/backend/src/workflows/types";
 import {
   applyClaimRowUpdateToWorksheet,
   postProcessWorksheet,
@@ -71,6 +73,24 @@ const fileInputs: FileInputSpec[] = [
     localPathEnv: "CREDENTIAL_EXCEL_PATH",
     s3KeyEnv: "CREDENTIAL_EXCEL_S3_KEY",
     fallbackName: "credentials.xlsx",
+  },
+  {
+    formField: "inputFile",
+    localPathEnv: "INPUT_FILE_PATH",
+    s3KeyEnv: "INPUT_FILE_S3_KEY",
+    fallbackName: "input.xlsx",
+  },
+  {
+    formField: "credentialFile",
+    localPathEnv: "CREDENTIAL_FILE_PATH",
+    s3KeyEnv: "CREDENTIAL_FILE_S3_KEY",
+    fallbackName: "credentials.xlsx",
+  },
+  {
+    formField: "referenceExcel",
+    localPathEnv: "REFERENCE_EXCEL_PATH",
+    s3KeyEnv: "REFERENCE_EXCEL_S3_KEY",
+    fallbackName: "reference.xlsx",
   },
 ];
 
@@ -167,7 +187,9 @@ async function appendClaimRows(formData: FormData): Promise<void> {
 async function buildFormData(portalId: string): Promise<FormData> {
   const formData = new FormData();
   formData.set("portalId", portalId);
+  formData.set("workflowId", optionalEnv("WORKFLOW_ID") || "claim-status");
 
+  appendIfSet(formData, "payerId", optionalEnv("PAYER_ID"));
   appendIfSet(formData, "startIndex", optionalEnv("START_INDEX"));
   appendIfSet(formData, "claimFileName", optionalEnv("CLAIM_FILE_NAME"));
   appendIfSet(formData, "loginFileName", optionalEnv("LOGIN_FILE_NAME"));
@@ -187,6 +209,12 @@ async function buildFormData(portalId: string): Promise<FormData> {
       formData.set("claimFileName", input.filename);
     }
     if (spec.formField === "loginExcel" && !formData.has("loginFileName")) {
+      formData.set("loginFileName", input.filename);
+    }
+    if ((spec.formField === "inputFile" || spec.formField === "referenceExcel") && !formData.has("claimFileName")) {
+      formData.set("claimFileName", input.filename);
+    }
+    if (spec.formField === "credentialFile" && !formData.has("loginFileName")) {
       formData.set("loginFileName", input.filename);
     }
   }
@@ -266,6 +294,53 @@ async function persistEvent(jobId: string, data: Record<string, unknown>): Promi
       mimeType: typeof data.mimeType === "string" ? data.mimeType : undefined,
       pathOrKey: s3Key || (typeof data.path === "string" ? data.path : undefined),
     }).catch(() => {});
+    if (s3Key && process.env.WORKFLOW_OUTPUTS_BUCKET) {
+      await appendWorkflowArtifact({
+        jobId,
+        artifactType: String(data.type),
+        filename: typeof data.filename === "string" ? data.filename : artifactFilename(data),
+        bucket: process.env.WORKFLOW_OUTPUTS_BUCKET,
+        s3Key,
+        mimeType: typeof data.mimeType === "string" ? data.mimeType : undefined,
+      }).catch(() => {});
+    }
+  }
+}
+
+function isAutomationWorkflowId(value: string): value is AutomationWorkflowId {
+  return value === "eligibility-verification" || value === "payment-eob-download" || value === "payment-posting";
+}
+
+async function persistAutomationEvent(jobId: string, workflowId: AutomationWorkflowId, data: Record<string, unknown>): Promise<void> {
+  if (!hasDatabase()) return;
+
+  const eventId = await appendWorkflowEvent(jobId, String(data.type ?? "event"), data).catch(() => null);
+  await publishWorkflowEvent(jobId, data, eventId).catch(() => {});
+
+  if (data.type === "progress") {
+    await updateWorkflowJob({
+      jobId,
+      status: "running",
+      currentCompleted: typeof data.completed === "number" ? data.completed : undefined,
+      totalRows: typeof data.total === "number" ? data.total : undefined,
+    }).catch(() => {});
+  }
+
+  if (isArtifactEvent(data)) {
+    const s3Key = await uploadWorkflowArtifact({
+      workflowId,
+      jobId,
+      artifactType: String(data.type),
+      filename: typeof data.filename === "string" ? data.filename : artifactFilename(data),
+      path: typeof data.path === "string" ? data.path : undefined,
+      base64: typeof data.base64 === "string" ? data.base64 : typeof data.image === "string" ? data.image : undefined,
+      text: typeof data.html === "string" ? data.html : undefined,
+      mimeType: typeof data.mimeType === "string" ? data.mimeType : undefined,
+    }).catch((error) => {
+      console.error("Worker automation artifact upload failed", error);
+      return "";
+    });
+
     if (s3Key && process.env.WORKFLOW_OUTPUTS_BUCKET) {
       await appendWorkflowArtifact({
         jobId,
@@ -410,11 +485,97 @@ function startCancellationPoll(jobId: string): { isCancelled: () => boolean; sto
   };
 }
 
+async function runAutomationWorkflow(params: {
+  jobId: string;
+  workflowId: AutomationWorkflowId;
+  portalId: string;
+  formData: FormData;
+}): Promise<void> {
+  const runner = getAutomationRunner(params.workflowId, params.portalId, stringField(params.formData, "payerId"));
+  const input = runner.validateInput(params.formData);
+  const job = createScrapeJob(params.jobId, params.workflowId);
+  const cancellation = startCancellationPoll(params.jobId);
+  let workflowErrorMessage = "";
+
+  await updateWorkflowJob({ jobId: params.jobId, status: "running" }).catch(() => {});
+  const startedEvent = { type: "log", message: `Worker started for ${params.workflowId}/${params.portalId}.` };
+  emitScrapeJobEvent(job.id, startedEvent);
+  await persistAutomationEvent(params.jobId, params.workflowId, startedEvent);
+
+  const context: AutomationContext = {
+    jobId: params.jobId,
+    workflowId: params.workflowId,
+    portalId: params.portalId,
+    payerId: stringField(params.formData, "payerId") || undefined,
+    isCancelled: cancellation.isCancelled,
+    emit: async (event) => {
+      emitScrapeJobEvent(job.id, event);
+      if (
+        typeof event === "object" &&
+        event !== null &&
+        "type" in event &&
+        event.type === "error" &&
+        "message" in event &&
+        typeof event.message === "string"
+      ) {
+        workflowErrorMessage = event.message;
+      }
+      await persistAutomationEvent(params.jobId, params.workflowId, event);
+    },
+    log: async (event) => {
+      const payload = {
+        type: "log",
+        message: event.message,
+        level: event.level,
+        eventName: event.eventName,
+        rowIndex: event.rowIndex,
+        meta: event.meta,
+      };
+      console.log(`[${event.level ?? "info"}] ${event.message}`);
+      emitScrapeJobEvent(job.id, payload);
+      await persistAutomationEvent(params.jobId, params.workflowId, payload);
+    },
+  };
+
+  try {
+    await runner.run(input, context);
+    if (workflowErrorMessage) throw new Error(workflowErrorMessage);
+    const currentJob = getScrapeJob(job.id);
+    const completed = currentJob?.currentCompleted ?? 0;
+    const total = currentJob?.totalRows ?? 0;
+    const status: AwsWorkflowJobStatus = cancellation.isCancelled() ? "cancelled" : "completed";
+    await updateWorkflowJob({ jobId: params.jobId, status, currentCompleted: completed, totalRows: total }).catch(() => {});
+    const finalEvent = { type: status === "cancelled" ? "cancelled" : "completed" };
+    const finalEventId = await appendWorkflowEvent(params.jobId, "completed", finalEvent).catch(() => null);
+    await publishWorkflowEvent(params.jobId, finalEvent, finalEventId).catch(() => {});
+    const doneEvent = { type: "done" };
+    emitScrapeJobEvent(job.id, doneEvent);
+    await publishWorkflowEvent(params.jobId, doneEvent).catch(() => {});
+    console.log(`Worker finished for ${params.workflowId}/${params.portalId} job ${params.jobId} with status ${status}.`);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unexpected worker error.";
+    await updateWorkflowJob({ jobId: params.jobId, status: "failed", errorMessage: message }).catch(() => {});
+    const errorEvent = { type: "error", message };
+    const eventId = await appendWorkflowEvent(params.jobId, "error", errorEvent).catch(() => null);
+    await publishWorkflowEvent(params.jobId, errorEvent, eventId).catch(() => {});
+    await publishWorkflowEvent(params.jobId, { type: "done" }).catch(() => {});
+    console.error(error);
+  } finally {
+    cancellation.stop();
+  }
+}
+
 export async function main(): Promise<void> {
   const jobId = requiredEnv("JOB_ID");
+  const workflowId = optionalEnv("WORKFLOW_ID") || "claim-status";
   const portalId = requiredEnv("PORTAL_ID");
   const userId = optionalEnv("USER_ID");
   const formData = await buildFormData(portalId);
+  if (isAutomationWorkflowId(workflowId)) {
+    await runAutomationWorkflow({ jobId, workflowId, portalId, formData });
+    return;
+  }
+
   const scraper = await getClaimStatusScraper(portalId);
   const input = scraper.validateInput(formData);
   const job = createScrapeJob(jobId);

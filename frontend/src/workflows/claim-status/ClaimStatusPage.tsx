@@ -52,7 +52,6 @@ import { clearCognitoAccessToken, getCognitoAccessToken, isCognitoMode, redirect
 import { clearStoredRunContext, loadClaimFileHandle, loadIehpLoginFile, saveClaimFileHandle, saveIehpLoginFile } from "../../lib/run-context-store";
 import type { FileSystemFileHandle, WindowWithFilePicker } from "../../types/file-system-access";
 import type { ClaimRow, ErrorScreenshot, JobProgressValue, ScrapeJobEvent } from "../../types/job";
-import { ActiveWorkflowRunsPanel } from "../../components/workflow-runs/ActiveWorkflowRunsPanel";
 import { IehpInputForm } from "./portals/iehp/IehpInputForm";
 import { IehpResultView } from "./portals/iehp/IehpResultView";
 import { AerialInputForm, type AerialSubportal } from "./portals/aerial/AerialInputForm";
@@ -5069,8 +5068,6 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
                 </div>
               </motion.div>
 
-              {workflowRunTrackingEnabled ? <ActiveWorkflowRunsPanel /> : null}
-
               {workflowRunsPanel}
 
               <div className="mt-5">
@@ -5289,8 +5286,6 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
                   })}
                 </div>
               </div>
-
-              {workflowRunTrackingEnabled ? <ActiveWorkflowRunsPanel /> : null}
 
               {workflowRunsPanel}
 

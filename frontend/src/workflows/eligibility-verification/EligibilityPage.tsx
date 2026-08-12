@@ -344,7 +344,7 @@ export function EligibilityPage() {
                   </div>
                 </motion.div>
 
-                <ActiveWorkflowRunsPanel />
+                <ActiveWorkflowRunsPanel currentWorkflowId="eligibility-verification" currentPortalId={portal.id} />
 
                 <div className="mt-5 rounded-[1.5rem] border border-sky-100 bg-white/88 p-5 shadow-[0_16px_34px_rgba(148,163,184,0.1)]">
                   <div className="flex flex-wrap items-center gap-3 md:flex-nowrap">

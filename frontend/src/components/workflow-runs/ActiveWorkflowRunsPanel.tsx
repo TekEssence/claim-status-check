@@ -20,17 +20,27 @@ const PORTAL_LABELS: Record<string, string> = {
   "all-care": "All Care",
   astrona: "Astrona",
   availity: "Availity",
+  "availity-remittance": "Availity Remittance",
   "blue-shield": "Blue Shield",
+  cigna: "Cigna",
+  advancedmd: "AdvancedMD",
   iehp: "IEHP",
+  "instamed-remittance": "InstaMed Remittance",
+  kaiser: "Kaiser",
+  "my-family": "My Family",
   "optum-pro": "Optum Pro",
+  physicians: "Physicians",
   regal: "Regal",
   uhc: "UHC",
   waystar: "Waystar",
+  zelis: "Zelis",
 };
 
 const WORKFLOW_LABELS: Record<string, string> = {
   "claim-status": "Claim Status",
   "eligibility-verification": "Eligibility",
+  "payment-eob-download": "Payment EOB",
+  "payment-posting": "Payment Posting",
 };
 
 function isLiveStatus(status: string): boolean {
@@ -55,7 +65,7 @@ function formatRunTimestamp(value: string): string {
 function normalizeClaimJob(job: ScrapeJobSummary): WorkflowRun {
   return {
     jobId: job.jobId,
-    workflowId: "claim-status",
+    workflowId: job.workflowId || "claim-status",
     portalId: job.portalId,
     status: job.status,
     completed: job.currentCompleted,
