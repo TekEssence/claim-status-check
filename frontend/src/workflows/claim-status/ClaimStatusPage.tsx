@@ -997,6 +997,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
 
   const isProtectedRoute = pathname !== "/";
   const awsWorkflowMode = isAwsWorkflowMode();
+  const authUsesCognito = awsWorkflowMode && isCognitoMode();
   const workflowRunTrackingEnabled = Boolean(authUser);
   const effectivePortalId = forcedPortalId ?? (pathname === "/claim-status" ? null : selectedPortalId);
   const availablePortals = useMemo(
@@ -1366,7 +1367,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
   }
 
   function handleAwsAuthFailure(error: unknown): boolean {
-    if (!isCognitoMode() || !(error instanceof ScrapeJobAuthError)) return false;
+    if (!authUsesCognito || !(error instanceof ScrapeJobAuthError)) return false;
     clearCognitoAccessToken();
     updateAuthUser(null);
     setWorkflowRuns([]);
@@ -1385,7 +1386,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
   }
 
   useEffect(() => {
-    if (isCognitoMode()) {
+    if (authUsesCognito) {
       const hasToken = storeCognitoTokenFromHash() || Boolean(getCognitoAccessToken());
       if (hasToken) {
         updateAuthUser({
@@ -1424,7 +1425,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [authUsesCognito]);
 
   useEffect(() => {
     if (!authLoading && !authUser && isProtectedRoute) {

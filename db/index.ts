@@ -14,12 +14,22 @@ const schema = {
 
 let pool: Pool | null = null;
 let db: NodePgDatabase<typeof schema> | null = null;
+let poolVersion = 0;
 
 const DB_CONNECT_TIMEOUT_MS = 5000;
 const DB_QUERY_TIMEOUT_MS = 6000;
 
+function isPoolEnded(candidate: Pool | null): boolean {
+  return Boolean(candidate && (candidate as unknown as { ended?: boolean }).ended);
+}
+
 export function getPool(): Pool {
-  if (pool) return pool;
+  if (pool && !isPoolEnded(pool)) return pool;
+  if (pool || db) {
+    pool = null;
+    db = null;
+    poolVersion += 1;
+  }
   if (!process.env.DATABASE_URL) {
     throw new Error("DATABASE_URL must be configured for database access.");
   }
@@ -32,19 +42,33 @@ export function getPool(): Pool {
     query_timeout: DB_QUERY_TIMEOUT_MS,
     statement_timeout: DB_QUERY_TIMEOUT_MS,
   });
+  poolVersion += 1;
 
   return pool;
 }
 
 export function getDb(): NodePgDatabase<typeof schema> {
-  if (db) return db;
+  if (db && pool && !isPoolEnded(pool)) return db;
+  if (db || isPoolEnded(pool)) {
+    db = null;
+    pool = null;
+  }
   db = drizzle(getPool(), { schema });
   return db;
+}
+
+export function getDbPoolVersion(): number {
+  return poolVersion;
+}
+
+export function hasUsableDbPool(): boolean {
+  return Boolean(pool && !isPoolEnded(pool));
 }
 
 export function isRetryableDbError(error: unknown): boolean {
   const retryableCodes = new Set(["ECONNRESET", "ETIMEDOUT", "ECONNREFUSED", "57P01"]);
   const retryableMessages = [
+    "cannot use a pool after calling end",
     "connection timeout",
     "connection terminated",
     "terminating connection",
@@ -74,6 +98,7 @@ export async function resetDbPool(): Promise<void> {
   const currentPool = pool;
   pool = null;
   db = null;
+  poolVersion += 1;
   await currentPool.end().catch(() => {});
 }
 

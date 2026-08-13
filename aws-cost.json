@@ -1,0 +1,756 @@
+﻿[
+    {
+        "Date": "2026-08-01",
+        "Services": [
+            {
+                "Service": "AWS Glue",
+                "Cost": "0",
+                "Unit": "USD"
+            },
+            {
+                "Service": "Amazon EC2 Container Registry (ECR)",
+                "Cost": "0",
+                "Unit": "USD"
+            },
+            {
+                "Service": "EC2 - Other",
+                "Cost": "0.9457942291",
+                "Unit": "USD"
+            },
+            {
+                "Service": "Amazon Elastic Compute Cloud - Compute",
+                "Cost": "5.4370840178",
+                "Unit": "USD"
+            },
+            {
+                "Service": "Amazon Route 53",
+                "Cost": "0.5",
+                "Unit": "USD"
+            },
+            {
+                "Service": "Amazon Simple Storage Service",
+                "Cost": "0.0017736136",
+                "Unit": "USD"
+            },
+            {
+                "Service": "Amazon Virtual Private Cloud",
+                "Cost": "0",
+                "Unit": "USD"
+            },
+            {
+                "Service": "AmazonCloudWatch",
+                "Cost": "0",
+                "Unit": "USD"
+            },
+            {
+                "Service": "Tax",
+                "Cost": "14.17",
+                "Unit": "USD"
+            }
+        ]
+    },
+    {
+        "Date": "2026-08-02",
+        "Services": [
+            {
+                "Service": "AWS Glue",
+                "Cost": "0",
+                "Unit": "USD"
+            },
+            {
+                "Service": "Amazon EC2 Container Registry (ECR)",
+                "Cost": "0",
+                "Unit": "USD"
+            },
+            {
+                "Service": "EC2 - Other",
+                "Cost": "0.6452674648",
+                "Unit": "USD"
+            },
+            {
+                "Service": "Amazon Elastic Compute Cloud - Compute",
+                "Cost": "5.3539807502",
+                "Unit": "USD"
+            },
+            {
+                "Service": "Amazon Simple Storage Service",
+                "Cost": "0.0017685976",
+                "Unit": "USD"
+            },
+            {
+                "Service": "Amazon Virtual Private Cloud",
+                "Cost": "0.12",
+                "Unit": "USD"
+            },
+            {
+                "Service": "AmazonCloudWatch",
+                "Cost": "0",
+                "Unit": "USD"
+            }
+        ]
+    },
+    {
+        "Date": "2026-08-03",
+        "Services": [
+            {
+                "Service": "AWS Glue",
+                "Cost": "0",
+                "Unit": "USD"
+            },
+            {
+                "Service": "Amazon EC2 Container Registry (ECR)",
+                "Cost": "0",
+                "Unit": "USD"
+            },
+            {
+                "Service": "EC2 - Other",
+                "Cost": "0.9697201629",
+                "Unit": "USD"
+            },
+            {
+                "Service": "Amazon Elastic Compute Cloud - Compute",
+                "Cost": "5.4660831992",
+                "Unit": "USD"
+            },
+            {
+                "Service": "Amazon Simple Storage Service",
+                "Cost": "0.0017635992",
+                "Unit": "USD"
+            },
+            {
+                "Service": "Amazon Virtual Private Cloud",
+                "Cost": "0.12",
+                "Unit": "USD"
+            },
+            {
+                "Service": "AmazonCloudWatch",
+                "Cost": "0",
+                "Unit": "USD"
+            }
+        ]
+    },
+    {
+        "Date": "2026-08-04",
+        "Services": [
+            {
+                "Service": "AWS CloudFormation",
+                "Cost": "0",
+                "Unit": "USD"
+            },
+            {
+                "Service": "AWS Glue",
+                "Cost": "0",
+                "Unit": "USD"
+            },
+            {
+                "Service": "AWS Key Management Service",
+                "Cost": "0",
+                "Unit": "USD"
+            },
+            {
+                "Service": "Amazon EC2 Container Registry (ECR)",
+                "Cost": "0",
+                "Unit": "USD"
+            },
+            {
+                "Service": "EC2 - Other",
+                "Cost": "0.9663479024",
+                "Unit": "USD"
+            },
+            {
+                "Service": "Amazon Elastic Compute Cloud - Compute",
+                "Cost": "5.4550815645",
+                "Unit": "USD"
+            },
+            {
+                "Service": "Amazon Simple Storage Service",
+                "Cost": "0.0018994642",
+                "Unit": "USD"
+            },
+            {
+                "Service": "Amazon Virtual Private Cloud",
+                "Cost": "0.12",
+                "Unit": "USD"
+            }
+        ]
+    },
+    {
+        "Date": "2026-08-05",
+        "Services": [
+            {
+                "Service": "AWS CloudFormation",
+                "Cost": "0",
+                "Unit": "USD"
+            },
+            {
+                "Service": "AWS Glue",
+                "Cost": "0",
+                "Unit": "USD"
+            },
+            {
+                "Service": "AWS Key Management Service",
+                "Cost": "0",
+                "Unit": "USD"
+            },
+            {
+                "Service": "AWS Lambda",
+                "Cost": "0",
+                "Unit": "USD"
+            },
+            {
+                "Service": "AWS Secrets Manager",
+                "Cost": "0.019718694",
+                "Unit": "USD"
+            },
+            {
+                "Service": "Amazon API Gateway",
+                "Cost": "0.0000001632",
+                "Unit": "USD"
+            },
+            {
+                "Service": "Amazon CloudFront",
+                "Cost": "0.002",
+                "Unit": "USD"
+            },
+            {
+                "Service": "Amazon Cognito",
+                "Cost": "0",
+                "Unit": "USD"
+            },
+            {
+                "Service": "Amazon EC2 Container Registry (ECR)",
+                "Cost": "0",
+                "Unit": "USD"
+            },
+            {
+                "Service": "EC2 - Other",
+                "Cost": "1.0080497835",
+                "Unit": "USD"
+            },
+            {
+                "Service": "Amazon Elastic Compute Cloud - Compute",
+                "Cost": "5.4719636586",
+                "Unit": "USD"
+            },
+            {
+                "Service": "Amazon Relational Database Service",
+                "Cost": "0.5869319734",
+                "Unit": "USD"
+            },
+            {
+                "Service": "Amazon Simple Notification Service",
+                "Cost": "0",
+                "Unit": "USD"
+            },
+            {
+                "Service": "Amazon Simple Storage Service",
+                "Cost": "0.0038026678",
+                "Unit": "USD"
+            },
+            {
+                "Service": "Amazon Virtual Private Cloud",
+                "Cost": "0.320000216",
+                "Unit": "USD"
+            },
+            {
+                "Service": "AmazonCloudWatch",
+                "Cost": "0",
+                "Unit": "USD"
+            }
+        ]
+    },
+    {
+        "Date": "2026-08-06",
+        "Services": [
+            {
+                "Service": "AWS CloudFormation",
+                "Cost": "0",
+                "Unit": "USD"
+            },
+            {
+                "Service": "AWS Glue",
+                "Cost": "0",
+                "Unit": "USD"
+            },
+            {
+                "Service": "AWS Key Management Service",
+                "Cost": "0",
+                "Unit": "USD"
+            },
+            {
+                "Service": "AWS Lambda",
+                "Cost": "0.0000009488",
+                "Unit": "USD"
+            },
+            {
+                "Service": "AWS Secrets Manager",
+                "Cost": "0.0266982256",
+                "Unit": "USD"
+            },
+            {
+                "Service": "Amazon API Gateway",
+                "Cost": "0.0000032856",
+                "Unit": "USD"
+            },
+            {
+                "Service": "Amazon CloudFront",
+                "Cost": "0.008",
+                "Unit": "USD"
+            },
+            {
+                "Service": "Amazon Cognito",
+                "Cost": "0",
+                "Unit": "USD"
+            },
+            {
+                "Service": "Amazon EC2 Container Registry (ECR)",
+                "Cost": "0.0000025887",
+                "Unit": "USD"
+            },
+            {
+                "Service": "EC2 - Other",
+                "Cost": "1.0042146092",
+                "Unit": "USD"
+            },
+            {
+                "Service": "Amazon Elastic Compute Cloud - Compute",
+                "Cost": "5.4171585617",
+                "Unit": "USD"
+            },
+            {
+                "Service": "Amazon Elastic Container Service",
+                "Cost": "0.0337732335",
+                "Unit": "USD"
+            },
+            {
+                "Service": "Amazon Relational Database Service",
+                "Cost": "0.794201453",
+                "Unit": "USD"
+            },
+            {
+                "Service": "Amazon Route 53",
+                "Cost": "0.5",
+                "Unit": "USD"
+            },
+            {
+                "Service": "Amazon Simple Storage Service",
+                "Cost": "0.0081390584",
+                "Unit": "USD"
+            },
+            {
+                "Service": "Amazon Virtual Private Cloud",
+                "Cost": "1.2017140206",
+                "Unit": "USD"
+            },
+            {
+                "Service": "AmazonCloudWatch",
+                "Cost": "0",
+                "Unit": "USD"
+            }
+        ]
+    },
+    {
+        "Date": "2026-08-07",
+        "Services": [
+            {
+                "Service": "AWS CloudFormation",
+                "Cost": "0",
+                "Unit": "USD"
+            },
+            {
+                "Service": "AWS Cost Explorer",
+                "Cost": "0.01",
+                "Unit": "USD"
+            },
+            {
+                "Service": "AWS Glue",
+                "Cost": "0",
+                "Unit": "USD"
+            },
+            {
+                "Service": "AWS Key Management Service",
+                "Cost": "0",
+                "Unit": "USD"
+            },
+            {
+                "Service": "AWS Lambda",
+                "Cost": "0.0000178643",
+                "Unit": "USD"
+            },
+            {
+                "Service": "AWS Secrets Manager",
+                "Cost": "0.0268332256",
+                "Unit": "USD"
+            },
+            {
+                "Service": "Amazon API Gateway",
+                "Cost": "0.0001382046",
+                "Unit": "USD"
+            },
+            {
+                "Service": "Amazon CloudFront",
+                "Cost": "0",
+                "Unit": "USD"
+            },
+            {
+                "Service": "Amazon Cognito",
+                "Cost": "0",
+                "Unit": "USD"
+            },
+            {
+                "Service": "Amazon EC2 Container Registry (ECR)",
+                "Cost": "0.0000012939",
+                "Unit": "USD"
+            },
+            {
+                "Service": "EC2 - Other",
+                "Cost": "0.9316227043",
+                "Unit": "USD"
+            },
+            {
+                "Service": "Amazon Elastic Compute Cloud - Compute",
+                "Cost": "5.1358003805",
+                "Unit": "USD"
+            },
+            {
+                "Service": "Amazon Elastic Container Service",
+                "Cost": "0.0127074823",
+                "Unit": "USD"
+            },
+            {
+                "Service": "Amazon Relational Database Service",
+                "Cost": "0.794198045",
+                "Unit": "USD"
+            },
+            {
+                "Service": "Amazon Simple Storage Service",
+                "Cost": "0.0069489062",
+                "Unit": "USD"
+            },
+            {
+                "Service": "Amazon Virtual Private Cloud",
+                "Cost": "2.0407675967",
+                "Unit": "USD"
+            },
+            {
+                "Service": "AmazonCloudWatch",
+                "Cost": "0",
+                "Unit": "USD"
+            }
+        ]
+    },
+    {
+        "Date": "2026-08-08",
+        "Services": [
+            {
+                "Service": "AWS Glue",
+                "Cost": "0",
+                "Unit": "USD"
+            },
+            {
+                "Service": "AWS Secrets Manager",
+                "Cost": "0.0266182256",
+                "Unit": "USD"
+            },
+            {
+                "Service": "Amazon Cognito",
+                "Cost": "0",
+                "Unit": "USD"
+            },
+            {
+                "Service": "Amazon EC2 Container Registry (ECR)",
+                "Cost": "0",
+                "Unit": "USD"
+            },
+            {
+                "Service": "EC2 - Other",
+                "Cost": "0.6815268496",
+                "Unit": "USD"
+            },
+            {
+                "Service": "Amazon Elastic Compute Cloud - Compute",
+                "Cost": "5.3675451042",
+                "Unit": "USD"
+            },
+            {
+                "Service": "Amazon Relational Database Service",
+                "Cost": "0.7941980578",
+                "Unit": "USD"
+            },
+            {
+                "Service": "Amazon Simple Storage Service",
+                "Cost": "0.002027745",
+                "Unit": "USD"
+            },
+            {
+                "Service": "Amazon Virtual Private Cloud",
+                "Cost": "2.04",
+                "Unit": "USD"
+            },
+            {
+                "Service": "AmazonCloudWatch",
+                "Cost": "0",
+                "Unit": "USD"
+            }
+        ]
+    },
+    {
+        "Date": "2026-08-09",
+        "Services": [
+            {
+                "Service": "AWS Glue",
+                "Cost": "0",
+                "Unit": "USD"
+            },
+            {
+                "Service": "AWS Secrets Manager",
+                "Cost": "0.0267632256",
+                "Unit": "USD"
+            },
+            {
+                "Service": "Amazon EC2 Container Registry (ECR)",
+                "Cost": "0.012772358",
+                "Unit": "USD"
+            },
+            {
+                "Service": "EC2 - Other",
+                "Cost": "0.665806452",
+                "Unit": "USD"
+            },
+            {
+                "Service": "Amazon Elastic Compute Cloud - Compute",
+                "Cost": "5.3566478085",
+                "Unit": "USD"
+            },
+            {
+                "Service": "Amazon Relational Database Service",
+                "Cost": "0.7941983636",
+                "Unit": "USD"
+            },
+            {
+                "Service": "Amazon Simple Storage Service",
+                "Cost": "0.0020377458",
+                "Unit": "USD"
+            },
+            {
+                "Service": "Amazon Virtual Private Cloud",
+                "Cost": "2.04",
+                "Unit": "USD"
+            },
+            {
+                "Service": "AmazonCloudWatch",
+                "Cost": "0",
+                "Unit": "USD"
+            }
+        ]
+    },
+    {
+        "Date": "2026-08-10",
+        "Services": [
+            {
+                "Service": "AWS Glue",
+                "Cost": "0",
+                "Unit": "USD"
+            },
+            {
+                "Service": "AWS Key Management Service",
+                "Cost": "0",
+                "Unit": "USD"
+            },
+            {
+                "Service": "AWS Lambda",
+                "Cost": "0.0000316248",
+                "Unit": "USD"
+            },
+            {
+                "Service": "AWS Secrets Manager",
+                "Cost": "0.0267732256",
+                "Unit": "USD"
+            },
+            {
+                "Service": "Amazon API Gateway",
+                "Cost": "0.0002696326",
+                "Unit": "USD"
+            },
+            {
+                "Service": "Amazon CloudFront",
+                "Cost": "0",
+                "Unit": "USD"
+            },
+            {
+                "Service": "Amazon EC2 Container Registry (ECR)",
+                "Cost": "0.0131167457",
+                "Unit": "USD"
+            },
+            {
+                "Service": "EC2 - Other",
+                "Cost": "0.975322362",
+                "Unit": "USD"
+            },
+            {
+                "Service": "Amazon Elastic Compute Cloud - Compute",
+                "Cost": "5.4314839404",
+                "Unit": "USD"
+            },
+            {
+                "Service": "Amazon Elastic Container Service",
+                "Cost": "0.0083530442",
+                "Unit": "USD"
+            },
+            {
+                "Service": "Amazon Relational Database Service",
+                "Cost": "0.7941982744",
+                "Unit": "USD"
+            },
+            {
+                "Service": "Amazon Simple Storage Service",
+                "Cost": "0.0032136773",
+                "Unit": "USD"
+            },
+            {
+                "Service": "Amazon Virtual Private Cloud",
+                "Cost": "2.0404627182",
+                "Unit": "USD"
+            },
+            {
+                "Service": "AmazonCloudWatch",
+                "Cost": "0",
+                "Unit": "USD"
+            }
+        ]
+    },
+    {
+        "Date": "2026-08-11",
+        "Services": [
+            {
+                "Service": "AWS Glue",
+                "Cost": "0",
+                "Unit": "USD"
+            },
+            {
+                "Service": "AWS Key Management Service",
+                "Cost": "0",
+                "Unit": "USD"
+            },
+            {
+                "Service": "AWS Lambda",
+                "Cost": "0.0001156749",
+                "Unit": "USD"
+            },
+            {
+                "Service": "AWS Secrets Manager",
+                "Cost": "0.0266482256",
+                "Unit": "USD"
+            },
+            {
+                "Service": "Amazon API Gateway",
+                "Cost": "0.0013729024",
+                "Unit": "USD"
+            },
+            {
+                "Service": "Amazon CloudFront",
+                "Cost": "0.0230031272",
+                "Unit": "USD"
+            },
+            {
+                "Service": "Amazon EC2 Container Registry (ECR)",
+                "Cost": "0.0149389852",
+                "Unit": "USD"
+            },
+            {
+                "Service": "EC2 - Other",
+                "Cost": "1.0308984307",
+                "Unit": "USD"
+            },
+            {
+                "Service": "Amazon Elastic Compute Cloud - Compute",
+                "Cost": "5.4676840777",
+                "Unit": "USD"
+            },
+            {
+                "Service": "Amazon Elastic Container Service",
+                "Cost": "0.0278497929",
+                "Unit": "USD"
+            },
+            {
+                "Service": "Amazon Relational Database Service",
+                "Cost": "0.7941979559",
+                "Unit": "USD"
+            },
+            {
+                "Service": "Amazon Simple Storage Service",
+                "Cost": "0.0087066571",
+                "Unit": "USD"
+            },
+            {
+                "Service": "Amazon Virtual Private Cloud",
+                "Cost": "2.04147083",
+                "Unit": "USD"
+            },
+            {
+                "Service": "AmazonCloudWatch",
+                "Cost": "0",
+                "Unit": "USD"
+            }
+        ]
+    },
+    {
+        "Date": "2026-08-12",
+        "Services": [
+            {
+                "Service": "AWS Lambda",
+                "Cost": "0",
+                "Unit": "USD"
+            },
+            {
+                "Service": "AWS Secrets Manager",
+                "Cost": "0.006098172",
+                "Unit": "USD"
+            },
+            {
+                "Service": "Amazon API Gateway",
+                "Cost": "0.0000633798",
+                "Unit": "USD"
+            },
+            {
+                "Service": "Amazon EC2 Container Registry (ECR)",
+                "Cost": "0.003392418",
+                "Unit": "USD"
+            },
+            {
+                "Service": "EC2 - Other",
+                "Cost": "0.1522862255",
+                "Unit": "USD"
+            },
+            {
+                "Service": "Amazon Elastic Compute Cloud - Compute",
+                "Cost": "0.7461600862",
+                "Unit": "USD"
+            },
+            {
+                "Service": "Amazon Relational Database Service",
+                "Cost": "0.1654576196",
+                "Unit": "USD"
+            },
+            {
+                "Service": "Amazon Simple Storage Service",
+                "Cost": "0.000004",
+                "Unit": "USD"
+            },
+            {
+                "Service": "Amazon Virtual Private Cloud",
+                "Cost": "0.48",
+                "Unit": "USD"
+            },
+            {
+                "Service": "AmazonCloudWatch",
+                "Cost": "0",
+                "Unit": "USD"
+            }
+        ]
+    },
+    {
+        "Date": "2026-08-13",
+        "Services": []
+    }
+]

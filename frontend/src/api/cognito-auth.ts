@@ -14,6 +14,14 @@ function decodeJwtPayload(token: string): { exp?: number } | null {
 }
 
 export function isCognitoMode(): boolean {
+  if (typeof window !== "undefined") {
+    const host = window.location.hostname;
+    const isLocalHost = host === "localhost" || host === "127.0.0.1" || host === "::1";
+    if (isLocalHost && process.env.NEXT_PUBLIC_FORCE_AWS_WORKFLOW !== "true") {
+      return false;
+    }
+  }
+
   return Boolean(
     process.env.NEXT_PUBLIC_COGNITO_DOMAIN &&
     process.env.NEXT_PUBLIC_COGNITO_CLIENT_ID,

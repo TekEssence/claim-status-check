@@ -1,5 +1,5 @@
 import { isAuthDbConnectionError } from "@/lib/auth/db";
-import { betterAuthInstance } from "@/lib/auth/better-auth";
+import { getBetterAuthInstance } from "@/lib/auth/better-auth";
 import { runBetterAuthWithDbRetry } from "@/lib/auth/better-auth-retry";
 import { appendSetCookieHeaders } from "@/lib/auth/response";
 
@@ -15,7 +15,7 @@ export async function POST(req: Request) {
 
     const attemptBetterAuthLogin = async (mode: "username" | "email") => {
       if (mode === "username") {
-        return betterAuthInstance.api.signInUsername({
+        return getBetterAuthInstance().api.signInUsername({
           body: {
             username: body.username,
             password: body.password,
@@ -25,7 +25,7 @@ export async function POST(req: Request) {
         });
       }
 
-      return betterAuthInstance.api.signInEmail({
+      return getBetterAuthInstance().api.signInEmail({
         body: {
           email: body.username,
           password: body.password,

@@ -3,7 +3,7 @@ import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { nextCookies } from "better-auth/next-js";
 import { admin } from "better-auth/plugins/admin";
 import { username } from "better-auth/plugins/username";
-import { getDb } from "@/db";
+import { getDb, getDbPoolVersion, hasUsableDbPool } from "@/db";
 import * as betterAuthSchema from "@/db/schema/better-auth";
 import { hashPassword, verifyPassword } from "./password";
 import { AUTH_IDLE_TIMEOUT_SECONDS, AUTH_SESSION_REFRESH_AGE_SECONDS } from "./session-config";
@@ -90,7 +90,16 @@ function createBetterAuthInstance() {
 }
 
 export let betterAuthInstance = createBetterAuthInstance();
+let betterAuthPoolVersion = getDbPoolVersion();
 
 export function resetBetterAuthInstance(): void {
   betterAuthInstance = createBetterAuthInstance();
+  betterAuthPoolVersion = getDbPoolVersion();
+}
+
+export function getBetterAuthInstance() {
+  if (!hasUsableDbPool() || betterAuthPoolVersion !== getDbPoolVersion()) {
+    resetBetterAuthInstance();
+  }
+  return betterAuthInstance;
 }

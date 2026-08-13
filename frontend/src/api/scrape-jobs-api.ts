@@ -66,6 +66,13 @@ const AWS_API_URL = process.env.NEXT_PUBLIC_WORKFLOW_API_URL?.replace(/\/+$/, ""
 const AWS_WS_URL = process.env.NEXT_PUBLIC_WORKFLOW_WS_URL || "";
 
 export function isAwsWorkflowMode(): boolean {
+  if (typeof window !== "undefined") {
+    const host = window.location.hostname;
+    const isLocalHost = host === "localhost" || host === "127.0.0.1" || host === "::1";
+    if (isLocalHost && process.env.NEXT_PUBLIC_FORCE_AWS_WORKFLOW !== "true") {
+      return false;
+    }
+  }
   return Boolean(AWS_API_URL);
 }
 

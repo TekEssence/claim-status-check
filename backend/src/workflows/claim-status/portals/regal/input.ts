@@ -190,7 +190,7 @@ export function readRegalCredentialsFromBuffer(buffer: ArrayBuffer): RegalCreden
 
   const rows = XLSX.utils.sheet_to_json(sheet) as Record<string, unknown>[];
   for (const row of rows) {
-    const rawLoginUrl = findValue(row, ["URL", "Login URL", "REGAL_PORTAL_LOGIN_URL"]);
+    const rawLoginUrl = findValue(row, ["Link", "URL", "Login URL", "REGAL_PORTAL_LOGIN_URL"]);
     const username = findValue(row, ["User Name", "Username", "REGAL_PORTAL_USERNAME"]);
     const password = findValue(row, ["Password", "REGAL_PORTAL_PASSWORD"]);
 
@@ -239,6 +239,6 @@ export async function parseRegalInput(formData: FormData): Promise<RegalInput> {
   }
 
   throw new Error(
-    "Missing Regal credentials. Provide REGAL_PORTAL_LOGIN_URL, REGAL_PORTAL_USERNAME, and REGAL_PORTAL_PASSWORD through env_path_regal, or upload a login Excel with URL, User Name, and Password columns.",
+    "Missing Regal credentials. Provide REGAL_PORTAL_LOGIN_URL, REGAL_PORTAL_USERNAME, and REGAL_PORTAL_PASSWORD through env_path_regal, or upload a login Excel with Link, Username, and Password columns.",
   );
 }

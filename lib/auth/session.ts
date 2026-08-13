@@ -1,5 +1,5 @@
 import { cookies, headers as nextHeaders } from "next/headers";
-import { betterAuthInstance } from "./better-auth";
+import { getBetterAuthInstance } from "./better-auth";
 import { runBetterAuthWithDbRetry } from "./better-auth-retry";
 import { getActiveAuthUser, isAuthDbConnectionError, type AuthUser } from "./db";
 import { getActiveAutomationJobForUser } from "@/lib/automation-jobs/db";
@@ -55,7 +55,7 @@ export async function getSessionFromCookies(requestHeaders?: Headers): Promise<A
   const sessionHeaders = requestHeaders ?? new Headers(await nextHeaders());
   try {
     const authResult = await runBetterAuthWithDbRetry(() =>
-      betterAuthInstance.api.getSession({ headers: sessionHeaders }),
+      getBetterAuthInstance().api.getSession({ headers: sessionHeaders }),
     );
 
     if (!authResult?.session || !authResult?.user) {

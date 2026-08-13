@@ -60,7 +60,7 @@ test("reads Regal login credentials from workbook", () => {
     workbook,
     XLSX.utils.json_to_sheet([
       {
-        "Login URL": "regalmed.okta.com/login",
+        Link: "regalmed.okta.com/login",
         Username: "excel-user@example.com",
         Password: "excel-password",
       },
