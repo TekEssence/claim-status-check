@@ -2,6 +2,7 @@
 .gitignore
 .next
 .next-static-build
+.next-static-api-backup
 .sst
 node_modules
 coverage
@@ -12,6 +13,16 @@ frontend
 public
 data
 incoming
+worker-runtime/node_modules
+data/logs
+data/outputs
+data/screenshots
+data/tmp
+*.xlsx
+!backend/src/workflows/claim-status/portals/availity/config/*.xlsx
+cost-filter.json
+aws-cost.json
+aws-cost-report.xlsx
 
 .env
 .env.*
