@@ -139,6 +139,11 @@ export async function getActiveAuthUser(userId: string): Promise<AuthUser | null
   return row ? mapAuthUser(row) : null;
 }
 
+export async function getActiveAuthUserByLogin(login: string): Promise<AuthUser | null> {
+  const row = await findActiveUserByLogin(login);
+  return row ? mapAuthUser(row) : null;
+}
+
 export async function resetPasswordByUsername(username: string, password: string): Promise<AuthUser | null> {
   const user = await findActiveUserByLogin(username);
   if (!user) {
@@ -311,3 +316,4 @@ export async function getCredentialPasswordHashByLogin(username: string): Promis
   const account = await findCredentialAccount(user.id);
   return account?.password ?? null;
 }
+

@@ -4163,11 +4163,11 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
 
               {effectivePortalId === "iehp" ? (
                 <div className="mt-5">
-                  <IehpResultView errorScreenshots={errorScreenshots} logs={logs} status={status} />
+                  <IehpResultView errorScreenshots={errorScreenshots} logs={logs} progress={progress} status={status} />
                 </div>
               ) : effectivePortalId === "aerial" ? (
                 <div className="mt-5">
-                  <AerialResultView errorScreenshots={errorScreenshots} logs={logs} status={status} />
+                  <AerialResultView errorScreenshots={errorScreenshots} logs={logs} progress={progress} status={status} />
                 </div>
               ) : effectivePortalId === "regal" ? (
                 <div className="mt-5">
@@ -4255,6 +4255,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     </main>
   );
 }
+
 
 
 

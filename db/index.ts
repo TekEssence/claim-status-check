@@ -13,8 +13,8 @@ const schema = {
 let pool: Pool | null = null;
 let db: NodePgDatabase<typeof schema> | null = null;
 
-const DB_CONNECT_TIMEOUT_MS = 5000;
-const DB_QUERY_TIMEOUT_MS = 6000;
+const DB_CONNECT_TIMEOUT_MS = 15000;
+const DB_QUERY_TIMEOUT_MS = 15000;
 
 export function getPool(): Pool {
   if (pool) return pool;
@@ -42,7 +42,17 @@ export function getDb(): NodePgDatabase<typeof schema> {
 
 export function isRetryableDbError(error: unknown): boolean {
   const code = typeof error === "object" && error !== null && "code" in error ? String((error as { code?: unknown }).code ?? "") : "";
-  return ["ECONNRESET", "ETIMEDOUT", "ECONNREFUSED", "57P01"].includes(code);
+  const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+  const cause = error instanceof Error && error.cause instanceof Error ? error.cause.message.toLowerCase() : "";
+
+  return (
+    ["ECONNRESET", "ETIMEDOUT", "ECONNREFUSED", "57P01"].includes(code) ||
+    message.includes("connection timeout") ||
+    message.includes("connection terminated") ||
+    message.includes("terminating connection") ||
+    cause.includes("connection terminated") ||
+    cause.includes("connection timeout")
+  );
 }
 
 export async function resetDbPool(): Promise<void> {
@@ -54,13 +64,13 @@ export async function resetDbPool(): Promise<void> {
 }
 
 export async function runDbWithRetry<T>(operation: (database: NodePgDatabase<typeof schema>) => Promise<T>): Promise<T> {
-  for (let attempt = 1; attempt <= 2; attempt++) {
+  for (let attempt = 1; attempt <= 3; attempt++) {
     try {
       return await operation(getDb());
     } catch (error) {
-      if (attempt < 2 && isRetryableDbError(error)) {
+      if (attempt < 3 && isRetryableDbError(error)) {
         await resetDbPool();
-        await new Promise((resolve) => setTimeout(resolve, 300));
+        await new Promise((resolve) => setTimeout(resolve, 300 * attempt));
         continue;
       }
       throw error;

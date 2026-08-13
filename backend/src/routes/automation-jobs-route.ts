@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import {
   cancelScrapeJob,
   createScrapeJob,
@@ -6,6 +8,7 @@ import {
   registerScrapeJobEmitListener,
   submitScrapeJobInput,
 } from "@/backend/src/jobs/job-store";
+import { getJobDataPath } from "@/backend/src/core/storage";
 import { getAutomationRunner } from "@/backend/src/workflows/registry";
 import type { WorkflowId } from "@/backend/src/workflows/types";
 import { getSessionFromCookies } from "@/lib/auth/session";
@@ -170,26 +173,63 @@ async function persistEvent(jobId: string, event: Record<string, unknown>) {
       rowIndex: typeof event.rowIndex === "number" ? event.rowIndex : undefined,
       metadata: isRecord(event.meta) ? event.meta : undefined,
     }).catch(() => {});
-  } else if (event.type === "progress") {
+    return;
+  }
+
+  if (event.type === "progress") {
     await updateAutomationJob({
       jobId,
       status: "running",
       currentCompleted: typeof event.completed === "number" ? event.completed : undefined,
       totalItems: typeof event.total === "number" ? event.total : undefined,
     }).catch(() => {});
-  } else if (event.type === "error") {
+    return;
+  }
+
+  if (event.type === "error") {
     await updateAutomationJob({ jobId, status: "failed" }).catch(() => {});
-  } else if (event.type === "cancelled") {
+    return;
+  }
+
+  if (event.type === "cancelled") {
     await updateAutomationJob({ jobId, status: "cancelled" }).catch(() => {});
-  } else if (["error_screenshot", "debug_html", "file_download", "output_snapshot"].includes(String(event.type))) {
-    await appendAutomationJobArtifact({
-      jobId,
-      artifactType: String(event.type),
-      rowIndex: typeof event.index === "number" ? event.index : undefined,
-      filename: typeof event.filename === "string" ? event.filename : undefined,
-      mimeType: typeof event.mimeType === "string" ? event.mimeType : undefined,
-      pathOrKey: typeof event.path === "string" ? event.path : undefined,
-    }).catch(() => {});
+    return;
+  }
+
+  if (!["error_screenshot", "debug_html", "file_download", "output_snapshot"].includes(String(event.type))) {
+    return;
+  }
+
+  const artifactPath = ensureArtifactPath(jobId, event);
+  await appendAutomationJobArtifact({
+    jobId,
+    artifactType: String(event.type),
+    rowIndex: typeof event.index === "number" ? event.index : undefined,
+    filename: typeof event.filename === "string" ? event.filename : undefined,
+    mimeType: typeof event.mimeType === "string" ? event.mimeType : undefined,
+    pathOrKey: artifactPath || (typeof event.path === "string" ? event.path : undefined),
+  }).catch(() => {});
+}
+
+function ensureArtifactPath(jobId: string, event: Record<string, unknown>): string {
+  if (typeof event.path === "string" && event.path) {
+    return event.path;
+  }
+  if (event.type !== "file_download") {
+    return "";
+  }
+  if (typeof event.filename !== "string" || !event.filename || typeof event.base64 !== "string" || !event.base64) {
+    return "";
+  }
+
+  try {
+    const outputDir = getJobDataPath(jobId, "outputs");
+    const safeFilename = path.basename(event.filename);
+    const outputPath = path.join(outputDir, safeFilename);
+    fs.writeFileSync(outputPath, Buffer.from(event.base64, "base64"));
+    return outputPath;
+  } catch {
+    return "";
   }
 }
 

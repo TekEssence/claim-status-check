@@ -1,4 +1,5 @@
 import { cookies, headers as nextHeaders } from "next/headers";
+import { resetDbPool } from "@/db";
 import { betterAuthInstance } from "./better-auth";
 import { getActiveAuthUser, isAuthDbConnectionError, type AuthUser } from "./db";
 
@@ -38,7 +39,9 @@ export async function getSessionFromCookies(requestHeaders?: Headers): Promise<A
     };
   } catch (error) {
     if (isAuthDbConnectionError(error)) {
-      throw error;
+      await resetDbPool();
+      console.warn("Auth session lookup failed due to a database connection issue.", error);
+      return null;
     }
     return null;
   }

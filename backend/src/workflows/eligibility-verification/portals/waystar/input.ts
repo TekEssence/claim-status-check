@@ -21,6 +21,9 @@ export const INSURANCE_HEADER_ALIASES = [
   "insurance payer",
   "insurance payer state",
   "insurance",
+] as const;
+
+const FALLBACK_INSURANCE_HEADER_ALIASES = [
   "primary ins subscriber no",
 ] as const;
 
@@ -125,6 +128,7 @@ export type WaystarWorkbookRouting = {
   unsupportedRows: Array<{
     rowIndex: number;
     insuranceName: string;
+    raw: Record<string, unknown>;
   }>;
   totalRows: number;
 };
@@ -158,7 +162,7 @@ export function routeWaystarRowsByPayer(
   const payerHeader = findInsuranceHeader(Object.keys(rows[0]));
   if (!payerHeader) {
     throw new Error(
-      `Missing payer column. Add one of: ${INSURANCE_HEADER_ALIASES.join(", ")}.`,
+      `Missing payer column. Add one of: ${[...INSURANCE_HEADER_ALIASES, ...FALLBACK_INSURANCE_HEADER_ALIASES].join(", ")}.`,
     );
   }
 
@@ -170,7 +174,7 @@ export function routeWaystarRowsByPayer(
     const insuranceName = asText(raw[payerHeader]);
     const payer = resolveWaystarPayer(insuranceName, options.payerMappings);
     if (!payer) {
-      unsupportedRows.push({ rowIndex, insuranceName });
+      unsupportedRows.push({ rowIndex, insuranceName, raw });
       return;
     }
 
@@ -282,13 +286,20 @@ function resolveWaystarPayer(
     return matchWaystarPayerByPortalName(mapping.payerPortal);
   }
 
+  if (normalizedInsuranceName === "medicare of texas") {
+    return matchWaystarPayer("medicare");
+  }
+
   return matchWaystarPayer(insuranceName);
 }
 
 function findInsuranceHeader(headers: string[]): string | null {
-  const aliases = new Set(INSURANCE_HEADER_ALIASES.map(normalizeHeader));
-  return headers.find((header) => aliases.has(normalizeHeader(header))) ??
+  const primaryAliases = new Set(INSURANCE_HEADER_ALIASES.map(normalizeHeader));
+  const fallbackAliases = new Set(FALLBACK_INSURANCE_HEADER_ALIASES.map(normalizeHeader));
+
+  return headers.find((header) => primaryAliases.has(normalizeHeader(header))) ??
     headers.find(isLikelyInsuranceHeader) ??
+    headers.find((header) => fallbackAliases.has(normalizeHeader(header))) ??
     null;
 }
 

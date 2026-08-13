@@ -1,4 +1,4 @@
-import { isAuthDbConnectionError } from "@/lib/auth/db";
+import { getActiveAuthUserByLogin, isAuthDbConnectionError } from "@/lib/auth/db";
 import { betterAuthInstance } from "@/lib/auth/better-auth";
 import { appendSetCookieHeaders } from "@/lib/auth/response";
 
@@ -12,12 +12,19 @@ export async function POST(req: Request) {
       return Response.json({ error: "Username and password are required." }, { status: 400 });
     }
 
+    const normalizedLogin = body.username.trim();
+    const normalizedPassword = body.password;
+    if (!normalizedLogin || !normalizedPassword) {
+      return Response.json({ error: "Username and password are required." }, { status: 400 });
+    }
+
     const attemptBetterAuthLogin = async (mode: "username" | "email") => {
       if (mode === "username") {
         return betterAuthInstance.api.signInUsername({
           body: {
-            username: body.username,
-            password: body.password,
+            username: normalizedLogin,
+            password: normalizedPassword,
+            rememberMe: true,
           },
           headers: req.headers,
           asResponse: true,
@@ -26,15 +33,15 @@ export async function POST(req: Request) {
 
       return betterAuthInstance.api.signInEmail({
         body: {
-          email: body.username,
-          password: body.password,
+          email: normalizedLogin,
+          password: normalizedPassword,
+          rememberMe: true,
         },
         headers: req.headers,
         asResponse: true,
       });
     };
 
-    const normalizedLogin = body.username.trim();
     const loginModes: Array<"username" | "email"> = normalizedLogin.includes("@")
       ? ["email", "username"]
       : ["username", "email"];
@@ -52,7 +59,12 @@ export async function POST(req: Request) {
     }
 
     if (!betterAuthResponse.ok) {
-      return Response.json({ error: "Invalid username or password." }, { status: 401 });
+      const errorData = await betterAuthResponse.json().catch(() => ({} as { message?: string; error?: string }));
+      const isAuthFailure = betterAuthResponse.status === 401 || betterAuthResponse.status === 403 || betterAuthResponse.status === 422;
+      return Response.json(
+        { error: errorData.message || errorData.error || (isAuthFailure ? "Invalid username or password." : "Login failed. Please try again.") },
+        { status: isAuthFailure ? 401 : betterAuthResponse.status },
+      );
     }
 
     const data = await betterAuthResponse.json().catch(() => ({} as { user?: unknown }));
@@ -65,22 +77,24 @@ export async function POST(req: Request) {
       legacyUserId?: string | null;
     } | undefined;
 
-    if (!betterAuthUser) {
-      return Response.json({ error: "Login failed. User payload was missing." }, { status: 500 });
-    }
-
     const headers = new Headers();
     appendSetCookieHeaders(headers, betterAuthResponse.headers);
 
-    return Response.json({
-      user: {
+    const resolvedUser = betterAuthUser
+      ? {
         userId: betterAuthUser.legacyUserId || betterAuthUser.id,
         username: betterAuthUser.username || betterAuthUser.email,
         email: betterAuthUser.email,
         role: betterAuthUser.role || "USER",
         mustResetPassword: Boolean(betterAuthUser.mustResetPassword),
-      },
-    }, {
+      }
+      : await getActiveAuthUserByLogin(normalizedLogin);
+
+    if (!resolvedUser) {
+      return Response.json({ error: "Login failed. User payload was missing." }, { status: 500, headers });
+    }
+
+    return Response.json({ user: resolvedUser }, {
       status: 200,
       headers,
     });

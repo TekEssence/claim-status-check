@@ -1,7 +1,8 @@
+import { JobProgress } from "../../../../components/JobProgress";
 import { LogsPanel } from "../../../../components/LogsPanel";
 import { ScreenshotViewer } from "../../../../components/ScreenshotViewer";
 import { StatusMessage } from "../../../../components/StatusMessage";
-import type { ErrorScreenshot } from "../../../../types/job";
+import type { ErrorScreenshot, JobProgressValue } from "../../../../types/job";
 
 export function MedpointResultView({
   captchaRequest,
@@ -12,6 +13,7 @@ export function MedpointResultView({
   onOtpSubmit,
   otpRequest,
   otpValue,
+  progress,
   status,
 }: {
   captchaRequest?: { inputName: string; label: string; message: string } | null;
@@ -22,10 +24,12 @@ export function MedpointResultView({
   onOtpSubmit: () => void;
   otpRequest?: { inputName: string; label: string; message: string } | null;
   otpValue?: string;
+  progress: JobProgressValue | null;
   status: string;
 }) {
   return (
     <div>
+      <JobProgress progress={progress} />
       {captchaRequest ? (
         <div className="mt-4 rounded-[1.6rem] border border-amber-200 bg-[radial-gradient(circle_at_top,#fff7d6_0%,#fff8e8_38%,#fffdf7_100%)] p-6 shadow-[0_20px_44px_rgba(245,158,11,0.14)]">
           <div className="inline-flex items-center rounded-full border border-amber-300 bg-white/80 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.24em] text-amber-700">

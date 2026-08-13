@@ -23,7 +23,7 @@ import {
   eligibilityPortals,
   getEligibilityPortal,
 } from "./registry";
-import type { ScrapeJobEvent } from "../../types/job";
+import type { JobProgressValue, ScrapeJobEvent } from "../../types/job";
 import { WaystarInputForm } from "./portals/waystar/WaystarInputForm";
 import { WaystarResultView } from "./portals/waystar/WaystarResultView";
 
@@ -41,6 +41,29 @@ const workflowSteps = [
   "Completed",
 ] as const;
 
+function base64ToBytes(base64: string): Uint8Array {
+  const binaryString = window.atob(base64);
+  const bytes = new Uint8Array(binaryString.length);
+  for (let i = 0; i < binaryString.length; i += 1) {
+    bytes[i] = binaryString.charCodeAt(i);
+  }
+  return bytes;
+}
+
+function downloadBase64File(filename: string, base64: string, mimeType: string): void {
+  const bytes = base64ToBytes(base64);
+  const arrayBuffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+  const blob = new Blob([arrayBuffer], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  document.body.removeChild(anchor);
+  URL.revokeObjectURL(url);
+}
+
 export function EligibilityPage() {
   const router = useRouter();
   const pathname = usePathname();
@@ -53,6 +76,7 @@ export function EligibilityPage() {
   const [jobId, setJobId] = useState("");
   const [status, setStatus] = useState("");
   const [logs, setLogs] = useState<string[]>([]);
+  const [progress, setProgress] = useState<JobProgressValue | null>(null);
   const [isRunning, setIsRunning] = useState(false);
   const streamController = useRef<AbortController | null>(null);
 
@@ -102,9 +126,17 @@ export function EligibilityPage() {
     if (event.type === "log" && event.message) {
       setLogs((current) => [...current, event.message!]);
     }
+    if (event.type === "progress" && typeof event.completed === "number" && typeof event.total === "number") {
+      setProgress({ completed: event.completed, total: event.total });
+      setStatus(`${heading} processing ${event.completed} of ${event.total} row(s)...`);
+    }
     if (event.type === "error") {
       setStatus(event.message || "Eligibility verification failed.");
       setIsRunning(false);
+    }
+    if (event.type === "file_download" && event.base64 && event.filename && event.mimeType) {
+      downloadBase64File(event.filename, event.base64, event.mimeType);
+      setStatus(`Output workbook ready: ${event.filename}`);
     }
     if (event.type === "done") {
       setStatus(event.message || "Eligibility verification completed.");
@@ -114,7 +146,7 @@ export function EligibilityPage() {
       setStatus(event.message || "Eligibility verification cancelled.");
       setIsRunning(false);
     }
-  }, []);
+  }, [heading]);
 
   const connect = useCallback((nextJobId: string) => {
     streamController.current?.abort();
@@ -134,6 +166,7 @@ export function EligibilityPage() {
       if (!job) return;
       setJobId(job.jobId);
       setLogs(job.logs.map((log) => log.message));
+      setProgress(job.totalItems > 0 ? { completed: job.currentCompleted, total: job.totalItems } : null);
       setStatus("Reconnected to the active eligibility run.");
       setIsRunning(true);
       connect(job.jobId);
@@ -145,6 +178,7 @@ export function EligibilityPage() {
     if (!portal || !inputFile || !credentialFile) return;
     setIsRunning(true);
     setLogs([]);
+    setProgress(null);
     setStatus("Starting eligibility verification...");
     try {
       const formData = new FormData();
@@ -339,7 +373,7 @@ export function EligibilityPage() {
               </div>
 
               <div className="mt-5">
-                <WaystarResultView status={status} logs={logs} />
+                <WaystarResultView status={status} logs={logs} progress={progress} />
               </div>
             </>
           )}
@@ -348,3 +382,4 @@ export function EligibilityPage() {
     </main>
   );
 }
+

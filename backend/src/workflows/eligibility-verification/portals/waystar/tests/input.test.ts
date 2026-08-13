@@ -43,6 +43,12 @@ test("accepts normalized payer and insurance name header variants", () => {
   assert.equal(insuranceRouting.batches[0].payerId, "arp");
 });
 
+test("routes Medicare of Texas rows through the Medicare workflow", () => {
+  const routing = routeWaystarRowsByPayer([{ Payer: "Medicare of Texas" }]);
+
+  assert.equal(routing.batches[0].payerId, "medicare");
+});
+
 test("reads abbreviated patient and subscriber headers from the workbook", () => {
   const routing = routeWaystarRowsByPayer([
     {
@@ -140,7 +146,19 @@ test("groups mixed payer rows so each payer can use its own portal flow", () => 
   );
 });
 
-test("accepts Primary Ins Subscriber No as a BCBS payer source column", () => {
+test("prefers a real payer column over Primary Ins Subscriber No when both exist", () => {
+  const routing = routeWaystarRowsByPayer([
+    {
+      "Primary Insurance Name": "Medicare",
+      "Primary Ins Subscriber No": "SUB-0001",
+    },
+  ]);
+
+  assert.equal(routing.payerHeader, "Primary Insurance Name");
+  assert.equal(routing.batches[0].payerId, "medicare");
+});
+
+test("accepts Primary Ins Subscriber No as a BCBS payer source column only as fallback", () => {
   const routing = routeWaystarRowsByPayer([
     { "Primary Ins Subscriber No": "Blue Cross and Blue Shield of Texas" },
   ]);
@@ -198,8 +216,8 @@ test("reports unsupported insurance rows without mixing them into payer batches"
 
   assert.equal(routing.batches[0].rows.length, 1);
   assert.deepEqual(routing.unsupportedRows, [
-    { rowIndex: 2, insuranceName: "Unknown Health Plan" },
-    { rowIndex: 3, insuranceName: "" },
+    { rowIndex: 2, insuranceName: "Unknown Health Plan", raw: { Payer: "Unknown Health Plan" } },
+    { rowIndex: 3, insuranceName: "", raw: { Payer: "" } },
   ]);
 });
 

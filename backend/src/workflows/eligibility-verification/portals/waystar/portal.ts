@@ -5,9 +5,11 @@ import type { EligibilityInputRow } from "../../types";
 
 export type WaystarInquiryPayload = {
   overallStatus: string;
+  bodyText: string;
   sectionStatuses: Array<{
     title: string;
     status: string;
+    detailsText?: string;
   }>;
 };
 
@@ -39,6 +41,12 @@ type WaystarInquirySnapshot = {
   firstName: string;
   dateOfBirth: string;
 };
+
+const HUMAN_DELAY = {
+  short: [180, 420],
+  medium: [450, 900],
+  long: [950, 1600],
+} as const;
 
 const WAYSTAR_PAYER_SUGGESTION_SELECTOR = [
   "ul.ui-autocomplete li:visible",
@@ -127,13 +135,21 @@ export async function submitWaystarInquiry(options: {
 
   return inquiryPage.evaluate((selectors) => {
     const overallStatus = document.querySelector(selectors.inquiry.activeCoverageDom)?.textContent?.trim() || "";
+    const bodyText = document.body?.innerText?.trim() || "";
     const sectionStatuses = Array.from(document.querySelectorAll(selectors.inquiry.sectionHeaders)).map((element) => {
       const title = element.querySelector(selectors.inquiry.sectionTitle)?.textContent?.trim() || "";
       const status = element.querySelector(selectors.inquiry.sectionStatus)?.textContent?.trim() || "";
-      return { title, status };
-    }).filter((entry) => entry.title || entry.status);
+      const details: string[] = [];
+      let sibling = element.nextElementSibling;
+      while (sibling && !sibling.matches(selectors.inquiry.sectionHeaders)) {
+        const text = sibling.textContent?.trim() || "";
+        if (text) details.push(text);
+        sibling = sibling.nextElementSibling;
+      }
+      return { title, status, detailsText: details.join("\n").trim() };
+    }).filter((entry) => entry.title || entry.status || entry.detailsText);
 
-    return { overallStatus, sectionStatuses };
+    return { overallStatus, bodyText, sectionStatuses };
   }, {
     inquiry: {
       activeCoverageDom: sanitizeDomSelector(WAYSTAR_SELECTORS.inquiry.activeCoverage),
@@ -556,35 +572,51 @@ async function selectServiceType(page: Page, serviceTypeCode: string): Promise<v
     );
   }
 
-  if (matchingOption.value) {
-    await serviceType.selectOption(matchingOption.value);
-  } else {
-    await serviceType.selectOption({ label: matchingOption.label });
+  const attempts = 3;
+  let selectedOption: WaystarSelectOption = { value: "", label: "" };
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    if (matchingOption.value) {
+      await serviceType.selectOption(matchingOption.value);
+    } else {
+      await serviceType.selectOption({ label: matchingOption.label });
+    }
+
+    await serviceType.evaluate((element) => {
+      const input = element as HTMLSelectElement;
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+      input.dispatchEvent(new Event("blur", { bubbles: true }));
+      input.dispatchEvent(new Event("focusout", { bubbles: true }));
+    }).catch(() => {});
+
+    await serviceType.press("Tab").catch(() => {});
+    await clickAddCodeIfVisible(page);
+    await page.waitForLoadState("networkidle").catch(() => {});
+    await page.waitForTimeout(500 + (attempt * 250));
+
+    selectedOption = await serviceType.locator("option:checked").evaluate((node) => ({
+      value: (node as HTMLOptionElement | null)?.value || "",
+      label: (node as HTMLOptionElement | null)?.textContent?.trim() || "",
+    })).catch(() => ({ value: "", label: "" }));
+
+    if (findWaystarServiceTypeOption([selectedOption], serviceTypeCode)) {
+      return;
+    }
+
+    await serviceType.scrollIntoViewIfNeeded().catch(() => {});
+    await page.waitForTimeout(250);
   }
 
-  await serviceType.evaluate((element) => {
-    const input = element as HTMLSelectElement;
-    input.dispatchEvent(new Event("change", { bubbles: true }));
-    input.dispatchEvent(new Event("blur", { bubbles: true }));
-  }).catch(() => {});
-  await clickAddCodeIfVisible(page);
-
-  const selectedOption = await serviceType.locator("option:checked").evaluate((node) => ({
-    value: (node as HTMLOptionElement | null)?.value || "",
-    label: (node as HTMLOptionElement | null)?.textContent?.trim() || "",
-  })).catch(() => ({ value: "", label: "" }));
-
-  if (!findWaystarServiceTypeOption([selectedOption], serviceTypeCode)) {
-    throw new Error(
-      `Waystar service type selection did not stick. Expected ${serviceTypeCode}, found ${selectedOption.label || selectedOption.value || "blank"}.`,
-    );
-  }
+  throw new Error(
+    `Waystar service type selection did not stick after ${attempts} attempt(s). Expected ${serviceTypeCode}, found ${selectedOption.label || selectedOption.value || "blank"}.`,
+  );
 }
 
 async function selectPatientLookup(page: Page, lookupValue: string): Promise<void> {
   const patientLookup = page.locator(WAYSTAR_SELECTORS.inquiry.patientLookup).first();
   await patientLookup.waitFor({ state: "visible", timeout: 30000 });
   await waitForEnabled(patientLookup, "Waystar patient lookup");
+  await humanPause(page, "short");
   await patientLookup.selectOption(lookupValue);
   await patientLookup.evaluate((element) => {
     const select = element as HTMLSelectElement;
@@ -723,6 +755,21 @@ async function selectProvider(page: Page, credentials: WaystarCredentials): Prom
   }
 }
 
+async function humanPause(page: Page, pace: keyof typeof HUMAN_DELAY = "short"): Promise<void> {
+  const [min, max] = HUMAN_DELAY[pace];
+  const duration = min + Math.floor(Math.random() * (max - min + 1));
+  await page.waitForTimeout(duration);
+}
+
+async function humanType(locator: Locator, value: string, minDelay = 45, maxDelay = 110): Promise<void> {
+  for (const character of value) {
+    await locator.type(character, { delay: minDelay + Math.floor(Math.random() * (maxDelay - minDelay + 1)) }).catch(async () => {
+      const current = await locator.inputValue().catch(() => "");
+      await locator.fill(`${current}${character}`).catch(() => {});
+    });
+  }
+}
+
 function normalizeServiceTypeCode(value?: string): string | null {
   const text = (value || "").trim();
   if (!text) return null;
@@ -790,6 +837,12 @@ async function waitForEnabled(locator: Locator, label: string): Promise<void> {
 
   throw new Error(`${label} did not become enabled.`);
 }
+
+
+
+
+
+
 
 
 

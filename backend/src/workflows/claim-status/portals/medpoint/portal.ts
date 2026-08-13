@@ -57,8 +57,7 @@ async function ensureMedpointSignIn(page: Page, log: (message: string) => Promis
 
     const alreadyAdvanced =
       (await isVisible(page, medpointConfig.selectors.otpInput, 1500)) ||
-      (await isVisible(page, medpointConfig.selectors.claimsMenu, 1500)) ||
-      (await isVisible(page, medpointConfig.selectors.currentIpa, 1500)) ||
+      (await isPortalHomeReady(page)) ||
       !(await isVisible(page, medpointConfig.selectors.username, 1000));
     if (alreadyAdvanced) {
       await log(`Medpoint login already advanced before Sign in retry ${attempt}.`);
@@ -77,8 +76,7 @@ async function ensureMedpointSignIn(page: Page, log: (message: string) => Promis
 
     const advancedAfterClick =
       (await isVisible(page, medpointConfig.selectors.otpInput, 2000)) ||
-      (await isVisible(page, medpointConfig.selectors.claimsMenu, 2000)) ||
-      (await isVisible(page, medpointConfig.selectors.currentIpa, 2000)) ||
+      (await isPortalHomeReady(page)) ||
       !(await isVisible(page, medpointConfig.selectors.username, 1000));
     if (advancedAfterClick) {
       await log(`Medpoint Sign in click succeeded on try ${attempt}/3.`);
@@ -107,8 +105,7 @@ async function ensureMedpointOtpValidation(page: Page, log: (message: string) =>
 
     const alreadyAdvanced =
       !(await isVisible(page, medpointConfig.selectors.otpInput, 1000)) ||
-      (await isVisible(page, medpointConfig.selectors.claimsMenu, 1500)) ||
-      (await isVisible(page, medpointConfig.selectors.currentIpa, 1500));
+      (await isPortalHomeReady(page));
     if (alreadyAdvanced) {
       await log(`Medpoint OTP already advanced before Validate click retry ${attempt}.`);
       return;
@@ -126,8 +123,7 @@ async function ensureMedpointOtpValidation(page: Page, log: (message: string) =>
 
     const advancedAfterClick =
       !(await isVisible(page, medpointConfig.selectors.otpInput, 1500)) ||
-      (await isVisible(page, medpointConfig.selectors.claimsMenu, 2000)) ||
-      (await isVisible(page, medpointConfig.selectors.currentIpa, 2000));
+      (await isPortalHomeReady(page));
     if (advancedAfterClick) {
       await log(`Medpoint Validate OTP click succeeded on try ${attempt}/3.`);
       return;
@@ -147,6 +143,23 @@ async function fillField(page: Page, selector: string, value: string): Promise<v
   await field.fill(value);
   await field.dispatchEvent("input").catch(() => {});
   await field.dispatchEvent("change").catch(() => {});
+}
+
+async function isPortalHomeReady(page: Page): Promise<boolean> {
+  const selectors = medpointConfig.selectors;
+  const currentUrl = page.url().toLowerCase();
+  if (currentUrl.includes('/claim') || currentUrl.includes('/dashboard') || currentUrl.includes('/home')) {
+    return true;
+  }
+
+  return (
+    (await isVisible(page, selectors.claimsMenu, 2500)) ||
+    (await isVisible(page, selectors.currentIpa, 2500)) ||
+    (await isVisible(page, selectors.memberLastName, 1500)) ||
+    (await isVisible(page, selectors.memberFirstName, 1500)) ||
+    (await isVisible(page, selectors.serviceFromDate, 1500)) ||
+    (await isVisible(page, selectors.claimLink, 1500))
+  );
 }
 
 async function requestCaptchaCompletion(context: ScraperContext, log: (message: string) => Promise<void>): Promise<void> {
@@ -204,7 +217,7 @@ export async function loginToMedpoint(options: {
     await page.waitForLoadState("networkidle", { timeout: 20000 }).catch(() => {});
   }
 
-  const reachedPortal = await isVisible(page, selectors.claimsMenu, 10000) || await isVisible(page, selectors.currentIpa, 10000);
+  const reachedPortal = await isPortalHomeReady(page);
   if (!reachedPortal) {
     throw new Error(`Medpoint login did not reach the portal home page. Current URL: ${page.url()}`);
   }
@@ -224,11 +237,17 @@ export function expectedIpaForRow(row: MedpointInputRow): string {
 }
 
 export async function openClaimsSearch(page: Page, log: (message: string) => Promise<void>): Promise<void> {
-  await clickFirstVisible(page, [medpointConfig.selectors.claimsMenu], 10000);
-  await page.waitForTimeout(1000);
-  await clickFirstVisible(page, [medpointConfig.selectors.searchAction], 8000);
-  await page.waitForTimeout(1000);
-  await log("Medpoint Claims search view opened.");
+  const claimsOpened = await clickFirstVisible(page, [medpointConfig.selectors.claimsMenu], 10000);
+  if (claimsOpened) {
+    await page.waitForTimeout(1000);
+  }
+
+  const searchOpened = await clickFirstVisible(page, [medpointConfig.selectors.searchAction], 8000);
+  if (searchOpened) {
+    await page.waitForTimeout(1000);
+  }
+
+  await log(`Medpoint Claims search view opened${claimsOpened ? '' : ' using the already-visible search form'}.`);
 }
 
 export async function searchClaims(page: Page, row: MedpointInputRow, log: (message: string) => Promise<void>): Promise<string[]> {
