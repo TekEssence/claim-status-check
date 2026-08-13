@@ -38,3 +38,17 @@ test("uses BCBS PPO Plan Date when eligibility dates are absent", () => {
   assert.equal(result.terminationDate, "12/31/9999");
   assert.equal(result.planDate, "01/01/2023 to 12/31/9999");
 });
+
+test("uses BCBS PPO Plan Begin Date before the Plan Date start", () => {
+  const result = bcbsPpoPayer.parseResult({
+    overallStatus: "ACTIVE COVERAGE",
+    subscriberCoverageInformation: {
+      planBeginDate: "01/01/2024",
+      planDate: "12/03/2023 to 12/31/9999",
+    },
+    healthBenefitPlanCoverage: { coverageDescription: "PPO" },
+  }, { originalIndex: 2, raw: {} });
+
+  assert.equal(result.effectiveDate, "01/01/2024");
+  assert.equal(result.terminationDate, "12/31/9999");
+});

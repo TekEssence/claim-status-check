@@ -172,6 +172,7 @@ export function createWaystarRunner(): AutomationRunner<EligibilityRunInput> {
             const fieldRetryCounts = new Map<number, number>();
             for (let rowPosition = 0; rowPosition < batch.rows.length; rowPosition += 1) {
               const row = batch.rows[rowPosition];
+              await context.emit({ type: "progress", completed, total: routing.totalRows, currentRow: row.originalIndex });
               if (context.isCancelled?.()) {
                 await context.log({
                   level: "warn",
@@ -199,10 +200,11 @@ export function createWaystarRunner(): AutomationRunner<EligibilityRunInput> {
                   row,
                 });
                 let result = applyWaystarResultDefaults(payer.parseResult(payload, row), row);
-                if (isFailedAtPayerResult(result)) {
+                if (isRetryablePayerError(result)) {
+                  const payerResponse = describePayerError(result);
                   await context.log({
                     level: "warn",
-                    message: `${payer.name} eligibility row ${row.originalIndex} returned Failed at Payer. Waiting and retrying the inquiry once.`,
+                    message: `${payer.name} eligibility row ${row.originalIndex} returned ${payerResponse}. Waiting and retrying the verified inquiry once.`,
                     rowIndex: row.originalIndex,
                     eventName: "eligibility_row_retry_failed_at_payer",
                   });
@@ -339,6 +341,7 @@ export function createWaystarRunner(): AutomationRunner<EligibilityRunInput> {
 
               completed = Math.min(completed + 1, routing.totalRows);
               await context.emit({ type: "progress", completed, total: routing.totalRows, currentRow: row.originalIndex });
+              await closeWaystarInquiryWindows(page);
             }
           } catch (error) {
             const message = error instanceof Error ? error.message : "Waystar payer login failed.";
@@ -548,8 +551,16 @@ export function applyWaystarResultDefaults(
       result.relationshipToSubscriber || row.relationshipToSubscriber || "Self",
   };
 }
-function isFailedAtPayerResult(result: EligibilityResult): boolean {
-  return String(result.planStatus || "").toLowerCase().includes("failed at payer");
+function isRetryablePayerError(result: EligibilityResult): boolean {
+  const response = `${result.coverageStatus || ""} ${result.planStatus || ""}`.toLowerCase();
+  return result.coverageStatus === "error" ||
+    result.coverageStatus === "unknown" ||
+    response.includes("failed at payer") ||
+    response.includes("subscriber not found");
+}
+function describePayerError(result: EligibilityResult): string {
+  const response = String(result.planStatus || "").trim();
+  return response || `${result.coverageStatus || "unknown"} payer response`;
 }
 function isWaystarInquiryFieldError(message: string): boolean {
   const normalized = message.toLowerCase();

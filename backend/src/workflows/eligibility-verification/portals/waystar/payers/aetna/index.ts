@@ -5,7 +5,7 @@ export const aetnaPayer: WaystarPayerHandler = {
   id: "aetna",
   name: "AETNA",
   portalPayerName: "Aetna (60054)",
-  insuranceNameAliases: ["aetna", "aetna insurance"],
+  insuranceNameAliases: ["aetna", "aetna insurance", "aetna health plans"],
   credentialProject: "FL2",
   requiredFields: ["memberId", "patientFirstName", "patientLastName", "dateOfBirth"],
   parseResult(payload, row) {
