@@ -50,11 +50,30 @@ test("reads Waystar credentials and verification answers from workbook", async (
   assert.equal(credentials.providerName, "PINELLAS COUNTY PRIMARY CARE AND HOSPITALISTS");
   assert.equal(credentials.serviceTypeCode, "30");
   assert.deepEqual(credentials.verificationAnswers, [
-    { question: "What was the first car you owned?", answer: "Dzire" },
-    { question: "First Job", answer: "Biller" },
+    { username: undefined, question: "What was the first car you owned?", answer: "Dzire" },
+    { username: undefined, question: "First Job", answer: "Biller" },
   ]);
 });
 
+test("scopes verification answers to the matching username", async () => {
+  const profiles = await readWaystarCredentialProfiles(workbookFile({
+    credentialsRows: [
+      { Username: "user-one", Password: "pass-one" },
+      { Username: "user-two", Password: "pass-two" },
+    ],
+    verificationRows: [
+      { Username: "user-one", Question: "First Job", Answer: "Biller" },
+      { Username: "user-two", Question: "First Job", Answer: "Nurse" },
+    ],
+  }));
+
+  assert.deepEqual(profiles[0].verificationAnswers, [
+    { username: "user-one", question: "First Job", answer: "Biller" },
+  ]);
+  assert.deepEqual(profiles[1].verificationAnswers, [
+    { username: "user-two", question: "First Job", answer: "Nurse" },
+  ]);
+});
 test("selects the credential row matching the routed payer", async () => {
   const profiles = await readWaystarCredentialProfiles(workbookFile({
     credentialsRows: [

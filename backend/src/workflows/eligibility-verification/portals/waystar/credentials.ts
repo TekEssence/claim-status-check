@@ -1,6 +1,7 @@
 import * as XLSX from "xlsx";
 
 export type WaystarSecurityQuestion = {
+  username?: string;
   question: string;
   answer: string;
 };
@@ -56,7 +57,9 @@ export async function readWaystarCredentialProfiles(file: File): Promise<Waystar
       serviceTypeCode: normalizeServiceTypeCode(
         findValue(row, ["service type code", "service type", "ddlstccode"]) || DEFAULT_SERVICE_TYPE_CODE,
       ),
-      verificationAnswers,
+      verificationAnswers: verificationAnswers.filter((entry) =>
+        !entry.username || normalizeHeader(entry.username) === normalizeHeader(username),
+      ),
     }];
   });
 
@@ -100,6 +103,7 @@ function readVerificationSheet(workbook: XLSX.WorkBook): WaystarSecurityQuestion
 
   return rows
     .map((row) => ({
+      username: findValue(row, ["user name", "username", "login name", "waystar username"]) || undefined,
       question: findValue(row, ["question", "security question", "verification question"]),
       answer: findValue(row, ["answer", "security answer", "verification answer"]),
     }))
