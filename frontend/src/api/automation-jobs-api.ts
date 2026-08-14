@@ -24,6 +24,8 @@ export type AutomationJobSummary = {
   finishedAt: string | null;
 };
 
+type AutomationJobScope = Pick<AutomationJobSummary, "workflowId" | "portalId">;
+
 export async function startAutomationJob(formData: FormData): Promise<string> {
   if (isAwsWorkflowMode()) {
     return startScrapeJob(formData);
@@ -37,10 +39,20 @@ export async function startAutomationJob(formData: FormData): Promise<string> {
   return body.jobId;
 }
 
-export async function getCurrentAutomationJob() {
+export async function getCurrentAutomationJob(options: {
+  workflowId?: string;
+  portalId?: string;
+} = {}) {
+  const matchesRequestedScope = (job: AutomationJobScope) =>
+    (!options.workflowId || job.workflowId === options.workflowId) &&
+    (!options.portalId || job.portalId === options.portalId);
+
   if (isAwsWorkflowMode()) {
     const jobs = await listAutomationJobs(50);
-    const job = jobs.find((candidate) => candidate.status === "queued" || candidate.status === "running" || candidate.status === "waiting_otp");
+    const job = jobs.find((candidate) =>
+      matchesRequestedScope(candidate) &&
+      (candidate.status === "queued" || candidate.status === "running" || candidate.status === "waiting_otp")
+    );
     return job ? { ...job, logs: [] as Array<{ message: string }> } : null;
   }
 
@@ -60,7 +72,7 @@ export async function getCurrentAutomationJob() {
     error?: string;
   };
   if (!response.ok) throw new Error(body.error || "Unable to load the active automation workflow.");
-  return body.job ?? null;
+  return body.job && matchesRequestedScope(body.job) ? body.job : null;
 }
 
 export async function listAutomationJobs(limit = 25): Promise<AutomationJobSummary[]> {

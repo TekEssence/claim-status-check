@@ -165,8 +165,8 @@ export function PaymentPostingPage() {
 
   useEffect(() => {
     if (!user) return;
-    void getCurrentAutomationJob().then((job) => {
-      if (!job || job.workflowId !== WORKFLOW_ID) return;
+    void getCurrentAutomationJob({ workflowId: WORKFLOW_ID }).then((job) => {
+      if (!job) return;
       setSelectedPortalId(job.portalId);
       setJobId(job.jobId);
       setLogs(job.logs.map((log) => log.message));

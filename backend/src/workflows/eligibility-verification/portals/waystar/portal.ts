@@ -581,6 +581,23 @@ type WaystarSelectOption = {
   disabled?: boolean;
 };
 
+async function readWaystarSelectOptions(select: Locator, options: { includeDisabled?: boolean } = {}): Promise<WaystarSelectOption[]> {
+  const optionLocator = select.locator("option");
+  const optionCount = await optionLocator.count();
+  const values: WaystarSelectOption[] = [];
+  for (let index = 0; index < optionCount; index += 1) {
+    const option = optionLocator.nth(index);
+    const disabled = await option.isDisabled().catch(() => false);
+    if (disabled && !options.includeDisabled) continue;
+    values.push({
+      value: await option.getAttribute("value").then((value) => value || ""),
+      label: (await option.textContent().catch(() => "") || "").trim(),
+      disabled,
+    });
+  }
+  return values;
+}
+
 type WaystarInquirySnapshot = {
   serviceTypeValue: string;
   serviceTypeLabel: string;
@@ -693,12 +710,7 @@ async function selectInquiryPatientType(page: Page, relationship?: string): Prom
   const relationshipSelect = page.locator(WAYSTAR_SELECTORS.inquiry.relationship).first();
   await relationshipSelect.waitFor({ state: "visible", timeout: 30000 });
   await waitForEnabled(relationshipSelect, "Waystar relationship to subscriber");
-  const options = await relationshipSelect.locator("option").evaluateAll((nodes) =>
-    nodes.map((node) => ({
-      value: (node as HTMLOptionElement).value,
-      label: node.textContent?.trim() || "",
-    })),
-  );
+  const options = await readWaystarSelectOptions(relationshipSelect);
   const target = normalizeRelationship(relationship || "");
   const match = options.find((option) => {
     const label = normalizeRelationship(option.label);
@@ -762,12 +774,7 @@ async function selectPayer(page: Page, payerName: string): Promise<void> {
   const payerSelect = page.locator(WAYSTAR_SELECTORS.inquiry.payerSelect).first();
   if (await payerSelect.isVisible().catch(() => false)) {
     await payerSelect.selectOption({ label: payerName }).catch(async () => {
-      const options = await payerSelect.locator("option").evaluateAll((nodes) =>
-        nodes.map((node) => ({
-          value: (node as HTMLOptionElement).value,
-          label: node.textContent?.trim() || "",
-        })),
-      );
+      const options = await readWaystarSelectOptions(payerSelect);
       const match = options.find((option) => isExactWaystarPayerMatch(option.label, payerName));
       if (!match?.value) {
         throw new Error(`Waystar payer ${payerName} was not found in the DDE payer dropdown.`);
@@ -861,21 +868,17 @@ async function selectPatientLookupOption(page: Page, lookupCode: string): Promis
   const lookup = page.locator(WAYSTAR_SELECTORS.inquiry.patientLookup).first();
   await lookup.waitFor({ state: "visible", timeout: 30000 });
   await waitForEnabled(lookup, "Waystar Look Up By");
-  const options = await lookup.locator("option").evaluateAll((nodes) =>
-    nodes.map((node) => ({
-      value: (node as HTMLOptionElement).value,
-      label: (node.textContent || "").trim(),
-    })),
-  );
+  const options = await readWaystarSelectOptions(lookup);
   const expected = findWaystarPatientLookupOption(options, lookupCode);
   if (!expected) {
     throw new Error(`Waystar Look Up By option Sbr ID, LName, FName, DOB (${lookupCode}) was not available.`);
   }
   await lookup.selectOption(expected.value);
-  const selected = await lookup.locator("option:checked").evaluate((node) => ({
-    value: (node as HTMLOptionElement).value,
-    label: (node.textContent || "").trim(),
-  }));
+  const selectedOption = lookup.locator("option:checked").first();
+  const selected = {
+    value: await selectedOption.getAttribute("value").then((value) => value || ""),
+    label: (await selectedOption.textContent().catch(() => "") || "").trim(),
+  };
   if (selected.value !== expected.value || normalizeText(selected.label) !== normalizeText(expected.label)) {
     throw new Error(`Waystar Look Up By selection did not stick. Expected ${expected.label}, found ${selected.label || selected.value || "blank"}.`);
   }
@@ -889,13 +892,7 @@ async function selectServiceType(page: Page, serviceTypeCode: string): Promise<v
   let matchingOption: WaystarSelectOption | null = null;
   let latestOptions: WaystarSelectOption[] = [];
   while (Date.now() < deadline) {
-    latestOptions = await serviceType.locator("option").evaluateAll((nodes) =>
-      nodes.map((node) => ({
-        value: (node as HTMLOptionElement).value,
-        label: node.textContent?.trim() || "",
-        disabled: (node as HTMLOptionElement).disabled,
-      })),
-    );
+    latestOptions = await readWaystarSelectOptions(serviceType, { includeDisabled: true });
     matchingOption = findWaystarServiceTypeOption(latestOptions, serviceTypeCode);
     if (matchingOption) break;
     await page.waitForTimeout(250);
@@ -919,17 +916,13 @@ async function selectServiceType(page: Page, serviceTypeCode: string): Promise<v
     await serviceType.selectOption({ label: matchingOption.label });
   }
 
-  await serviceType.evaluate((element) => {
-    const input = element as HTMLSelectElement;
-    input.dispatchEvent(new Event("change", { bubbles: true }));
-    input.dispatchEvent(new Event("blur", { bubbles: true }));
-  }).catch(() => {});
+  await serviceType.blur().catch(() => {});
 
-
-  const selectedOption = await serviceType.locator("option:checked").evaluate((node) => ({
-    value: (node as HTMLOptionElement | null)?.value || "",
-    label: (node as HTMLOptionElement | null)?.textContent?.trim() || "",
-  })).catch(() => ({ value: "", label: "" }));
+  const selectedServiceOption = serviceType.locator("option:checked").first();
+  const selectedOption = {
+    value: await selectedServiceOption.getAttribute("value").then((value) => value || "").catch(() => ""),
+    label: (await selectedServiceOption.textContent().catch(() => "") || "").trim(),
+  };
 
   if (!findWaystarServiceTypeOption([selectedOption], serviceTypeCode)) {
     throw new Error(
@@ -953,12 +946,6 @@ async function clickAddCodeIfVisible(page: Page): Promise<void> {
 
 async function dismissWaystarDatePicker(page: Page): Promise<void> {
   await page.keyboard.press("Escape").catch(() => {});
-  const datePicker = page.locator("#ui-datepicker-div:visible").first();
-  if (await datePicker.isVisible().catch(() => false)) {
-    await datePicker.evaluate((element) => {
-      (element as HTMLElement).style.display = "none";
-    }).catch(() => {});
-  }
 }
 async function fillVerifiedText(page: Page, selector: string, value: string, label: string, compareAsDate = false): Promise<void> {
   const input = page.locator(selector).first();
@@ -983,13 +970,8 @@ async function fillVerifiedText(page: Page, selector: string, value: string, lab
     matches = compareAsDate ? waystarDatesMatch(actualValue, value) : actualValue.trim() === value.trim();
   }
   if (!matches) {
-    await input.evaluate((element, expectedValue) => {
-      const field = element as HTMLInputElement;
-      const valueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
-      valueSetter?.call(field, expectedValue);
-      field.dispatchEvent(new Event("input", { bubbles: true }));
-      field.dispatchEvent(new Event("change", { bubbles: true }));
-    }, value);
+    await input.fill(value);
+    await commitInputValue(input);
     await page.waitForTimeout(250);
     actualValue = await input.inputValue().catch(() => "");
     matches = compareAsDate ? waystarDatesMatch(actualValue, value) : actualValue.trim() === value.trim();
@@ -1000,12 +982,7 @@ async function fillVerifiedText(page: Page, selector: string, value: string, lab
 }
 
 async function commitInputValue(input: Locator): Promise<void> {
-  await input.evaluate((element) => {
-    const field = element as HTMLInputElement;
-    field.dispatchEvent(new Event("input", { bubbles: true }));
-    field.dispatchEvent(new Event("change", { bubbles: true }));
-    field.dispatchEvent(new Event("blur", { bubbles: true }));
-  }).catch(() => {});
+  await input.blur().catch(() => {});
 }
 async function verifyInquiryFieldsBeforeSubmit(
   page: Page,
@@ -1073,16 +1050,18 @@ function waystarDatesMatch(actual: string, expected: string): boolean {
 
 async function readInquirySnapshot(page: Page): Promise<WaystarInquirySnapshot> {
   const serviceType = page.locator(WAYSTAR_SELECTORS.inquiry.serviceType).first();
-  const selectedService = await serviceType.locator("option:checked").evaluate((node) => ({
-    value: (node as HTMLOptionElement | null)?.value || "",
-    label: (node as HTMLOptionElement | null)?.textContent?.trim() || "",
-  })).catch(() => ({ value: "", label: "" }));
+  const selectedServiceOption = serviceType.locator("option:checked").first();
+  const selectedService = {
+    value: await selectedServiceOption.getAttribute("value").then((value) => value || "").catch(() => ""),
+    label: (await selectedServiceOption.textContent().catch(() => "") || "").trim(),
+  };
 
   const patientLookup = page.locator(WAYSTAR_SELECTORS.inquiry.patientLookup).first();
-  const selectedPatientLookup = await patientLookup.locator("option:checked").evaluate((node) => ({
-    value: (node as HTMLOptionElement | null)?.value || "",
-    label: (node as HTMLOptionElement | null)?.textContent?.trim() || "",
-  })).catch(() => ({ value: "", label: "" }));
+  const selectedPatientLookupOption = patientLookup.locator("option:checked").first();
+  const selectedPatientLookup = {
+    value: await selectedPatientLookupOption.getAttribute("value").then((value) => value || "").catch(() => ""),
+    label: (await selectedPatientLookupOption.textContent().catch(() => "") || "").trim(),
+  };
 
   return {
     serviceTypeValue: selectedService.value,
@@ -1108,12 +1087,7 @@ async function selectProvider(page: Page, credentials: WaystarCredentials): Prom
     await humanPause(page, 300, 650);
     await provider.selectOption({ label: credentials.providerName }).catch(async () => {
       const normalizedTarget = normalizeText(credentials.providerName || "");
-      const options = await provider.locator("option").evaluateAll((nodes) =>
-        nodes.map((node) => ({
-          value: (node as HTMLOptionElement).value,
-          label: node.textContent?.trim() || "",
-        })),
-      );
+      const options = await readWaystarSelectOptions(provider);
       const match = options.find((option) => normalizeText(option.label) === normalizedTarget);
       if (!match?.value) {
         throw new Error(`Waystar provider ${credentials.providerName} was not found in the inquiry form.`);

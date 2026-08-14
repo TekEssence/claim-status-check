@@ -186,8 +186,8 @@ export function EligibilityPage() {
   }, [handleEvent]);
 
   useEffect(() => {
-    if (!user) return;
-    void getCurrentAutomationJob().then((job) => {
+    if (!user || !portal) return;
+    void getCurrentAutomationJob({ workflowId: "eligibility-verification", portalId: portal.id }).then((job) => {
       if (!job) return;
       setJobId(job.jobId);
       setLogs(job.logs.map((log) => log.message));
@@ -197,7 +197,7 @@ export function EligibilityPage() {
       setIsRunning(job.status === "running");
       if (job.status === "running") connect(job.jobId);
     }).catch(() => {});
-  }, [user, connect]);
+  }, [user, portal, connect]);
 
   async function start(event: FormEvent) {
     event.preventDefault();

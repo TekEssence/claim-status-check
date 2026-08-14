@@ -183,9 +183,8 @@ export function PaymentEobPage({ portalId: initialPortalId }: PaymentEobPageProp
 
   useEffect(() => {
     if (!user) return;
-    void getCurrentAutomationJob().then((job) => {
-      if (!job || job.workflowId !== WORKFLOW_ID) return;
-      if (initialPortalId && job.portalId !== initialPortalId) return;
+    void getCurrentAutomationJob({ workflowId: WORKFLOW_ID, portalId: initialPortalId ?? undefined }).then((job) => {
+      if (!job) return;
       setSelectedPortalId(job.portalId);
       setJobId(job.jobId);
       setLogs(job.logs.map((log) => log.message));
