@@ -68,8 +68,9 @@ async function launchLocalBrowser(headless: boolean): Promise<Browser> {
   );
 }
 
-export async function launchAutomationBrowser(): Promise<BrowserLaunchResult> {
+export async function launchAutomationBrowser(options: { headless?: boolean } = {}): Promise<BrowserLaunchResult> {
   const runtimeConfig = getAutomationRuntimeConfig();
+  const headless = options.headless ?? runtimeConfig.headless;
   if (runtimeConfig.environment === "vercel") {
     const browser = await playwright.launch({
       args: chromium.args,
@@ -83,7 +84,7 @@ export async function launchAutomationBrowser(): Promise<BrowserLaunchResult> {
     return { browser, context };
   }
 
-  const browser = await launchLocalBrowser(runtimeConfig.headless);
+  const browser = await launchLocalBrowser(headless);
   const context = await browser.newContext({
     acceptDownloads: true,
     viewport: { width: 1280, height: 800 },

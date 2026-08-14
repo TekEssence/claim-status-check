@@ -892,7 +892,14 @@ async function selectServiceType(page: Page, serviceTypeCode: string): Promise<v
   let matchingOption: WaystarSelectOption | null = null;
   let latestOptions: WaystarSelectOption[] = [];
   while (Date.now() < deadline) {
-    latestOptions = await readWaystarSelectOptions(serviceType, { includeDisabled: true });
+    // allTextContents is implemented by Playwright and does not serialize one
+    // of our callbacks into the page. This avoids the AWS bundle's `__name`
+    // transform and snapshots the dynamic Waystar dropdown in one operation.
+    const labels = await serviceType.locator("option").allTextContents();
+    latestOptions = labels.map((label) => ({
+      value: "",
+      label: label.trim(),
+    }));
     matchingOption = findWaystarServiceTypeOption(latestOptions, serviceTypeCode);
     if (matchingOption) break;
     await page.waitForTimeout(250);
@@ -908,13 +915,8 @@ async function selectServiceType(page: Page, serviceTypeCode: string): Promise<v
     );
   }
 
-  if (matchingOption.value) {
-    await humanPause(page, 300, 650);
-    await serviceType.selectOption(matchingOption.value);
-  } else {
-    await humanPause(page, 300, 650);
-    await serviceType.selectOption({ label: matchingOption.label });
-  }
+  await humanPause(page, 300, 650);
+  await serviceType.selectOption({ label: matchingOption.label });
 
   await serviceType.blur().catch(() => {});
 
@@ -1179,7 +1181,10 @@ async function recoverStaleInquiryOverlay(page: Page): Promise<void> {
   await waitForInquiryControls(page);
 }
 async function humanType(locator: Locator, value: string): Promise<void> {
-  await locator.click();
+  // Waystar can leave its jQuery date picker over other form fields between
+  // inquiries. Programmatic focus avoids a pointer click being intercepted by
+  // the calendar while still sending keyboard input to the field.
+  await locator.focus();
   await locator.press("Control+A").catch(() => {});
   await locator.press("Backspace").catch(() => {});
   const delay = authenticatedWaystarContexts.has(locator.page().context())
