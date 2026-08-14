@@ -962,7 +962,7 @@ async function fillVerifiedText(page: Page, selector: string, value: string, lab
   let actualValue = await input.inputValue().catch(() => "");
   let matches = compareAsDate ? waystarDatesMatch(actualValue, value) : actualValue.trim() === value.trim();
   if (!matches) {
-    await input.click();
+    await input.focus();
     await input.press("Control+A").catch(() => {});
     await input.press("Backspace").catch(() => {});
     await input.pressSequentially(value, { delay: randomBetween(25, 40) });
