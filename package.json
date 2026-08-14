@@ -11,6 +11,7 @@
     "build:static:verify": "node scripts/verify-static-frontend.mjs",
     "build:docker": "next build",
     "worker:push:dev": "node scripts/push-worker-dev.mjs",
+    "deploy:aws:dev": "node scripts/deploy-aws-dev.mjs",
     "start": "next start",
     "lint": "eslint",
     "db:generate": "drizzle-kit generate",

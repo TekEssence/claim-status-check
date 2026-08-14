@@ -670,6 +670,12 @@ async function selectRegalGroupSite(page: Page, group: string, stageLog: (level:
   }
 
   if (!value) {
+    const visibleSiteText = await getVisibleRegalSiteText(page);
+    if (normalizeRegalSiteText(visibleSiteText).includes(normalizeRegalSiteText(groupName))) {
+      await stageLog("info", "group", `Regal group ${group} confirmed from fixed site text after dropdown lookup: ${groupName}.`, page);
+      return;
+    }
+
     throw new Error(`Regal group ${group} could not be found in the site dropdown. Expected option containing "${groupName}".`);
   }
 
