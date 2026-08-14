@@ -166,6 +166,22 @@ export async function openEligibilityInquiry(page: Page): Promise<Page> {
   throw new Error(`Waystar could not open a usable DDE inquiry window after two attempts. ${lastError instanceof Error ? lastError.message : "Unknown DDE window error."}`);
 }
 
+function buildWaystarPageExpression<TArg, TResult>(
+  callback: (arg: TArg) => TResult,
+  arg: TArg,
+): string {
+  const serializedArg = JSON.stringify(arg) ?? "undefined";
+  return `(() => { const __name = (target) => target; return (${callback.toString()})(${serializedArg}); })()`;
+}
+
+async function evaluateWaystarPage<TArg, TResult>(
+  page: Page,
+  callback: (arg: TArg) => TResult,
+  arg: TArg,
+): Promise<TResult> {
+  return page.evaluate(buildWaystarPageExpression(callback, arg)) as Promise<TResult>;
+}
+
 async function enableCardSwipeAutoClose(page: Page): Promise<void> {
   const installAutoClose = () => {
     const state = window as typeof window & { __waystarCardSwipeObserver?: MutationObserver };
@@ -196,12 +212,12 @@ async function enableCardSwipeAutoClose(page: Page): Promise<void> {
 
   if (!cardSwipeAutoClosePages.has(page)) {
     cardSwipeAutoClosePages.add(page);
-    await page.addInitScript(installAutoClose);
+    await page.addInitScript({ content: buildWaystarPageExpression(installAutoClose, undefined) });
   }
 
   // addInitScript applies to future documents. Install it immediately on the
   // already-open DDE document too, so dialogs created by AJAX are closed.
-  await page.evaluate(installAutoClose).catch(() => {});
+  await evaluateWaystarPage(page, installAutoClose, undefined).catch(() => {});
 }
 export async function submitWaystarInquiry(options: {
   page: Page;
@@ -297,7 +313,7 @@ export async function submitWaystarInquiry(options: {
   
   // --- END TEMPORARY DEBUG DUMP ---
 
-  return inquiryPage.evaluate((selectors) => {
+  return evaluateWaystarPage(inquiryPage, (selectors) => {
     // ---- generic helpers ----
     function textOf(el: Element | null): string {
       return el?.textContent?.trim() || "";
@@ -650,9 +666,18 @@ async function handleAdditionalAuthentication(
   page: Page,
   verificationAnswers: WaystarSecurityQuestion[],
 ): Promise<void> {
-  const authContainer = page.locator(WAYSTAR_SELECTORS.additionalAuth.container).first();
-  const authVisible = await authContainer.isVisible().catch(() => false);
-  if (!authVisible) return;
+  const authenticationOutcome = await Promise.race([
+    page.locator(WAYSTAR_SELECTORS.additionalAuth.answer).first()
+      .waitFor({ state: "visible", timeout: 30000 })
+      .then(() => "additional-auth" as const),
+    page.locator(WAYSTAR_SELECTORS.navigation.eligibility).first()
+      .waitFor({ state: "visible", timeout: 30000 })
+      .then(() => "eligibility" as const),
+  ]).catch(() => {
+    throw new Error("Waystar did not show either the additional authentication form or the Eligibility navigation after login.");
+  });
+
+  if (authenticationOutcome === "eligibility") return;
 
   const questionText = await readAdditionalAuthQuestion(page);
   const answer = resolveWaystarSecurityAnswer(questionText, verificationAnswers);
@@ -1135,7 +1160,7 @@ async function waitForWaystarEligibilityOutcome(
       await onWaiting(Math.round((Date.now() - startedAt) / 1000));
       nextHeartbeatAt = Date.now() + 15000;
     }
-    const state = await page.evaluate(({ overallStatusSelector, sectionStatusSelector }) => {
+    const state = await evaluateWaystarPage(page, ({ overallStatusSelector, sectionStatusSelector }) => {
       const bodyText = document.body?.innerText || "";
       if (/Eligibility Inquiry Timed Out/i.test(bodyText)) return "timeout";
       if (/login\.zirmed\.com/i.test(location.href) || document.querySelector("#loginName")) return "login";
