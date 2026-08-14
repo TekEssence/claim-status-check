@@ -7,6 +7,7 @@ const automationRuntimeFiles = [
 
 const nextConfig: NextConfig = {
   output: process.env.STATIC_EXPORT === "true" ? "export" : "standalone",
+  trailingSlash: process.env.STATIC_EXPORT === "true",
   images: {
     unoptimized: process.env.STATIC_EXPORT === "true",
   },

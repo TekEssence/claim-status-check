@@ -143,19 +143,27 @@ export async function openEligibilityInquiry(page: Page): Promise<Page> {
     return existingInquiryPage;
   }
 
-  const popupPromise = page.context().waitForEvent("page", { timeout: 15000 }).catch(() => null);
-  await Promise.all([
-    page.waitForLoadState("networkidle").catch(() => {}),
-    page.locator(WAYSTAR_SELECTORS.navigation.eligibility).first().click(),
-  ]);
-
-  const popup = await popupPromise;
-  const inquiryPage = popup ?? page;
-  await enableCardSwipeAutoClose(inquiryPage);
-  await inquiryPage.waitForLoadState("domcontentloaded").catch(() => {});
-  await inquiryPage.bringToFront().catch(() => {});
-  await waitForInquiryControls(inquiryPage);
-  return inquiryPage;
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    const popupPromise = page.context().waitForEvent("page", { timeout: 15000 }).catch(() => null);
+    await page.locator(WAYSTAR_SELECTORS.navigation.eligibility).first().click();
+    const popup = await popupPromise;
+    if (!popup) {
+      lastError = new Error(`Waystar did not open the DDE inquiry window on attempt ${attempt}.`);
+      continue;
+    }
+    try {
+      await enableCardSwipeAutoClose(popup);
+      await popup.waitForLoadState("domcontentloaded").catch(() => {});
+      await popup.bringToFront().catch(() => {});
+      await waitForInquiryControls(popup);
+      return popup;
+    } catch (error) {
+      lastError = error;
+      await popup.close().catch(() => {});
+    }
+  }
+  throw new Error(`Waystar could not open a usable DDE inquiry window after two attempts. ${lastError instanceof Error ? lastError.message : "Unknown DDE window error."}`);
 }
 
 async function enableCardSwipeAutoClose(page: Page): Promise<void> {
@@ -243,6 +251,7 @@ export async function submitWaystarInquiry(options: {
   await dismissWaystarDatePicker(inquiryPage);
   await verifyInquiryFieldsBeforeSubmit(inquiryPage, {
     serviceTypeCode: expectedServiceType,
+    patientLookupCode: options.patientLookupCode,
     memberId: expectedMemberId,
     lastName: expectedLastName,
     firstName: expectedFirstName,
@@ -440,7 +449,8 @@ const dataId = header.getAttribute("data-id");
       relationshipToSubscriber: patientBlock.fields["Relationship to Subscriber"],
     } : undefined;
 
-    const coverageBlock = readHalfColumn("Subscriber Coverage Information");
+    const coverageBlock = readHalfColumn("Subscriber Coverage Information") ??
+      readHalfColumn("Patient Coverage Information");
     const otherInsuranceBlock = readHalfColumn("Other Insurance Information") ?? readHalfColumn("Other Insurance");
     const subscriberCoverageInformation = coverageBlock ? {
       groupNumber: coverageBlock.fields["Group Number"],
@@ -574,6 +584,8 @@ type WaystarSelectOption = {
 type WaystarInquirySnapshot = {
   serviceTypeValue: string;
   serviceTypeLabel: string;
+  patientLookupValue: string;
+  patientLookupLabel: string;
   memberId: string;
   lastName: string;
   firstName: string;
@@ -660,10 +672,9 @@ async function waitForInquiryControls(page: Page): Promise<void> {
   if (await payerInput.isVisible().catch(() => false)) return;
   if (await payerSelect.isVisible().catch(() => false)) return;
 
-  await Promise.any([
-    payerInput.waitFor({ state: "visible", timeout: 30000 }),
-    payerSelect.waitFor({ state: "visible", timeout: 30000 }),
-  ]);
+  await payerInput.or(payerSelect).first().waitFor({ state: "visible", timeout: 30000 }).catch(() => {
+    throw new Error("Waystar DDE opened, but neither payer search control became visible within 30 seconds.");
+  });
 }
 
 async function selectInquiryPatientType(page: Page, relationship?: string): Promise<void> {
@@ -1000,6 +1011,7 @@ async function verifyInquiryFieldsBeforeSubmit(
   page: Page,
   expected: {
     serviceTypeCode: string;
+    patientLookupCode?: string;
     memberId: string;
     lastName: string;
     firstName: string;
@@ -1014,6 +1026,11 @@ async function verifyInquiryFieldsBeforeSubmit(
     { value: snapshot.serviceTypeValue, label: snapshot.serviceTypeLabel },
   ], expected.serviceTypeCode)) {
     missing.push(`serviceType=${snapshot.serviceTypeLabel || snapshot.serviceTypeValue || "blank"}`);
+  }
+  if (expected.patientLookupCode && !findWaystarPatientLookupOption([
+    { value: snapshot.patientLookupValue, label: snapshot.patientLookupLabel },
+  ], expected.patientLookupCode)) {
+    missing.push(`patientLookup=${snapshot.patientLookupLabel || snapshot.patientLookupValue || "blank"}`);
   }
   if (snapshot.memberId.trim() !== expected.memberId.trim()) {
     missing.push(`memberId=${snapshot.memberId || "blank"}`);
@@ -1031,6 +1048,9 @@ async function verifyInquiryFieldsBeforeSubmit(
   if (missing.length > 0 && retryCount === 0) {
     await dismissWaystarDatePicker(page);
     await selectServiceType(page, expected.serviceTypeCode);
+    if (expected.patientLookupCode) {
+      await selectPatientLookupOption(page, expected.patientLookupCode);
+    }
     await fillVerifiedText(page, WAYSTAR_SELECTORS.inquiry.memberId, expected.memberId, "Member ID");
     await fillVerifiedText(page, WAYSTAR_SELECTORS.inquiry.lastName, expected.lastName, "Last Name");
     await fillVerifiedText(page, WAYSTAR_SELECTORS.inquiry.firstName, expected.firstName, "First Name");
@@ -1058,9 +1078,17 @@ async function readInquirySnapshot(page: Page): Promise<WaystarInquirySnapshot> 
     label: (node as HTMLOptionElement | null)?.textContent?.trim() || "",
   })).catch(() => ({ value: "", label: "" }));
 
+  const patientLookup = page.locator(WAYSTAR_SELECTORS.inquiry.patientLookup).first();
+  const selectedPatientLookup = await patientLookup.locator("option:checked").evaluate((node) => ({
+    value: (node as HTMLOptionElement | null)?.value || "",
+    label: (node as HTMLOptionElement | null)?.textContent?.trim() || "",
+  })).catch(() => ({ value: "", label: "" }));
+
   return {
     serviceTypeValue: selectedService.value,
     serviceTypeLabel: selectedService.label,
+    patientLookupValue: selectedPatientLookup.value,
+    patientLookupLabel: selectedPatientLookup.label,
     memberId: await page.locator(WAYSTAR_SELECTORS.inquiry.memberId).first().inputValue().catch(() => ""),
     lastName: await page.locator(WAYSTAR_SELECTORS.inquiry.lastName).first().inputValue().catch(() => ""),
     firstName: await page.locator(WAYSTAR_SELECTORS.inquiry.firstName).first().inputValue().catch(() => ""),
@@ -1097,6 +1125,9 @@ async function selectProvider(page: Page, credentials: WaystarCredentials): Prom
 
 export function payerSearchTerms(payerName: string): string[] {
   const normalized = normalizeText(payerName);
+  if (extractWaystarPayerId(payerName) === "61101" && normalized.includes("humana")) {
+    return ["humana"];
+  }
   if (normalized.includes("aarp medicare advantage choice plan")) {
     return ["AARP Medicare Advantage Choice Plan", payerName];
   }

@@ -145,6 +145,7 @@ test("routes every BCBS PPO input alias through the same payer implementation", 
     "Florida Blue Options",
     "Florida Blue Medicare/PPO",
     "BCBS/of All States/Commercial/Federal",
+    "BCBS Federal Employee Plan PPO",
     "BCBS",
     "BCBS MI- MCR Plus PPO",
   ];
@@ -156,6 +157,18 @@ test("routes every BCBS PPO input alias through the same payer implementation", 
     ["bcbs-ppo", "BCBS PPO", aliases.length],
   ]);
   assert.equal(routing.unsupportedRows.length, 0);
+});
+test("keeps BCBS Federal Employee Plan PPO under BCBS when an old mapping points to UHC", () => {
+  const routing = routeWaystarRowsByPayer(
+    [{ Payer: "BCBS Federal Employee Plan PPO", "Member ID": "FEP-1" }],
+    { payerMappings: [{
+      inputInsurancePayerState: "BCBS Federal Employee Plan PPO",
+      payerPortal: "United Healthcare(87726)",
+    }] },
+  );
+
+  assert.equal(routing.batches[0]?.payerId, "bcbs-ppo");
+  assert.equal(routing.batches[0]?.payerName, "BCBS PPO");
 });
 test("groups mixed payer rows so each payer can use its own portal flow", () => {
   const routing = routeWaystarRowsByPayer([
@@ -220,6 +233,18 @@ test("routes HUMANA MEDICARE PPO to the Humana 61101 Waystar payer", () => {
   ]);
 });
 
+test("keeps Aetna Health Plans under Aetna when an old mapping points to UHC", () => {
+  const routing = routeWaystarRowsByPayer(
+    [{ Payer: "Aetna Health Plans", "Member ID": "AHP-1" }],
+    { payerMappings: [{
+      inputInsurancePayerState: "Aetna Health Plans",
+      payerPortal: "United Healthcare(87726)",
+    }] },
+  );
+
+  assert.equal(routing.batches[0]?.payerId, "aetna");
+  assert.equal(routing.batches[0]?.payerName, "AETNA");
+});
 test("routes AETNA separately from Aetna Medicare PPO", () => {
   const routing = routeWaystarRowsByPayer([
     { Payer: "AETNA", "Member ID": "AETNA-1" },

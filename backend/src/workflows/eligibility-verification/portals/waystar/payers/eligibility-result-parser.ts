@@ -109,6 +109,7 @@ export function parseWaystarEligibilityResult(
   const effectiveDate = payerId === "av-med"
     ? asText(coverage?.benefitBeginDate) || asText(subscriberCoverage.planBeginDate) || asText(coverage?.eligibilityBeginDate)
     : asText(coverage?.eligibilityBeginDate) ||
+      (payerId === "bcbs-ppo" ? asText(subscriberCoverage.planBeginDate) : undefined) ||
       planDateRange.effectiveDate ||
       (payerId === "umr" || payerId === "humana-medicare-ppo"
         ? asText(subscriberCoverage.planBeginDate)

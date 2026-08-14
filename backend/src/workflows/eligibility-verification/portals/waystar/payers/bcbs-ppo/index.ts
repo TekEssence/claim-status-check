@@ -11,6 +11,7 @@ export const bcbsPpoPayer: WaystarPayerHandler = {
     "florida blue options",
     "florida blue medicare ppo",
     "bcbs of all states commercial federal",
+    "bcbs federal employee plan ppo",
     "bcbs",
     "bcbs mi mcr plus ppo",
   ],

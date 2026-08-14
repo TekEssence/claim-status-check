@@ -911,6 +911,12 @@ type BcbsAvailityEligibilityWorkflowOptions = {
   requirePatientName?: boolean;
   useWellcareEligibilityFallbacks?: boolean;
   usePlanBeginDateFallback?: boolean;
+  parsePayerOverrides?: (text: string) => {
+    effectiveDate?: string;
+    endDate?: string;
+    coinsurance?: string;
+    copay?: string;
+  };
 };
 
 export async function runBcbsAvailityEligibilityWorkflow(
@@ -990,6 +996,7 @@ export async function runBcbsAvailityEligibilityWorkflow(
         throw new Error(`The Availity response did not finish loading an Active or Inactive Member Status within ${Math.round(resultReadyTimeout / 1000)} seconds.`);
       }
       const snapshot = parseAvailitySnapshotBasics(resultText);
+      const payerOverrides = options.parsePayerOverrides?.(resultText) || {};
       const locatedCoverageStatus = await readCoverageStatus(portal);
       const locatedDates = await readPlanDates(portal);
       const coverageBenefitDates = options.useCoverageBenefitDatesFallback
@@ -1008,8 +1015,8 @@ export async function runBcbsAvailityEligibilityWorkflow(
       const insuranceType = await readLabeledResultValue(portal, SELECTORS.results.insuranceTypeLabel, "Insurance Type") || snapshot.insuranceType || wellcareFallbacks.insuranceType;
       const planType = await readLabeledResultValue(portal, SELECTORS.results.planProductLabel, "Plan / Product") || snapshot.planType;
       const coverageStatus = locatedCoverageStatus || snapshot.coverageStatus.toLowerCase();
-      const effectiveDate = locatedDates.effectiveDate || snapshot.effectiveDate || coverageBenefitDates.effectiveDate || wellcareFallbacks.eligibilityBeginDate || planBeginDate;
-      const endDate = locatedDates.endDate || snapshot.endDate || coverageBenefitDates.endDate;
+      const effectiveDate = payerOverrides.effectiveDate || locatedDates.effectiveDate || snapshot.effectiveDate || coverageBenefitDates.effectiveDate || wellcareFallbacks.eligibilityBeginDate || planBeginDate;
+      const endDate = payerOverrides.endDate || locatedDates.endDate || snapshot.endDate || coverageBenefitDates.endDate;
       const network = await readSelectedNetwork(portal);
       if (/\bhmo\b/i.test(insuranceType) && !otherInsurance) {
         otherInsurance = await readPrimaryCareProvider(portal);
@@ -1020,6 +1027,8 @@ export async function runBcbsAvailityEligibilityWorkflow(
       if (tableBenefits?.coinsurance) benefits.coinsurance = tableBenefits.coinsurance;
       if (tableBenefits?.copay) benefits.copay = tableBenefits.copay;
 
+      if (payerOverrides.coinsurance !== undefined) benefits.coinsurance = payerOverrides.coinsurance;
+      if (payerOverrides.copay !== undefined) benefits.copay = payerOverrides.copay;
       const result = {
         "Coverage Status": coverageStatus ? coverageStatus[0].toUpperCase() + coverageStatus.slice(1) : "",
         "Eff Date": effectiveDate,

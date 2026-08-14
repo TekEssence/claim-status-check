@@ -1,5 +1,6 @@
 import type { AvailityEligibilityPayerWorkflowInput } from "../types";
 import { runBcbsAvailityEligibilityWorkflow } from "../bcbs/workflow";
+import { parseAetnaResultOverrides } from "./result-parser";
 
 export async function runAetnaMedicareAvailityEligibilityWorkflow(
   input: AvailityEligibilityPayerWorkflowInput,
@@ -10,5 +11,6 @@ export async function runAetnaMedicareAvailityEligibilityWorkflow(
     skipPlaceOfService: true,
     ensureHealthBenefitPlanCoverage: true,
     useCoverageBenefitDatesFallback: true,
+    parsePayerOverrides: parseAetnaResultOverrides,
   });
 }

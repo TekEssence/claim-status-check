@@ -1,4 +1,4 @@
-﻿import * as XLSX from "xlsx";
+import * as XLSX from "xlsx";
 import type {
   EligibilityInputRow,
   EligibilityPayerBatch,
@@ -294,6 +294,12 @@ function resolveWaystarPayer(
   payerMappings: WaystarPayerPortalMapping[] = [],
 ): WaystarPayerHandler | null {
   const normalizedInsuranceName = normalizeHeader(insuranceName);
+  if (normalizedInsuranceName === normalizeHeader("BCBS Federal Employee Plan PPO")) {
+    return matchWaystarPayer(insuranceName);
+  }
+  if (normalizedInsuranceName === normalizeHeader("Aetna Health Plans")) {
+    return matchWaystarPayer(insuranceName);
+  }
   const mapping = payerMappings.find(
     (entry) => normalizeHeader(entry.inputInsurancePayerState) === normalizedInsuranceName,
   );
