@@ -198,6 +198,13 @@ function isLiveWorkflowStatus(status: string): boolean {
   return status === "queued" || status === "running" || status === "waiting_otp";
 }
 
+const WORKFLOW_LABELS: Record<string, string> = {
+  "claim-status": "Claim Status",
+  "eligibility-verification": "Eligibility",
+  "payment-eob-download": "Payment EOB",
+  "payment-posting": "Payment Posting",
+};
+
 function formatShortJobId(jobId: string): string {
   return jobId ? jobId.slice(0, 8) : "";
 }
@@ -212,6 +219,18 @@ function formatRunTimestamp(value: string | null | undefined): string {
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+function formatWorkflowLabel(workflowId: string | undefined): string {
+  if (!workflowId) return "Claim Status";
+  return WORKFLOW_LABELS[workflowId] ?? workflowId;
+}
+
+function formatUploadedJobFiles(job: ScrapeJobSummary): string {
+  const files = [job.loginFileName, job.claimFileName]
+    .map((name) => String(name || "").trim())
+    .filter(Boolean);
+  return files.length > 0 ? files.join(", ") : "Uploaded files";
 }
 
 function canRestoreCurrentJob(job: CurrentScrapeJob): job is CurrentScrapeJob & { portalId: PortalId } {
@@ -1087,10 +1106,9 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
   const visibleWorkflowRuns = useMemo(
     () =>
       workflowRuns.filter((job) =>
-        isLiveWorkflowStatus(job.status) &&
-        (!effectivePortalId || job.portalId === effectivePortalId),
+        isLiveWorkflowStatus(job.status),
       ),
-    [effectivePortalId, workflowRuns],
+    [workflowRuns],
   );
   const runningWorkflowRunCount = useMemo(
     () => visibleWorkflowRuns.length,
@@ -4398,9 +4416,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <div>
           <p className="text-[0.7rem] font-semibold uppercase tracking-[0.22em] text-sky-600">My Active Runs</p>
-          <h2 className="mt-1 text-base font-semibold text-slate-950">
-            {effectivePortalId ? `${selectedPortal?.name ?? "Portal"} active runs` : "Running claim status jobs"}
-          </h2>
+          <h2 className="mt-1 text-base font-semibold text-slate-950">Current automation progress</h2>
           <p className="mt-1 text-xs text-slate-500">
             {runningWorkflowRunCount} active {runningWorkflowRunCount === 1 ? "run" : "runs"} across your account.
           </p>
@@ -4428,9 +4444,12 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
             <thead>
               <tr className="border-b border-sky-100 text-xs uppercase tracking-[0.14em] text-slate-400">
                 <th className="whitespace-nowrap px-3 py-3 font-semibold">Run</th>
+                <th className="whitespace-nowrap px-3 py-3 font-semibold">Workflow</th>
                 <th className="whitespace-nowrap px-3 py-3 font-semibold">Portal</th>
+                <th className="min-w-[14rem] px-3 py-3 font-semibold">Uploaded File</th>
                 <th className="whitespace-nowrap px-3 py-3 font-semibold">Status</th>
                 <th className="min-w-[12rem] px-3 py-3 font-semibold">Progress</th>
+                <th className="whitespace-nowrap px-3 py-3 font-semibold">Created</th>
                 <th className="whitespace-nowrap px-3 py-3 font-semibold">Updated</th>
                 <th className="whitespace-nowrap px-3 py-3 text-right font-semibold">Actions</th>
               </tr>
@@ -4466,11 +4485,14 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
                       >
                         {formatShortJobId(job.jobId)}
                       </button>
-                      <div className="mt-1 max-w-[10rem] truncate text-[0.7rem] text-slate-400">
-                        {job.claimFileName || job.loginFileName || "Uploaded files"}
+                    </td>
+                    <td className="whitespace-nowrap px-3 py-3 text-slate-700">{formatWorkflowLabel(job.workflowId)}</td>
+                    <td className="whitespace-nowrap px-3 py-3 text-slate-700">{portalName}</td>
+                    <td className="px-3 py-3">
+                      <div className="max-w-[18rem] truncate text-xs text-slate-500" title={formatUploadedJobFiles(job)}>
+                        {formatUploadedJobFiles(job)}
                       </div>
                     </td>
-                    <td className="whitespace-nowrap px-3 py-3 text-slate-700">{portalName}</td>
                     <td className="whitespace-nowrap px-3 py-3">
                       <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${statusClassName}`}>
                         {job.status.replace(/_/g, " ")}
@@ -4488,6 +4510,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
                         />
                       </div>
                     </td>
+                    <td className="whitespace-nowrap px-3 py-3 text-xs text-slate-500">{formatRunTimestamp(job.createdAt)}</td>
                     <td className="whitespace-nowrap px-3 py-3 text-xs text-slate-500">{formatRunTimestamp(job.updatedAt)}</td>
                     <td className="px-3 py-3">
                       <div className="flex justify-end gap-2">

@@ -1,8 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { listAutomationJobs, type AutomationJobSummary } from "../../api/automation-jobs-api";
-import { isAwsWorkflowMode, listScrapeJobs, type ScrapeJobSummary } from "../../api/scrape-jobs-api";
+import { listScrapeJobs, type ScrapeJobSummary } from "../../api/scrape-jobs-api";
 
 type WorkflowRun = {
   jobId: string;
@@ -11,7 +10,8 @@ type WorkflowRun = {
   status: string;
   completed: number;
   total: number;
-  fileName: string;
+  fileNames: string[];
+  createdAt: string;
   updatedAt: string;
 };
 
@@ -62,6 +62,14 @@ function formatRunTimestamp(value: string): string {
   });
 }
 
+function uploadedFiles(...names: Array<string | null | undefined>): string[] {
+  return names.map((name) => String(name || "").trim()).filter(Boolean);
+}
+
+function formatUploadedFiles(names: string[]): string {
+  return names.length > 0 ? names.join(", ") : "Uploaded files";
+}
+
 function normalizeClaimJob(job: ScrapeJobSummary): WorkflowRun {
   return {
     jobId: job.jobId,
@@ -70,20 +78,8 @@ function normalizeClaimJob(job: ScrapeJobSummary): WorkflowRun {
     status: job.status,
     completed: job.currentCompleted,
     total: job.totalRows,
-    fileName: job.claimFileName || job.loginFileName || "Uploaded files",
-    updatedAt: job.updatedAt,
-  };
-}
-
-function normalizeEligibilityJob(job: AutomationJobSummary): WorkflowRun {
-  return {
-    jobId: job.jobId,
-    workflowId: job.workflowId || "eligibility-verification",
-    portalId: job.portalId,
-    status: job.status,
-    completed: job.currentCompleted,
-    total: job.totalItems,
-    fileName: job.primaryInputFileName || job.credentialFileName || "Uploaded files",
+    fileNames: uploadedFiles(job.loginFileName, job.claimFileName),
+    createdAt: job.createdAt,
     updatedAt: job.updatedAt,
   };
 }
@@ -107,15 +103,10 @@ export function ActiveWorkflowRunsPanel({
 
     try {
       const claimJobs = await listScrapeJobs(50).catch(() => [] as ScrapeJobSummary[]);
-      const eligibilityJobs = isAwsWorkflowMode()
-        ? []
-        : await listAutomationJobs(50).catch(() => [] as AutomationJobSummary[]);
 
       setRuns(
-        [
-          ...claimJobs.map(normalizeClaimJob),
-          ...eligibilityJobs.map(normalizeEligibilityJob),
-        ]
+        claimJobs
+          .map(normalizeClaimJob)
           .filter((job) => isLiveStatus(job.status))
           .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt)),
       );
@@ -139,14 +130,8 @@ export function ActiveWorkflowRunsPanel({
     };
   }, []);
 
-  const visibleRuns = useMemo(
-    () =>
-      runs.filter((run) =>
-        (!currentWorkflowId || run.workflowId === currentWorkflowId) &&
-        (!currentPortalId || run.portalId === currentPortalId),
-      ),
-    [currentPortalId, currentWorkflowId, runs],
-  );
+  const visibleRuns = useMemo(() => runs, [runs]);
+  const currentScopeLabel = currentWorkflowId || currentPortalId ? " across your account" : "";
 
   return (
     <section className="mt-5 rounded-[1.5rem] border border-sky-100 bg-white/92 p-5 shadow-[0_16px_36px_rgba(148,163,184,0.12)]">
@@ -155,7 +140,7 @@ export function ActiveWorkflowRunsPanel({
           <p className="text-[0.7rem] font-semibold uppercase tracking-[0.22em] text-sky-600">Active Runs</p>
           <h2 className="mt-1 text-base font-semibold text-slate-950">Current automation progress</h2>
           <p className="mt-1 text-xs text-slate-500">
-            {visibleRuns.length} active {visibleRuns.length === 1 ? "run" : "runs"} for this view.
+            {visibleRuns.length} active {visibleRuns.length === 1 ? "run" : "runs"}{currentScopeLabel}.
           </p>
         </div>
         <button
@@ -183,8 +168,10 @@ export function ActiveWorkflowRunsPanel({
                 <th className="whitespace-nowrap px-3 py-3 font-semibold">Run</th>
                 <th className="whitespace-nowrap px-3 py-3 font-semibold">Workflow</th>
                 <th className="whitespace-nowrap px-3 py-3 font-semibold">Portal</th>
+                <th className="min-w-[14rem] px-3 py-3 font-semibold">Uploaded File</th>
                 <th className="whitespace-nowrap px-3 py-3 font-semibold">Status</th>
                 <th className="min-w-[12rem] px-3 py-3 font-semibold">Progress</th>
+                <th className="whitespace-nowrap px-3 py-3 font-semibold">Created</th>
                 <th className="whitespace-nowrap px-3 py-3 font-semibold">Updated</th>
               </tr>
             </thead>
@@ -195,10 +182,14 @@ export function ActiveWorkflowRunsPanel({
                   <tr key={run.jobId} className="border-b border-sky-50 last:border-0">
                     <td className="whitespace-nowrap px-3 py-3">
                       <span className="font-mono text-xs font-semibold text-blue-700">{formatShortJobId(run.jobId)}</span>
-                      <div className="mt-1 max-w-[11rem] truncate text-[0.7rem] text-slate-400">{run.fileName}</div>
                     </td>
                     <td className="whitespace-nowrap px-3 py-3 text-slate-700">{WORKFLOW_LABELS[run.workflowId] ?? run.workflowId}</td>
                     <td className="whitespace-nowrap px-3 py-3 text-slate-700">{PORTAL_LABELS[run.portalId] ?? run.portalId.toUpperCase()}</td>
+                    <td className="px-3 py-3">
+                      <div className="max-w-[18rem] truncate text-xs text-slate-500" title={formatUploadedFiles(run.fileNames)}>
+                        {formatUploadedFiles(run.fileNames)}
+                      </div>
+                    </td>
                     <td className="whitespace-nowrap px-3 py-3">
                       <span className="inline-flex rounded-full bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700">
                         {run.status.replace(/_/g, " ")}
@@ -213,6 +204,7 @@ export function ActiveWorkflowRunsPanel({
                         <div className="h-full rounded-full bg-blue-500" style={{ width: `${percent}%` }} />
                       </div>
                     </td>
+                    <td className="whitespace-nowrap px-3 py-3 text-xs text-slate-500">{formatRunTimestamp(run.createdAt)}</td>
                     <td className="whitespace-nowrap px-3 py-3 text-xs text-slate-500">{formatRunTimestamp(run.updatedAt)}</td>
                   </tr>
                 );

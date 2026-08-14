@@ -6,11 +6,12 @@ import {
   automationJobs,
 } from "@/db/schema/automation-jobs";
 
-export type PersistentScrapeJobStatus = "running" | "waiting_resume" | "completed" | "failed" | "cancelled";
+export type PersistentScrapeJobStatus = "queued" | "running" | "waiting_otp" | "waiting_resume" | "completed" | "failed" | "cancelled";
 
 export type PersistentScrapeJob = {
   jobId: string;
   userId: string;
+  workflowId: string;
   portalId: string;
   status: PersistentScrapeJobStatus;
   currentCompleted: number;
@@ -71,6 +72,7 @@ function mapPersistentScrapeJob(
   return {
     jobId: row.jobId,
     userId: row.userId,
+    workflowId: row.workflowId,
     portalId: row.portalId,
     status: row.status as PersistentScrapeJobStatus,
     currentCompleted: row.currentCompleted,
@@ -185,12 +187,12 @@ export async function getScrapeJobByIdForUser(jobId: string, userId: string): Pr
 export async function listScrapeJobsForUser(userId: string, limit = 25): Promise<PersistentScrapeJob[]> {
   const safeLimit = Math.max(1, Math.min(limit, 100));
   const rows = await runDbWithRetry((db) =>
-    db
-      .select()
-      .from(automationJobs)
-      .where(and(eq(automationJobs.userId, userId), eq(automationJobs.workflowId, "claim-status")))
-      .orderBy(desc(automationJobs.updatedAt))
-      .limit(safeLimit),
+      db
+        .select()
+        .from(automationJobs)
+        .where(eq(automationJobs.userId, userId))
+        .orderBy(desc(automationJobs.updatedAt))
+        .limit(safeLimit),
   );
 
   return Promise.all(

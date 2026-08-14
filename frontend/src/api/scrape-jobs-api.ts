@@ -5,7 +5,7 @@ import { getCognitoAccessToken } from "./cognito-auth";
 export type CurrentScrapeJob = {
   jobId: string;
   portalId: string;
-  status: "running" | "waiting_resume" | "completed" | "failed" | "cancelled";
+  status: "queued" | "running" | "waiting_otp" | "waiting_resume" | "completed" | "failed" | "cancelled";
   currentCompleted: number;
   totalRows: number;
   claimFileName: string;
@@ -460,13 +460,58 @@ async function subscribeToAwsScrapeJobEvents(options: {
 }): Promise<void> {
   let after = 0;
   let socket: WebSocket | null = null;
+  let reconnectTimer: number | null = null;
+  let reconnectAttempt = 0;
+  let terminal = false;
 
-  if (AWS_WS_URL) {
+  const clearReconnectTimer = () => {
+    if (reconnectTimer !== null) {
+      window.clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
+  };
+
+  const shouldKeepSocketOpen = () =>
+    Boolean(AWS_WS_URL) &&
+    !terminal &&
+    !options.signal.aborted &&
+    (typeof document === "undefined" || document.visibilityState === "visible") &&
+    (typeof navigator === "undefined" || navigator.onLine !== false);
+
+  const closeSocket = () => {
+    if (socket) {
+      socket.onopen = null;
+      socket.onmessage = null;
+      socket.onerror = null;
+      socket.onclose = null;
+      socket.close();
+      socket = null;
+    }
+  };
+
+  const scheduleReconnect = () => {
+    clearReconnectTimer();
+    if (!shouldKeepSocketOpen()) return;
+    const delay = Math.min(15000, 1000 * 2 ** Math.min(reconnectAttempt, 4));
+    reconnectAttempt += 1;
+    reconnectTimer = window.setTimeout(() => {
+      reconnectTimer = null;
+      openSocket();
+    }, delay);
+  };
+
+  const openSocket = () => {
+    if (!shouldKeepSocketOpen()) return;
+    if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) return;
+
     const token = getCognitoAccessToken();
     const url = new URL(AWS_WS_URL);
     url.searchParams.set("jobId", options.jobId);
     if (token) url.searchParams.set("token", token);
     socket = new WebSocket(url.toString());
+    socket.onopen = () => {
+      reconnectAttempt = 0;
+    };
     socket.onmessage = async (message) => {
       try {
         const parsed = JSON.parse(String(message.data)) as ScrapeJobEvent & { id?: number; payload?: ScrapeJobEvent };
@@ -477,10 +522,39 @@ async function subscribeToAwsScrapeJobEvents(options: {
       }
     };
     socket.onerror = () => {
-      socket?.close();
-      socket = null;
+      closeSocket();
+      scheduleReconnect();
     };
-    options.signal.addEventListener("abort", () => socket?.close(), { once: true });
+    socket.onclose = () => {
+      socket = null;
+      scheduleReconnect();
+    };
+  };
+
+  const handleVisibilityOrNetworkChange = () => {
+    if (shouldKeepSocketOpen()) {
+      openSocket();
+    } else {
+      clearReconnectTimer();
+      closeSocket();
+    }
+  };
+
+  const cleanup = () => {
+    terminal = true;
+    clearReconnectTimer();
+    closeSocket();
+    window.removeEventListener("online", handleVisibilityOrNetworkChange);
+    window.removeEventListener("offline", handleVisibilityOrNetworkChange);
+    document.removeEventListener("visibilitychange", handleVisibilityOrNetworkChange);
+  };
+
+  if (typeof window !== "undefined" && typeof document !== "undefined") {
+    window.addEventListener("online", handleVisibilityOrNetworkChange);
+    window.addEventListener("offline", handleVisibilityOrNetworkChange);
+    document.addEventListener("visibilitychange", handleVisibilityOrNetworkChange);
+    options.signal.addEventListener("abort", cleanup, { once: true });
+    openSocket();
   }
 
   while (!options.signal.aborted) {
@@ -495,13 +569,28 @@ async function subscribeToAwsScrapeJobEvents(options: {
           job?: { status?: string };
           events?: Array<{ id: number; payload: ScrapeJobEvent }>;
         };
+        const jobStatus = body.job?.status;
         for (const event of body.events ?? []) {
           after = Math.max(after, event.id);
+          if (isOtpReplayEvent(event.payload) && jobStatus !== "waiting_otp") {
+            continue;
+          }
           await options.onEvent(event.payload);
         }
-        if (body.job?.status === "completed" || body.job?.status === "failed" || body.job?.status === "cancelled") {
+        if (jobStatus === "completed" || jobStatus === "failed" || jobStatus === "cancelled") {
+          terminal = true;
+          if (jobStatus === "completed") {
+            try {
+              const filename = await autoDownloadCompletedJobOutput(options.jobId);
+              if (filename) {
+                await options.onEvent({ type: "log", message: `Output ready. Download started for ${filename}.` });
+              }
+            } catch (error) {
+              await options.onEvent({ type: "log", message: `Output is ready, but automatic download did not start: ${error instanceof Error ? error.message : "Unknown error"}` });
+            }
+          }
           await options.onEvent({ type: "done" });
-          socket?.close();
+          cleanup();
           return;
         }
       }
@@ -510,4 +599,45 @@ async function subscribeToAwsScrapeJobEvents(options: {
     }
     await new Promise((resolve) => setTimeout(resolve, 2000));
   }
+  cleanup();
+}
+
+function isOtpReplayEvent(event: ScrapeJobEvent): boolean {
+  return event.type === "input_request" || event.type === "otp_required";
+}
+
+function autoDownloadStorageKey(jobId: string): string {
+  return `claim-status:auto-downloaded:${jobId}`;
+}
+
+function hasAutoDownloadedJob(jobId: string): boolean {
+  if (typeof window === "undefined") return true;
+  try {
+    return window.sessionStorage.getItem(autoDownloadStorageKey(jobId)) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function rememberAutoDownloadedJob(jobId: string): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.sessionStorage.setItem(autoDownloadStorageKey(jobId), "1");
+  } catch {
+    // Ignore storage failures.
+  }
+}
+
+async function autoDownloadCompletedJobOutput(jobId: string): Promise<string | null> {
+  if (hasAutoDownloadedJob(jobId)) return null;
+  const { filename, downloadUrl } = await getScrapeJobDownload(jobId);
+  const link = document.createElement("a");
+  link.href = downloadUrl;
+  link.download = filename;
+  link.rel = "noreferrer";
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  rememberAutoDownloadedJob(jobId);
+  return filename;
 }
