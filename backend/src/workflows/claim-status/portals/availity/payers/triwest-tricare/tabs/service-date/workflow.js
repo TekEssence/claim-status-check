@@ -150,7 +150,13 @@ async function selectAutocompleteOption(scope, inputLocator, value) {
   await humanDelay(500, 1000);
 
   const option = scope.getByText(value, { exact: true }).last();
-  if (await option.isVisible({ timeout: 3000 }).catch(() => false)) {
+  let optionVisible = await option.isVisible({ timeout: 3000 }).catch(() => false);
+  if (!optionVisible) {
+    await humanDelay(900, 1200);
+    optionVisible = await option.isVisible({ timeout: 3000 }).catch(() => false);
+  }
+
+  if (optionVisible) {
     await option.click();
   } else {
     await inputLocator.press("Enter");
@@ -171,7 +177,13 @@ async function fillProviderTaxId(frame, taxId) {
   await humanDelay(400, 800);
 
   const exactOption = frame.getByText(taxId, { exact: true }).last();
-  if (await exactOption.isVisible({ timeout: 2000 }).catch(() => false)) {
+  let exactOptionVisible = await exactOption.isVisible({ timeout: 2000 }).catch(() => false);
+  if (!exactOptionVisible) {
+    await humanDelay(900, 1200);
+    exactOptionVisible = await exactOption.isVisible({ timeout: 2000 }).catch(() => false);
+  }
+
+  if (exactOptionVisible) {
     await exactOption.click();
   } else {
     await taxIdInput.press("Enter").catch(() => {});
@@ -490,6 +502,7 @@ async function processTriwestTricareServiceDateResults(page, row, provider, resu
   const resultRows = await getTriwestTricareServiceDateRows(page);
   const inputDate = normalizeDateText(row.data["Service Date"]);
   const inputCharge = normalizeMoney(row.data.Charges);
+  const shouldMatchBilledAmount = options.projectId !== "medrevenu";
   const inputMemberId = hasUsableValue(row.data["Subscriber No"]) ? normalizeMemberId(row.data["Subscriber No"]) : "";
   const inputPatientName = hasUsableValue(row.data["Patient Name"]) ? normalizePatientName(row.data["Patient Name"]) : "";
   const inputPatientNameWithoutInitial = hasUsableValue(row.data["Patient Name"]) ? normalizePatientNameWithoutInitial(row.data["Patient Name"]) : "";
@@ -497,10 +510,10 @@ async function processTriwestTricareServiceDateResults(page, row, provider, resu
   const shouldMatchMemberId = options.projectId !== "medrevenu" || Boolean(inputMemberId);
   const shouldMatchPatientName = canFallbackToPatientName && !inputMemberId && Boolean(inputPatientName);
   let matchLabel = shouldMatchMemberId
-    ? "Service Date + Billed Amount + Member ID"
+    ? `${shouldMatchBilledAmount ? "Service Date + Billed Amount" : "Service Date"} + Member ID`
     : shouldMatchPatientName
-      ? "Service Date + Billed Amount + Patient Name"
-      : "Service Date + Billed Amount";
+      ? `${shouldMatchBilledAmount ? "Service Date + Billed Amount" : "Service Date"} + Patient Name`
+      : shouldMatchBilledAmount ? "Service Date + Billed Amount" : "Service Date";
 
   resultRows.forEach((result) => {
     logger.info(
@@ -510,7 +523,7 @@ async function processTriwestTricareServiceDateResults(page, row, provider, resu
 
   let matchedRows = resultRows.filter((result) => {
     return result.serviceDate === inputDate
-      && normalizeMoney(result.billedAmount) === inputCharge
+      && (!shouldMatchBilledAmount || normalizeMoney(result.billedAmount) === inputCharge)
       && (!shouldMatchMemberId || normalizeMemberId(result.memberId) === inputMemberId)
       && (!shouldMatchPatientName || normalizePatientName(result.patientName) === inputPatientName);
   });
@@ -519,20 +532,20 @@ async function processTriwestTricareServiceDateResults(page, row, provider, resu
     logger.info("No TRIWEST-TRICARE Service Dates rows matched Member ID. Falling back to Patient Name match.");
     matchedRows = resultRows.filter((result) => {
       return result.serviceDate === inputDate
-        && normalizeMoney(result.billedAmount) === inputCharge
+        && (!shouldMatchBilledAmount || normalizeMoney(result.billedAmount) === inputCharge)
         && normalizePatientName(result.patientName) === inputPatientName;
     });
-    matchLabel = "Service Date + Billed Amount + Patient Name";
+    matchLabel = `${shouldMatchBilledAmount ? "Service Date + Billed Amount" : "Service Date"} + Patient Name`;
   }
 
   if (matchedRows.length === 0 && canFallbackToPatientName && inputPatientNameWithoutInitial) {
     logger.info("No TRIWEST-TRICARE Service Dates rows matched exact Patient Name. Falling back to Patient Name without trailing initial.");
     matchedRows = resultRows.filter((result) => {
       return result.serviceDate === inputDate
-        && normalizeMoney(result.billedAmount) === inputCharge
+        && (!shouldMatchBilledAmount || normalizeMoney(result.billedAmount) === inputCharge)
         && normalizePatientNameWithoutInitial(result.patientName) === inputPatientNameWithoutInitial;
     });
-    matchLabel = "Service Date + Billed Amount + Patient Name without initial";
+    matchLabel = `${shouldMatchBilledAmount ? "Service Date + Billed Amount" : "Service Date"} + Patient Name without initial`;
   }
 
   if (matchedRows.length === 0 && canFallbackToPatientName && hasUsableValue(row.data["Patient Name"])) {
@@ -548,9 +561,6 @@ async function processTriwestTricareServiceDateResults(page, row, provider, resu
   logger.info(`Matched ${matchedRows.length} TRIWEST-TRICARE Service Dates result row(s) by ${matchLabel}`);
 
   if (matchedRows.length === 0) {
-    const returnedRowsSummary = resultRows.slice(0, 5).map((result, index) => {
-      return `returned row ${index + 1}: service_date=${result.serviceDate || "blank"}, billed=${result.billedAmount || "blank"}, member_id=${result.memberId || "blank"}, patient_name=${result.patientName || "blank"}, finalized_date=${result.finalizedDate || "blank"}, claim=${result.claimNumber || "blank"}, status=${result.status.display || "blank"}`;
-    }).join("; ");
     const returnedCount = resultSummary.total ?? (resultRows.length || "unknown");
     const matchCriteria = matchLabel === "Service Date + Billed Amount + Member ID"
       ? `Service Date ${row.data["Service Date"]}, Charges ${row.data.Charges}, and Member ID ${row.data["Subscriber No"]}`
@@ -559,7 +569,22 @@ async function processTriwestTricareServiceDateResults(page, row, provider, resu
         || matchLabel === "Service Date + Billed Amount + fuzzy Patient Name words"
         ? `Service Date ${row.data["Service Date"]}, Charges ${row.data.Charges}, and Patient Name ${row.data["Patient Name"]}`
         : `Service Date ${row.data["Service Date"]} and Charges ${row.data.Charges}`;
-    const mismatchReason = `Portal returned ${returnedCount} rows in ${sourceTab} for provider ${provider}, but none matched input ${matchCriteria}. ${returnedRowsSummary}`;
+    const dateMatchedRows = resultRows.filter((result) => result.serviceDate === inputDate);
+    const billedMatchedRows = shouldMatchBilledAmount
+      ? dateMatchedRows.filter((result) => normalizeMoney(result.billedAmount) === inputCharge)
+      : dateMatchedRows;
+    const mismatchDetail = !dateMatchedRows.length
+      ? `Service Date mismatch for input ${row.data["Service Date"] || "blank"}.`
+      : shouldMatchBilledAmount && !billedMatchedRows.length
+        ? `Billed Amount mismatch for input Charges ${row.data.Charges || "blank"}.`
+        : options.projectId === "medrevenu" && inputMemberId && inputPatientName
+          ? `Member ID and Patient Name mismatch for input Member ID ${row.data["Subscriber No"] || "blank"} and Patient Name ${row.data["Patient Name"] || "blank"}.`
+          : matchLabel.includes("Member ID")
+            ? `Member ID mismatch for input ${row.data["Subscriber No"] || "blank"}.`
+            : matchLabel.includes("Patient Name")
+            ? `Patient Name mismatch for input ${row.data["Patient Name"] || "blank"}.`
+            : `No matching ${sourceTab} row found.`;
+    const mismatchReason = `Portal returned ${returnedCount} rows in ${sourceTab} for provider ${provider}, but none matched input ${matchCriteria}. ${mismatchDetail} ${returnedRowsSummary}`.trim();
     return {
       status: "failed",
       summaries: [renderFailedSummary(mismatchReason)],

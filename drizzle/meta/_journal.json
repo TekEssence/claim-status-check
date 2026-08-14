@@ -29,6 +29,13 @@
       "when": 1786113500000,
       "tag": "0003_workflow_artifact_bucket_compat",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1786640500000,
+      "tag": "0004_workflow_command_requested_by_compat",
+      "breakpoints": true
     }
   ]
 }

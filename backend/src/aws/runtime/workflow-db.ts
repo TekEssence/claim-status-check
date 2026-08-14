@@ -146,12 +146,13 @@ export async function createWorkflowCommand(params: {
     commandType: params.commandType,
     status: "pending",
     payload: params.payload ?? {},
+    expiresAt: params.ttlMs && params.ttlMs > 0
+      ? new Date(now.getTime() + params.ttlMs).toISOString()
+      : null,
+    consumedAt: null,
     createdBy: params.createdBy,
     createdAt: now.toISOString(),
   };
-  if (params.ttlMs) {
-    values.expiresAt = new Date(now.getTime() + params.ttlMs).toISOString();
-  }
 
   await runDbWithRetry((db) =>
     db.insert(workflowJobCommands).values(values),

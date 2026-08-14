@@ -89,6 +89,10 @@ function lineDeniedReason(line: ClaimLineDetail): string {
   return [remarkCode, description].filter(Boolean).join(" - ");
 }
 
+function lineStatus(line: ClaimLineDetail): string {
+  return asText(line.status || line.lineStatus || "");
+}
+
 function renderMedrevenuCptSummary(detail: ClaimDetail, line: ClaimLineDetail, inputCpt: string): string {
   const serviceDate = valueOrBlank(detail.serviceDate);
   const receivedDate = valueOrBlank(detail.receivedDate);
@@ -96,7 +100,7 @@ function renderMedrevenuCptSummary(detail: ClaimDetail, line: ClaimLineDetail, i
   const checkDate = valueOrBlank(detail.checkDate);
   const claimNumber = valueOrBlank(detail.claimNumber);
   const procedureCode = valueOrBlank(line.procedureCode || inputCpt);
-  const status = asText(detail.type || detail.claimStatus).toLowerCase();
+  const status = asText(lineStatus(line) || detail.type || detail.claimStatus).toLowerCase();
 
   if (status.includes("denied")) {
     return `DOS ${serviceDate}: Checked Availity portal CPT ${procedureCode} claim received on ${receivedDate} denied on ${checkDate} denial reason ${valueOrBlank(lineDeniedReason(line))}. Claim# ${claimNumber}.`;
@@ -114,7 +118,7 @@ function renderMedrevenuCptSummary(detail: ClaimDetail, line: ClaimLineDetail, i
     return `DOS ${serviceDate}: Checked Availity portal CPT ${procedureCode} claim received on ${receivedDate} paid on ${checkDate} paid amount ${paidAmount} with copay of ${copay}, coinsurance of ${coinsurance}, and deductible of ${deductible} EFT/Check # ${checkNumber}. Claim #: ${claimNumber}. Check Amount: ${checkAmount}.${billedAmount}${allowedAmount}`;
   }
 
-  return `DOS ${serviceDate}: Checked Availity portal CPT ${procedureCode} claim processed on ${finalizedDate} current status ${valueOrBlank(detail.claimStatus || detail.type)}. Claim# ${claimNumber}.`;
+  return `DOS ${serviceDate}: Checked Availity portal CPT ${procedureCode} claim processed on ${finalizedDate} current status ${valueOrBlank(lineStatus(line) || detail.claimStatus || detail.type)}. Claim# ${claimNumber}.`;
 }
 
 function applyCommonBotFields(outputRow: AvailityOutputRow, result: WorkflowResult): void {

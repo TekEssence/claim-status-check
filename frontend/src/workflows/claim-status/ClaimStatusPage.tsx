@@ -452,7 +452,7 @@ const PORTAL_WORKSPACE_META: Record<
     processingDescription: "Blue Shield requests are validated by group, encrypted during upload, and processed with checkpoint-aware automation.",
   },
   availity: {
-    heroDescription: "Upload your Availity login workbook and claim workbook to process Aetna, Anthem-CA, Blue Cross Blue Shield, Wellpoint, Wellcare, Humana, Health Net, Molina, and TRIWEST-TRICARE claim status checks.",
+    heroDescription: "Upload your Availity login workbook and claim workbook to process Aetna, Anthem-CA, Blue Cross Blue Shield, Wellpoint, Wellcare, Humana, Central Health Medicare Plan, Health Net, Molina, Providence Health Plan, Scan Health, TRIWEST-TRICARE, and TRIWEST-VA CCN claim status checks.",
     processingDescription: "Availity requests stream live status over SSE and automatically download the completed output workbook.",
   },
   cigna: {
@@ -970,6 +970,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
   const [regalOtpRequest, setRegalOtpRequest] = useState<{ inputName: string; label: string; message: string } | null>(null);
   const [regalOtpValue, setRegalOtpValue] = useState<string>("");
   const [latestRegalOutput, setLatestRegalOutput] = useState<DownloadableArtifact | null>(null);
+  const [latestAvailityOutput, setLatestAvailityOutput] = useState<DownloadableArtifact | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [isCancellingJob, setIsCancellingJob] = useState(false);
   const [status, setStatus] = useState<string>("");
@@ -1059,8 +1060,8 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     [effectivePortalId, workflowRuns],
   );
   const runningWorkflowRunCount = useMemo(
-    () => workflowRuns.filter((job) => isLiveWorkflowStatus(job.status)).length,
-    [workflowRuns],
+    () => visibleWorkflowRuns.length,
+    [visibleWorkflowRuns],
   );
   const userDisplayName = useMemo(() => {
     const raw = authUser?.email || authUser?.username || "Afrin";
@@ -1768,6 +1769,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     setOptumProStopping(false);
     setOptumProStaleRunAvailable(false);
     setLatestRegalOutput(null);
+    setLatestAvailityOutput(null);
   }
 
   function resetPortalSelection() {
@@ -2526,6 +2528,9 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
             setLogs((prev) => [...prev, eventData.message ?? ""]);
           } else if (eventData.type === "progress" && typeof eventData.completed === "number" && typeof eventData.total === "number") {
             setProgress({ completed: eventData.completed, total: eventData.total, currentRow: eventData.currentRow });
+          } else if (eventData.type === "row_progress" && typeof eventData.current === "number" && typeof eventData.total === "number") {
+            setProgress({ completed: Math.max(0, eventData.current - 1), total: eventData.total, currentRow: eventData.current });
+            setStatus(`Aerial processing row ${eventData.current} of ${eventData.total}: ${eventData.payerName || "Unknown payer"}${eventData.stage ? ` (${eventData.stage})` : ""}.`);
           } else if (eventData.type === "error_screenshot" && typeof eventData.index === "number" && eventData.image) {
             setErrorScreenshots((prev) => [...prev, { index: eventData.index ?? -1, image: eventData.image ?? "" }]);
           } else if (eventData.type === "file_download" && eventData.filename && eventData.base64) {
@@ -2585,6 +2590,18 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
         })),
     );
     setProgress(currentJob.totalRows > 0 ? { completed: currentJob.currentCompleted, total: currentJob.totalRows } : null);
+    const latestSnapshot = [...(currentJob.artifacts ?? [])]
+      .reverse()
+      .find((artifact) => artifact.artifactType === "output_snapshot" && artifact.contentBase64 && artifact.filename);
+    if (portalId === "availity" && latestSnapshot?.contentBase64 && latestSnapshot.filename) {
+      setLatestAvailityOutput({
+        filename: latestSnapshot.filename,
+        base64: latestSnapshot.contentBase64,
+        mimeType: latestSnapshot.mimeType || "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        completed: currentJob.currentCompleted,
+        total: currentJob.totalRows,
+      });
+    }
     setStatus(`Reconnecting to current ${portalName} run...`);
 
     let hasError = false;
@@ -2609,6 +2626,16 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
               downloadBase64File(eventData.filename, eventData.base64, eventData.mimeType || "application/octet-stream");
               rememberDownloadedArtifact(currentJob.jobId, artifactKey);
               setStatus(`Downloaded ${eventData.filename}`);
+            }
+          } else if (eventData.type === "output_snapshot" && eventData.filename && eventData.base64) {
+            if (portalId === "availity") {
+              setLatestAvailityOutput({
+                filename: eventData.filename,
+                base64: eventData.base64,
+                mimeType: eventData.mimeType || "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                completed: eventData.completed,
+                total: eventData.total,
+              });
             }
           } else if (eventData.type === "warning" && eventData.message) {
             setLogs((prev) => [...prev, eventData.message ?? ""]);
@@ -3118,6 +3145,9 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
         setLogs((prev) => [...prev, eventData.message ?? ""]);
       } else if (eventData.type === "progress" && typeof eventData.completed === "number" && typeof eventData.total === "number") {
         setProgress({ completed: eventData.completed, total: eventData.total, currentRow: eventData.currentRow });
+      } else if (eventData.type === "row_progress" && typeof eventData.current === "number" && typeof eventData.total === "number") {
+        setProgress({ completed: Math.max(0, eventData.current - 1), total: eventData.total, currentRow: eventData.current });
+        setStatus(`Availity processing row ${eventData.current} of ${eventData.total}: ${eventData.payerName || "Unknown payer"}${eventData.stage ? ` (${eventData.stage})` : ""}.`);
       } else if (eventData.type === "error_screenshot" && typeof eventData.index === "number" && eventData.image) {
         setErrorScreenshots((prev) => [...prev, { index: eventData.index ?? -1, image: eventData.image ?? "" }]);
       } else if (eventData.type === "otp_request" && eventData.inputName) {
@@ -3135,6 +3165,14 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
           rememberDownloadedArtifact(subscribedJobId, artifactKey);
           setStatus(`Downloaded ${eventData.filename}`);
         }
+      } else if (eventData.type === "output_snapshot" && eventData.filename && eventData.base64) {
+        setLatestAvailityOutput({
+          filename: eventData.filename,
+          base64: eventData.base64,
+          mimeType: eventData.mimeType || "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          completed: eventData.completed,
+          total: eventData.total,
+        });
       } else if (eventData.type === "warning" && eventData.message) {
         setLogs((prev) => [...prev, eventData.message ?? ""]);
         setStatus(eventData.message);
@@ -4288,6 +4326,38 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
       ? `regal_output_partial${completedSuffix}.xlsx`
       : latestRegalOutput.filename;
     downloadBase64File(filename, latestRegalOutput.base64, latestRegalOutput.mimeType);
+  }
+
+  async function downloadLatestAvailityOutput() {
+    let output = latestAvailityOutput;
+    const currentJob = await getCurrentScrapeJob().catch(() => null);
+    const latestSnapshot = [...(currentJob?.artifacts ?? [])]
+      .reverse()
+      .find((artifact) => artifact.artifactType === "output_snapshot" && artifact.contentBase64 && artifact.filename);
+    if (latestSnapshot?.contentBase64 && latestSnapshot.filename) {
+      output = {
+        filename: latestSnapshot.filename,
+        base64: latestSnapshot.contentBase64,
+        mimeType: latestSnapshot.mimeType || "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        completed: currentJob?.currentCompleted,
+        total: currentJob?.totalRows,
+      };
+      setLatestAvailityOutput(output);
+    }
+
+    if (!output) {
+      setStatus("No Availity current-results workbook is available yet. Try again after the first row completes.");
+      return;
+    }
+
+    const completedSuffix = typeof output.completed === "number" && typeof output.total === "number"
+      ? `-${output.completed}-of-${output.total}`
+      : "";
+    const filename = output.filename === "availity_output_snapshot.xlsx"
+      ? `availity_claimstatus_partial${completedSuffix}.xlsx`
+      : output.filename;
+    downloadBase64File(filename, output.base64, output.mimeType);
+    setStatus(`Downloaded ${filename}`);
   }
 
   const workflowRunsPanel = workflowRunTrackingEnabled ? (
@@ -5495,10 +5565,14 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
               ) : effectivePortalId === "availity" ? (
                 <div className="mt-5">
                   <AvailityResultView
+                    canDownloadOutput={Boolean(latestAvailityOutput || activeJobId || availityJobId)}
                     errorScreenshots={errorScreenshots}
                     logs={logs}
+                    onOutputDownload={downloadLatestAvailityOutput}
                     onOtpChange={setAvailityOtpValue}
                     onOtpSubmit={submitAvailityOtp}
+                    outputCompleted={latestAvailityOutput?.completed}
+                    outputTotal={latestAvailityOutput?.total}
                     otpRequest={availityOtpRequest}
                     otpValue={availityOtpValue}
                     progress={progress}

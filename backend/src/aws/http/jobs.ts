@@ -206,25 +206,37 @@ export async function listJobs(event: ApiEvent) {
 }
 
 export async function submitOtp(event: ApiEvent) {
+  let jobId = "";
   try {
     const userId = getAuthUserId(event);
-    const jobId = getJobId(event);
+    jobId = getJobId(event);
     const job = await getWorkflowJobForUser(jobId, userId);
     if (!job) return jsonResponse(404, { error: "Job not found." });
-    const body = parseJsonBody<{ otp?: string; inputName?: string }>(event);
-    const otp = body.otp?.trim();
-    if (!otp) return jsonResponse(400, { error: "Missing OTP." });
+    const body = parseJsonBody<{ otp?: unknown; value?: unknown; inputName?: unknown }>(event);
+    const commandType = typeof body.inputName === "string" && body.inputName.trim()
+      ? body.inputName.trim()
+      : "otp";
+    const inputValue = typeof body.otp === "string" && body.otp.trim()
+      ? body.otp.trim()
+      : typeof body.value === "string" && body.value.trim()
+        ? body.value.trim()
+        : "";
+    if (!inputValue) return jsonResponse(400, { error: "Missing verification response." });
     await createWorkflowCommand({
       jobId,
-      commandType: body.inputName || "otp",
-      payload: { value: otp },
+      commandType,
+      payload: { value: inputValue },
       createdBy: userId,
       ttlMs: 2 * 60 * 1000,
     });
-    await appendWorkflowEvent(jobId, "otp_submitted", { type: "otp_submitted" });
+    await appendWorkflowEvent(jobId, "input_submitted", { type: "input_submitted", inputName: commandType });
     return jsonResponse(200, { ok: true });
   } catch (error) {
-    return jsonResponse(500, { error: error instanceof Error ? error.message : "Failed to submit OTP." });
+    console.error("Submit workflow input failed", {
+      jobId,
+      message: error instanceof Error ? error.message : String(error),
+    });
+    return jsonResponse(500, { error: error instanceof Error ? error.message : "Failed to submit verification response." });
   }
 }
 

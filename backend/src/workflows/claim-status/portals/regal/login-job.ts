@@ -113,7 +113,7 @@ async function dismissRegalPasswordExpiryWarningIfPresent(
   await page.waitForLoadState("domcontentloaded", { timeout: 15000 }).catch(() => {});
   await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
   if (await warningTitle.isVisible({ timeout: 1000 }).catch(() => false)) {
-    await remindLater.evaluate((element) => (element as HTMLElement).click()).catch(() => {});
+    await remindLater.click({ force: true }).catch(() => {});
     await page.waitForLoadState("domcontentloaded", { timeout: 15000 }).catch(() => {});
     await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
   }
@@ -551,29 +551,38 @@ function normalizeRegalSiteText(value: string): string {
   return normalizeText(value).toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
+async function readRegalTableRows(table: Locator): Promise<string[][]> {
+  const rowLocator = table.locator("tr");
+  const rowCount = await rowLocator.count();
+  const rows: string[][] = [];
+  for (let rowIndex = 0; rowIndex < rowCount; rowIndex += 1) {
+    const cellTexts = await rowLocator.nth(rowIndex).locator("td").allTextContents();
+    rows.push(cellTexts.map((cell) => normalizeText(cell)));
+  }
+  return rows;
+}
+
 async function getVisibleRegalSiteText(page: Page): Promise<string> {
-  const frameTexts = await Promise.all(
-    page.frames().map((frame) =>
-      frame.evaluate(() => {
-        const normalize = (value: unknown) => String(value || "").replace(/\s+/g, " ").trim();
-        const selectedSite = Array.from(document.querySelectorAll("select[id$='_header_ddlSite'], select[name$='$header$ddlSite'], select[id*='ddlSite'], select[name*='ddlSite']"))
-          .map((select) => (select as HTMLSelectElement).selectedOptions?.[0]?.textContent || "")
-          .map(normalize)
-          .find(Boolean);
-        const hiddenSite = Array.from(document.querySelectorAll("span[id$='_header_lblSite'], span[id*='lblSite']"))
-          .map((span) => span.textContent || "")
-          .map(normalize)
-          .find(Boolean);
-        const siteLabel = Array.from(document.querySelectorAll("td, span, label, div"))
-          .find((element) => normalize(element.textContent).toLowerCase() === "site:");
-        const siteLabelSibling = siteLabel?.nextElementSibling ? normalize(siteLabel.nextElementSibling.textContent) : "";
-        const siteLine = (document.body?.innerText || "").split(/\r?\n/)
-          .map(normalize)
-          .find((line) => /^site:\s*\S/i.test(line) || /\bsite:\s*\S/i.test(line));
-        return [selectedSite, hiddenSite, siteLabelSibling, siteLine].filter(Boolean).join("\n");
-      }).catch(() => "")
-    ),
-  );
+  const frameTexts: string[] = [];
+  for (const frame of page.frames()) {
+    const selectedSite = await frame
+      .locator(regalConfig.selectors.siteSelect)
+      .first()
+      .locator("option:checked")
+      .textContent({ timeout: 1000 })
+      .catch(() => "");
+    const hiddenSite = await frame
+      .locator("span[id$='_header_lblSite'], span[id*='lblSite']")
+      .first()
+      .textContent({ timeout: 1000 })
+      .catch(() => "");
+    const bodyText = await frame.locator("body").innerText({ timeout: 1000 }).catch(() => "");
+    const siteLine = bodyText
+      .split(/\r?\n/)
+      .map((line) => normalizeText(line))
+      .find((line) => /^site:\s*\S/i.test(line) || /\bsite:\s*\S/i.test(line));
+    frameTexts.push([selectedSite, hiddenSite, siteLine].map(normalizeText).filter(Boolean).join("\n"));
+  }
   const locatorText = await page.locator("body").innerText({ timeout: 3000 }).catch(() => "");
   const siteLine = locatorText.split(/\r?\n/).map((line) => normalizeText(line)).find((line) => /^site:\s*\S/i.test(line) || /\bsite:\s*\S/i.test(line)) || "";
   const combined = `${siteLine}\n${frameTexts.join("\n")}`;
@@ -648,14 +657,17 @@ async function selectRegalGroupSite(page: Page, group: string, stageLog: (level:
     return;
   }
 
-  const value = await siteSelect.evaluate((select, expectedText) => {
-    const normalize = (text: string) => String(text || "").toLowerCase().replace(/[^a-z0-9]/g, "");
-    const expected = normalize(expectedText);
-    const option = Array.from((select as HTMLSelectElement).options).find((candidate) =>
-      normalize(candidate.textContent || "").includes(expected)
-    );
-    return option?.value || "";
-  }, groupName);
+  const optionLocator = siteSelect.locator("option");
+  const optionCount = await optionLocator.count();
+  let value = "";
+  for (let index = 0; index < optionCount; index += 1) {
+    const option = optionLocator.nth(index);
+    const optionText = await option.innerText().catch(() => "");
+    if (normalizeRegalSiteText(optionText).includes(normalizeRegalSiteText(groupName))) {
+      value = await option.getAttribute("value").then((optionValue) => optionValue || "");
+      break;
+    }
+  }
 
   if (!value) {
     throw new Error(`Regal group ${group} could not be found in the site dropdown. Expected option containing "${groupName}".`);
@@ -840,22 +852,7 @@ async function navigateToViewClaims(page: Page): Promise<void> {
       viewClaimsLink.click(),
     ]);
   } else {
-    const navigatedByPortalFunction = await page.evaluate(() => {
-      const navigate = (window as unknown as { navigateFromSideMenuTo?: (path: string, linkId?: string) => void }).navigateFromSideMenuTo;
-      if (typeof navigate !== "function") return false;
-
-      const link = Array.from(document.querySelectorAll<HTMLAnchorElement>("a")).find((candidate) =>
-        candidate.href.includes("selclaimmember.asp") ||
-        candidate.getAttribute("href")?.includes("selclaimmember.asp") ||
-        candidate.textContent?.trim().toLowerCase() === "view claims"
-      );
-      navigate("selclaimmember.asp", link?.id);
-      return true;
-    });
-
-    if (!navigatedByPortalFunction) {
-      await page.goto(new URL("selclaimmember.asp", page.url()).toString(), { waitUntil: "domcontentloaded" });
-    }
+    await page.goto(new URL("selclaimmember.asp", page.url()).toString(), { waitUntil: "domcontentloaded" });
   }
 
   await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
@@ -909,31 +906,33 @@ async function extractRegalClaimRows(page: Page): Promise<RegalClaimSearchRow[]>
   const table = await findRegalLocator(page, regalConfig.selectors.claimResultsTable, { state: "visible", timeout: 30000 });
   await table.waitFor({ state: "visible", timeout: 30000 });
 
-  return table.locator("tbody tr").evaluateAll((rows) =>
-    rows
-      .map((row, index) => {
-        const cells = Array.from(row.querySelectorAll("td")).map((cell) =>
-          String(cell.textContent || "").replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim()
-        );
-        const href = row.querySelector<HTMLAnchorElement>("td:first-child a")?.getAttribute("href") || "";
-        const absoluteHref = href ? new URL(href, row.ownerDocument.location.href).toString() : "";
-        return {
-          index,
-          href,
-          absoluteHref,
-          memberName: cells[0] || "",
-          memberHmoId: cells[1] || "",
-          providerName: cells[2] || "",
-          claimNumber: cells[3] || "",
-          firstDateOfService: cells[4] || "",
-          diagnosis: cells[5] || "",
-          billed: cells[6] || "",
-          payAmount: cells[7] || "",
-          status: cells[8] || "",
-        };
-      })
-      .filter((row) => row.claimNumber || row.memberName)
-  );
+  const rowLocator = table.locator("tbody tr");
+  const rowCount = await rowLocator.count();
+  const rows: RegalClaimSearchRow[] = [];
+  for (let index = 0; index < rowCount; index += 1) {
+    const row = rowLocator.nth(index);
+    const cells = (await row.locator("td").allTextContents()).map((cell) => normalizeText(cell));
+    const href = await row.locator("td:first-child a").first().getAttribute("href").catch(() => "") || "";
+    const absoluteHref = href ? new URL(href, regalContentUrl(page)).toString() : "";
+    const parsedRow = {
+      index,
+      href,
+      absoluteHref,
+      memberName: cells[0] || "",
+      memberHmoId: cells[1] || "",
+      providerName: cells[2] || "",
+      claimNumber: cells[3] || "",
+      firstDateOfService: cells[4] || "",
+      diagnosis: cells[5] || "",
+      billed: cells[6] || "",
+      payAmount: cells[7] || "",
+      status: cells[8] || "",
+    };
+    if (parsedRow.claimNumber || parsedRow.memberName) {
+      rows.push(parsedRow);
+    }
+  }
+  return rows;
 }
 
 async function openRegalClaimResult(page: Page, claimRow: RegalClaimSearchRow): Promise<void> {
@@ -969,25 +968,19 @@ async function openRegalClaimResult(page: Page, claimRow: RegalClaimSearchRow): 
 
 async function extractRegalClaimSummary(page: Page): Promise<RegalClaimSummary> {
   const tablesLocator = await findRegalLocators(page, "table", { state: "attached", timeout: 30000 });
-  const details = await tablesLocator.evaluateAll((tables) => {
-    const normalize = (value: unknown) => String(value || "").replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
-    const values: Record<string, string> = {};
-
-    for (const table of tables) {
-      for (const row of Array.from(table.querySelectorAll("tr"))) {
-        const cells = Array.from(row.querySelectorAll("td"));
-        if (cells.length < 2) continue;
-
-        const label = normalize(cells[0].textContent).toLowerCase();
-        const value = normalize(cells[1].textContent);
-        if (label && value && !values[label]) {
-          values[label] = value;
-        }
+  const details: Record<string, string> = {};
+  const tableCount = await tablesLocator.count();
+  for (let tableIndex = 0; tableIndex < tableCount; tableIndex += 1) {
+    const rows = await readRegalTableRows(tablesLocator.nth(tableIndex));
+    for (const cells of rows) {
+      if (cells.length < 2) continue;
+      const label = normalizeText(cells[0]).toLowerCase();
+      const value = normalizeText(cells[1]);
+      if (label && value && !details[label]) {
+        details[label] = value;
       }
     }
-
-    return values;
-  });
+  }
   const splitClaim = splitClaimNumberAndDate(details["claim #"] || "");
 
   return {
@@ -1008,7 +1001,7 @@ async function showRegalLineDetail(page: Page): Promise<void> {
   }
 
   const showButton = await findRegalLocator(page, regalConfig.selectors.lineDetailShowSubmit, { state: "attached", timeout: 30000 });
-  const showValue = normalizeText(await showButton.inputValue().catch(async () => String(await showButton.evaluate((element) => (element as HTMLInputElement).value || "").catch(() => ""))));
+  const showValue = normalizeText(await showButton.inputValue().catch(async () => await showButton.getAttribute("value").catch(() => "") || ""));
   if (!/show line detail/i.test(showValue)) {
     await findRegalLocator(page, regalConfig.selectors.lineDetailHideSubmit, { state: "visible", timeout: 30000 });
   } else {
@@ -1026,107 +1019,99 @@ async function showRegalLineDetail(page: Page): Promise<void> {
 
 async function extractRegalLineDetails(page: Page): Promise<RegalLineDetailRow[]> {
   const tablesLocator = await findRegalLocators(page, "table", { state: "attached", timeout: 30000 });
-  return tablesLocator.evaluateAll((tables) => {
-    const normalize = (value: unknown) => String(value || "").replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
-    const normalizeColumn = (value: string) =>
-      normalize(value)
-        .toLowerCase()
-        .replace(/\//g, " ")
-        .replace(/#/g, "number")
-        .replace(/[^a-z0-9]+/g, "_")
-        .replace(/^_+|_+$/g, "");
+  const normalizeColumn = (value: string) =>
+    normalizeText(value)
+      .toLowerCase()
+      .replace(/\//g, " ")
+      .replace(/#/g, "number")
+      .replace(/[^a-z0-9]+/g, "_")
+      .replace(/^_+|_+$/g, "");
 
-    const parseLineTable = (table: HTMLTableElement) => {
-      const rows = Array.from(table.querySelectorAll("tr")).map((row) =>
-        Array.from(row.querySelectorAll("td")).map((cell) => normalize(cell.textContent))
-      );
-      const headerIndex = rows.findIndex((row) => row.some((cell) => normalizeColumn(cell) === "seqnm"));
-      if (headerIndex < 0) return [];
+  const parseLineRows = (rows: string[][]) => {
+    const headerIndex = rows.findIndex((row) => row.some((cell) => normalizeColumn(cell) === "seqnm"));
+    if (headerIndex < 0) return [];
 
-      const headers = rows[headerIndex].map(normalizeColumn);
-      return rows.slice(headerIndex + 1)
-        .filter((row) => row.some(Boolean))
-        .map((row) => {
-          const values: Record<string, string> = {};
-          headers.forEach((header, index) => {
-            if (header) values[header] = row[index] || "";
-          });
-          return values;
-        })
-        .filter((row) => (row.seqnm || row.cpt || row.dos) && normalize(row.seqnm).toLowerCase() !== "totals");
-    };
+    const headers = rows[headerIndex].map(normalizeColumn);
+    return rows.slice(headerIndex + 1)
+      .filter((row) => row.some(Boolean))
+      .map((row) => {
+        const values: Record<string, string> = {};
+        headers.forEach((header, index) => {
+          if (header) values[header] = row[index] || "";
+        });
+        return values;
+      })
+      .filter((row) => (row.seqnm || row.cpt || row.dos) && normalizeText(row.seqnm).toLowerCase() !== "totals");
+  };
 
-    const parseAdjustmentTable = (table: HTMLTableElement) => {
-      const rows = Array.from(table.querySelectorAll("tr")).map((row) =>
-        Array.from(row.querySelectorAll("td")).map((cell) => normalize(cell.textContent))
-      );
-      const adjustmentHeaderIndex = rows.findIndex((row) => row.some((cell) => normalizeColumn(cell) === "deductible"));
-      const finalHeaderIndex = rows.findIndex((row) => row.some((cell) => normalizeColumn(cell) === "final_adj"));
+  const parseAdjustmentRows = (rows: string[][]) => {
+    const adjustmentHeaderIndex = rows.findIndex((row) => row.some((cell) => normalizeColumn(cell) === "deductible"));
+    const finalHeaderIndex = rows.findIndex((row) => row.some((cell) => normalizeColumn(cell) === "final_adj"));
 
-      const firstAdjustment = adjustmentHeaderIndex >= 0 ? rows[adjustmentHeaderIndex + 1] || [] : [];
-      const firstAdjustmentHeaders = adjustmentHeaderIndex >= 0 ? rows[adjustmentHeaderIndex].map(normalizeColumn) : [];
-      const finalAdjustment = finalHeaderIndex >= 0 ? rows[finalHeaderIndex + 1] || [] : [];
-      const finalAdjustmentHeaders = finalHeaderIndex >= 0 ? rows[finalHeaderIndex].map(normalizeColumn) : [];
-      const values: Record<string, string> = {};
-      const expectedAdjustmentColumns = [
-        "deductible",
-        "copay",
-        "coinsurance",
-        "adjustment",
-        "adjustment_reason",
-        "final_adj",
-        "final_adj_reason",
-      ];
-      expectedAdjustmentColumns.forEach((column) => {
-        values[column] = "";
-      });
+    const firstAdjustment = adjustmentHeaderIndex >= 0 ? rows[adjustmentHeaderIndex + 1] || [] : [];
+    const firstAdjustmentHeaders = adjustmentHeaderIndex >= 0 ? rows[adjustmentHeaderIndex].map(normalizeColumn) : [];
+    const finalAdjustment = finalHeaderIndex >= 0 ? rows[finalHeaderIndex + 1] || [] : [];
+    const finalAdjustmentHeaders = finalHeaderIndex >= 0 ? rows[finalHeaderIndex].map(normalizeColumn) : [];
+    const values: Record<string, string> = {};
+    const expectedAdjustmentColumns = [
+      "deductible",
+      "copay",
+      "coinsurance",
+      "adjustment",
+      "adjustment_reason",
+      "final_adj",
+      "final_adj_reason",
+    ];
+    expectedAdjustmentColumns.forEach((column) => {
+      values[column] = "";
+    });
 
-      firstAdjustmentHeaders.forEach((header, index) => {
-        if (!header) return;
-        if (!Object.prototype.hasOwnProperty.call(values, header)) return;
-        values[header] = firstAdjustment[index] || "";
-      });
-      finalAdjustmentHeaders.forEach((header, index) => {
-        if (!header) return;
-        if (!Object.prototype.hasOwnProperty.call(values, header)) return;
-        values[header] = finalAdjustment[index] || "";
-      });
+    firstAdjustmentHeaders.forEach((header, index) => {
+      if (!header) return;
+      if (!Object.prototype.hasOwnProperty.call(values, header)) return;
+      values[header] = firstAdjustment[index] || "";
+    });
+    finalAdjustmentHeaders.forEach((header, index) => {
+      if (!header) return;
+      if (!Object.prototype.hasOwnProperty.call(values, header)) return;
+      values[header] = finalAdjustment[index] || "";
+    });
 
-      return values;
-    };
+    return values;
+  };
 
-    const isLineTable = (table: Element) => {
-      const text = normalize(table.textContent);
-      return text.includes("SEQNM") && text.includes("CPT");
-    };
-    const isAdjustmentTable = (table: Element) => {
-      const text = normalize(table.textContent);
-      return text.includes("Deductible") && text.includes("Adjustment Reason");
-    };
+  const tableRows: string[][][] = [];
+  const tableTexts: string[] = [];
+  const tableCount = await tablesLocator.count();
+  for (let index = 0; index < tableCount; index += 1) {
+    const table = tablesLocator.nth(index);
+    tableRows.push(await readRegalTableRows(table));
+    tableTexts.push(normalizeText(await table.innerText().catch(() => "")));
+  }
 
-    const output: Record<string, string>[] = [];
-    for (let index = 0; index < tables.length; index += 1) {
-      const table = tables[index];
-      if (!isLineTable(table)) continue;
+  const isLineTable = (index: number) => tableTexts[index]?.includes("SEQNM") && tableTexts[index]?.includes("CPT");
+  const isAdjustmentTable = (index: number) => tableTexts[index]?.includes("Deductible") && tableTexts[index]?.includes("Adjustment Reason");
 
-      const lineRows = parseLineTable(table as HTMLTableElement);
-      if (lineRows.length === 0) continue;
+  const output: Record<string, string>[] = [];
+  for (let index = 0; index < tableRows.length; index += 1) {
+    if (!isLineTable(index)) continue;
 
-      let adjustmentValues: Record<string, string> = {};
-      for (let nextIndex = index + 1; nextIndex < tables.length; nextIndex += 1) {
-        const nextTable = tables[nextIndex];
-        if (isLineTable(nextTable)) break;
-        if (isAdjustmentTable(nextTable)) {
-          adjustmentValues = parseAdjustmentTable(nextTable as HTMLTableElement);
-          break;
-        }
+    const lineRows = parseLineRows(tableRows[index]);
+    if (lineRows.length === 0) continue;
+
+    let adjustmentValues: Record<string, string> = {};
+    for (let nextIndex = index + 1; nextIndex < tableRows.length; nextIndex += 1) {
+      if (isLineTable(nextIndex)) break;
+      if (isAdjustmentTable(nextIndex)) {
+        adjustmentValues = parseAdjustmentRows(tableRows[nextIndex]);
+        break;
       }
-
-      output.push(...lineRows.map((line) => ({ ...line, ...adjustmentValues })));
     }
 
-    return output;
-  });
+    output.push(...lineRows.map((line) => ({ ...line, ...adjustmentValues })));
+  }
+
+  return output;
 }
 
 async function extractRegalClaimDetailRows(page: Page): Promise<{ summary: RegalClaimSummary; lineDetails: RegalLineDetailRow[] }> {

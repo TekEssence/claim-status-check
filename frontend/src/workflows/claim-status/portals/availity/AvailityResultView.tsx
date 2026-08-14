@@ -5,19 +5,27 @@ import { StatusMessage } from "../../../../components/StatusMessage";
 import type { ErrorScreenshot, JobProgressValue } from "../../../../types/job";
 
 export function AvailityResultView({
+  canDownloadOutput,
   errorScreenshots,
   logs,
+  onOutputDownload,
   onOtpChange,
   onOtpSubmit,
+  outputCompleted,
+  outputTotal,
   otpRequest,
   otpValue,
   progress,
   status,
 }: {
+  canDownloadOutput?: boolean;
   errorScreenshots: ErrorScreenshot[];
   logs: string[];
+  onOutputDownload?: () => void | Promise<void>;
   onOtpChange?: (value: string) => void;
   onOtpSubmit?: () => void;
+  outputCompleted?: number;
+  outputTotal?: number;
   otpRequest?: { inputName: string; label: string; message: string } | null;
   otpValue?: string;
   progress: JobProgressValue | null;
@@ -58,6 +66,21 @@ export function AvailityResultView({
       ) : null}
       <JobProgress progress={progress} />
       <StatusMessage status={status} />
+      {canDownloadOutput ? (
+        <div className="mb-4 rounded-[1.2rem] border border-blue-100 bg-white p-4 shadow-sm">
+          <p className="text-sm text-slate-600">
+            Latest Availity workbook is ready
+            {typeof outputCompleted === "number" && typeof outputTotal === "number" ? ` through ${outputCompleted} of ${outputTotal} input rows` : ""}.
+          </p>
+          <button
+            type="button"
+            onClick={onOutputDownload}
+            className="mt-3 rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+          >
+            Download current results
+          </button>
+        </div>
+      ) : null}
       <ScreenshotViewer screenshots={errorScreenshots} />
       <LogsPanel logs={logs} />
     </>

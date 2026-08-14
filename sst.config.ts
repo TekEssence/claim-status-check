@@ -47,6 +47,8 @@ export default $config({
     const deployEnv = loadDeployEnv();
     const databaseUrl = process.env.DATABASE_URL || deployEnv.DATABASE_URL || "";
     const dbSsl = process.env.DB_SSL || deployEnv.DB_SSL || "true";
+    const workerImageUriOverride = process.env.WORKER_IMAGE_URI || deployEnv.WORKER_IMAGE_URI || "";
+    const skipFrontendBuild = (process.env.SST_SKIP_FRONTEND_BUILD || deployEnv.SST_SKIP_FRONTEND_BUILD || "").toLowerCase() === "true";
     if (!databaseUrl) {
       throw new Error("DATABASE_URL must be set in the shell or .env.local before deploying AWS workflow APIs.");
     }
@@ -119,6 +121,14 @@ export default $config({
       vpc,
     });
 
+    const workerRepository = new aws.ecr.Repository("WorkerRepository", {
+      name: `claim-status-${$app.stage}-worker`,
+      imageTagMutability: "MUTABLE",
+      forceDelete: $app.stage !== "production",
+    });
+
+    const workerImageUri = workerImageUriOverride || $interpolate`${workerRepository.repositoryUrl}:dev`;
+
     const webSocketApi = new sst.aws.ApiGatewayWebSocket("WorkflowWebSocketApi", {
       transform: {
         route: {
@@ -142,10 +152,7 @@ export default $config({
       containers: [
         {
           name: "worker",
-          image: {
-            context: ".",
-            dockerfile: "Dockerfile.worker",
-          },
+          image: workerImageUri,
           environment: {
             NODE_ENV: "production",
             NEXT_TELEMETRY_DISABLED: "1",
@@ -263,7 +270,7 @@ export default $config({
         NEXT_PUBLIC_COGNITO_DOMAIN: $interpolate`https://${userPoolDomain.domain}.auth.${aws.getRegionOutput({}).name}.amazoncognito.com`,
       },
       build: {
-        command: "npm run build:static",
+        command: skipFrontendBuild ? "npm run build:static:verify" : "npm run build:static",
         output: "out",
       },
     });
@@ -277,6 +284,8 @@ export default $config({
       cognitoDomain: $interpolate`https://${userPoolDomain.domain}.auth.${aws.getRegionOutput({}).name}.amazoncognito.com`,
       inputBucketName: inputsBucket.name,
       outputBucketName: outputsBucket.name,
+      workerRepositoryUrl: workerRepository.repositoryUrl,
+      workerImageUri,
       cluster: cluster.id,
       workerTaskDefinition: workerTask.nodes.taskDefinition.arn,
       workerTaskLogGroup: $interpolate`/claim-status/${$app.stage}/worker`,

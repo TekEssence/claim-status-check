@@ -1,4 +1,7 @@
 import { createRequire } from "node:module";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import type { Page } from "playwright-core";
 import type { ScraperContext } from "../../types";
 import { launchAvailityBrowser } from "./browser";
@@ -29,8 +32,9 @@ function createRunId(): string {
   return `availity_${new Date().toISOString().replace(/[-:.TZ]/g, "").slice(0, 14)}`;
 }
 
-function createAvailityOutputFilename(): string {
-  return `availity_claimstatus_${new Date().toISOString().replace(/[-:.TZ]/g, "").slice(0, 14)}.xlsx`;
+function createAvailityOutputFilename(partial = false): string {
+  const suffix = new Date().toISOString().replace(/[-:.TZ]/g, "").slice(0, 14);
+  return partial ? `availity_claimstatus_partial_${suffix}.xlsx` : `availity_claimstatus_${suffix}.xlsx`;
 }
 
 function errorMessage(error: unknown): string {
@@ -139,6 +143,32 @@ function downloadableFileEvent(filename: string, buffer: Buffer, mimeType: strin
     mimeType,
   };
 }
+
+function outputSnapshotEvent(filename: string, fields: { buffer?: Buffer; path?: string }, completed: number, total: number, mimeType: string): Record<string, unknown> {
+  return {
+    type: "output_snapshot",
+    filename,
+    ...(fields.buffer ? { base64: fields.buffer.toString("base64") } : {}),
+    ...(fields.path ? { path: fields.path } : {}),
+    completed,
+    total,
+    mimeType,
+  };
+}
+
+function rowProgressEvent(row: AvailityInputRow, current: number, total: number, stage: string): Record<string, unknown> {
+  return {
+    type: "row_progress",
+    current,
+    currentRow: row.input_row_id,
+    totalRows: total,
+    total,
+    completed: current - 1,
+    payerName: row.data["Payer Name"] || "Unknown payer",
+    stage,
+  };
+}
+
 
 function legacyLevelToContextLevel(level: string): "debug" | "info" | "warn" | "error" {
   if (level === "ERROR") return "error";
@@ -353,6 +383,8 @@ export async function runAvailityClaimStatusJob(formData: FormData, context: Scr
   const payerMapping = await readAvailityPayerMapping(input.projectId);
   const providerMappings = await readAvailityProviderMapping();
   let session: Awaited<ReturnType<typeof initializeSession>> | null = null;
+  let activeRow: AvailityInputRow | null = null;
+  let outputWorkbookEmitted = false;
 
   const log = async (message: string) => context.log({ level: "info", message });
   legacyLogger.setLogSink((entry: { level: string; message: string; line: string }) => {
@@ -361,8 +393,42 @@ export async function runAvailityClaimStatusJob(formData: FormData, context: Scr
       message: entry.line,
     });
   });
-  await log(`Availity input loaded: ${input.inputRows.length} row(s). Project: ${input.projectId}. Available payers: Aetna, Anthem-CA, Blue Cross Blue Shield, Wellpoint, Wellcare, Humana, Health Net, Molina, TRIWEST-TRICARE.`);
+  await log(`Availity input loaded: ${input.inputRows.length} row(s). Project: ${input.projectId}. Available payers: Aetna, Anthem-CA, Blue Cross Blue Shield, Wellpoint, Wellcare, Humana, Central Health Medicare Plan, Health Net, Molina, Providence Health Plan, Scan Health, TRIWEST-TRICARE, TRIWEST-VA CCN.`);
   await context.emit({ type: "progress", completed: 0, total: input.inputRows.length });
+
+  const emitOutputWorkbook = async (partial: boolean): Promise<void> => {
+    const workbookBuffer = await createAvailityOutputWorkbookBuffer({
+      inputHeaders: input.inputHeaders,
+      inputRows: inputSheetRows,
+      outputRows,
+      errorRows,
+      auditRows,
+    });
+    await context.emit(downloadableFileEvent(createAvailityOutputFilename(partial), workbookBuffer, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"));
+    outputWorkbookEmitted = true;
+  };
+
+  const emitOutputSnapshot = async (completed: number): Promise<void> => {
+    const workbookBuffer = await createAvailityOutputWorkbookBuffer({
+      inputHeaders: input.inputHeaders,
+      inputRows: inputSheetRows,
+      outputRows,
+      errorRows,
+      auditRows,
+    });
+    const snapshotDir = path.join(os.tmpdir(), "availity-output-snapshots", runId);
+    fs.mkdirSync(snapshotDir, { recursive: true });
+    const snapshotPath = path.join(snapshotDir, "availity_output_snapshot.xlsx");
+    fs.writeFileSync(snapshotPath, workbookBuffer);
+    const shouldSendWorkbookToBrowser = completed % 10 === 0 || completed === input.inputRows.length;
+    await context.emit(outputSnapshotEvent(
+      "availity_output_snapshot.xlsx",
+      shouldSendWorkbookToBrowser ? { buffer: workbookBuffer, path: snapshotPath } : { path: snapshotPath },
+      completed,
+      input.inputRows.length,
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ));
+  };
 
   try {
     session = await initializeSession(input, context, log);
@@ -382,8 +448,10 @@ export async function runAvailityClaimStatusJob(formData: FormData, context: Scr
       }
 
       const row = input.inputRows[index];
+      activeRow = row;
       const startedAt = Date.now();
       const outputRow = buildBaseOutput(row);
+      await context.emit(rowProgressEvent(row, index + 1, input.inputRows.length, "started"));
       let validation: { isValid: boolean; validation_status: string; validation_message: string; mappedPayerName: string };
       try {
         validation = validateRow(
@@ -413,6 +481,8 @@ export async function runAvailityClaimStatusJob(formData: FormData, context: Scr
         });
         addAudit(auditRows, runId, row, "validation", "failed", validation.validation_message, startedAt);
         await context.emit({ type: "progress", completed: index + 1, total: input.inputRows.length });
+        await emitOutputSnapshot(index + 1);
+        activeRow = null;
         continue;
       }
 
@@ -420,6 +490,7 @@ export async function runAvailityClaimStatusJob(formData: FormData, context: Scr
       let lastRowErrorMessage = "";
       for (let rowAttempt = 1; rowAttempt <= ROW_PROCESS_MAX_ATTEMPTS && !rowHandled; rowAttempt += 1) {
         try {
+          await context.emit(rowProgressEvent(row, index + 1, input.inputRows.length, `attempt ${rowAttempt}`));
           const result = await processValidRow(session.page, row, validation.mappedPayerName, automationState, {
             projectId: input.projectId,
             providerMappings,
@@ -485,16 +556,11 @@ export async function runAvailityClaimStatusJob(formData: FormData, context: Scr
       }
 
       await context.emit({ type: "progress", completed: index + 1, total: input.inputRows.length });
+      await emitOutputSnapshot(index + 1);
+      activeRow = null;
     }
 
-    const workbookBuffer = await createAvailityOutputWorkbookBuffer({
-      inputHeaders: input.inputHeaders,
-      inputRows: inputSheetRows,
-      outputRows,
-      errorRows,
-      auditRows,
-    });
-    await context.emit(downloadableFileEvent(createAvailityOutputFilename(), workbookBuffer, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"));
+    await emitOutputWorkbook(false);
 
     if (errorRows.length) {
       await context.emit({
@@ -504,6 +570,26 @@ export async function runAvailityClaimStatusJob(formData: FormData, context: Scr
     }
   } catch (error) {
     const message = friendlyAvailityError(error);
+    if (activeRow && !outputRows.some((row) => row.input_row_id === activeRow?.input_row_id)) {
+      const outputRow = buildBaseOutput(activeRow);
+      markFailure(outputRow, message, "failed", "Fatal Availity job error occurred while this row was active.");
+      outputRows.push(outputRow);
+      addError(errorRows, runId, activeRow, {
+        search_source_tab: "Member/HIPAA",
+        failure_stage: "fatal_job_error",
+        failure_reason: message,
+        current_url: safePageUrl(session?.page || null),
+      });
+      addAudit(auditRows, runId, activeRow, "fatal_job_error", "failed", message);
+    }
+    if (!outputWorkbookEmitted && (outputRows.length || inputSheetRows.length || errorRows.length || auditRows.length)) {
+      await context.log({ level: "warn", message: "Availity job stopped before normal completion. Emitting partial output workbook." });
+      try {
+        await emitOutputWorkbook(true);
+      } catch (partialOutputError) {
+        await context.log({ level: "error", message: `Failed to emit Availity partial output workbook: ${friendlyAvailityError(partialOutputError)}` });
+      }
+    }
     await context.emit({ type: "error", message });
   } finally {
     legacyLogger.setLogSink(null);

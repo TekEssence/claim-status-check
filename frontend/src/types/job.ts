@@ -18,6 +18,11 @@ export type ScrapeJobEvent = {
   message?: string;
   completed?: number;
   total?: number;
+  current?: number;
+  currentRow?: number;
+  totalRows?: number;
+  payerName?: string;
+  stage?: string;
   index?: number;
   rowIndex?: number;
   image?: string;
@@ -41,5 +46,4 @@ export type ScrapeJobEvent = {
   corporateTaxIdOwners?: string[];
   careProviders?: string[];
   rows?: Record<string, unknown>[];
-  currentRow?: number;
 };

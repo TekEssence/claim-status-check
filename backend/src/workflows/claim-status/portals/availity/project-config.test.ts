@@ -18,6 +18,14 @@ function createRow(input_row_id: number, data: Record<string, string>): Availity
 }
 
 describe("applyProjectPreprocessing", () => {
+  it("maps Medrevenu DOB column to Patient DOB", () => {
+    const row = createRow(1, {
+      DOB: "01/15/1980",
+    });
+
+    assert.equal(row.data["Patient DOB"], "01/15/1980");
+  });
+
   it("sums Medrevenu CPT-level billed amounts by account number and episode dos", () => {
     const rows = [
       createRow(1, {

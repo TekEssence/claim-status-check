@@ -3,10 +3,14 @@
 const aetnaWorkflow = require("./aetna/registry");
 const anthemCaWorkflow = require("./anthem-ca/registry");
 const blueCrossBlueShieldWorkflow = require("./blue-cross-blue-shield/registry");
+const centralHealthMedicarePlanWorkflow = require("./central-health-medicare-plan/registry");
 const healthNetWorkflow = require("./health-net/registry");
 const humanaWorkflow = require("./humana/registry");
 const molinaWorkflow = require("./molina/registry");
+const providenceHealthPlanWorkflow = require("./providence-health-plan/registry");
+const scanHealthWorkflow = require("./scan-health/registry");
 const triwestTricareWorkflow = require("./triwest-tricare/registry");
+const triwestVaCcnWorkflow = require("./triwest-va-ccn/registry");
 const wellcareWorkflow = require("./wellcare/registry");
 const wellpointWorkflow = require("./wellpoint/registry");
 
@@ -34,12 +38,35 @@ function getWorkflowForPayer({ inputPayerName, mappedPortalPayerName }) {
     return humanaWorkflow;
   }
 
+  if (
+    mapped.includes("CENTRAL HEALTH") ||
+    input.includes("CENTRAL HEALTH")
+  ) {
+    return centralHealthMedicarePlanWorkflow;
+  }
+
   if (mapped.includes("HEALTH NET") || mapped.includes("HEALTHNET") || input.includes("HEALTH NET") || input.includes("HEALTHNET")) {
     return healthNetWorkflow;
   }
 
   if (mapped.includes("MOLINA") || input.includes("MOLINA")) {
     return molinaWorkflow;
+  }
+
+  if (mapped.includes("PROVIDENCE") || input.includes("PROVIDENCE")) {
+    return providenceHealthPlanWorkflow;
+  }
+
+  if (mapped.includes("SCAN") || input.includes("SCAN")) {
+    return scanHealthWorkflow;
+  }
+
+  if (
+    mapped.includes("VA CCN") ||
+    mapped.includes("VACC") ||
+    input.includes("VA CCN") ||
+    input.includes("VACC")) {
+    return triwestVaCcnWorkflow;
   }
 
   if (

@@ -44,7 +44,7 @@ export function AvailityInputForm({
   return (
     <form className="space-y-5" onSubmit={onSubmit}>
       <div className="rounded-[1.2rem] border border-blue-100 bg-blue-50/70 px-4 py-3 text-sm text-blue-900">
-        <span className="font-semibold">Available Payers:</span> Aetna, Anthem-CA, Blue Cross Blue Shield, Wellpoint, Wellcare, Humana, Health Net, Molina, TRIWEST-TRICARE
+        <span className="font-semibold">Available Payers:</span> Aetna, Anthem-CA, Blue Cross Blue Shield, Wellpoint, Wellcare, Humana, Central Health Medicare Plan, Health Net, Molina, Providence Health Plan, Scan Health, TRIWEST-TRICARE, TRIWEST-VA CCN
       </div>
 
       <div className="rounded-[1.2rem] border border-sky-100 bg-white/90 p-4">
@@ -107,7 +107,7 @@ export function AvailityInputForm({
         <Play className="h-4 w-4" strokeWidth={2.2} />
         {isProcessing ? "Processing..." : "Start processing"}
       </button>
-      <p className="text-center text-sm text-slate-500">Output Excel downloads automatically after completion.</p>
+      <p className="text-center text-sm text-slate-500">Output Excel downloads automatically after completion. Current results are also saved after each processed row.</p>
     </form>
   );
 }

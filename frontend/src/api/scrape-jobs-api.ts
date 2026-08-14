@@ -276,7 +276,7 @@ export async function submitScrapeJobInput(options: { jobId: string; inputName: 
     const response = await fetch(`${AWS_API_URL}/jobs/${encodeURIComponent(options.jobId)}/otp`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...requireAwsAuthHeaders() },
-      body: JSON.stringify({ inputName: options.inputName, otp: options.value }),
+      body: JSON.stringify({ inputName: options.inputName, otp: options.value, value: options.value }),
     });
     await throwForAwsAuthResponse(response);
     if (!response.ok) {

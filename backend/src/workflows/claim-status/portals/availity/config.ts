@@ -10,4 +10,4 @@ export const availityConfig = {
   },
 } satisfies PortalConfig;
 
-export const AVAILITY_AVAILABLE_PAYERS = ["Aetna", "Anthem-CA", "Blue Cross Blue Shield", "Wellpoint", "Wellcare", "Humana", "Health Net", "Molina", "TRIWEST-TRICARE"] as const;
+export const AVAILITY_AVAILABLE_PAYERS = ["Aetna", "Anthem-CA", "Blue Cross Blue Shield", "Wellpoint", "Wellcare", "Humana", "Central Health Medicare Plan", "Health Net", "Molina", "Providence Health Plan", "Scan Health", "TRIWEST-TRICARE", "TRIWEST-VA CCN"] as const;

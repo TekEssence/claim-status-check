@@ -271,6 +271,33 @@ async function persistEvent(jobId: string, data: Record<string, unknown>): Promi
     return;
   }
 
+  if (data.type === "row_progress") {
+    const completed = typeof data.completed === "number"
+      ? data.completed
+      : typeof data.current === "number"
+        ? Math.max(0, data.current - 1)
+        : undefined;
+    const total = typeof data.total === "number" ? data.total : undefined;
+    await updateWorkflowJob({
+      jobId,
+      status: "running",
+      currentCompleted: completed,
+      totalRows: total,
+    }).catch(() => {});
+    await updateScrapeJobSnapshot({
+      jobId,
+      status: "running",
+      currentCompleted: completed,
+      totalRows: total,
+    }).catch(() => {});
+    return;
+  }
+
+  if (data.type === "input_request" || data.type === "otp_request") {
+    await updateWorkflowJob({ jobId, status: "waiting_otp" }).catch(() => {});
+    return;
+  }
+
   if (isArtifactEvent(data)) {
     const s3Key = await uploadWorkflowArtifact({
       workflowId: "claim-status",
@@ -324,6 +351,24 @@ async function persistAutomationEvent(jobId: string, workflowId: AutomationWorkf
       currentCompleted: typeof data.completed === "number" ? data.completed : undefined,
       totalRows: typeof data.total === "number" ? data.total : undefined,
     }).catch(() => {});
+  }
+
+  if (data.type === "row_progress") {
+    const completed = typeof data.completed === "number"
+      ? data.completed
+      : typeof data.current === "number"
+        ? Math.max(0, data.current - 1)
+        : undefined;
+    await updateWorkflowJob({
+      jobId,
+      status: "running",
+      currentCompleted: completed,
+      totalRows: typeof data.total === "number" ? data.total : undefined,
+    }).catch(() => {});
+  }
+
+  if (data.type === "input_request" || data.type === "otp_request") {
+    await updateWorkflowJob({ jobId, status: "waiting_otp" }).catch(() => {});
   }
 
   if (isArtifactEvent(data)) {

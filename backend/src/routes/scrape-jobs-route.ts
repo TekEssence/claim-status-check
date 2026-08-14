@@ -344,6 +344,22 @@ async function persistScrapeJobEvent(jobId: string, data: Record<string, unknown
     return;
   }
 
+  if (data.type === "row_progress") {
+    const completed = typeof data.completed === "number"
+      ? data.completed
+      : typeof data.current === "number"
+        ? Math.max(0, data.current - 1)
+        : undefined;
+    const total = typeof data.total === "number" ? data.total : undefined;
+    await updateScrapeJobSnapshot({
+      jobId,
+      status: "running",
+      currentCompleted: completed,
+      totalRows: total,
+    }).catch(() => {});
+    return;
+  }
+
   if (data.type === "error_screenshot" || data.type === "debug_html" || data.type === "pdf_download" || data.type === "file_download" || data.type === "output_snapshot") {
     const persistedPath = getArtifactPathForPersistence(jobId, data);
     const s3Key = await uploadWorkflowArtifact({
