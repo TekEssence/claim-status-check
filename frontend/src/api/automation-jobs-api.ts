@@ -68,6 +68,16 @@ export async function getCurrentAutomationJob(options: {
       currentCompleted: number;
       totalItems: number;
       logs: Array<{ message: string }>;
+      artifacts?: Array<{
+        id: number;
+        rowIndex: number | null;
+        artifactType: string;
+        filename: string;
+        mimeType: string;
+        pathOrKey: string;
+        createdAt: string;
+        contentBase64?: string;
+      }>;
     } | null;
     error?: string;
   };

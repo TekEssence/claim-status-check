@@ -2203,7 +2203,7 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
                     onSelectClaimFile={selectClaimFile}
                     onSubmit={submitIehp}
                   />
-                  <IehpResultView errorScreenshots={errorScreenshots} logs={logs} status={status} />
+                  <IehpResultView errorScreenshots={errorScreenshots} logs={logs} progress={progress} status={status} />
                 </>
               ) : effectivePortalId === "aerial" ? (
                 <>
@@ -2216,7 +2216,7 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
                     onSubportalChange={setAerialSubportal}
                     onSubmit={submitAerial}
                   />
-                  <AerialResultView errorScreenshots={errorScreenshots} logs={logs} status={status} />
+                  <AerialResultView errorScreenshots={errorScreenshots} logs={logs} progress={progress} status={status} />
                 </>
               ) : effectivePortalId === "regal" ? (
                 <>
@@ -2234,6 +2234,7 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
                     onOtpSubmit={submitRegalOtp}
                     otpRequest={regalOtpRequest}
                     otpValue={regalOtpValue}
+                    progress={progress}
                     status={status}
                   />
                 </>
@@ -2246,7 +2247,7 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
                     onInputFileChange={setBlueShieldInputFile}
                     onSubmit={submitBlueShield}
                   />
-                  <BlueShieldResultView errorScreenshots={errorScreenshots} logs={logs} status={status} />
+                  <BlueShieldResultView errorScreenshots={errorScreenshots} logs={logs} progress={progress} status={status} />
                 </>
               ) : (
                 <>

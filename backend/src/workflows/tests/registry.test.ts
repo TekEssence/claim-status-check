@@ -1,4 +1,4 @@
-import assert from "node:assert/strict";
+﻿import assert from "node:assert/strict";
 import test from "node:test";
 import { getAutomationRunner } from "../registry";
 import { getClaimStatusScraper } from "../claim-status/registry";
@@ -27,6 +27,22 @@ test("claim status resolves All Care as an independent portal", () => {
   assert.equal(runner.workflowId, "claim-status");
   assert.equal(runner.portalId, "all-care");
   assert.equal(runner.name, "All Care Claim Status");
+});
+
+test("claim status resolves Waystar through the workflow registry", () => {
+  const runner = getAutomationRunner("claim-status", "waystar");
+
+  assert.equal(runner.workflowId, "claim-status");
+  assert.equal(runner.portalId, "waystar");
+  assert.equal(runner.name, "Waystar Claim Status");
+});
+
+test("claim status resolves Medpoint through the workflow registry", () => {
+  const runner = getAutomationRunner("claim-status", "medpoint");
+
+  assert.equal(runner.workflowId, "claim-status");
+  assert.equal(runner.portalId, "medpoint");
+  assert.equal(runner.name, "Medpoint Claim Status");
 });
 
 test("claim status resolves new portal additions", () => {

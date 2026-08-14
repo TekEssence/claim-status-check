@@ -1,7 +1,8 @@
+import { JobProgress } from "../../../../components/JobProgress";
 import { LogsPanel } from "../../../../components/LogsPanel";
 import { ScreenshotViewer } from "../../../../components/ScreenshotViewer";
 import { StatusMessage } from "../../../../components/StatusMessage";
-import type { ErrorScreenshot } from "../../../../types/job";
+import type { ErrorScreenshot, JobProgressValue } from "../../../../types/job";
 
 const BLUE_SHIELD_OTP_LENGTH = 6;
 
@@ -12,6 +13,7 @@ export function BlueShieldResultView({
   onOtpSubmit,
   otpRequest,
   otpValue,
+  progress,
   status,
 }: {
   errorScreenshots: ErrorScreenshot[];
@@ -20,6 +22,7 @@ export function BlueShieldResultView({
   onOtpSubmit?: () => void;
   otpRequest?: { inputName: string; label: string; message: string } | null;
   otpValue?: string;
+  progress: JobProgressValue | null;
   status: string;
 }) {
   const normalizedOtpValue = (otpValue || "").replace(/\D/g, "").slice(0, BLUE_SHIELD_OTP_LENGTH);
@@ -27,6 +30,7 @@ export function BlueShieldResultView({
 
   return (
     <>
+      <JobProgress progress={progress} />
       {otpRequest ? (
         <div className="mt-4 rounded-[1.4rem] border border-sky-200 bg-[linear-gradient(180deg,rgba(239,246,255,0.95),rgba(224,242,254,0.88))] p-5 shadow-[0_18px_36px_rgba(14,116,144,0.12)]">
           <label className="block text-sm font-semibold uppercase tracking-[0.18em] text-sky-900" htmlFor="blueShieldOtp">
@@ -73,5 +77,3 @@ export function BlueShieldResultView({
     </>
   );
 }
-
-

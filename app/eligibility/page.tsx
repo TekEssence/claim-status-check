@@ -1,3 +1,6 @@
-import { EligibilityPage } from "@/frontend/src/workflows/eligibility-verification/EligibilityPage";
+﻿import { EligibilityPage } from "@/frontend/src/workflows/eligibility-verification/EligibilityPage";
 
-export default EligibilityPage;
+export default function EligibilityRoutePage() {
+  return <EligibilityPage />;
+}
+

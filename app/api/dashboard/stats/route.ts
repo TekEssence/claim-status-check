@@ -1,3 +1,4 @@
+import { isAuthDbConnectionError } from "@/lib/auth/db";
 import { getSessionFromCookies } from "@/lib/auth/session";
 import { getDashboardStatsForUser } from "@/lib/scrape-jobs/db";
 
@@ -17,6 +18,9 @@ export async function GET() {
     return Response.json({ stats });
   } catch (error) {
     console.error("Load dashboard stats failed", error);
+    if (isAuthDbConnectionError(error)) {
+      return Response.json({ error: "Database connection timed out. Check DATABASE_URL and restart the dev server." }, { status: 503 });
+    }
     return Response.json({ error: "Unable to load dashboard stats." }, { status: 500 });
   }
 }

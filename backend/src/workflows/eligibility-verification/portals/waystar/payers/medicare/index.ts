@@ -1,4 +1,4 @@
-import type { WaystarPayerHandler } from "../types";
+﻿import type { WaystarPayerHandler } from "../types";
 import { parseWaystarEligibilityResult } from "../eligibility-result-parser";
 
 export const medicarePayer: WaystarPayerHandler = {

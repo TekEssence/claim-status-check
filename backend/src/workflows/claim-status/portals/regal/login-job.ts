@@ -635,14 +635,14 @@ async function selectRegalGroupSite(page: Page, group: string, stageLog: (level:
   const siteSelect =
     await findRegalLocator(page, regalConfig.selectors.siteSelect, { state: "visible", timeout: 5000 }).catch(() => null) ??
     await findRegalLocator(page, regalConfig.selectors.siteSelect, { state: "attached", timeout: 5000 }).catch(() => null);
-  if (!siteSelect) {
-    const visibleSiteText = await getVisibleRegalSiteText(page);
-    if (normalizeRegalSiteText(visibleSiteText).includes(normalizeRegalSiteText(groupName))) {
-      await stageLog("info", "group", `Regal group ${group} confirmed from fixed site text: ${groupName}.`, page);
-      return;
-    }
+  const visibleSiteText = await getVisibleRegalSiteText(page);
+  if (normalizeRegalSiteText(visibleSiteText).includes(normalizeRegalSiteText(groupName))) {
+    await stageLog("info", "group", `Regal group ${group} confirmed from site text: ${groupName}.`, page);
+    return;
+  }
 
-    if (normalizeText(group).replace(/\s+/g, "").toUpperCase() === "USA") {
+  if (!siteSelect) {
+    if (["USA", "MAIN"].includes(normalizeText(group).replace(/\s+/g, "").toUpperCase())) {
       await stageLog("warn", "group", `Regal site dropdown was not available and site text could not be confirmed, but this login appears to be fixed-site. Continuing with ${group}: ${groupName}.`, page);
       return;
     }
@@ -670,13 +670,18 @@ async function selectRegalGroupSite(page: Page, group: string, stageLog: (level:
   }
 
   if (!value) {
-    const visibleSiteText = await getVisibleRegalSiteText(page);
-    if (normalizeRegalSiteText(visibleSiteText).includes(normalizeRegalSiteText(groupName))) {
-      await stageLog("info", "group", `Regal group ${group} confirmed from fixed site text after dropdown lookup: ${groupName}.`, page);
+    const latestVisibleSiteText = await getVisibleRegalSiteText(page);
+    if (normalizeRegalSiteText(latestVisibleSiteText).includes(normalizeRegalSiteText(groupName))) {
+      await stageLog("info", "group", `Regal group ${group} confirmed from site text after dropdown lookup: ${groupName}.`, page);
       return;
     }
 
-    throw new Error(`Regal group ${group} could not be found in the site dropdown. Expected option containing "${groupName}".`);
+    if (["USA", "MAIN"].includes(normalizeText(group).replace(/\s+/g, "").toUpperCase())) {
+      await stageLog("warn", "group", `Regal group ${group} was not found in a dropdown, but this login appears to be fixed-site. Continuing with ${group}: ${groupName}.`, page);
+      return;
+    }
+
+    throw new Error(`Regal group ${group} could not be found in the site dropdown. Expected option containing "${groupName}". Current page showed "${latestVisibleSiteText.slice(0, 120) || "(unknown)"}".`);
   }
 
   await stageLog("info", "group", `Selecting Regal group ${group}: ${groupName}.`, page);

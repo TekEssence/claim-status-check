@@ -1,4 +1,4 @@
-import { cookies, headers as nextHeaders } from "next/headers";
+﻿import { cookies, headers as nextHeaders } from "next/headers";
 import { getBetterAuthInstance } from "./better-auth";
 import { runBetterAuthWithDbRetry } from "./better-auth-retry";
 import { getActiveAuthUser, isAuthDbConnectionError, type AuthUser } from "./db";

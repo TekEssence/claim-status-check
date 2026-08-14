@@ -1,4 +1,4 @@
-import ExcelJS from "exceljs";
+﻿import ExcelJS from "exceljs";
 import type { EligibilityInputRow, EligibilityResult } from "../../types";
 
 const LEGACY_OUTPUT_COLUMNS: Array<{

@@ -1,6 +1,6 @@
 import { UnknownPortalError } from "../../core/errors";
-import type { PortalScraper } from "./types";
 import type { AutomationRunner } from "../types";
+import type { PortalScraper } from "./types";
 
 type PortalScraperLoader = () => Promise<PortalScraper>;
 
@@ -13,11 +13,13 @@ const claimStatusPortalLoaders = {
   cigna: async () => (await import("./portals/cigna/scraper")).cignaScraper,
   iehp: async () => (await import("./portals/iehp/scraper")).iehpScraper,
   kaiser: async () => (await import("./portals/kaiser/scraper")).kaiserScraper,
+  medpoint: async () => (await import("./portals/medpoint/scraper")).medpointScraper,
   "my-family": async () => (await import("./portals/my_family/scraper")).myFamilyScraper,
   "optum-pro": async () => (await import("../../scrapers/optum-pro/scraper")).optumProScraper,
   physicians: async () => (await import("./portals/physicians/scraper")).physiciansScraper,
   regal: async () => (await import("./portals/regal/scraper")).regalScraper,
   uhc: async () => (await import("./portals/uhc/scraper")).uhcScraper,
+  waystar: async () => (await import("./portals/waystar/scraper")).waystarScraper,
 } satisfies Record<string, PortalScraperLoader>;
 
 const claimStatusPortalNames = {
@@ -29,11 +31,13 @@ const claimStatusPortalNames = {
   cigna: "Cigna Claim Status",
   iehp: "IEHP Claim Status",
   kaiser: "Kaiser Claim Status",
+  medpoint: "Medpoint Claim Status",
   "my-family": "My family Claim Status",
   "optum-pro": "Optum Pro Claim Status",
   physicians: "Physicians Claim Status",
   regal: "Regal Claim Status",
   uhc: "UHC Claim Status",
+  waystar: "Waystar Claim Status",
 } satisfies Record<keyof typeof claimStatusPortalLoaders, string>;
 
 export async function getClaimStatusScraper(portalId: string): Promise<PortalScraper> {

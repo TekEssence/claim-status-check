@@ -1,4 +1,4 @@
-import { JobProgress } from "../../../../components/JobProgress";
+﻿import { JobProgress } from "../../../../components/JobProgress";
 import { LogsPanel } from "../../../../components/LogsPanel";
 import { ScreenshotViewer } from "../../../../components/ScreenshotViewer";
 import { StatusMessage } from "../../../../components/StatusMessage";

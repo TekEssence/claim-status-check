@@ -1,4 +1,4 @@
-import { WorkflowDashboardPage } from "@/frontend/src/workflows/WorkflowDashboardPage";
+﻿import { WorkflowDashboardPage } from "@/frontend/src/workflows/WorkflowDashboardPage";
 
 export default function PortalRoutePage() {
   return <WorkflowDashboardPage />;

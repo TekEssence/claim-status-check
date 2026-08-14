@@ -1,4 +1,4 @@
-import assert from "node:assert/strict";
+﻿import assert from "node:assert/strict";
 import test from "node:test";
 import ExcelJS from "exceljs";
 import * as XLSX from "xlsx";

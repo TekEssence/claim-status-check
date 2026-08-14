@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { motion } from "framer-motion";
 import { FormEvent, useEffect, useMemo, useState } from "react";
@@ -135,7 +135,22 @@ type UhcWorkbookBundle = {
   worksheet: ExcelJS.Worksheet;
 };
 
-export type PortalId = "iehp" | "aerial" | "all-care" | "astrona" | "regal" | "blue-shield" | "availity" | "cigna" | "kaiser" | "my-family" | "optum-pro" | "physicians" | "uhc";
+export type PortalId =
+  | "iehp"
+  | "aerial"
+  | "all-care"
+  | "astrona"
+  | "regal"
+  | "blue-shield"
+  | "availity"
+  | "cigna"
+  | "kaiser"
+  | "medpoint"
+  | "my-family"
+  | "optum-pro"
+  | "physicians"
+  | "uhc"
+  | "waystar";
 type DownloadFile = {
   filename: string;
   bytes: Uint8Array;
@@ -163,14 +178,16 @@ const PORTAL_ROUTE_MAP: Record<PortalId, string> = {
   availity: "/availity",
   cigna: "/cigna",
   kaiser: "/kaiser",
+  medpoint: "/medpoint",
   "my-family": "/my-family",
   "optum-pro": "/optum-pro",
   physicians: "/physicians",
   uhc: "/uhc",
+  waystar: "/claim-status/waystar",
 };
 
 function isPortalId(value: string): value is PortalId {
-  return value === "iehp" || value === "aerial" || value === "all-care" || value === "astrona" || value === "regal" || value === "blue-shield" || value === "availity" || value === "cigna" || value === "kaiser" || value === "my-family" || value === "optum-pro" || value === "physicians" || value === "uhc";
+  return value === "iehp" || value === "aerial" || value === "all-care" || value === "astrona" || value === "regal" || value === "blue-shield" || value === "availity" || value === "cigna" || value === "kaiser" || value === "medpoint" || value === "my-family" || value === "optum-pro" || value === "physicians" || value === "uhc" || value === "waystar";
 }
 
 function isTerminalWorkflowStatus(status: string): boolean {
@@ -350,6 +367,10 @@ const PORTAL_UI_META: Record<
       height: 32,
     },
   },
+  medpoint: {
+    shortCode: "MP",
+    logoClassName: "bg-[linear-gradient(180deg,#eef2ff_0%,#dbeafe_100%)] text-indigo-700",
+  },
   "my-family": {
     shortCode: "MF",
     logoClassName: "bg-[#111827] text-cyan-700",
@@ -418,6 +439,10 @@ const PORTAL_UI_META: Record<
       height: 36,
     },
   },
+  waystar: {
+    shortCode: "WS",
+    logoClassName: "bg-white text-blue-700",
+  },
 };
 
 const PORTAL_WORKSPACE_META: Record<
@@ -463,6 +488,10 @@ const PORTAL_WORKSPACE_META: Record<
     heroDescription: "Upload the Kaiser EpicLink login workbook and claim workbook to search claim status by Member ID, DOS, and CPT.",
     processingDescription: "Kaiser rows stream live progress and download an output workbook with claim, payment, service, and denial details.",
   },
+  medpoint: {
+    heroDescription: "Upload the Medpoint login workbook and claim workbook to start Medpoint claim status verification.",
+    processingDescription: "Medpoint requests stream live progress and download claim status output when the run completes.",
+  },
   "my-family": {
     heroDescription: "Upload the My family EZ-NET login workbook and claim workbook to search claims by Member ID or patient name and service date.",
     processingDescription: "My family rows stream live progress and download an output workbook with claim, status, payment, and service-line details.",
@@ -478,6 +507,10 @@ const PORTAL_WORKSPACE_META: Record<
   uhc: {
     heroDescription: "Upload your UHC login workbook and claim workbook to process UnitedHealthcare claim status checks for Minimax or MedRevenu.",
     processingDescription: "UHC requests stream live status, prompt for OTP or provider selection when needed, and update the selected workbook in place.",
+  },
+  waystar: {
+    heroDescription: "Upload the Waystar login workbook and claim details workbook to begin claim status verification.",
+    processingDescription: "Waystar streams live progress and produces an output workbook with the extracted claim status results.",
   },
 };
 
@@ -5536,11 +5569,11 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
 
               {effectivePortalId === "iehp" ? (
                 <div className="mt-5">
-                  <IehpResultView errorScreenshots={errorScreenshots} logs={logs} status={status} />
+                  <IehpResultView errorScreenshots={errorScreenshots} logs={logs} progress={progress} status={status} />
                 </div>
               ) : effectivePortalId === "aerial" ? (
                 <div className="mt-5">
-                  <AerialResultView errorScreenshots={errorScreenshots} logs={logs} status={status} />
+                  <AerialResultView errorScreenshots={errorScreenshots} logs={logs} progress={progress} status={status} />
                 </div>
               ) : effectivePortalId === "regal" ? (
                 <div className="mt-5">
@@ -5559,6 +5592,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
                     otpValue={regalOtpValue}
                     outputCompleted={latestRegalOutput?.completed}
                     outputTotal={latestRegalOutput?.total}
+                    progress={progress}
                     status={status}
                   />
                 </div>
@@ -5653,6 +5687,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
                     onOtpSubmit={submitBlueShieldOtp}
                     otpRequest={blueShieldOtpRequest}
                     otpValue={blueShieldOtpValue}
+                    progress={progress}
                     status={status}
                   />
                 </div>

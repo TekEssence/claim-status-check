@@ -1,4 +1,4 @@
-import type { BrowserContext, Locator, Page } from "playwright-core";
+﻿import type { BrowserContext, Locator, Page } from "playwright-core";
 import { WAYSTAR_SELECTORS } from "./selectors";
 import type { WaystarCredentials, WaystarSecurityQuestion } from "./credentials";
 import type { EligibilityInputRow } from "../../types";

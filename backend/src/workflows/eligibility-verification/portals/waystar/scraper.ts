@@ -1,4 +1,4 @@
-import type { Browser, BrowserContext, Page } from "playwright-core";
+﻿import type { Browser, BrowserContext, Page } from "playwright-core";
 import { readFile } from "node:fs/promises";
 import { launchAutomationBrowser } from "@/backend/src/core/browser";
 import { closeAutomationResources } from "@/backend/src/core/runtime-config";
