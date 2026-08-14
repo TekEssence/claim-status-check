@@ -7,7 +7,7 @@ export const WAYSTAR_SELECTORS = {
   additionalAuth: {
     container: "text=Additional Authentication Required",
     question: "div:has-text('Answer:') >> xpath=preceding-sibling::*[contains(normalize-space(.), '?')][1], text=/what .*\?|first job\??|dessert\??/i",
-    answer: "input[type='text']:visible",
+    answer: "input[type='text']:not(#loginName):visible",
     verify: "button:has-text('Verify'):visible, input[type='submit'][value='Verify']:visible",
     trustDevice: "input[type='checkbox']:visible",
   },
