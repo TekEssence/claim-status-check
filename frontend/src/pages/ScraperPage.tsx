@@ -30,7 +30,7 @@ type AuthUser = {
   userId: string;
   username: string;
   email: string;
-  role: "ADMIN" | "USER";
+  role: "ADMIN" | "DEVELOPER" | "USER";
   mustResetPassword: boolean;
 };
 
@@ -38,10 +38,14 @@ type ManagedUser = {
   userId: string;
   username: string;
   email: string;
-  role: "ADMIN" | "USER";
+  role: "ADMIN" | "DEVELOPER" | "USER";
   isActive: boolean;
   mustResetPassword: boolean;
 };
+
+function hasFullWorkflowAccess(user: AuthUser | null): boolean {
+  return user?.role === "ADMIN" || user?.role === "DEVELOPER";
+}
 
 type IehpWorkbookBundle = {
   claimRows: ClaimRow[];
@@ -1904,7 +1908,7 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
                   >
                     Reset Password
                   </button>
-                  {authUser.role === "ADMIN" && (
+                  {hasFullWorkflowAccess(authUser) && (
                     <button
                       type="button"
                       onClick={openManageUsers}
@@ -1995,7 +1999,7 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
               </button>
             </form>
           </div>
-        ) : activeView === "manage-users" && authUser.role === "ADMIN" ? (
+        ) : activeView === "manage-users" && hasFullWorkflowAccess(authUser) ? (
           <div className="mx-auto w-full max-w-5xl rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
             <div className="flex flex-wrap items-center justify-between gap-4">
               <h1 className="text-xl font-semibold">Manage Users</h1>

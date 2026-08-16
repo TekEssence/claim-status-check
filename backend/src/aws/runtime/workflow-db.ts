@@ -8,7 +8,13 @@ import {
   workflowJobs,
 } from "@/db/schema/workflow-runtime";
 
-export type AwsWorkflowJobStatus = "queued" | "running" | "waiting_otp" | "completed" | "failed" | "cancelled";
+export type AwsWorkflowJobStatus = "queued" | "running" | "waiting_otp" | "cancelling" | "completed" | "failed" | "cancelled";
+
+const protectedStatuses = new Set<AwsWorkflowJobStatus>(["cancelling", "completed", "failed", "cancelled"]);
+
+function isProtectedStatus(status: string): boolean {
+  return protectedStatuses.has(status as AwsWorkflowJobStatus);
+}
 
 export async function createWorkflowJob(params: {
   jobId: string;
@@ -21,6 +27,9 @@ export async function createWorkflowJob(params: {
   outputPrefix: string;
   claimFileName?: string;
   loginFileName?: string;
+  createdByUserId?: string;
+  createdByEmail?: string;
+  createdByName?: string;
   metadata?: Record<string, unknown>;
 }) {
   const now = new Date().toISOString();
@@ -37,6 +46,9 @@ export async function createWorkflowJob(params: {
       outputPrefix: params.outputPrefix,
       claimFileName: params.claimFileName ?? "",
       loginFileName: params.loginFileName ?? "",
+      createdByUserId: params.createdByUserId?.trim() || params.userId || "unknown",
+      createdByEmail: params.createdByEmail?.trim() || "unknown",
+      createdByName: params.createdByName?.trim() || "unknown",
       metadata: params.metadata ?? {},
       createdAt: now,
       updatedAt: now,
@@ -47,6 +59,13 @@ export async function createWorkflowJob(params: {
 export async function getWorkflowJobForUser(jobId: string, userId: string) {
   const rows = await runDbWithRetry((db) =>
     db.select().from(workflowJobs).where(and(eq(workflowJobs.jobId, jobId), eq(workflowJobs.userId, userId))).limit(1),
+  );
+  return rows[0] ?? null;
+}
+
+export async function getWorkflowJobById(jobId: string) {
+  const rows = await runDbWithRetry((db) =>
+    db.select().from(workflowJobs).where(eq(workflowJobs.jobId, jobId)).limit(1),
   );
   return rows[0] ?? null;
 }
@@ -84,6 +103,18 @@ export async function listWorkflowJobsForUser(userId: string, limit = 25) {
   );
 }
 
+export async function listRunningWorkflowJobs(limit = 50) {
+  const safeLimit = Math.max(1, Math.min(limit, 100));
+  return runDbWithRetry((db) =>
+    db
+      .select()
+      .from(workflowJobs)
+      .where(or(eq(workflowJobs.status, "queued"), eq(workflowJobs.status, "running"), eq(workflowJobs.status, "waiting_otp"), eq(workflowJobs.status, "cancelling")))
+      .orderBy(desc(workflowJobs.updatedAt))
+      .limit(safeLimit),
+  );
+}
+
 export async function updateWorkflowJob(params: {
   jobId: string;
   status?: AwsWorkflowJobStatus;
@@ -91,17 +122,31 @@ export async function updateWorkflowJob(params: {
   currentCompleted?: number;
   totalRows?: number;
   errorMessage?: string;
+  startedAt?: string;
 }) {
   const now = new Date().toISOString();
   const status = params.status;
   const terminal = status === "completed" || status === "failed" || status === "cancelled";
   const values: Partial<typeof workflowJobs.$inferInsert> = { updatedAt: now };
-  if (params.status !== undefined) values.status = params.status;
+
+  const existingRows = await runDbWithRetry((db) =>
+    db.select({ status: workflowJobs.status }).from(workflowJobs).where(eq(workflowJobs.jobId, params.jobId)).limit(1),
+  );
+  const existingStatus = existingRows[0]?.status ?? "";
+  const allowStatusUpdate = params.status !== undefined
+    && !(existingStatus === "cancelling" && params.status !== "cancelled")
+    && !(existingStatus === "completed" && params.status !== "completed")
+    && !(existingStatus === "failed" && params.status !== "failed")
+    && !(existingStatus === "cancelled" && params.status !== "cancelled")
+    && !(isProtectedStatus(existingStatus) && params.status === "running");
+
+  if (allowStatusUpdate) values.status = params.status;
   if (params.ecsTaskArn !== undefined) values.ecsTaskArn = params.ecsTaskArn;
   if (params.currentCompleted !== undefined) values.currentCompleted = params.currentCompleted;
   if (params.totalRows !== undefined) values.totalRows = params.totalRows;
   if (params.errorMessage !== undefined) values.errorMessage = params.errorMessage;
-  if (terminal) values.finishedAt = now;
+  if (params.startedAt !== undefined) values.startedAt = params.startedAt;
+  if (terminal && allowStatusUpdate) values.finishedAt = now;
   await runDbWithRetry((db) =>
     db
       .update(workflowJobs)
@@ -151,6 +196,7 @@ export async function createWorkflowCommand(params: {
       : null,
     consumedAt: null,
     createdBy: params.createdBy,
+    requestedBy: params.createdBy,
     createdAt: now.toISOString(),
   };
 

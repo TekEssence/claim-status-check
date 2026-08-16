@@ -1,5 +1,5 @@
 import { getSessionFromCookies } from "@/lib/auth/session";
-import { getScrapeJobByIdForUser, isScrapeJobDbConnectionError } from "@/lib/scrape-jobs/db";
+import { getScrapeJobById, getScrapeJobByIdForUser, isScrapeJobDbConnectionError } from "@/lib/scrape-jobs/db";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -17,7 +17,8 @@ export async function GET(req: Request) {
       return Response.json({ error: "Missing scrape jobId." }, { status: 400 });
     }
 
-    const job = await getScrapeJobByIdForUser(jobId, session.userId);
+    const canSeeAnyJob = session.role === "ADMIN" || session.role === "DEVELOPER";
+    const job = canSeeAnyJob ? await getScrapeJobById(jobId) : await getScrapeJobByIdForUser(jobId, session.userId);
     if (!job) {
       return Response.json({ error: "Run not found for this user." }, { status: 404 });
     }

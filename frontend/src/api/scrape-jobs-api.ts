@@ -2,14 +2,21 @@ import { fetchEventSource } from "@microsoft/fetch-event-source";
 import type { ScrapeJobEvent } from "../types/job";
 import { getCognitoAccessToken } from "./cognito-auth";
 
+export type ScrapeJobStatus = "queued" | "running" | "waiting_otp" | "waiting_resume" | "cancelling" | "completed" | "failed" | "cancelled";
+
 export type CurrentScrapeJob = {
   jobId: string;
+  userId?: string;
   portalId: string;
-  status: "queued" | "running" | "waiting_otp" | "waiting_resume" | "completed" | "failed" | "cancelled";
+  status: ScrapeJobStatus;
   currentCompleted: number;
   totalRows: number;
   claimFileName: string;
   loginFileName: string;
+  createdByUserId: string;
+  createdByEmail: string;
+  createdByName: string;
+  startedAt: string | null;
   logs: string[];
   artifacts: Array<{
     id: number;
@@ -26,13 +33,18 @@ export type CurrentScrapeJob = {
 
 export type ScrapeJobSummary = {
   jobId: string;
+  userId?: string;
   workflowId?: string;
   portalId: string;
-  status: "queued" | "running" | "waiting_otp" | "waiting_resume" | "completed" | "failed" | "cancelled";
+  status: ScrapeJobStatus;
   currentCompleted: number;
   totalRows: number;
   claimFileName: string;
   loginFileName: string;
+  createdByUserId: string;
+  createdByEmail: string;
+  createdByName: string;
+  startedAt: string | null;
   errorMessage: string | null;
   artifactCount: number;
   createdAt: string;
@@ -121,6 +133,7 @@ function normalizeJobStatus(status: unknown): ScrapeJobSummary["status"] {
     status === "running" ||
     status === "waiting_otp" ||
     status === "waiting_resume" ||
+    status === "cancelling" ||
     status === "completed" ||
     status === "failed" ||
     status === "cancelled"
@@ -139,6 +152,10 @@ function normalizeJobDetails(job: Partial<ScrapeJobDetails>, logs: string[] = []
     totalRows: Number(job.totalRows ?? 0),
     claimFileName: String(job.claimFileName ?? ""),
     loginFileName: String(job.loginFileName ?? ""),
+    createdByUserId: String(job.createdByUserId ?? job.userId ?? "unknown"),
+    createdByEmail: String(job.createdByEmail ?? "unknown"),
+    createdByName: String(job.createdByName ?? "unknown"),
+    startedAt: typeof job.startedAt === "string" ? job.startedAt : null,
     errorMessage: typeof job.errorMessage === "string" ? job.errorMessage : null,
     artifactCount: Number(job.artifactCount ?? job.artifacts?.length ?? 0),
     createdAt: String(job.createdAt ?? ""),
@@ -336,6 +353,24 @@ export async function cancelScrapeJob(jobId: string): Promise<void> {
   }
 }
 
+export async function forceStopScrapeJob(jobId: string, reason = "Force stop requested from operations console."): Promise<void> {
+  if (!isAwsMode()) {
+    await cancelScrapeJob(jobId);
+    return;
+  }
+
+  const response = await fetch(`${AWS_API_URL}/jobs/${encodeURIComponent(jobId)}/force-stop`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...requireAwsAuthHeaders() },
+    body: JSON.stringify({ reason }),
+  });
+  await throwForAwsAuthResponse(response);
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({})) as { error?: string };
+    throw new Error(body.error || `Failed to force stop scrape job: ${response.status}`);
+  }
+}
+
 export async function subscribeToScrapeJobEvents(options: {
   jobId: string;
   signal: AbortSignal;
@@ -361,9 +396,10 @@ export async function subscribeToScrapeJobEvents(options: {
   });
 }
 
-export async function listScrapeJobs(limit = 25): Promise<ScrapeJobSummary[]> {
+export async function listScrapeJobs(limit = 25, options?: { scope?: "mine" | "all-running" }): Promise<ScrapeJobSummary[]> {
+  const scope = options?.scope && options.scope !== "mine" ? `&scope=${encodeURIComponent(options.scope)}` : "";
   if (!isAwsMode()) {
-    const response = await fetch(`/api/scrape-jobs/list?limit=${encodeURIComponent(String(limit))}`);
+    const response = await fetch(`/api/scrape-jobs/list?limit=${encodeURIComponent(String(limit))}${scope}`);
     if (!response.ok) {
       const body = await response.json().catch(() => ({})) as { error?: string };
       throw new Error(body.error || `Failed to load jobs: ${response.status}`);
@@ -373,7 +409,7 @@ export async function listScrapeJobs(limit = 25): Promise<ScrapeJobSummary[]> {
     return body.jobs ?? [];
   }
 
-  const response = await fetch(`${AWS_API_URL}/jobs?limit=${encodeURIComponent(String(limit))}`, {
+  const response = await fetch(`${AWS_API_URL}/jobs?limit=${encodeURIComponent(String(limit))}${scope}`, {
     headers: { ...requireAwsAuthHeaders() },
   });
   await throwForAwsAuthResponse(response);

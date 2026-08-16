@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { patchPlaywrightBrowserEvalHelpers } from "@/backend/src/core/playwright-browser-eval-helpers";
 import {
   cancelScrapeJob,
   createScrapeJob,
@@ -17,6 +18,7 @@ import {
   appendScrapeJobLog,
   createPersistentScrapeJob,
   getActiveScrapeJobForUser,
+  getScrapeJobById,
   getScrapeJobByIdForUser,
   isScrapeJobDbConnectionError,
   updateScrapeJobSnapshot,
@@ -32,6 +34,8 @@ import {
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
+
+patchPlaywrightBrowserEvalHelpers();
 
 let persistenceListenerRegistered = false;
 
@@ -91,6 +95,9 @@ export async function POST(req: Request) {
       loginFileName: getOptionalString(formData, "loginFileName"),
       totalRows,
       currentCompleted: startIndex,
+      createdByUserId: session.userId,
+      createdByEmail: session.email,
+      createdByName: session.email,
     });
     await uploadClaimStatusInputs(job.id, formData).catch((error) => {
       console.error("Upload claim-status input files to S3 failed", error);
@@ -193,7 +200,8 @@ export async function PATCH(req: Request) {
     return Response.json({ error: "Missing jobId, inputName, or value." }, { status: 400 });
   }
 
-  const ownedJob = await getScrapeJobByIdForUser(jobId, session.userId);
+  const canManageAnyJob = session.role === "ADMIN" || session.role === "DEVELOPER";
+  const ownedJob = canManageAnyJob ? await getScrapeJobById(jobId) : await getScrapeJobByIdForUser(jobId, session.userId);
   if (!ownedJob) {
     return Response.json({ error: "Run not found for this user." }, { status: 404 });
   }

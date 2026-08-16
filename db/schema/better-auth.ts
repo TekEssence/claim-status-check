@@ -10,7 +10,7 @@ export const authUsers = pgTable(
     image: text("image"),
     username: text("username"),
     displayUsername: text("display_username"),
-    role: text("role").notNull().default("USER").$type<"ADMIN" | "USER">(),
+    role: text("role").notNull().default("USER").$type<"ADMIN" | "DEVELOPER" | "USER">(),
     mustResetPassword: boolean("must_reset_password").notNull().default(false),
     isActive: boolean("is_active").notNull().default(true),
     legacyUserId: varchar("legacy_user_id", { length: 64 }),

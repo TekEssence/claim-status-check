@@ -81,7 +81,7 @@ export async function POST(req: Request) {
       id: string;
       email: string;
       username?: string | null;
-      role?: "ADMIN" | "USER";
+      role?: "ADMIN" | "DEVELOPER" | "USER";
       mustResetPassword?: boolean;
       legacyUserId?: string | null;
     } | undefined;

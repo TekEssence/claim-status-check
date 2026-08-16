@@ -6,7 +6,7 @@ import {
   automationJobs,
 } from "@/db/schema/automation-jobs";
 
-export type PersistentScrapeJobStatus = "queued" | "running" | "waiting_otp" | "waiting_resume" | "completed" | "failed" | "cancelled";
+export type PersistentScrapeJobStatus = "queued" | "running" | "waiting_otp" | "waiting_resume" | "cancelling" | "completed" | "failed" | "cancelled";
 
 export type PersistentScrapeJob = {
   jobId: string;
@@ -18,6 +18,10 @@ export type PersistentScrapeJob = {
   totalRows: number;
   claimFileName: string;
   loginFileName: string;
+  createdByUserId: string;
+  createdByEmail: string;
+  createdByName: string;
+  startedAt: string | null;
   createdAt: string;
   updatedAt: string;
   finishedAt: string | null;
@@ -48,6 +52,11 @@ export type UserDashboardStats = {
 
 type AutomationJobRow = typeof automationJobs.$inferSelect;
 
+function getMetadataString(metadata: Record<string, unknown>, key: string, fallback = "unknown"): string {
+  const value = metadata[key];
+  return typeof value === "string" && value.trim() ? value.trim() : fallback;
+}
+
 export function isScrapeJobDbConnectionError(error: unknown): boolean {
   const code = typeof error === "object" && error !== null && "code" in error ? String((error as { code?: unknown }).code ?? "") : "";
   const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
@@ -69,6 +78,7 @@ function mapPersistentScrapeJob(
   logs: string[],
   artifacts: PersistentScrapeJobArtifact[],
 ): PersistentScrapeJob {
+  const metadata = row.metadataJson ?? {};
   return {
     jobId: row.jobId,
     userId: row.userId,
@@ -79,6 +89,10 @@ function mapPersistentScrapeJob(
     totalRows: row.totalItems,
     claimFileName: row.primaryInputFileName,
     loginFileName: row.credentialFileName,
+    createdByUserId: getMetadataString(metadata, "createdByUserId", row.userId || "unknown"),
+    createdByEmail: getMetadataString(metadata, "createdByEmail"),
+    createdByName: getMetadataString(metadata, "createdByName"),
+    startedAt: getMetadataString(metadata, "startedAt", row.createdAt || "") || null,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     finishedAt: row.finishedAt,
@@ -103,8 +117,18 @@ export async function createPersistentScrapeJob(params: {
   loginFileName?: string;
   totalRows?: number;
   currentCompleted?: number;
+  createdByUserId?: string;
+  createdByEmail?: string;
+  createdByName?: string;
 }): Promise<void> {
   const now = new Date().toISOString();
+  const metadata = {
+    source: "scrape-jobs-api",
+    createdByUserId: params.createdByUserId?.trim() || params.userId || "unknown",
+    createdByEmail: params.createdByEmail?.trim() || "unknown",
+    createdByName: params.createdByName?.trim() || params.createdByEmail?.trim() || "unknown",
+    startedAt: now,
+  };
   await runDbWithRetry((db) =>
     db
       .insert(automationJobs)
@@ -119,7 +143,7 @@ export async function createPersistentScrapeJob(params: {
         totalItems: params.totalRows ?? 0,
         primaryInputFileName: params.claimFileName ?? "",
         credentialFileName: params.loginFileName ?? "",
-        metadataJson: { source: "scrape-jobs-api" },
+        metadataJson: metadata,
         createdAt: now,
         updatedAt: now,
         finishedAt: null,
@@ -135,7 +159,7 @@ export async function createPersistentScrapeJob(params: {
           totalItems: params.totalRows ?? 0,
           primaryInputFileName: params.claimFileName ?? "",
           credentialFileName: params.loginFileName ?? "",
-          metadataJson: { source: "scrape-jobs-api" },
+          metadataJson: metadata,
           updatedAt: now,
           finishedAt: null,
         },
@@ -152,7 +176,7 @@ export async function getActiveScrapeJobForUser(userId: string): Promise<Persist
         and(
           eq(automationJobs.userId, userId),
           eq(automationJobs.workflowId, "claim-status"),
-          inArray(automationJobs.status, ["running", "waiting_resume"]),
+          inArray(automationJobs.status, ["running", "waiting_otp", "waiting_resume", "cancelling"]),
         ),
       )
       .orderBy(desc(automationJobs.updatedAt))
@@ -161,6 +185,8 @@ export async function getActiveScrapeJobForUser(userId: string): Promise<Persist
 
   const row = rows.find((candidate) =>
     candidate.status === "running" ||
+    candidate.status === "waiting_otp" ||
+    candidate.status === "cancelling" ||
     (candidate.status === "waiting_resume" && (candidate.totalItems <= 0 || candidate.currentCompleted < candidate.totalItems)),
   );
   return row ? hydrateScrapeJob(row) : null;
@@ -184,6 +210,18 @@ export async function getScrapeJobByIdForUser(jobId: string, userId: string): Pr
   return rows[0] ? hydrateScrapeJob(rows[0]) : null;
 }
 
+export async function getScrapeJobById(jobId: string): Promise<PersistentScrapeJob | null> {
+  const rows = await runDbWithRetry((db) =>
+    db
+      .select()
+      .from(automationJobs)
+      .where(eq(automationJobs.jobId, jobId))
+      .limit(1),
+  );
+
+  return rows[0] ? hydrateScrapeJob(rows[0]) : null;
+}
+
 export async function listScrapeJobsForUser(userId: string, limit = 25): Promise<PersistentScrapeJob[]> {
   const safeLimit = Math.max(1, Math.min(limit, 100));
   const rows = await runDbWithRetry((db) =>
@@ -193,6 +231,25 @@ export async function listScrapeJobsForUser(userId: string, limit = 25): Promise
         .where(eq(automationJobs.userId, userId))
         .orderBy(desc(automationJobs.updatedAt))
         .limit(safeLimit),
+  );
+
+  return Promise.all(
+    rows.map(async (row) => {
+      const artifacts = await getScrapeJobArtifacts(row.jobId);
+      return mapPersistentScrapeJob(row, [], artifacts);
+    }),
+  );
+}
+
+export async function listRunningScrapeJobs(limit = 50): Promise<PersistentScrapeJob[]> {
+  const safeLimit = Math.max(1, Math.min(limit, 100));
+  const rows = await runDbWithRetry((db) =>
+    db
+      .select()
+      .from(automationJobs)
+      .where(inArray(automationJobs.status, ["queued", "running", "waiting_otp", "waiting_resume", "cancelling"]))
+      .orderBy(desc(automationJobs.updatedAt))
+      .limit(safeLimit),
   );
 
   return Promise.all(
@@ -283,7 +340,14 @@ export async function updateScrapeJobSnapshot(params: {
   const existing = rows[0];
   if (!existing) return;
 
-  const nextStatus = params.status ?? (existing.status as PersistentScrapeJobStatus);
+  const existingStatus = existing.status as PersistentScrapeJobStatus;
+  const requestedStatus = params.status ?? existingStatus;
+  const blockedStatusChange =
+    (existingStatus === "cancelling" && requestedStatus !== "cancelled") ||
+    (existingStatus === "cancelled" && requestedStatus !== "cancelled") ||
+    (existingStatus === "completed" && requestedStatus !== "completed") ||
+    (existingStatus === "failed" && requestedStatus !== "failed");
+  const nextStatus = blockedStatusChange ? existingStatus : requestedStatus;
   const isTerminalStatus = nextStatus === "completed" || nextStatus === "failed" || nextStatus === "cancelled";
   const now = new Date().toISOString();
 
@@ -308,7 +372,7 @@ export async function getDashboardStatsForUser(userId: string, availablePortals:
         portalsRunToday: sql<number>`COALESCE(COUNT(DISTINCT ${automationJobs.portalId}) FILTER (WHERE ${automationJobs.createdAt} >= CURRENT_DATE), 0)`,
         completedClaimsToday: sql<number>`COALESCE(SUM(${automationJobs.currentCompleted}) FILTER (WHERE ${automationJobs.status} = 'completed' AND ${automationJobs.updatedAt} >= CURRENT_DATE), 0)`,
         failedJobsToday: sql<number>`COALESCE(COUNT(*) FILTER (WHERE ${automationJobs.status} = 'failed' AND ${automationJobs.updatedAt} >= CURRENT_DATE), 0)`,
-        runningJobs: sql<number>`COALESCE(COUNT(*) FILTER (WHERE ${automationJobs.status} IN ('running', 'waiting_resume')), 0)`,
+        runningJobs: sql<number>`COALESCE(COUNT(*) FILTER (WHERE ${automationJobs.status} IN ('running', 'waiting_otp', 'waiting_resume', 'cancelling')), 0)`,
       })
       .from(automationJobs)
       .where(and(eq(automationJobs.userId, userId), eq(automationJobs.workflowId, "claim-status"))),

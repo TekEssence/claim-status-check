@@ -3,6 +3,7 @@ import { WAYSTAR_SELECTORS } from "./selectors";
 import type { WaystarCredentials, WaystarSecurityQuestion } from "./credentials";
 import type { EligibilityInputRow } from "../../types";
 import { normalizeWaystarDate } from "./dates";
+import { installBrowserEvalHelpers } from "@/backend/src/core/playwright-browser-eval-helpers";
 
 export type WaystarBenefitEntry = {
   type?: string;
@@ -80,6 +81,7 @@ export async function loginToWaystar(page: Page, credentials: WaystarCredentials
     // redirects to Waystar. Continue when the redirected login UI appears.
     await page.waitForLoadState("domcontentloaded", { timeout: 30000 }).catch(() => {});
   }
+  await installBrowserEvalHelpers(page);
   await page.locator(WAYSTAR_SELECTORS.login.username).first().waitFor({ state: "visible", timeout: 30000 });
   await humanPause(page, 700, 1300);
   await humanType(page.locator(WAYSTAR_SELECTORS.login.username).first(), credentials.username);
@@ -179,10 +181,12 @@ async function evaluateWaystarPage<TArg, TResult>(
   callback: (arg: TArg) => TResult,
   arg: TArg,
 ): Promise<TResult> {
+  await installBrowserEvalHelpers(page);
   return page.evaluate(buildWaystarPageExpression(callback, arg)) as Promise<TResult>;
 }
 
 async function enableCardSwipeAutoClose(page: Page): Promise<void> {
+  await installBrowserEvalHelpers(page);
   const installAutoClose = () => {
     const state = window as typeof window & { __waystarCardSwipeObserver?: MutationObserver };
     const dismiss = () => {

@@ -81,7 +81,7 @@ function createBetterAuthInstance() {
     plugins: [
       username(),
       admin({
-        adminRoles: ["ADMIN"],
+        adminRoles: ["ADMIN", "DEVELOPER"],
         defaultRole: "USER",
       }),
       nextCookies(),

@@ -16,16 +16,20 @@ import {
   Stethoscope,
   Users,
 } from "lucide-react";
-import { getCognitoAccessToken, isCognitoMode, redirectToCognitoLogout } from "../api/cognito-auth";
+import { getCognitoAccessToken, getCognitoUserProfile, isCognitoMode, redirectToCognitoLogout } from "../api/cognito-auth";
 
 type AuthUser = {
   username: string;
   email: string;
-  role: "ADMIN" | "USER";
+  role: "ADMIN" | "DEVELOPER" | "USER";
   mustResetPassword: boolean;
 };
 
 const AUTH_USER_STORAGE_KEY = "claim-status-auth-user";
+
+function hasFullWorkflowAccess(user: AuthUser | null): boolean {
+  return user?.role === "ADMIN" || user?.role === "DEVELOPER";
+}
 
 const workflows = [
   {
@@ -73,10 +77,11 @@ export function WorkflowDashboardPage() {
         router.replace("/");
         return;
       }
+      const profile = getCognitoUserProfile();
       setUser({
-        username: "Cognito user",
-        email: "Signed in with Cognito",
-        role: "USER",
+        username: profile?.username || "Cognito user",
+        email: profile?.email || "Signed in with Cognito",
+        role: profile?.role || "USER",
         mustResetPassword: false,
       });
       setLoading(false);
@@ -188,7 +193,7 @@ export function WorkflowDashboardPage() {
               <ShieldEllipsis className="h-4 w-4" />
               Reset Password
             </button>
-            {user.role === "ADMIN" && (
+            {hasFullWorkflowAccess(user) && (
               <button
                 type="button"
                 onClick={() => router.push("/claim-status?view=manage-users")}

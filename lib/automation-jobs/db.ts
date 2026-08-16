@@ -10,6 +10,7 @@ import type { WorkflowId } from "@/backend/src/workflows/types";
 export type AutomationJobStatus =
   | "running"
   | "waiting_resume"
+  | "cancelling"
   | "completed"
   | "failed"
   | "cancelled";
@@ -115,8 +116,18 @@ export async function createPersistentAutomationJob(params: {
   primaryInputFileName?: string;
   credentialFileName?: string;
   metadata?: Record<string, unknown>;
+  createdByUserId?: string;
+  createdByEmail?: string;
+  createdByName?: string;
 }): Promise<void> {
   const now = new Date().toISOString();
+  const metadata = {
+    ...(params.metadata ?? {}),
+    createdByUserId: params.createdByUserId?.trim() || params.userId || "unknown",
+    createdByEmail: params.createdByEmail?.trim() || "unknown",
+    createdByName: params.createdByName?.trim() || params.createdByEmail?.trim() || "unknown",
+    startedAt: now,
+  };
   await runDbWithRetry((db) =>
     db.insert(automationJobs).values({
       jobId: params.jobId,
@@ -129,7 +140,7 @@ export async function createPersistentAutomationJob(params: {
       totalItems: params.totalItems ?? 0,
       primaryInputFileName: params.primaryInputFileName ?? "",
       credentialFileName: params.credentialFileName ?? "",
-      metadataJson: params.metadata ?? {},
+      metadataJson: metadata,
       createdAt: now,
       updatedAt: now,
       finishedAt: null,
@@ -147,7 +158,7 @@ export async function getActiveAutomationJobForUser(
       .where(
         and(
           eq(automationJobs.userId, userId),
-          inArray(automationJobs.status, ["running", "waiting_resume"]),
+          inArray(automationJobs.status, ["running", "waiting_resume", "cancelling"]),
         ),
       )
       .orderBy(desc(automationJobs.updatedAt))
@@ -242,7 +253,14 @@ export async function updateAutomationJob(params: {
   const current = rows[0];
   if (!current) return;
 
-  const status = params.status ?? (current.status as AutomationJobStatus);
+  const currentStatus = current.status as AutomationJobStatus;
+  const requestedStatus = params.status ?? currentStatus;
+  const blockedStatusChange =
+    (currentStatus === "cancelling" && requestedStatus !== "cancelled") ||
+    (currentStatus === "cancelled" && requestedStatus !== "cancelled") ||
+    (currentStatus === "completed" && requestedStatus !== "completed") ||
+    (currentStatus === "failed" && requestedStatus !== "failed");
+  const status = blockedStatusChange ? currentStatus : requestedStatus;
   const now = new Date().toISOString();
   const terminal = ["completed", "failed", "cancelled"].includes(status);
   await runDbWithRetry((db) =>

@@ -4,6 +4,7 @@ import { pathToFileURL } from "node:url";
 import { GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { eq } from "drizzle-orm";
 import ExcelJS from "exceljs";
+import { patchPlaywrightBrowserEvalHelpers } from "@/backend/src/core/playwright-browser-eval-helpers";
 import { cancelScrapeJob, createScrapeJob, emitScrapeJobEvent, getScrapeJob, submitScrapeJobInput } from "@/backend/src/jobs/job-store";
 import {
   uploadWorkflowArtifact,
@@ -18,7 +19,7 @@ import {
   type ClaimRowUpdateEvent,
 } from "@/backend/src/workflows/claim-status/portals/iehp/workbook-output";
 import { runDbWithRetry } from "@/db";
-import { scrapeJobs } from "@/db/schema/scrape-jobs";
+import { workflowJobs } from "@/db/schema/workflow-runtime";
 import {
   appendWorkflowEvent,
   appendWorkflowArtifact,
@@ -34,6 +35,8 @@ import {
   updateScrapeJobSnapshot,
   type PersistentScrapeJobStatus,
 } from "@/lib/scrape-jobs/db";
+
+patchPlaywrightBrowserEvalHelpers();
 
 type FileInputSpec = {
   formField: string;
@@ -499,12 +502,15 @@ function startCancellationPoll(jobId: string): { isCancelled: () => boolean; sto
   if (!hasDatabase()) return { isCancelled: () => false, stop: () => {} };
 
   let cancelled = false;
-  const timer = setInterval(() => {
-    void Promise.all([
+  const checkCancellation = async () => {
+    await Promise.all([
       runDbWithRetry((db) =>
-        db.select({ status: scrapeJobs.status }).from(scrapeJobs).where(eq(scrapeJobs.jobId, jobId)).limit(1),
+        db.select({ status: workflowJobs.status }).from(workflowJobs).where(eq(workflowJobs.jobId, jobId)).limit(1),
       ).then((rows) => {
-        cancelled = rows[0]?.status === "cancelled";
+        const status = rows[0]?.status;
+        if (status === "cancelled" || status === "cancelling") {
+          cancelled = true;
+        }
       }),
       consumePendingWorkflowCommands(jobId).then((commands) => {
         for (const command of commands) {
@@ -521,8 +527,12 @@ function startCancellationPoll(jobId: string): { isCancelled: () => boolean; sto
           }
         }
       }),
-    ]).catch(() => {});
-  }, 3000);
+    ]);
+  };
+  void checkCancellation().catch(() => {});
+  const timer = setInterval(() => {
+    void checkCancellation().catch(() => {});
+  }, 1500);
 
   return {
     isCancelled: () => cancelled,

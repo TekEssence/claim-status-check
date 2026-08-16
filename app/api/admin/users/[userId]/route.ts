@@ -4,19 +4,19 @@ import { getSessionFromCookies } from "@/lib/auth/session";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-async function requireAdmin() {
+async function requireAdminOrDeveloper() {
   const session = await getSessionFromCookies();
   const user = session ? await getActiveAuthUser(session.userId) : null;
-  return user?.role === "ADMIN" ? user : null;
+  return user?.role === "ADMIN" || user?.role === "DEVELOPER" ? user : null;
 }
 
 export async function PATCH(
   req: Request,
   { params }: { params: Promise<{ userId: string }> },
 ) {
-  const session = await requireAdmin();
+  const session = await requireAdminOrDeveloper();
   if (!session) {
-    return Response.json({ error: "Admin access required." }, { status: 403 });
+    return Response.json({ error: "Admin or developer access required." }, { status: 403 });
   }
 
   const { userId } = await params;
@@ -33,9 +33,9 @@ export async function DELETE(
   _req: Request,
   { params }: { params: Promise<{ userId: string }> },
 ) {
-  const session = await requireAdmin();
+  const session = await requireAdminOrDeveloper();
   if (!session) {
-    return Response.json({ error: "Admin access required." }, { status: 403 });
+    return Response.json({ error: "Admin or developer access required." }, { status: 403 });
   }
 
   const { userId } = await params;

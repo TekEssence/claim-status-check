@@ -7,7 +7,7 @@ export type AuthUser = {
   userId: string;
   username: string;
   email: string;
-  role: "ADMIN" | "USER";
+  role: "ADMIN" | "DEVELOPER" | "USER";
   mustResetPassword: boolean;
 };
 
@@ -15,7 +15,7 @@ export type ManagedUser = {
   userId: string;
   username: string;
   email: string;
-  role: "ADMIN" | "USER";
+  role: "ADMIN" | "DEVELOPER" | "USER";
   isActive: boolean;
   mustResetPassword: boolean;
 };
@@ -36,6 +36,13 @@ function normalizeLogin(login: string): string {
   return login.trim().toLowerCase();
 }
 
+function normalizeRole(role: string): AuthUser["role"] {
+  const normalizedRole = role.trim().toUpperCase();
+  if (normalizedRole === "ADMIN") return "ADMIN";
+  if (normalizedRole === "DEVELOPER" || normalizedRole === "DEVELOPERS") return "DEVELOPER";
+  return "USER";
+}
+
 function parseUserIdSequence(userId: string): number | null {
   const match = /^USR(\d+)$/i.exec(userId.trim());
   return match ? Number.parseInt(match[1], 10) : null;
@@ -46,7 +53,7 @@ function mapAuthUser(row: AuthUserRow): AuthUser {
     userId: row.legacyUserId || row.id,
     username: row.username || row.email,
     email: row.email,
-    role: row.role,
+    role: normalizeRole(row.role),
     mustResetPassword: row.mustResetPassword,
   };
 }
@@ -209,7 +216,7 @@ export async function listManagedUsers(): Promise<ManagedUser[]> {
     userId: row.legacyUserId || row.id,
     username: row.username || row.email,
     email: row.email,
-    role: row.role,
+    role: normalizeRole(row.role),
     isActive: row.isActive,
     mustResetPassword: row.mustResetPassword,
   }));

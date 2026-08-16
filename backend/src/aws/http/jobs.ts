@@ -1,6 +1,6 @@
 import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { WORKFLOW_IDS, type WorkflowId } from "@/backend/src/workflows/types";
-import { jsonResponse, parseJsonBody, getAuthUserId, getJobId, createJobId, type ApiEvent } from "../runtime/http";
+import { jsonResponse, parseJsonBody, getAuthUserId, getAuthUserSnapshot, getJobId, createJobId, hasFullWorkflowAccess, type ApiEvent } from "../runtime/http";
 import { describeWorkerTask, runWorkerTask, stopWorkerTask } from "../runtime/ecs";
 import { buildWorkflowKey, createDownloadUrl, createUploadUrl } from "../runtime/s3";
 import {
@@ -8,7 +8,9 @@ import {
   createWorkflowCommand,
   createWorkflowJob,
   getWorkflowJobForUser,
+  getWorkflowJobById,
   listArtifactsForJob,
+  listRunningWorkflowJobs,
   listWorkflowJobsForUser,
   listWorkflowEvents,
   updateWorkflowJob,
@@ -23,7 +25,7 @@ type CreateJobBody = {
 
 const uploadFields = new Set(["claimExcel", "loginExcel", "inputExcel", "credentialExcel", "inputFile", "credentialFile", "referenceExcel", "claimRows"]);
 let s3Client: S3Client | null = null;
-const activeJobStatuses = new Set(["queued", "running", "waiting_otp"]);
+const activeJobStatuses = new Set(["queued", "running", "waiting_otp", "cancelling"]);
 
 function s3(): S3Client {
   if (!s3Client) s3Client = new S3Client({});
@@ -64,7 +66,7 @@ async function reconcileAwsJobRuntime(job: Awaited<ReturnType<typeof getWorkflow
   if (task.lastStatus === "STOPPED") {
     const stoppedReason = task.stoppedReason || task.containers?.find((container) => container.reason)?.reason || "";
     const exitCode = task.containers?.find((container) => typeof container.exitCode === "number")?.exitCode;
-    const status = exitCode === 0 ? "completed" : "failed";
+    const status = job.status === "cancelling" ? "cancelled" : exitCode === 0 ? "completed" : "failed";
     const message = status === "completed"
       ? undefined
       : stoppedReason || `AWS worker task stopped${typeof exitCode === "number" ? ` with exit code ${exitCode}` : ""}.`;
@@ -87,7 +89,8 @@ async function reconcileAwsJobsRuntime<T extends Awaited<ReturnType<typeof listW
 
 export async function createJob(event: ApiEvent) {
   try {
-    const userId = getAuthUserId(event);
+    const user = getAuthUserSnapshot(event);
+    const userId = user.userId;
     const body = parseJsonBody<CreateJobBody>(event);
     const workflowId = normalizeWorkflowId(body.workflowId);
     const portalId = body.portalId?.trim() || "iehp";
@@ -127,6 +130,9 @@ export async function createJob(event: ApiEvent) {
       outputPrefix,
       claimFileName: body.files?.find((file) => file.field === "claimExcel" || file.field === "inputExcel" || file.field === "inputFile" || file.field === "referenceExcel")?.filename,
       loginFileName: body.files?.find((file) => file.field === "loginExcel" || file.field === "credentialExcel" || file.field === "credentialFile")?.filename,
+      createdByUserId: user.userId,
+      createdByEmail: user.email,
+      createdByName: user.name,
       metadata: { inputKeys, formFields: body.formFields ?? {} },
     });
     await appendWorkflowEvent(jobId, "job_created", { type: "job_started", workflowId, portalId });
@@ -157,7 +163,7 @@ export async function confirmJob(event: ApiEvent) {
       inputKeys: metadata.inputKeys ?? {},
       formFields: metadata.formFields ?? {},
     });
-    await updateWorkflowJob({ jobId, status: "running", ecsTaskArn: taskArn });
+    await updateWorkflowJob({ jobId, status: "running", ecsTaskArn: taskArn, startedAt: new Date().toISOString() });
     await appendWorkflowEvent(jobId, "task_started", { type: "task_starting", taskArn });
     return jsonResponse(200, { jobId, taskArn });
   } catch (error) {
@@ -174,7 +180,7 @@ export async function getJob(event: ApiEvent) {
   try {
     const userId = getAuthUserId(event);
     const jobId = getJobId(event);
-    const job = await reconcileAwsJobRuntime(await getWorkflowJobForUser(jobId, userId));
+    const job = await reconcileAwsJobRuntime(hasFullWorkflowAccess(event) ? await getWorkflowJobById(jobId) : await getWorkflowJobForUser(jobId, userId));
     if (!job) return jsonResponse(404, { error: "Job not found." });
     const events = await listWorkflowEvents(jobId, Number(event.queryStringParameters?.after || 0));
     const artifacts = await listArtifactsForJob(jobId);
@@ -188,7 +194,13 @@ export async function listJobs(event: ApiEvent) {
   try {
     const userId = getAuthUserId(event);
     const rawLimit = Number(event.queryStringParameters?.limit || 25);
-    const jobs = await reconcileAwsJobsRuntime(await listWorkflowJobsForUser(userId, Number.isFinite(rawLimit) ? rawLimit : 25));
+    const scope = event.queryStringParameters?.scope || "";
+    const canSeeAll = scope === "all-running" && hasFullWorkflowAccess(event);
+    const jobs = await reconcileAwsJobsRuntime(
+      canSeeAll
+        ? await listRunningWorkflowJobs(Number.isFinite(rawLimit) ? rawLimit : 50)
+        : await listWorkflowJobsForUser(userId, Number.isFinite(rawLimit) ? rawLimit : 25),
+    );
     const jobsWithArtifacts = await Promise.all(
       jobs.map(async (job) => {
         const artifacts = await listArtifactsForJob(job.jobId).catch(() => []);
@@ -210,7 +222,7 @@ export async function submitOtp(event: ApiEvent) {
   try {
     const userId = getAuthUserId(event);
     jobId = getJobId(event);
-    const job = await getWorkflowJobForUser(jobId, userId);
+    const job = hasFullWorkflowAccess(event) ? await getWorkflowJobById(jobId) : await getWorkflowJobForUser(jobId, userId);
     if (!job) return jsonResponse(404, { error: "Job not found." });
     const body = parseJsonBody<{ otp?: unknown; value?: unknown; inputName?: unknown }>(event);
     const commandType = typeof body.inputName === "string" && body.inputName.trim()
@@ -244,10 +256,10 @@ export async function cancelJob(event: ApiEvent) {
   try {
     const userId = getAuthUserId(event);
     const jobId = getJobId(event);
-    const job = await getWorkflowJobForUser(jobId, userId);
+    const job = hasFullWorkflowAccess(event) ? await getWorkflowJobById(jobId) : await getWorkflowJobForUser(jobId, userId);
     if (!job) return jsonResponse(404, { error: "Job not found." });
     await createWorkflowCommand({ jobId, commandType: "cancel", createdBy: userId });
-    await updateWorkflowJob({ jobId, status: "cancelled" });
+    await updateWorkflowJob({ jobId, status: "cancelling" });
     await appendWorkflowEvent(jobId, "cancel_requested", { type: "cancellation_acknowledged" });
     return jsonResponse(200, { ok: true });
   } catch (error) {
@@ -260,12 +272,14 @@ export async function forceStopJob(event: ApiEvent) {
     const userId = getAuthUserId(event);
     const jobId = getJobId(event);
     const body = parseJsonBody<{ reason?: string }>(event);
-    const job = await getWorkflowJobForUser(jobId, userId);
+    if (!hasFullWorkflowAccess(event)) return jsonResponse(403, { error: "Force stop requires admin or developer access." });
+    const job = await getWorkflowJobById(jobId);
     if (!job) return jsonResponse(404, { error: "Job not found." });
     if (!job.ecsTaskArn) return jsonResponse(409, { error: "Job does not have an ECS task ARN." });
-    await stopWorkerTask(job.ecsTaskArn, body.reason || `Force-stopped by ${userId}`);
+    const reason = body.reason || `Force-stopped by ${userId}`;
+    await stopWorkerTask(job.ecsTaskArn, reason);
     await updateWorkflowJob({ jobId, status: "cancelled" });
-    await appendWorkflowEvent(jobId, "force_stopped", { type: "cancellation_acknowledged" });
+    await appendWorkflowEvent(jobId, "force_stopped", { type: "cancellation_acknowledged", initiatedBy: userId, reason });
     return jsonResponse(200, { ok: true });
   } catch (error) {
     return jsonResponse(500, { error: error instanceof Error ? error.message : "Failed to force stop job." });
@@ -276,10 +290,15 @@ export async function downloadJob(event: ApiEvent) {
   try {
     const userId = getAuthUserId(event);
     const jobId = getJobId(event);
-    const job = await getWorkflowJobForUser(jobId, userId);
+    const job = hasFullWorkflowAccess(event) ? await getWorkflowJobById(jobId) : await getWorkflowJobForUser(jobId, userId);
     if (!job) return jsonResponse(404, { error: "Job not found." });
     const artifacts = await listArtifactsForJob(jobId);
-    const artifact = artifacts.find((item) => item.artifactType === "output_snapshot" || item.artifactType === "file_download") ?? artifacts[0];
+    const artifact = artifacts.find((item) => item.artifactType === "output_snapshot")
+      ?? artifacts.find((item) =>
+        item.artifactType === "file_download" &&
+        !item.filename.toLowerCase().endsWith(".pdf") &&
+        item.mimeType !== "application/pdf"
+      );
     if (!artifact) return jsonResponse(404, { error: "No output is available yet." });
     if (!artifact.bucket) return jsonResponse(500, { error: "Output artifact is missing its S3 bucket." });
     const downloadUrl = await createDownloadUrl({ bucket: artifact.bucket, key: artifact.s3Key });

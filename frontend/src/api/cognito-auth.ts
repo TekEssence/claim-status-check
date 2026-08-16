@@ -1,16 +1,76 @@
 const TOKEN_KEY = "cognito_access_token";
 const RETURN_PATH_KEY = "cognito_return_path";
 
-function decodeJwtPayload(token: string): { exp?: number } | null {
+export type CognitoRole = "ADMIN" | "DEVELOPER" | "USER";
+
+export type CognitoUserProfile = {
+  userId: string;
+  username: string;
+  email: string;
+  role: CognitoRole;
+};
+
+type CognitoJwtPayload = {
+  sub?: string;
+  exp?: number;
+  email?: string;
+  username?: string;
+  name?: string;
+  preferred_username?: string;
+  "cognito:username"?: string;
+  "cognito:groups"?: string[] | string;
+  "custom:role"?: string;
+  role?: string;
+};
+
+function decodeJwtPayload(token: string): CognitoJwtPayload | null {
   try {
     const payload = token.split(".")[1];
     if (!payload) return null;
     const normalized = payload.replace(/-/g, "+").replace(/_/g, "/");
     const padded = normalized.padEnd(normalized.length + ((4 - normalized.length % 4) % 4), "=");
-    return JSON.parse(window.atob(padded)) as { exp?: number };
+    return JSON.parse(window.atob(padded)) as CognitoJwtPayload;
   } catch {
     return null;
   }
+}
+
+function normalizeRole(value: unknown): CognitoRole | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().toUpperCase();
+  if (normalized === "ADMIN") return "ADMIN";
+  if (normalized === "DEVELOPER" || normalized === "DEVELOPERS" || normalized === "DEVELOPER_ADMIN") return "DEVELOPER";
+  if (normalized === "USER") return "USER";
+  return null;
+}
+
+function getGroups(payload: CognitoJwtPayload): string[] {
+  const rawGroups = payload["cognito:groups"];
+  if (Array.isArray(rawGroups)) return rawGroups.map((group) => String(group).trim().toUpperCase()).filter(Boolean);
+  if (typeof rawGroups === "string") return rawGroups.split(",").map((group) => group.trim().toUpperCase()).filter(Boolean);
+  return [];
+}
+
+export function getCognitoUserProfile(): CognitoUserProfile | null {
+  const token = getCognitoAccessToken();
+  if (!token) return null;
+  const payload = decodeJwtPayload(token);
+  if (!payload) return null;
+  const email = String(payload.email || payload.preferred_username || payload.username || "").trim().toLowerCase();
+  const groups = getGroups(payload);
+  const role =
+    groups.includes("ADMIN")
+      ? "ADMIN"
+      : groups.includes("DEVELOPER") || groups.includes("DEVELOPERS")
+        ? "DEVELOPER"
+        : normalizeRole(payload["custom:role"]) ?? normalizeRole(payload.role) ?? "USER";
+  const username = String(payload.name || payload.preferred_username || payload.username || payload["cognito:username"] || email || "Cognito user");
+  return {
+    userId: String(payload.sub || payload["cognito:username"] || email || "cognito"),
+    username,
+    email: email || username,
+    role,
+  };
 }
 
 export function isCognitoMode(): boolean {

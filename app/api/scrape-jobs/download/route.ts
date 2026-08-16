@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { getSessionFromCookies } from "@/lib/auth/session";
-import { getScrapeJobByIdForUser, isScrapeJobDbConnectionError } from "@/lib/scrape-jobs/db";
+import { getScrapeJobById, getScrapeJobByIdForUser, isScrapeJobDbConnectionError } from "@/lib/scrape-jobs/db";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -19,18 +19,24 @@ export async function GET(req: Request) {
       return Response.json({ error: "Missing scrape jobId." }, { status: 400 });
     }
 
-    const job = await getScrapeJobByIdForUser(jobId, session.userId);
+    const canSeeAnyJob = session.role === "ADMIN" || session.role === "DEVELOPER";
+    const job = canSeeAnyJob ? await getScrapeJobById(jobId) : await getScrapeJobByIdForUser(jobId, session.userId);
     if (!job) {
       return Response.json({ error: "Run not found for this user." }, { status: 404 });
     }
 
-    const artifact = [...job.artifacts]
-      .reverse()
-      .find((candidate) =>
-        (candidate.artifactType === "file_download" || candidate.artifactType === "output_snapshot") &&
-        candidate.pathOrKey &&
-        fs.existsSync(candidate.pathOrKey),
-      );
+    const artifacts = [...job.artifacts].reverse();
+    const artifact = artifacts.find((candidate) =>
+      candidate.artifactType === "output_snapshot" &&
+      candidate.pathOrKey &&
+      fs.existsSync(candidate.pathOrKey),
+    ) ?? artifacts.find((candidate) =>
+      candidate.artifactType === "file_download" &&
+      candidate.pathOrKey &&
+      fs.existsSync(candidate.pathOrKey) &&
+      !candidate.filename.toLowerCase().endsWith(".pdf") &&
+      candidate.mimeType !== "application/pdf",
+    );
     if (!artifact) {
       return Response.json({ error: "No downloadable output is available for this run yet." }, { status: 404 });
     }

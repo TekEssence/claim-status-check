@@ -1,5 +1,5 @@
 import { getSessionFromCookies } from "@/lib/auth/session";
-import { isScrapeJobDbConnectionError, listScrapeJobsForUser } from "@/lib/scrape-jobs/db";
+import { isScrapeJobDbConnectionError, listRunningScrapeJobs, listScrapeJobsForUser } from "@/lib/scrape-jobs/db";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -13,7 +13,14 @@ export async function GET(req: Request) {
 
     const url = new URL(req.url);
     const rawLimit = Number(url.searchParams.get("limit") || 25);
-    const jobs = await listScrapeJobsForUser(session.userId, Number.isFinite(rawLimit) ? rawLimit : 25);
+    const scope = url.searchParams.get("scope") || "";
+    const canSeeAllRunning = session.role === "ADMIN" || session.role === "DEVELOPER";
+    if (scope === "all-running" && !canSeeAllRunning) {
+      return Response.json({ error: "Admin or developer access is required." }, { status: 403 });
+    }
+    const jobs = scope === "all-running"
+      ? await listRunningScrapeJobs(Number.isFinite(rawLimit) ? rawLimit : 50)
+      : await listScrapeJobsForUser(session.userId, Number.isFinite(rawLimit) ? rawLimit : 25);
     return Response.json({
       jobs: jobs.map((job) => ({
         ...job,
