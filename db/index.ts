@@ -45,6 +45,7 @@ export function getDb(): NodePgDatabase<typeof schema> {
 export function isRetryableDbError(error: unknown): boolean {
   const retryableCodes = new Set(["ECONNRESET", "ETIMEDOUT", "ECONNREFUSED", "57P01"]);
   const retryableMessages = [
+    "cannot use a pool after calling end on the pool",
     "connection timeout",
     "connection terminated",
     "terminating connection",
