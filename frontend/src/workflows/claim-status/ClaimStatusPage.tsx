@@ -31,6 +31,7 @@ import optumLogo from "../../Assets/optum-logo.svg";
 import physiciansLogo from "../../Assets/physicians-health-network-logo.svg";
 import regalLogo from "../../Assets/channels4_profile (1).jpg";
 import availityLogo from "../../Assets/availity-logo.jpg";
+import waystarLogo from "../../Assets/waystar-logo-vector.png";
 import { applyClaimRowUpdateToWorksheet, postProcessWorksheet } from "./portals/iehp/workbook";
 import { applyUhcRowUpdateToWorksheet, parseUhcClaimRows, postProcessUhcWorksheet } from "./portals/uhc/workbook";
 import {
@@ -80,6 +81,8 @@ import { OptumProInputForm } from "./portals/optum-pro/OptumProInputForm";
 import { OptumProResultView } from "./portals/optum-pro/OptumProResultView";
 import { PhysiciansInputForm } from "./portals/physicians/PhysiciansInputForm";
 import { PhysiciansResultView } from "./portals/physicians/PhysiciansResultView";
+import { WaystarInputForm } from "./portals/waystar/WaystarInputForm";
+import { WaystarResultView } from "./portals/waystar/WaystarResultView";
 import {
   aerialFrontendPortalConfig,
   allCareFrontendPortalConfig,
@@ -95,6 +98,7 @@ import {
   physiciansFrontendPortalConfig,
   regalFrontendPortalConfig,
   uhcFrontendPortalConfig,
+  waystarFrontendPortalConfig,
 } from "./registry";
 
 type AuthUser = {
@@ -471,7 +475,20 @@ const PORTAL_UI_META: Record<
   },
   waystar: {
     shortCode: "WS",
-    logoClassName: "bg-white text-blue-700",
+    logoClassName: "bg-white text-slate-700",
+    logoSrc: waystarLogo,
+    cardLogoFrameClassName: "h-10 w-[6.1rem] rounded-[1rem] px-2.5",
+    cardLogoImageClassName: "h-full w-full scale-[1.55] object-contain",
+    cardLogoSize: {
+      width: 92,
+      height: 28,
+    },
+    heroLogoFrameClassName: "h-14 w-[8.2rem] rounded-[1.15rem] px-3",
+    heroLogoImageClassName: "h-full w-full scale-[1.55] object-contain",
+    heroLogoSize: {
+      width: 120,
+      height: 38,
+    },
   },
 };
 
@@ -982,6 +999,8 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
   const [availityJobId, setAvailityJobId] = useState<string>("");
   const [availityOtpRequest, setAvailityOtpRequest] = useState<{ inputName: string; label: string; message: string } | null>(null);
   const [availityOtpValue, setAvailityOtpValue] = useState<string>("");
+  const [waystarLoginFile, setWaystarLoginFile] = useState<File | null>(null);
+  const [waystarInputFile, setWaystarInputFile] = useState<File | null>(null);
   const [astronaCredentialFile, setAstronaCredentialFile] = useState<File | null>(null);
   const [astronaInputFile, setAstronaInputFile] = useState<File | null>(null);
   const [astronaResults, setAstronaResults] = useState<Record<string, unknown>[]>([]);
@@ -1099,6 +1118,8 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
                 ? physiciansFrontendPortalConfig
               : effectivePortalId === "uhc"
                 ? uhcFrontendPortalConfig
+              : effectivePortalId === "waystar"
+                ? waystarFrontendPortalConfig
             : null;
   const selectedPortalUiMeta = effectivePortalId ? PORTAL_UI_META[effectivePortalId] : null;
   const filteredPortals = useMemo(() => {
@@ -1209,6 +1230,10 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     () => Boolean(blueShieldCredentialFile && blueShieldInputFile && canStartAnotherRun),
     [blueShieldCredentialFile, blueShieldInputFile, canStartAnotherRun],
   );
+  const canSubmitWaystar = useMemo(
+    () => Boolean(waystarLoginFile && waystarInputFile && canStartAnotherRun),
+    [waystarInputFile, waystarLoginFile, canStartAnotherRun],
+  );
   const currentCanSubmit =
     effectivePortalId === "iehp"
       ? canSubmitIehp
@@ -1236,6 +1261,8 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
                 ? canSubmitPhysicians
               : effectivePortalId === "uhc"
                 ? canSubmitUhc
+              : effectivePortalId === "waystar"
+                ? canSubmitWaystar
             : false;
   const portalWorkflowMeta = effectivePortalId ? PORTAL_WORKSPACE_META[effectivePortalId] : null;
   const portalFileState = useMemo(() => {
@@ -1272,6 +1299,15 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
         claimReady: Boolean(availityInputFile),
         loginFileLabel: availityCredentialFile?.name ?? "",
         loginReady: Boolean(availityCredentialFile),
+      };
+    }
+
+    if (effectivePortalId === "waystar") {
+      return {
+        claimFileLabel: waystarInputFile?.name ?? "",
+        claimReady: Boolean(waystarInputFile),
+        loginFileLabel: waystarLoginFile?.name ?? "",
+        loginReady: Boolean(waystarLoginFile),
       };
     }
 
@@ -1391,6 +1427,8 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     uhcClaimFileHandle,
     uhcClaimFileName,
     uhcLoginFile,
+    waystarInputFile,
+    waystarLoginFile,
   ]);
   const portalWorkflowStepIndex = useMemo(() => {
     const normalizedStatus = status.toLowerCase();
@@ -3647,6 +3685,93 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     }
   }
 
+  async function submitWaystar(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+
+    if (!waystarLoginFile || !waystarInputFile) {
+      setStatus("Please provide both the Waystar login Excel and claim Excel files.");
+      return;
+    }
+
+    resetRunState("Starting Waystar processing...");
+
+    const formData = new FormData();
+    formData.append("portalId", "waystar");
+    formData.append("loginExcel", waystarLoginFile);
+    formData.append("inputExcel", waystarInputFile);
+    formData.append("loginFileName", waystarLoginFile.name);
+    formData.append("claimFileName", waystarInputFile.name);
+
+    let hasError = false;
+    let wasCancelled = false;
+    let finalErrorMessage = "";
+    let subscribedJobId = "";
+    const streamAbortController = new AbortController();
+
+    const handleJobEvent = async (eventData: ScrapeJobEvent) => {
+      if (eventData.type === "log" && eventData.message) {
+        setLogs((prev) => [...prev, eventData.message ?? ""]);
+      } else if (eventData.type === "progress" && typeof eventData.completed === "number" && typeof eventData.total === "number") {
+        setProgress({ completed: eventData.completed, total: eventData.total, currentRow: eventData.currentRow });
+        setStatus(`Waystar processing ${eventData.completed} of ${eventData.total} row(s)...`);
+      } else if (eventData.type === "error_screenshot" && typeof eventData.index === "number" && eventData.image) {
+        setErrorScreenshots((prev) => [...prev, { index: eventData.index ?? -1, image: eventData.image ?? "" }]);
+      } else if (eventData.type === "file_download" && eventData.filename && eventData.base64) {
+        const artifactKey = buildDownloadArtifactKey(eventData);
+        if (!hasDownloadedArtifact(subscribedJobId, artifactKey)) {
+          downloadBase64File(eventData.filename, eventData.base64, eventData.mimeType || "application/octet-stream");
+          rememberDownloadedArtifact(subscribedJobId, artifactKey);
+          setStatus(`Downloaded ${eventData.filename}`);
+        }
+      } else if (eventData.type === "warning" && eventData.message) {
+        setLogs((prev) => [...prev, eventData.message ?? ""]);
+        setStatus(eventData.message);
+      } else if (eventData.type === "error" && eventData.message) {
+        finalErrorMessage = eventData.message;
+        setLogs((prev) => [...prev, `ERROR: ${eventData.message}`]);
+        setStatus(`Error: ${eventData.message}`);
+        hasError = true;
+      } else if (eventData.type === "cancelled") {
+        wasCancelled = true;
+        setLogs((prev) => [...prev, eventData.message || "Processing cancelled."]);
+        setStatus(eventData.message || "Processing cancelled.");
+      }
+    };
+
+    try {
+      const jobId = await startScrapeJob(formData);
+      subscribedJobId = jobId;
+      setActiveJobId(jobId);
+      setWaystarLoginFile(null);
+      setWaystarInputFile(null);
+      void refreshWorkflowRuns({ silent: true });
+      await subscribeToScrapeJobEvents({
+        jobId,
+        signal: streamAbortController.signal,
+        onEvent: handleJobEvent,
+        onStreamError(error) {
+          console.error("Waystar stream error:", error);
+          finalErrorMessage = getErrorMessage(error);
+          setLogs((prev) => [...prev, `STREAM ERROR: ${finalErrorMessage}`]);
+          setStatus(`Stream error: ${finalErrorMessage}`);
+          hasError = true;
+        },
+      });
+      setStatus(
+        wasCancelled
+          ? "Waystar processing cancelled."
+          : hasError
+          ? `Waystar processing finished with errors${finalErrorMessage ? `: ${finalErrorMessage}` : "."}`
+          : "Waystar processing completed.",
+      );
+    } catch (error) {
+      setStatus(`Failed to process Waystar claims: ${getErrorMessage(error)}`);
+    } finally {
+      setIsProcessing(false);
+      setActiveJobId("");
+    }
+  }
+
   async function submitKaiser(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
 
@@ -5776,6 +5901,16 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
                       onLoginFileChange={setOptumProLoginFile}
                       onSubmit={submitOptumPro}
                     />
+                  ) : effectivePortalId === "waystar" ? (
+                    <WaystarInputForm
+                      canSubmit={canSubmitWaystar}
+                      inputFileName={waystarInputFile?.name ?? ""}
+                      isProcessing={blockPortalFormForProcessing}
+                      loginFileName={waystarLoginFile?.name ?? ""}
+                      onInputFileChange={setWaystarInputFile}
+                      onLoginFileChange={setWaystarLoginFile}
+                      onSubmit={submitWaystar}
+                    />
                   ) : (
                     <BlueShieldInputForm
                       canSubmit={canSubmitBlueShield}
@@ -5835,6 +5970,10 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
                     progress={progress}
                     status={status}
                   />
+                </div>
+              ) : effectivePortalId === "waystar" ? (
+                <div className="mt-5">
+                  <WaystarResultView errorScreenshots={errorScreenshots} logs={logs} progress={progress} status={status} />
                 </div>
               ) : effectivePortalId === "uhc" ? (
                 <div className="mt-5">

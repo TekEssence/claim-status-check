@@ -5,13 +5,12 @@ import {
   type Browser,
   type BrowserContext,
   type BrowserContextOptions,
-  type BrowserType,
 } from "playwright-core";
+import { linuxChromeUserAgent } from "@/backend/src/core/browser-fingerprint";
 import { getAutomationRuntimeConfig } from "@/backend/src/core/runtime-config";
 
 const TRUE_VALUES = new Set(["1", "true", "yes", "y", "on"]);
 const FALSE_VALUES = new Set(["0", "false", "no", "n", "off"]);
-const MAC_CHROME_122_USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
 
 type OptumProBrowserChoice = "chromium" | "firefox" | "cdp";
 
@@ -42,7 +41,6 @@ export async function launchOptumProBrowser(
   const browserChoice = optumProBrowserChoice();
   const headless = runtimeConfig.environment === "vercel" ? true : optumProHeadless(runtimeConfig.headless);
   const cdpEndpoint = optumProCdpEndpoint();
-  const contextOptions = optumProContextOptions();
 
   if (browserChoice === "cdp") {
     if (!cdpEndpoint) {
@@ -51,6 +49,7 @@ export async function launchOptumProBrowser(
 
     await log(`Connecting to existing Chrome over CDP for Optum Pro: ${redactEndpoint(cdpEndpoint)}.`);
     const browser = await playwrightChromium.connectOverCDP(cdpEndpoint);
+    const contextOptions = optumProContextOptions(browser.version());
     const context = await browser.newContext(contextOptions);
     await log("Fresh non-persistent Optum Pro browser context created over CDP.");
     return buildSession(browser, context, {
@@ -87,6 +86,7 @@ export async function launchOptumProBrowser(
   await log(`Optum Pro ${browserChoice} launched successfully.`);
   await log(`Browser version: ${browser.version()}.`);
 
+  const contextOptions = optumProContextOptions(browser.version());
   const context = await browser.newContext(contextOptions);
   await log("Fresh non-persistent Optum Pro browser context created.");
 
@@ -167,10 +167,10 @@ async function optumProLaunchArgs(browserChoice: OptumProBrowserChoice, environm
   return args;
 }
 
-function optumProContextOptions(): BrowserContextOptions {
+function optumProContextOptions(browserVersion?: string): BrowserContextOptions {
   const customUserAgentEnabled = envBoolean(["OPTUM_PRO_CUSTOM_USER_AGENT", "CUSTOM_USER_AGENT"], false);
   const userAgent = customUserAgentEnabled
-    ? envText("OPTUM_PRO_USER_AGENT", "BROWSER_USER_AGENT") || MAC_CHROME_122_USER_AGENT
+    ? envText("OPTUM_PRO_USER_AGENT", "BROWSER_USER_AGENT") || linuxChromeUserAgent(browserVersion)
     : "";
 
   return {

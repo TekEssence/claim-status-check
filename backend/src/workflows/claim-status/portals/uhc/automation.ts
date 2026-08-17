@@ -16,6 +16,7 @@ if (process.env.RENDER === 'true' || process.env.NETLIFY === 'true' || process.e
 
 import { chromium as playwrightChromium, firefox as playwrightFirefox, type Browser, type BrowserContext, type Page } from 'playwright-core';
 import chromium from '@sparticuz/chromium';
+import { linuxChromeUserAgent } from '@/backend/src/core/browser-fingerprint';
 import { generateTOTP, totpSecondsRemaining } from './totp';
 import type { ClaimRow, BotFields } from './excel';
 
@@ -3254,10 +3255,12 @@ export async function runAutomation(opts: AutomationOptions): Promise<void> {
       await log(`✅ Local Chrome launched successfully.`);
     }
 
-    context = await browser.newContext({
+    const browserContextOptions = {
       viewport: { width: 1440, height: 900 },
-      userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-    });
+      userAgent: linuxChromeUserAgent(browser.version()),
+    };
+
+    context = await browser.newContext(browserContextOptions);
     await log(`✅ Browser context created.`);
     page = await context.newPage();
     page.setDefaultTimeout(30_000);
@@ -3299,10 +3302,7 @@ export async function runAutomation(opts: AutomationOptions): Promise<void> {
       await log(`  UHC recovery: ${reason}`);
       await log('  Closing current browser context and opening a fresh test browser page...');
       await context?.close().catch(() => {});
-      context = await browser.newContext({
-        viewport: { width: 1440, height: 900 },
-        userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-      });
+      context = await browser.newContext(browserContextOptions);
       page = await context.newPage();
       page.setDefaultTimeout(30_000);
       await attachAkamaiRoute(page);
