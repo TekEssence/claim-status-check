@@ -2,6 +2,7 @@ import { betterAuth } from "better-auth/minimal";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { nextCookies } from "better-auth/next-js";
 import { admin } from "better-auth/plugins/admin";
+import { adminAc, userAc } from "better-auth/plugins/admin/access";
 import { username } from "better-auth/plugins/username";
 import { getDb, getDbPoolVersion, hasUsableDbPool } from "@/db";
 import * as betterAuthSchema from "@/db/schema/better-auth";
@@ -83,6 +84,11 @@ function createBetterAuthInstance() {
       admin({
         adminRoles: ["ADMIN", "DEVELOPER"],
         defaultRole: "USER",
+        roles: {
+          ADMIN: adminAc,
+          DEVELOPER: adminAc,
+          USER: userAc,
+        },
       }),
       nextCookies(),
     ],
