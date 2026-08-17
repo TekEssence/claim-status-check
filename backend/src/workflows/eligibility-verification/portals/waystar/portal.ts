@@ -93,6 +93,7 @@ export async function loginToWaystar(page: Page, credentials: WaystarCredentials
     page.locator(WAYSTAR_SELECTORS.login.submit).click(),
   ]);
 
+  await handleOptionalProfileUpdate(page);
   await handleAdditionalAuthentication(page, credentials.verificationAnswers);
 
   await page.locator(WAYSTAR_SELECTORS.navigation.eligibility).first().waitFor({
@@ -100,6 +101,38 @@ export async function loginToWaystar(page: Page, credentials: WaystarCredentials
     timeout: 30000,
   });
   authenticatedWaystarContexts.add(page.context());
+}
+
+async function handleOptionalProfileUpdate(page: Page): Promise<void> {
+  const getStarted = page.locator([
+    "button:has-text('Get Started'):visible",
+    "a:has-text('Get Started'):visible",
+    "input[type='button'][value*='Get Started' i]:visible",
+    "input[type='submit'][value*='Get Started' i]:visible",
+  ].join(", ")).first();
+
+  const profileUpdateShown = await getStarted
+    .waitFor({ state: "visible", timeout: 10000 })
+    .then(() => true)
+    .catch(() => false);
+  if (!profileUpdateShown) return;
+
+  await Promise.all([
+    page.waitForLoadState("domcontentloaded").catch(() => {}),
+    getStarted.click(),
+  ]);
+
+  const skipStep = page.locator([
+    "button:has-text('Skip This Step'):visible",
+    "a:has-text('Skip This Step'):visible",
+    "input[type='button'][value*='Skip This Step' i]:visible",
+    "input[type='submit'][value*='Skip This Step' i]:visible",
+  ].join(", ")).first();
+  await skipStep.waitFor({ state: "visible", timeout: 15000 });
+  await Promise.all([
+    page.waitForLoadState("domcontentloaded").catch(() => {}),
+    skipStep.click(),
+  ]);
 }
 
 export function isWaystarAbortedNavigationError(error: unknown): boolean {

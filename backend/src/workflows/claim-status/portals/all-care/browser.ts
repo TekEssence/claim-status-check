@@ -20,12 +20,12 @@ export async function launchAllCareBrowser(log: (message: string) => Promise<voi
   const explicitPath = String(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || "").trim();
   const channel = String(process.env.PORTAL_ALL_CARE_BROWSER_CHANNEL || "").trim();
   const attempts: Array<[string, LaunchOptions]> = [];
-  if (explicitPath) attempts.push(["configured executable", { executablePath: explicitPath, headless: runtime.headless, slowMo: ALL_CARE_SLOW_MO_MS }]);
-  if (channel) attempts.push([`configured ${channel}`, { channel, headless: runtime.headless, slowMo: ALL_CARE_SLOW_MO_MS }]);
+  if (explicitPath) attempts.push(["configured executable", { executablePath: explicitPath, headless: true, slowMo: ALL_CARE_SLOW_MO_MS }]);
+  if (channel) attempts.push([`configured ${channel}`, { channel, headless: true, slowMo: ALL_CARE_SLOW_MO_MS }]);
   attempts.push(
-    ["Playwright Chromium", { headless: runtime.headless, slowMo: ALL_CARE_SLOW_MO_MS }],
-    ["Google Chrome", { channel: "chrome", headless: runtime.headless, slowMo: ALL_CARE_SLOW_MO_MS }],
-    ["Microsoft Edge", { channel: "msedge", headless: runtime.headless, slowMo: ALL_CARE_SLOW_MO_MS }],
+    ["Playwright Chromium", { headless: true, slowMo: ALL_CARE_SLOW_MO_MS }],
+    ["Google Chrome", { channel: "chrome", headless: true, slowMo: ALL_CARE_SLOW_MO_MS }],
+    ["Microsoft Edge", { channel: "msedge", headless: true, slowMo: ALL_CARE_SLOW_MO_MS }],
   );
 
   let lastError: unknown;

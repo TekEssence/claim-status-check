@@ -38,12 +38,17 @@ export async function createUploadUrl(params: {
 export async function createDownloadUrl(params: {
   bucket: string;
   key: string;
+  filename?: string;
+  contentType?: string;
 }) {
+  const safeFilename = params.filename?.replace(/["\r\n]/g, "") || "download";
   return getSignedUrl(
     s3(),
     new GetObjectCommand({
       Bucket: params.bucket,
       Key: params.key,
+      ResponseContentDisposition: `attachment; filename="${safeFilename}"`,
+      ResponseContentType: params.contentType || "application/octet-stream",
     }),
     { expiresIn: 300 },
   );
