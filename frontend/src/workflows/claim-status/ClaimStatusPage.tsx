@@ -874,7 +874,7 @@ async function loadIehpWorkbookBundle(
 
   const excelWb = new ExcelJS.Workbook();
   await excelWb.xlsx.load(arrayBuffer);
-  const worksheet = excelWb.getWorksheet(1);
+  const worksheet = excelWb.worksheets[0];
   if (!worksheet) {
     throw new Error("Claim Excel file does not contain a worksheet.");
   }
@@ -899,7 +899,7 @@ async function loadUhcWorkbookBundle(claimFileHandle: FileSystemFileHandle, grou
   const arrayBuffer = await file.arrayBuffer();
   const excelWb = new ExcelJS.Workbook();
   await excelWb.xlsx.load(arrayBuffer);
-  const worksheet = excelWb.getWorksheet(1);
+  const worksheet = excelWb.worksheets[0];
   if (!worksheet) {
     throw new Error("UHC claim Excel file does not contain a worksheet.");
   }
