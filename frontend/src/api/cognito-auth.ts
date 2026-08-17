@@ -1,4 +1,5 @@
 const TOKEN_KEY = "cognito_access_token";
+const ID_TOKEN_KEY = "cognito_id_token";
 const RETURN_PATH_KEY = "cognito_return_path";
 
 export type CognitoRole = "ADMIN" | "DEVELOPER" | "USER";
@@ -51,8 +52,15 @@ function getGroups(payload: CognitoJwtPayload): string[] {
   return [];
 }
 
+function formatDisplayNameFromEmail(email: string): string {
+  const localPart = email.split("@")[0] || "";
+  const firstName = localPart.split(/[._-]+/).find(Boolean) || localPart;
+  if (!firstName) return "";
+  return firstName[0].toUpperCase() + firstName.slice(1).toLowerCase();
+}
+
 export function getCognitoUserProfile(): CognitoUserProfile | null {
-  const token = getCognitoAccessToken();
+  const token = getCognitoIdToken() || getCognitoAccessToken();
   if (!token) return null;
   const payload = decodeJwtPayload(token);
   if (!payload) return null;
@@ -64,7 +72,8 @@ export function getCognitoUserProfile(): CognitoUserProfile | null {
       : groups.includes("DEVELOPER") || groups.includes("DEVELOPERS")
         ? "DEVELOPER"
         : normalizeRole(payload["custom:role"]) ?? normalizeRole(payload.role) ?? "USER";
-  const username = String(payload.name || payload.preferred_username || payload.username || payload["cognito:username"] || email || "Cognito user");
+  const readableName = String(payload.name || "").trim();
+  const username = readableName || formatDisplayNameFromEmail(email) || String(payload.preferred_username || payload.username || payload["cognito:username"] || "Cognito user");
   return {
     userId: String(payload.sub || payload["cognito:username"] || email || "cognito"),
     username,
@@ -100,10 +109,24 @@ export function getCognitoAccessToken(): string {
   return token;
 }
 
+export function getCognitoIdToken(): string {
+  if (typeof window === "undefined") return "";
+  const token = window.sessionStorage.getItem(ID_TOKEN_KEY) || window.localStorage.getItem(ID_TOKEN_KEY) || "";
+  if (!token) return "";
+  const payload = decodeJwtPayload(token);
+  if (typeof payload?.exp === "number" && payload.exp * 1000 <= Date.now() + 30000) {
+    clearCognitoAccessToken();
+    return "";
+  }
+  return token;
+}
+
 export function clearCognitoAccessToken(): void {
   if (typeof window === "undefined") return;
   window.sessionStorage.removeItem(TOKEN_KEY);
   window.localStorage.removeItem(TOKEN_KEY);
+  window.sessionStorage.removeItem(ID_TOKEN_KEY);
+  window.localStorage.removeItem(ID_TOKEN_KEY);
 }
 
 export function storeCognitoTokenFromHash(): boolean {
@@ -112,6 +135,10 @@ export function storeCognitoTokenFromHash(): boolean {
   if (!hash) return Boolean(getCognitoAccessToken());
   const params = new URLSearchParams(hash);
   const token = params.get("access_token");
+  const idToken = params.get("id_token");
+  if (idToken) {
+    window.sessionStorage.setItem(ID_TOKEN_KEY, idToken);
+  }
   if (!token) return Boolean(getCognitoAccessToken());
   window.sessionStorage.setItem(TOKEN_KEY, token);
   window.history.replaceState(null, "", window.location.pathname + window.location.search);
@@ -135,6 +162,19 @@ export function redirectToCognitoLogin(): void {
     window.sessionStorage.setItem(RETURN_PATH_KEY, returnPath);
   }
   const url = new URL(`${domain.replace(/\/+$/, "")}/login`);
+  url.searchParams.set("client_id", clientId);
+  url.searchParams.set("response_type", "token");
+  url.searchParams.set("scope", "openid email profile");
+  url.searchParams.set("redirect_uri", window.location.origin + "/");
+  window.location.href = url.toString();
+}
+
+export function redirectToCognitoForgotPassword(): void {
+  if (typeof window === "undefined") return;
+  const domain = process.env.NEXT_PUBLIC_COGNITO_DOMAIN;
+  const clientId = process.env.NEXT_PUBLIC_COGNITO_CLIENT_ID;
+  if (!domain || !clientId) return;
+  const url = new URL(`${domain.replace(/\/+$/, "")}/forgotPassword`);
   url.searchParams.set("client_id", clientId);
   url.searchParams.set("response_type", "token");
   url.searchParams.set("scope", "openid email profile");

@@ -14,7 +14,7 @@ import {
   Stethoscope,
   User,
 } from "lucide-react";
-import { consumeCognitoReturnPath, isCognitoMode, redirectToCognitoLogin, storeCognitoTokenFromHash } from "../api/cognito-auth";
+import { consumeCognitoReturnPath, isCognitoMode, redirectToCognitoForgotPassword, redirectToCognitoLogin, storeCognitoTokenFromHash } from "../api/cognito-auth";
 
 const reveal = {
   hidden: { opacity: 0, y: 24 },
@@ -37,9 +37,10 @@ export function LoginPage() {
   const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [authError, setAuthError] = useState("");
+  const cognitoMode = isCognitoMode();
 
   useEffect(() => {
-    if (isCognitoMode()) {
+    if (cognitoMode) {
       if (storeCognitoTokenFromHash()) {
         router.replace(consumeCognitoReturnPath() || "/portal");
       }
@@ -69,11 +70,11 @@ export function LoginPage() {
     return () => {
       cancelled = true;
     };
-  }, [router]);
+  }, [router, cognitoMode]);
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (isCognitoMode()) {
+    if (cognitoMode) {
       redirectToCognitoLogin();
       return;
     }
@@ -241,7 +242,7 @@ export function LoginPage() {
                 Welcome Back
               </h2>
               <p className="mt-2 text-sm text-slate-600 sm:text-base">
-                Sign in to your account to continue
+                {cognitoMode ? "Use your Opus account to continue" : "Sign in to your account to continue"}
               </p>
             </motion.div>
 
@@ -253,64 +254,74 @@ export function LoginPage() {
               onSubmit={onSubmit}
               className="mt-6 space-y-4"
             >
-              <InputField
-                label="Username"
-                placeholder="Enter your username"
-                type="text"
-                value={username}
-                onChange={setUsername}
-                icon={<User className="h-5 w-5" strokeWidth={2.1} />}
-              />
+              {!cognitoMode && (
+                <>
+                  <InputField
+                    label="Username"
+                    placeholder="Enter your username"
+                    type="text"
+                    value={username}
+                    onChange={setUsername}
+                    icon={<User className="h-5 w-5" strokeWidth={2.1} />}
+                  />
 
-              <InputField
-                label="Password"
-                placeholder="Enter your password"
-                type={showPassword ? "text" : "password"}
-                value={password}
-                onChange={setPassword}
-                icon={<Lock className="h-5 w-5" strokeWidth={2.1} />}
-                trailing={
+                  <InputField
+                    label="Password"
+                    placeholder="Enter your password"
+                    type={showPassword ? "text" : "password"}
+                    value={password}
+                    onChange={setPassword}
+                    icon={<Lock className="h-5 w-5" strokeWidth={2.1} />}
+                    trailing={
+                      <button
+                        type="button"
+                        onClick={() => setShowPassword((value) => !value)}
+                        className="text-slate-400 transition hover:text-[#2563EB]"
+                        aria-label={showPassword ? "Hide password" : "Show password"}
+                      >
+                        {showPassword ? (
+                          <EyeOff className="h-5 w-5" strokeWidth={2.1} />
+                        ) : (
+                          <Eye className="h-5 w-5" strokeWidth={2.1} />
+                        )}
+                      </button>
+                    }
+                  />
+                </>
+              )}
+
+              {!cognitoMode ? (
+                <div className="flex flex-col gap-4 text-sm text-slate-700 sm:flex-row sm:items-center sm:justify-between sm:text-base">
+                  <label className="inline-flex cursor-pointer items-center gap-3 font-medium">
+                    <button
+                      type="button"
+                      onClick={() => setRememberMe((value) => !value)}
+                      aria-pressed={rememberMe}
+                      className={`flex h-5 w-5 items-center justify-center rounded-md border transition ${
+                        rememberMe
+                          ? "border-[#2563EB] bg-[#2563EB] text-white shadow-[0_8px_18px_rgba(37,99,235,0.22)]"
+                          : "border-slate-300 bg-white text-transparent hover:border-[#2563EB]"
+                      }`}
+                    >
+                      <svg viewBox="0 0 16 16" className="h-3.5 w-3.5 fill-current">
+                        <path d="M6.4 11.2 3.3 8.1l-1 1 4.1 4.1 7.2-7.2-1-1z" />
+                      </svg>
+                    </button>
+                    <span>Remember Me</span>
+                  </label>
+
                   <button
                     type="button"
-                    onClick={() => setShowPassword((value) => !value)}
-                    className="text-slate-400 transition hover:text-[#2563EB]"
-                    aria-label={showPassword ? "Hide password" : "Show password"}
+                    className="font-medium text-[#2563EB] transition hover:text-blue-700"
                   >
-                    {showPassword ? (
-                      <EyeOff className="h-5 w-5" strokeWidth={2.1} />
-                    ) : (
-                      <Eye className="h-5 w-5" strokeWidth={2.1} />
-                    )}
+                    Forgot password?
                   </button>
-                }
-              />
-
-              <div className="flex flex-col gap-4 text-sm text-slate-700 sm:flex-row sm:items-center sm:justify-between sm:text-base">
-                <label className="inline-flex cursor-pointer items-center gap-3 font-medium">
-                  <button
-                    type="button"
-                    onClick={() => setRememberMe((value) => !value)}
-                    aria-pressed={rememberMe}
-                    className={`flex h-5 w-5 items-center justify-center rounded-md border transition ${
-                      rememberMe
-                        ? "border-[#2563EB] bg-[#2563EB] text-white shadow-[0_8px_18px_rgba(37,99,235,0.22)]"
-                        : "border-slate-300 bg-white text-transparent hover:border-[#2563EB]"
-                    }`}
-                  >
-                    <svg viewBox="0 0 16 16" className="h-3.5 w-3.5 fill-current">
-                      <path d="M6.4 11.2 3.3 8.1l-1 1 4.1 4.1 7.2-7.2-1-1z" />
-                    </svg>
-                  </button>
-                  <span>Remember Me</span>
-                </label>
-
-                <button
-                  type="button"
-                  className="font-medium text-[#2563EB] transition hover:text-blue-700"
-                >
-                  Forgot password?
-                </button>
-              </div>
+                </div>
+              ) : (
+                <div className="rounded-[1rem] border border-sky-100 bg-sky-50/80 px-4 py-3 text-sm leading-6 text-slate-600">
+                  Passwords, MFA, and password reset are handled by Amazon Cognito.
+                </div>
+              )}
 
               {authError && (
                 <div className="rounded-[1rem] border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">
@@ -326,9 +337,18 @@ export function LoginPage() {
                 className="flex h-12 w-full items-center justify-center gap-3 rounded-[1rem] bg-[linear-gradient(90deg,#1f8bff_0%,#2563eb_44%,#2347ef_100%)] text-base font-semibold text-white shadow-[0_18px_40px_rgba(37,99,235,0.28)] transition hover:shadow-[0_22px_46px_rgba(37,99,235,0.35)]"
               >
                 <Lock className="h-5 w-5" strokeWidth={2.15} />
-                {submitting ? "Signing In..." : "Sign In"}
+                {cognitoMode ? "Continue with Opus Account" : submitting ? "Signing In..." : "Sign In"}
                 <ArrowRight className="h-5 w-5" strokeWidth={2.15} />
               </motion.button>
+              {cognitoMode && (
+                <button
+                  type="button"
+                  onClick={redirectToCognitoForgotPassword}
+                  className="w-full text-center text-sm font-semibold text-[#2563EB] transition hover:text-blue-700"
+                >
+                  Forgot password?
+                </button>
+              )}
             </motion.form>
 
             <motion.div

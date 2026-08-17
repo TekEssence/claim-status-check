@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import {
   ArrowRight,
+  Ban,
   FileSearch,
   HeartPulse,
   LayoutDashboard,
@@ -17,6 +18,7 @@ import {
   Users,
 } from "lucide-react";
 import { getCognitoAccessToken, getCognitoUserProfile, isCognitoMode, redirectToCognitoLogout } from "../api/cognito-auth";
+import { cancelScrapeJob, forceStopScrapeJob, listScrapeJobs, type ScrapeJobSummary } from "../api/scrape-jobs-api";
 
 type AuthUser = {
   username: string;
@@ -29,6 +31,44 @@ const AUTH_USER_STORAGE_KEY = "claim-status-auth-user";
 
 function hasFullWorkflowAccess(user: AuthUser | null): boolean {
   return user?.role === "ADMIN" || user?.role === "DEVELOPER";
+}
+
+function formatDisplayName(user: AuthUser | null): string {
+  const raw = user?.email || user?.username || "";
+  const localPart = raw.includes("@") ? raw.split("@")[0] : raw;
+  const firstName = localPart.split(/[._\-\s]+/).find(Boolean) || localPart;
+  if (!firstName) return "User";
+  return firstName[0].toUpperCase() + firstName.slice(1).toLowerCase();
+}
+
+function formatWorkflowLabel(workflowId: string): string {
+  if (workflowId === "claim-status") return "Claim Status";
+  if (workflowId === "eligibility-verification") return "Eligibility";
+  if (workflowId === "payment-eob-download") return "Payment EOB";
+  if (workflowId === "payment-posting") return "Payment Posting";
+  return workflowId.replace(/-/g, " ");
+}
+
+function formatShortJobId(jobId: string): string {
+  return jobId.slice(0, 8);
+}
+
+function formatRunTimestamp(value?: string | null): string {
+  if (!value) return "Not available";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Not available";
+  return date.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
+function formatUploadedJobFiles(job: ScrapeJobSummary): string {
+  const files = [job.loginFileName, job.claimFileName]
+    .map((value) => value?.trim())
+    .filter((value): value is string => Boolean(value));
+  return files.length > 0 ? files.join(", ") : "Uploaded files";
+}
+
+function isLiveWorkflowStatus(status: string): boolean {
+  return status === "queued" || status === "running" || status === "waiting_otp" || status === "waiting_resume" || status === "cancelling";
 }
 
 const workflows = [
@@ -70,6 +110,11 @@ export function WorkflowDashboardPage() {
   const router = useRouter();
   const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
+  const [operationsJobs, setOperationsJobs] = useState<ScrapeJobSummary[]>([]);
+  const [operationsLoading, setOperationsLoading] = useState(false);
+  const [operationsError, setOperationsError] = useState("");
+  const [stoppingJobId, setStoppingJobId] = useState("");
+  const displayName = formatDisplayName(user);
 
   useEffect(() => {
     if (isCognitoMode()) {
@@ -133,6 +178,67 @@ export function WorkflowDashboardPage() {
     router.push(route);
   }
 
+  async function refreshOperationsJobs(options?: { silent?: boolean }) {
+    if (!hasFullWorkflowAccess(user)) {
+      setOperationsJobs([]);
+      setOperationsError("");
+      return;
+    }
+
+    if (!options?.silent) {
+      setOperationsLoading(true);
+      setOperationsError("");
+    }
+
+    try {
+      const jobs = await listScrapeJobs(50, { scope: "all-running" });
+      setOperationsJobs(jobs.filter((job) => isLiveWorkflowStatus(job.status)));
+    } catch (error) {
+      setOperationsError(error instanceof Error ? error.message : "Failed to load running tasks.");
+    } finally {
+      if (!options?.silent) setOperationsLoading(false);
+    }
+  }
+
+  async function cancelRun(job: ScrapeJobSummary) {
+    setStoppingJobId(job.jobId);
+    try {
+      await cancelScrapeJob(job.jobId);
+      await refreshOperationsJobs({ silent: true });
+    } catch (error) {
+      setOperationsError(error instanceof Error ? error.message : "Failed to cancel task.");
+    } finally {
+      setStoppingJobId("");
+    }
+  }
+
+  async function forceStopRun(job: ScrapeJobSummary) {
+    setStoppingJobId(job.jobId);
+    try {
+      await forceStopScrapeJob(job.jobId);
+      await refreshOperationsJobs({ silent: true });
+    } catch (error) {
+      setOperationsError(error instanceof Error ? error.message : "Failed to force stop task.");
+    } finally {
+      setStoppingJobId("");
+    }
+  }
+
+  useEffect(() => {
+    if (!hasFullWorkflowAccess(user)) return;
+    let cancelled = false;
+    const load = async (silent: boolean) => {
+      if (cancelled) return;
+      await refreshOperationsJobs({ silent });
+    };
+    void load(false);
+    const interval = window.setInterval(() => void load(true), 5000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [user?.email, user?.role]);
+
   if (loading || !user) {
     return (
       <main className="flex min-h-screen items-center justify-center bg-[#f4f7fb]">
@@ -151,7 +257,7 @@ export function WorkflowDashboardPage() {
             </span>
             <span>
               <span className="block text-sm font-semibold">Healthcare Automation</span>
-              <span className="block text-xs text-slate-500">{user.email || user.username}</span>
+              <span className="block text-xs text-slate-500">{displayName}</span>
             </span>
           </div>
           <button
@@ -220,6 +326,100 @@ export function WorkflowDashboardPage() {
             <h1 className="mt-2 text-3xl font-semibold text-slate-950">Choose a workflow</h1>
             <p className="mt-2 text-sm text-slate-600">Select the healthcare automation you want to run.</p>
           </div>
+
+          {hasFullWorkflowAccess(user) && (
+            <div className="mt-7 rounded-2xl border border-indigo-200 bg-white p-5 shadow-sm">
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-indigo-100 pb-4">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-[0.18em] text-indigo-600">Operations</p>
+                  <h2 className="mt-1 text-lg font-semibold text-slate-950">All running tasks</h2>
+                  <p className="mt-1 text-xs text-slate-500">
+                    {operationsJobs.length} active {operationsJobs.length === 1 ? "task" : "tasks"} across users.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void refreshOperationsJobs()}
+                  className="rounded-xl border border-indigo-100 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-indigo-50"
+                >
+                  {operationsLoading ? "Refreshing..." : "Refresh"}
+                </button>
+              </div>
+
+              {operationsError ? (
+                <div className="mt-4 rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-700">
+                  {operationsError}
+                </div>
+              ) : operationsJobs.length === 0 ? (
+                <div className="mt-4 rounded-xl border border-dashed border-indigo-200 bg-indigo-50/60 px-4 py-6 text-center text-sm text-slate-500">
+                  No running tasks found.
+                </div>
+              ) : (
+                <div className="mt-4 overflow-x-auto">
+                  <table className="min-w-full text-left text-sm">
+                    <thead>
+                      <tr className="border-b border-indigo-100 bg-indigo-50/60 text-xs uppercase tracking-[0.12em] text-slate-500">
+                        <th className="whitespace-nowrap px-3 py-3 font-semibold">Run</th>
+                        <th className="whitespace-nowrap px-3 py-3 font-semibold">User</th>
+                        <th className="whitespace-nowrap px-3 py-3 font-semibold">Workflow</th>
+                        <th className="min-w-[14rem] px-3 py-3 font-semibold">Uploaded File</th>
+                        <th className="whitespace-nowrap px-3 py-3 font-semibold">Status</th>
+                        <th className="whitespace-nowrap px-3 py-3 font-semibold">Created</th>
+                        <th className="whitespace-nowrap px-3 py-3 text-right font-semibold">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {operationsJobs.map((job) => (
+                        <tr key={job.jobId} className="border-b border-indigo-50 last:border-0 hover:bg-indigo-50/40">
+                          <td className="whitespace-nowrap px-3 py-3 font-mono text-xs font-semibold text-blue-700">
+                            {formatShortJobId(job.jobId)}
+                          </td>
+                          <td className="whitespace-nowrap px-3 py-3 text-xs text-slate-600">
+                            {job.createdByName && job.createdByName !== "unknown" ? job.createdByName : job.createdByEmail || job.userId || "unknown"}
+                          </td>
+                          <td className="whitespace-nowrap px-3 py-3 text-slate-700">{formatWorkflowLabel(job.workflowId || "claim-status")}</td>
+                          <td className="px-3 py-3">
+                            <div className="max-w-[18rem] truncate text-xs text-slate-500" title={formatUploadedJobFiles(job)}>
+                              {formatUploadedJobFiles(job)}
+                            </div>
+                          </td>
+                          <td className="whitespace-nowrap px-3 py-3">
+                            <span className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700">
+                              {job.status.replace(/_/g, " ")}
+                            </span>
+                          </td>
+                          <td className="whitespace-nowrap px-3 py-3 text-xs text-slate-500">{formatRunTimestamp(job.createdAt)}</td>
+                          <td className="px-3 py-3">
+                            <div className="flex justify-end gap-2">
+                              <button
+                                type="button"
+                                onClick={() => void cancelRun(job)}
+                                disabled={stoppingJobId === job.jobId}
+                                className="rounded-lg border border-red-100 bg-white px-3 py-2 text-xs font-semibold text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:text-slate-300"
+                              >
+                                Cancel
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => void forceStopRun(job)}
+                                disabled={stoppingJobId === job.jobId}
+                                className="rounded-lg border border-amber-100 bg-white px-3 py-2 text-xs font-semibold text-amber-700 hover:bg-amber-50 disabled:cursor-not-allowed disabled:text-slate-300"
+                              >
+                                <span className="inline-flex items-center gap-1">
+                                  <Ban className="h-3.5 w-3.5" />
+                                  Force Stop
+                                </span>
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
 
           <div className="mt-7 grid gap-5 md:grid-cols-2">
             {workflows.map((workflow) => {
