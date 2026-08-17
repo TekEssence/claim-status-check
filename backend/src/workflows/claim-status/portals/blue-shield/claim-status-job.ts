@@ -381,17 +381,9 @@ async function emitErrorArtifacts(
   context: ScraperContext,
   state: BlueShieldWorkbookState,
 ): Promise<void> {
-  const [errorReport, errorLog] = await Promise.all([
-    saveErrorReport(context.jobId, state),
-    saveErrorLog(context.jobId, state),
-  ]);
+  const errorLog = await saveErrorLog(context.jobId, state);
   await context.emit(downloadableFileEvent(
-    "blue-shield-error-report.xlsx",
-    errorReport.buffer,
-    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-  ));
-  await context.emit(downloadableFileEvent(
-    "blue-shield-error.log",
+    "blue-shield-error-report.txt",
     errorLog.buffer,
     "text/plain",
   ));

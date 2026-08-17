@@ -242,6 +242,7 @@ async function startAwsScrapeJob(formData: FormData): Promise<string> {
       formFields: {
         workflowId: getStringField(formData, "workflowId"),
         payerId: getStringField(formData, "payerId"),
+        aerialSubportal: getStringField(formData, "aerialSubportal"),
         totalItems: getStringField(formData, "totalItems"),
         startIndex: getStringField(formData, "startIndex"),
         projectId: getStringField(formData, "projectId"),

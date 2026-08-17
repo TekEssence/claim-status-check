@@ -25,7 +25,7 @@ export async function launchBlueShieldPersistentContext(
   const launch = (profilePath: string) => chromium.launchPersistentContext(profilePath, {
     acceptDownloads: true,
     executablePath,
-    headless: false,
+    headless: true,
     viewport: { width: 1600, height: 1000 },
   });
 

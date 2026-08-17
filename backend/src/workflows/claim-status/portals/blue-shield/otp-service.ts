@@ -5,7 +5,7 @@ import {
 } from "@/backend/src/core/mfa-otp-service";
 import { envText } from "./env";
 
-const BLUE_SHIELD_OTP_TIMEOUT_MS = 300000;
+const BLUE_SHIELD_OTP_TIMEOUT_MS = 600000;
 const BLUE_SHIELD_OTP_POLL_MS = 5000;
 
 function normalizeGroupName(value: string): string {

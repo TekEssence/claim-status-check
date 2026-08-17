@@ -301,7 +301,12 @@ export async function downloadJob(event: ApiEvent) {
       );
     if (!artifact) return jsonResponse(404, { error: "No output is available yet." });
     if (!artifact.bucket) return jsonResponse(500, { error: "Output artifact is missing its S3 bucket." });
-    const downloadUrl = await createDownloadUrl({ bucket: artifact.bucket, key: artifact.s3Key });
+    const downloadUrl = await createDownloadUrl({
+      bucket: artifact.bucket,
+      key: artifact.s3Key,
+      filename: artifact.filename,
+      contentType: artifact.mimeType,
+    });
     return jsonResponse(200, { filename: artifact.filename, downloadUrl });
   } catch (error) {
     return jsonResponse(500, { error: error instanceof Error ? error.message : "Failed to create download URL." });

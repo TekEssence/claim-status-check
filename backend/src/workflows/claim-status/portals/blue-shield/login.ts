@@ -6,6 +6,9 @@ import { blueShieldConfig } from "./config";
 import { assertNoSecurityBlock } from "./detection-monitor";
 import type { BlueShieldCredentials } from "./types";
 
+const BLUE_SHIELD_OTP_TIMEOUT_MS = 600000;
+const BLUE_SHIELD_OTP_PAGE_TIMEOUT_MS = 60000;
+
 async function firstVisible(page: Page, selector: string) {
   const locator = page.locator(selector).first();
   return (await locator.count()) > 0 && await locator.isVisible().catch(() => false) ? locator : null;
@@ -182,14 +185,14 @@ async function handleOptionalBookmarkPage(page: Page, log: (message: string) => 
 }
 
 async function requestBlueShieldOtpFromUser(context: ScraperContext, log: (message: string) => Promise<void>): Promise<string> {
-  await log("Blue Shield OTP page detected. Waiting for user to enter OTP in frontend. Timeout: 5 minutes.");
-  const otpPromise = waitForScrapeJobInput(context.jobId, "blue_shield_otp", 300000);
+  await log("Blue Shield OTP page detected. Waiting for user to enter OTP in frontend. Timeout: 10 minutes.");
+  const otpPromise = waitForScrapeJobInput(context.jobId, "blue_shield_otp", BLUE_SHIELD_OTP_TIMEOUT_MS);
   await context.emit({
     type: "input_request",
     inputName: "blue_shield_otp",
     label: "Blue Shield OTP",
-    message: "Enter the Blue Shield verification code within 5 minutes.",
-    timeoutMs: 300000,
+    message: "Enter the Blue Shield verification code within 10 minutes.",
+    timeoutMs: BLUE_SHIELD_OTP_TIMEOUT_MS,
   });
   return otpPromise;
 }
@@ -284,8 +287,11 @@ export async function loginToBlueShield(options: {
     await clickIfVisible(page, selectors.loginRegister, 5000);
   }
 
-  const otpInput = await waitForVisible(page, selectors.otpInput, 12000);
+  const otpInput = await waitForVisible(page, selectors.otpInput, BLUE_SHIELD_OTP_PAGE_TIMEOUT_MS);
   if (otpInput) {
+    if (await clickIfVisible(page, selectors.otpResend, 3000)) {
+      await log("Blue Shield Send Code control was selected. Waiting for the OTP email.");
+    }
     const otp = await requestBlueShieldOtpFromUser(context, log);
     await otpInput.fill(otp);
     await page.locator(selectors.otpSubmit).first().click();
