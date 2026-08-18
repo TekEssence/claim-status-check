@@ -386,6 +386,40 @@ async function isSessionUnavailable(page: Page): Promise<boolean> {
   return Boolean(await findVisibleLocator(page, kaiserConfig.selectors.password, 500));
 }
 
+async function isKaiserLoginMessageVisible(page: Page): Promise<boolean> {
+  const currentUrl = page.url();
+  const bodyText = await visibleBodyText(page);
+  return (
+    /\/cs\/common\/login_msg_show\.asp/i.test(currentUrl) ||
+    /Multi-Factor Authentication \(MFA\) Is Coming to Affiliate Link/i.test(bodyText) ||
+    Boolean(await findVisibleLocator(page, kaiserConfig.selectors.loginMessage, 300))
+  );
+}
+
+async function acceptLoginMessageIfPresent(page: Page, context: ScraperContext, timeout = 6000): Promise<boolean> {
+  const deadline = Date.now() + timeout;
+  let messageVisible = await isKaiserLoginMessageVisible(page);
+  while (!messageVisible && Date.now() < deadline) {
+    await page.waitForTimeout(300);
+    messageVisible = await isKaiserLoginMessageVisible(page);
+  }
+  if (!messageVisible) return false;
+
+  await context.log({ level: "info", message: "Kaiser login message page detected. Accepting and continuing." });
+  const accepted = await clickIfVisible(page, kaiserConfig.selectors.loginMessageAccept, 5000);
+  if (!accepted) {
+    throw new Error("Kaiser login message page appeared, but the Accept button was not clickable.");
+  }
+
+  await page.waitForLoadState("domcontentloaded", { timeout: 30000 }).catch(() => {});
+  await page.waitForTimeout(1200);
+  if (await isKaiserLoginMessageVisible(page)) {
+    throw new Error("Kaiser login message page remained visible after clicking Accept.");
+  }
+  await context.log({ level: "info", message: "Kaiser login message accepted." });
+  return true;
+}
+
 async function captureDiagnostics(context: ScraperContext, page: Page, inputRow: KaiserInputRow | null, reason: string): Promise<void> {
   const safeReason = reason.replace(/[^a-z0-9_-]+/gi, "-").slice(0, 60) || "error";
   const dir = path.join(process.cwd(), ".tmp", "kaiser", context.jobId);
@@ -448,21 +482,25 @@ async function login(page: Page, input: Awaited<ReturnType<typeof parseKaiserInp
   if (await clickIfVisible(page, kaiserConfig.selectors.fontDialogOk, 600)) {
     await context.log({ level: "info", message: "Kaiser browser warning popup closed." });
   }
+  await acceptLoginMessageIfPresent(page, context, 8000);
   await context.log({ level: "info", message: "Kaiser login completed." });
 }
 
 async function openClaimSearch(page: Page, context: ScraperContext): Promise<void> {
   await context.log({ level: "info", message: "Opening Kaiser Claim Search from home page." });
+  await acceptLoginMessageIfPresent(page, context, 3000);
   let opened = await clickIfVisible(page, kaiserConfig.selectors.claimSearchCard, 1500);
   if (opened) {
     await context.log({ level: "info", message: "Clicked Kaiser Claim Search quick action." });
     await page.waitForTimeout(1200);
+    await acceptLoginMessageIfPresent(page, context, 3000);
   }
 
   if (!opened) {
     await context.log({ level: "info", message: "Claim Search quick action was not clickable; using Kaiser menu frame fallback." });
     opened = await page.evaluate(() => {
-      const menuFrame = (window.top as any)?.sMenuFrame;
+      const topWindow = window.top as (Window & { sMenuFrame?: { loadSub?: (target: string) => void } }) | null;
+      const menuFrame = topWindow?.sMenuFrame;
       if (menuFrame && typeof menuFrame.loadSub === "function") {
         menuFrame.loadSub("claims_claimprovreview");
         return true;
@@ -472,18 +510,23 @@ async function openClaimSearch(page: Page, context: ScraperContext): Promise<voi
     if (opened) {
       await context.log({ level: "info", message: "Kaiser menu frame fallback opened Claim Search." });
       await page.waitForTimeout(1200);
+      await acceptLoginMessageIfPresent(page, context, 3000);
     }
   }
 
   if (!opened) {
     await context.log({ level: "info", message: "Using Kaiser top navigation fallback for Claim Search." });
     await clickIfVisible(page, kaiserConfig.selectors.claimsTopNav, 2000);
+    await acceptLoginMessageIfPresent(page, context, 3000);
     await clickIfVisible(page, kaiserConfig.selectors.claimSearchTab, 2000);
+    await acceptLoginMessageIfPresent(page, context, 3000);
   }
 
   await context.log({ level: "info", message: "Waiting for Kaiser Claim Search fields." });
-  await findVisibleLocator(page, kaiserConfig.selectors.megaSearch, 5000);
-  await findVisibleLocator(page, kaiserConfig.selectors.fromDate, 5000);
+  await acceptLoginMessageIfPresent(page, context, 3000);
+  if (!(await isClaimSearchReady(page, 12000, context))) {
+    throw new Error("Kaiser Claim Search page was not ready after navigation.");
+  }
   await context.log({ level: "info", message: "TRACE 1: Claim Search page detected." });
   await context.log({ level: "info", message: "Kaiser Claim Search page is ready." });
 }
@@ -774,6 +817,15 @@ async function clearSearchFormFields(page: Page, context: ScraperContext, rowInd
   await clearDateField(page, kaiserConfig.selectors.toDate, "To Date", context, rowIndex);
 }
 
+async function ensureToDateFieldAvailable(page: Page, context: ScraperContext, rowIndex: number): Promise<void> {
+  if (await findVisibleLocator(page, kaiserConfig.selectors.toDate, 800)) return;
+  const expanded = await clickIfVisible(page, kaiserConfig.selectors.advancedSearch, 1500);
+  if (expanded) {
+    await context.log({ level: "info", message: "Expanded Kaiser Advanced Search to reveal To Date field.", rowIndex });
+    await page.waitForTimeout(800);
+  }
+}
+
 async function selectMemberIdFromMegaSearch(page: Page, memberId: string, context: ScraperContext, rowIndex: number): Promise<boolean> {
   const megaSearch = await findVisibleLocator(page, kaiserConfig.selectors.megaSearch, 3000);
   if (!megaSearch) throw new Error("Could not find Kaiser claim search box.");
@@ -968,6 +1020,18 @@ async function waitForKaiserLoadingToFinish(page: Page): Promise<void> {
   }
 }
 
+async function hasNoClaimsMessage(page: Page): Promise<boolean> {
+  for (const frame of [page.mainFrame(), ...page.frames()]) {
+    const found = await frame
+      .locator("body")
+      .innerText({ timeout: 500 })
+      .then((text) => /no claims were found/i.test(text))
+      .catch(() => false);
+    if (found) return true;
+  }
+  return false;
+}
+
 async function waitForClaimTableRefresh(page: Page, previousSignature: string, context: ScraperContext, rowIndex: number): Promise<ClaimTableSnapshot> {
   await context.log({ level: "info", message: "TRACE 10: Search request or table refresh started.", rowIndex });
   const deadline = Date.now() + 20000;
@@ -976,6 +1040,13 @@ async function waitForClaimTableRefresh(page: Page, previousSignature: string, c
 
   while (Date.now() < deadline) {
     await waitForKaiserLoadingToFinish(page);
+
+    if (await hasNoClaimsMessage(page)) {
+      await context.log({ level: "info", message: "Kaiser returned 'No claims were found.' Search completed.", rowIndex });
+      await context.log({ level: "info", message: "TRACE 11: Search request completed with no claims.", rowIndex });
+      return { found: false, rowCount: 0, signature: "", rowTexts: [] };
+    }
+
     latest = await getClaimTableSnapshot(page);
     if (latest.found) {
       await context.log({ level: "info", message: "TRACE 12: #ClmTbl found.", rowIndex });
@@ -1012,6 +1083,7 @@ async function submitSearch(page: Page, inputRow: KaiserInputRow, context: Scrap
   } catch {
     return "from-date-not-accepted";
   }
+  await ensureToDateFieldAvailable(page, context, inputRow.inputRowId);
   try {
     await fillDateAndCommit(page, kaiserConfig.selectors.toDate, dates.toDate, "To Date", context, inputRow.inputRowId);
   } catch {
@@ -1241,13 +1313,69 @@ async function goBackToSearch(page: Page, context?: ScraperContext, rowIndex?: n
   await context?.log({ level: "warn", message: "Kaiser Back control was not found on claim-detail page.", rowIndex });
 }
 
-async function isClaimSearchReady(page: Page, timeout = 3000): Promise<boolean> {
+async function isClaimSearchReady(
+  page: Page,
+  timeout = 3000,
+  context?: ScraperContext,
+): Promise<boolean> {
   const deadline = Date.now() + timeout;
-  const selectors = ["#txtMegaSearch", "#txtFromDate", "#txtToDate"];
+  let lastMegaSearchReady = false;
+  let lastFromDateReady = false;
+
   while (Date.now() < deadline) {
-    const ready = await Promise.all(selectors.map((selector) => findVisibleLocator(page, selector, 350)));
-    if (ready.every(Boolean)) return true;
+    if (await isKaiserLoginMessageVisible(page)) {
+      await context?.log({ level: "warn", message: "Claim Search readiness check found Kaiser login message." });
+      return false;
+    }
+
+    const megaSearchReady = Boolean(await findVisibleLocator(page, kaiserConfig.selectors.megaSearch, 800));
+    const fromDateReady = Boolean(await findVisibleLocator(page, kaiserConfig.selectors.fromDate, 800));
+    lastMegaSearchReady = megaSearchReady;
+    lastFromDateReady = fromDateReady;
+
+    if (megaSearchReady && fromDateReady) return true;
+    await page.waitForTimeout(250);
   }
+
+  if (context) {
+    await context.log({
+      level: "warn",
+      message: `Claim Search readiness failed: megaSearch=${lastMegaSearchReady ? "found" : "not found"}, fromDate=${lastFromDateReady ? "found" : "not found"}.`,
+    });
+
+    const frameInfo = page.frames().map((frame) => ({ name: frame.name(), url: frame.url() }));
+    await context.log({ level: "info", message: `Kaiser frames at Claim Search readiness failure: ${JSON.stringify(frameInfo)}` });
+
+    for (const frame of [page.mainFrame(), ...page.frames()]) {
+      const inputs = await frame.locator("input").evaluateAll((elements) =>
+        elements
+          .map((element) => {
+            const input = element as HTMLInputElement;
+            return {
+              id: input.id,
+              name: input.name,
+              type: input.type,
+              value: input.value,
+              placeholder: input.placeholder,
+              title: input.title,
+              ariaLabel: input.getAttribute("aria-label"),
+            };
+          })
+          .filter((input) => {
+            const text = `${input.id} ${input.name} ${input.placeholder} ${input.title} ${input.ariaLabel || ""}`;
+            return /search|from|date/i.test(text);
+          }),
+      ).catch(() => []);
+
+      if (inputs.length) {
+        await context.log({
+          level: "info",
+          message: `Kaiser Claim Search candidate inputs in frame ${frame.url() || "(no URL)"}: ${JSON.stringify(inputs)}`,
+        });
+      }
+    }
+  }
+
   return false;
 }
 
