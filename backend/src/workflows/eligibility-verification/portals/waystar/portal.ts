@@ -104,35 +104,53 @@ export async function loginToWaystar(page: Page, credentials: WaystarCredentials
 }
 
 async function handleOptionalProfileUpdate(page: Page): Promise<void> {
-  const getStarted = page.locator([
-    "button:has-text('Get Started'):visible",
-    "a:has-text('Get Started'):visible",
-    "input[type='button'][value*='Get Started' i]:visible",
-    "input[type='submit'][value*='Get Started' i]:visible",
-  ].join(", ")).first();
-
-  const profileUpdateShown = await getStarted
-    .waitFor({ state: "visible", timeout: 10000 })
-    .then(() => true)
-    .catch(() => false);
+  const profileUpdateShown = await clickWaystarActionWhenAvailable(page, "Get Started", 120000);
   if (!profileUpdateShown) return;
 
-  await Promise.all([
-    page.waitForLoadState("domcontentloaded").catch(() => {}),
-    getStarted.click(),
-  ]);
+  await page.waitForLoadState("domcontentloaded").catch(() => {});
 
-  const skipStep = page.locator([
-    "button:has-text('Skip This Step'):visible",
-    "a:has-text('Skip This Step'):visible",
-    "input[type='button'][value*='Skip This Step' i]:visible",
-    "input[type='submit'][value*='Skip This Step' i]:visible",
-  ].join(", ")).first();
-  await skipStep.waitFor({ state: "visible", timeout: 15000 });
-  await Promise.all([
-    page.waitForLoadState("domcontentloaded").catch(() => {}),
-    skipStep.click(),
-  ]);
+  if (!await clickWaystarActionWhenAvailable(page, "Skip This Step", 120000)) {
+    throw new Error("Waystar Profile Update opened, but Skip This Step did not become available.");
+  }
+  await page.waitForLoadState("domcontentloaded").catch(() => {});
+}
+
+async function clickWaystarActionWhenAvailable(page: Page, label: string, timeout: number): Promise<boolean> {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    for (const frame of page.frames()) {
+      const clicked = await frame.evaluate((expectedLabel) => {
+        const normalize = (value: string) => value.replace(/\s+/g, " ").trim().toLowerCase();
+        const expected = normalize(expectedLabel);
+        const candidates = Array.from(document.querySelectorAll<HTMLElement>(
+          "button, a, input, [role='button'], [onclick]",
+        ));
+        const action = candidates.find((element) => {
+          const inputValue = element instanceof HTMLInputElement ? element.value : "";
+          const text = normalize(inputValue || element.innerText || element.textContent || "");
+          const style = window.getComputedStyle(element);
+          const rect = element.getBoundingClientRect();
+          return text.includes(expected) && style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
+        });
+        action?.click();
+        return Boolean(action);
+      }, label).catch(() => false);
+      if (clicked) return true;
+    }
+    if (
+      await page.locator(WAYSTAR_SELECTORS.navigation.eligibility).first().isVisible().catch(() => false) ||
+      await page.locator(WAYSTAR_SELECTORS.additionalAuth.answer).first().isVisible().catch(() => false)
+    ) {
+      return false;
+    }
+    await page.waitForTimeout(500);
+  }
+
+  const profileUpdatePresent = page.frames().some((frame) => /ProfileUpdate|ExternalUserManagement/i.test(frame.url()));
+  if (profileUpdatePresent) {
+    throw new Error(`Waystar Profile Update is open, but the ${label} action could not be selected in any page frame.`);
+  }
+  return false;
 }
 
 export function isWaystarAbortedNavigationError(error: unknown): boolean {

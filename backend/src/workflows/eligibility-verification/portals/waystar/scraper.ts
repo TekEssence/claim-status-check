@@ -146,7 +146,7 @@ export function createWaystarRunner(): AutomationRunner<EligibilityRunInput> {
                 page,
                 log: (message) => context.log({ level: "debug", message, eventName: "eligibility_browser_cleanup" }),
               });
-              const session = await launchAutomationBrowser({ headless: false });
+              const session = await launchAutomationBrowser({ headless: process.platform === "linux" });
               browser = session.browser;
               browserContext = session.context;
               page = await browserContext.newPage();
