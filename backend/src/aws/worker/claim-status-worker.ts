@@ -498,10 +498,20 @@ function numberField(formData: FormData, key: string): number {
   return Number.isFinite(value) && value > 0 ? value : 0;
 }
 
-function startCancellationPoll(jobId: string): { isCancelled: () => boolean; stop: () => void } {
-  if (!hasDatabase()) return { isCancelled: () => false, stop: () => {} };
+function startCancellationPoll(jobId: string): { isCancelled: () => boolean; waitForCancellation: Promise<void>; stop: () => void } {
+  if (!hasDatabase()) return { isCancelled: () => false, waitForCancellation: new Promise(() => {}), stop: () => {} };
 
   let cancelled = false;
+  let resolveCancellation: () => void = () => {};
+  const waitForCancellation = new Promise<void>((resolve) => {
+    resolveCancellation = resolve;
+  });
+  const markCancelled = () => {
+    if (cancelled) return;
+    cancelled = true;
+    cancelScrapeJob(jobId, "Cancellation requested.", { emitDone: false });
+    resolveCancellation();
+  };
   const checkCancellation = async () => {
     await Promise.all([
       runDbWithRetry((db) =>
@@ -509,14 +519,13 @@ function startCancellationPoll(jobId: string): { isCancelled: () => boolean; sto
       ).then((rows) => {
         const status = rows[0]?.status;
         if (status === "cancelled" || status === "cancelling") {
-          cancelled = true;
+          markCancelled();
         }
       }),
       consumePendingWorkflowCommands(jobId).then((commands) => {
         for (const command of commands) {
           if (command.commandType === "cancel") {
-            cancelled = true;
-            cancelScrapeJob(jobId, "Cancellation requested.");
+            markCancelled();
             continue;
           }
           const payload = command.payload as { value?: unknown };
@@ -536,6 +545,7 @@ function startCancellationPoll(jobId: string): { isCancelled: () => boolean; sto
 
   return {
     isCancelled: () => cancelled,
+    waitForCancellation,
     stop: () => clearInterval(timer),
   };
 }
@@ -593,12 +603,18 @@ async function runAutomationWorkflow(params: {
   };
 
   try {
-    await runner.run(input, context);
+    const runResult = await Promise.race([
+      runner.run(input, context).then(() => "completed" as const),
+      cancellation.waitForCancellation.then(() => "cancelled" as const),
+    ]);
+    if (runResult === "cancelled") {
+      workflowErrorMessage = "";
+    }
     if (workflowErrorMessage) throw new Error(workflowErrorMessage);
     const currentJob = getScrapeJob(job.id);
     const completed = currentJob?.currentCompleted ?? 0;
     const total = currentJob?.totalRows ?? 0;
-    const status: AwsWorkflowJobStatus = cancellation.isCancelled() ? "cancelled" : "completed";
+    const status: AwsWorkflowJobStatus = runResult === "cancelled" || cancellation.isCancelled() ? "cancelled" : "completed";
     await updateWorkflowJob({ jobId: params.jobId, status, currentCompleted: completed, totalRows: total }).catch(() => {});
     const finalEvent = { type: status === "cancelled" ? "cancelled" : "completed" };
     const finalEventId = await appendWorkflowEvent(params.jobId, "completed", finalEvent).catch(() => null);
@@ -682,7 +698,13 @@ export async function main(): Promise<void> {
   };
 
   try {
-    await scraper.run(input, context);
+    const runResult = await Promise.race([
+      scraper.run(input, context).then(() => "completed" as const),
+      cancellation.waitForCancellation.then(() => "cancelled" as const),
+    ]);
+    if (runResult === "cancelled") {
+      scraperErrorMessage = "";
+    }
     if (scraperErrorMessage) {
       throw new Error(scraperErrorMessage);
     }
@@ -692,7 +714,7 @@ export async function main(): Promise<void> {
     const uploadedIehpOutput = portalId === "iehp"
       ? await uploadIehpOutputWorkbook(jobId, iehpOutputWorkbook)
       : false;
-    const status: PersistentScrapeJobStatus = cancellation.isCancelled()
+    const status: PersistentScrapeJobStatus = runResult === "cancelled" || cancellation.isCancelled()
       ? "cancelled"
       : total > 0 && completed < total
         ? "waiting_resume"

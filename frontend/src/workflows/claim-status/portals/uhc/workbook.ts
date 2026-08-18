@@ -160,10 +160,10 @@ export function parseUhcClaimRows(
   const firstNameCol = findColumn(headerRow, ["first name", "patient first name", "member first name", "subscriber first name"]);
   const lastNameCol = findColumn(headerRow, ["last name", "patient last name", "member last name", "subscriber last name"]);
 
-  if (!subscriberCol || !serviceDateCol || (options.requirePatientDob && !dobCol)) {
+  if (!subscriberCol || !serviceDateCol) {
     throw new Error(
       options.requirePatientDob
-        ? 'Missing required columns. Minimax UHC requires subscriber/member id, patient DOB, and service date columns.'
+        ? 'Missing required columns. Minimax UHC requires subscriber/member id and service date columns.'
         : 'Missing required columns. MedRevenu UHC requires subscriber/member id and service date columns.',
     );
   }

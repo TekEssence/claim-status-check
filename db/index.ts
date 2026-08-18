@@ -68,6 +68,7 @@ export function hasUsableDbPool(): boolean {
 export function isRetryableDbError(error: unknown): boolean {
   const retryableCodes = new Set(["ECONNRESET", "ETIMEDOUT", "ECONNREFUSED", "57P01"]);
   const retryableMessages = [
+    "cannot use a pool after calling end on the pool",
     "cannot use a pool after calling end",
     "connection timeout",
     "connection terminated",

@@ -9,6 +9,7 @@ ENV NODE_ENV=production \
     PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
     CLAIM_STATUS_RUNTIME_DIR=/tmp/claim-status-artifacts \
     BROWSER_HEADLESS=true \
+    OPTUM_PRO_CUSTOM_USER_AGENT=true \
     BROWSER_KEEP_OPEN=false
 
 COPY worker-runtime/package.json worker-runtime/package-lock.json ./

@@ -45,7 +45,7 @@ test("UHC MedRevenu rows do not require Patient DOB and preserve CPT/service cod
   assert.equal(rows[0]["Service Code"], "99213");
 });
 
-test("UHC Minimax rows still require Patient DOB", async () => {
+test("UHC Minimax rows can load without Patient DOB", async () => {
   const worksheet = await buildWorksheet(
     ["Subscriber ID", "Patient Name", "Service Date"],
     [
@@ -57,10 +57,12 @@ test("UHC Minimax rows still require Patient DOB", async () => {
     ],
   );
 
-  assert.throws(
-    () => parseUhcClaimRows(worksheet, { requirePatientDob: true }),
-    /Minimax UHC requires subscriber\/member id, patient DOB, and service date columns/,
-  );
+  const rows = parseUhcClaimRows(worksheet, { requirePatientDob: true });
+
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].subscriberNo, "123456789");
+  assert.equal(rows[0].patientDOB, "");
+  assert.equal(rows[0].serviceDate, "04/16/2026");
 });
 
 test("UHC parser accepts Excel serial service dates", async () => {

@@ -159,6 +159,7 @@ export default $config({
             DATABASE_URL: databaseUrl,
             DB_SSL: dbSsl,
             BROWSER_HEADLESS: "true",
+            OPTUM_PRO_CUSTOM_USER_AGENT: "true",
             BROWSER_KEEP_OPEN: "false",
             EXIT_AFTER_WORKFLOW_DONE: "true",
             EXIT_AFTER_WORKFLOW_DELAY_MS: "15000",

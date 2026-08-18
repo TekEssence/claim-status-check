@@ -259,7 +259,8 @@ export async function cancelJob(event: ApiEvent) {
     const job = hasFullWorkflowAccess(event) ? await getWorkflowJobById(jobId) : await getWorkflowJobForUser(jobId, userId);
     if (!job) return jsonResponse(404, { error: "Job not found." });
     await createWorkflowCommand({ jobId, commandType: "cancel", createdBy: userId });
-    await updateWorkflowJob({ jobId, status: "cancelling" });
+    const hasRunningWorker = Boolean(job.ecsTaskArn) && job.status !== "queued";
+    await updateWorkflowJob({ jobId, status: hasRunningWorker ? "cancelling" : "cancelled" });
     await appendWorkflowEvent(jobId, "cancel_requested", { type: "cancellation_acknowledged" });
     return jsonResponse(200, { ok: true });
   } catch (error) {
