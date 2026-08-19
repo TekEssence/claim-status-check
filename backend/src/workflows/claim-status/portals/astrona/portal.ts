@@ -342,18 +342,32 @@ export function astronaResultDosMatches(value: string, dos: string): boolean {
   return false;
 }
 
-export async function getAstronaClaimNumbersForRow(page: Page, _inputRow: AstronaInputRow): Promise<string[]> {
+export async function getAstronaClaimNumbersForRow(page: Page, inputRow: AstronaInputRow): Promise<string[]> {
   const matches = new Set<string>();
   await scrollAstronaResults(page, async () => {
     const claims = astronaClaimLinks(page);
     for (let index = 0; index < await claims.count(); index += 1) {
       const claim = claims.nth(index);
       const claimNumber = (await claim.innerText().catch(() => "")).trim();
-      // Astrona's visual grid can render the claim-number and Date of Service
-      // columns in separate virtualized DOM trees. Never reject a returned
-      // claim from the summary grid; open it and use detail service lines as
-      // the authoritative DOS/CPT source.
-      if (claimNumber) matches.add(claimNumber);
+      if (!claimNumber) continue;
+      const summaryDos = await claim.evaluate((element) => {
+        const row = element.closest("tr,[role=row]") as HTMLElement | null;
+        const table = row?.closest("table,[role=table],[role=grid]");
+        if (!row || !table) return "";
+        const normalizeHeader = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, "");
+        const headers = Array.from(table.querySelectorAll("th,[role=columnheader]"));
+        const cells = Array.from(row.querySelectorAll("td,[role=cell],[role=gridcell]"));
+        const dosHeader = headers.find((header) => ["dateofservice", "servicedate", "dos"].includes(normalizeHeader(header.textContent ?? "")));
+        const dosIndex = dosHeader instanceof HTMLTableCellElement ? dosHeader.cellIndex : headers.indexOf(dosHeader as Element);
+        return dosIndex >= 0 ? (cells[dosIndex]?.textContent ?? "").trim() : "";
+      }).catch(() => "");
+
+      // When the summary row exposes DOS, reject unrelated claims before
+      // opening them. If Astrona virtualizes the columns separately and DOS
+      // cannot be paired safely, retain the claim and verify DOS/CPT in detail.
+      if (!summaryDos || astronaResultDosMatches(summaryDos, inputRow.dos)) {
+        matches.add(claimNumber);
+      }
     }
   });
   return [...matches];

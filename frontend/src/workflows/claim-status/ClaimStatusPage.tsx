@@ -3705,7 +3705,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     let hasError = false;
     let wasCancelled = false;
     let finalErrorMessage = "";
-    const subscribedJobId = "";
+    let subscribedJobId = "";
     const streamAbortController = new AbortController();
 
     const handleJobEvent = async (eventData: ScrapeJobEvent) => {

@@ -718,6 +718,9 @@ async function runAutomationWorkflow(params: {
         rowIndex: event.rowIndex,
         meta: event.meta,
       });
+      if (event.level === "error" && !workflowErrorMessage) {
+        workflowErrorMessage = event.message;
+      }
       emitScrapeJobEvent(job.id, payload);
       await persistAutomationEvent(params.jobId, params.workflowId, payload);
     },
@@ -823,6 +826,9 @@ export async function main(): Promise<void> {
         rowIndex: event.rowIndex,
         meta: event.meta,
       });
+      if (event.level === "error" && !scraperErrorMessage) {
+        scraperErrorMessage = event.message;
+      }
       emitScrapeJobEvent(job.id, payload);
       await persistEvent(job.id, payload);
     },

@@ -4,6 +4,7 @@ import * as XLSX from "xlsx";
 import { readAstronaCredentials, readAstronaInputRows, routeAstronaRows } from "../input";
 import { astronaFinalStatus, astronaFinalStatusText, astronaOutputRow, astronaOutputRows } from "../workbook";
 import { astronaClaimNameMatches, astronaMemberNameSearchCandidates, astronaProviderPortalMatches, astronaResultDosMatches, astronaServiceLinesForDos, astronaServiceLinesForDosAndCpt } from "../portal";
+import { selectMostRecentlyPaidAstronaClaim } from "../claim-status-job";
 
 function buffer(rows: Record<string, string>[]): ArrayBuffer {
   const workbook = XLSX.utils.book_new();
@@ -132,6 +133,22 @@ test("Astrona expands every aligned service line into its own output row", () =>
       ["07/02/2026", "07/02/2026", "80053", "", "Z00.0", "1", "$50.00", "$0.00", "$0.00", "$0.00", "$20.00", "$30.00", "", "Paid"],
     ],
   );
+});
+
+test("Astrona selects the most recently paid claim when DOS and CPT match multiple claims", () => {
+  const selected = selectMostRecentlyPaidAstronaClaim([
+    { claimNumber: "OLDER", details: { datePaid: "11/12/2025", dateReceived: "10/13/2025" } },
+    { claimNumber: "NEWER", details: { datePaid: "06/03/2026", dateReceived: "04/06/2026" } },
+  ]);
+  assert.equal(selected?.claimNumber, "NEWER");
+});
+
+test("Astrona falls back to the most recent Date Received when Date Paid is blank", () => {
+  const selected = selectMostRecentlyPaidAstronaClaim([
+    { claimNumber: "OLDER", details: { datePaid: "", dateReceived: "10/13/2025" } },
+    { claimNumber: "NEWER", details: { datePaid: "", dateReceived: "04/06/2026" } },
+  ]);
+  assert.equal(selected?.claimNumber, "NEWER");
 });
 
 test("Astrona builds paid and denied final status narratives", () => {

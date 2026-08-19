@@ -33,6 +33,24 @@ function blankDetails(): AstronaClaimDetails {
   return { memberName: "", memberDob: "", claimNumber: "", datePaid: "", checkNumber: "", portalStatus: "", netAmount: "", cptCodes: [], memoLine1: "", serviceLines: [] };
 }
 
+function paidDateTimestamp(value: string): number {
+  const match = value.trim().match(/\b(\d{1,2})[\/-](\d{1,2})[\/-](\d{2,4})\b/);
+  if (!match) return Number.NEGATIVE_INFINITY;
+  const year = match[3].length === 2 ? Number(match[3]) + 2000 : Number(match[3]);
+  const timestamp = Date.UTC(year, Number(match[1]) - 1, Number(match[2]));
+  return Number.isFinite(timestamp) ? timestamp : Number.NEGATIVE_INFINITY;
+}
+
+export function selectMostRecentlyPaidAstronaClaim<T extends { details: Pick<AstronaClaimDetails, "datePaid" | "dateReceived"> }>(claims: T[]): T | null {
+  if (!claims.length) return null;
+  const effectiveTimestamp = (claim: T) => paidDateTimestamp(claim.details.datePaid || claim.details.dateReceived || "");
+  return claims.reduce((latest, candidate) =>
+    effectiveTimestamp(candidate) > effectiveTimestamp(latest)
+      ? candidate
+      : latest
+  );
+}
+
 function record(auditRows: Record<string, unknown>[], row: AstronaInputRow | null, step: string, status: string, message: string): void {
   auditRows.push({ timestamp: new Date().toISOString(), input_row_id: row?.inputRowId ?? "", group: row?.group ?? "", payer: row?.payer ?? "", member_id: row?.memberId ?? "", step, status, message });
 }
@@ -72,6 +90,7 @@ async function processRow(page: Page, row: AstronaInputRow, auditRows: Record<st
   if (!count) return astronaOutputRows(row, blankDetails(), "no_data", "No claim data found in portal.");
 
   const output: Record<string, unknown>[] = [];
+  const matchingClaims: Array<{ details: AstronaClaimDetails; serviceLines: AstronaClaimDetails["serviceLines"] }> = [];
   let matchedNameAndDos = false;
   let dobMismatch = false;
   const availablePortalDos = new Set<string>();
@@ -105,11 +124,7 @@ async function processRow(page: Page, row: AstronaInputRow, auditRows: Record<st
           continue;
         }
         if (serviceLines.length || !row.dos) {
-          output.push(...astronaOutputRows(row, {
-            ...details,
-            cptCodes: row.dos ? Array.from(new Set(serviceLines.map((line) => line.cpt).filter(Boolean))) : details.cptCodes,
-            serviceLines,
-          }));
+          matchingClaims.push({ details, serviceLines });
         }
       } finally {
         await returnToAstronaResults(page, opened.originalUrl);
@@ -123,6 +138,21 @@ async function processRow(page: Page, row: AstronaInputRow, auditRows: Record<st
     if (!await goToNextAstronaClaimsPage(page)) break;
     resultsPage += 1;
     await liveLog("info", `Requested DOS was not confirmed on the previous results page; moving to page ${resultsPage}.`);
+  }
+  if (matchingClaims.length) {
+    const selected = selectMostRecentlyPaidAstronaClaim(matchingClaims)!;
+    if (matchingClaims.length > 1) {
+      const selectedDateLabel = selected.details.datePaid ? "Date Paid" : "Date Received";
+      const selectedDate = selected.details.datePaid || selected.details.dateReceived || "not available";
+      await liveLog("info", `Found ${matchingClaims.length} claims matching DOS ${row.dos} and CPT ${row.cptCode || "not provided"}; selected claim ${selected.details.claimNumber} with the most recent ${selectedDateLabel} ${selectedDate}.`);
+    }
+    output.push(...astronaOutputRows(row, {
+      ...selected.details,
+      cptCodes: row.dos
+        ? Array.from(new Set(selected.serviceLines.map((line) => line.cpt).filter(Boolean)))
+        : selected.details.cptCodes,
+      serviceLines: selected.serviceLines,
+    }));
   }
   if (!discoveredClaimLinks) {
     await liveLog("warn", "The portal reported claims, but no claim-number links could be discovered while checking all result pages.");

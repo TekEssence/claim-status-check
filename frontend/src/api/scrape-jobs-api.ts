@@ -84,6 +84,9 @@ export function isAwsWorkflowMode(): boolean {
     if (isLocalHost && process.env.NEXT_PUBLIC_FORCE_AWS_WORKFLOW !== "true") {
       return false;
     }
+    if (!isLocalHost) {
+      return true;
+    }
   }
   return Boolean(AWS_API_URL);
 }
@@ -103,6 +106,13 @@ function requireAwsAuthHeaders(): HeadersInit {
     throw new ScrapeJobAuthError();
   }
   return headers;
+}
+
+function requireAwsApiUrl(): string {
+  if (!AWS_API_URL) {
+    throw new Error("AWS workflow API URL is not configured in this frontend build. Rebuild/deploy with NEXT_PUBLIC_WORKFLOW_API_URL.");
+  }
+  return AWS_API_URL;
 }
 
 async function throwForAwsAuthResponse(response: Response): Promise<void> {
@@ -221,6 +231,7 @@ export async function startScrapeJob(formData: FormData): Promise<string> {
 }
 
 async function startAwsScrapeJob(formData: FormData): Promise<string> {
+  const apiUrl = requireAwsApiUrl();
   const files = getUploadFiles(formData);
   const claimRows = getStringField(formData, "claimRows");
   const fileDescriptors = [
@@ -232,7 +243,7 @@ async function startAwsScrapeJob(formData: FormData): Promise<string> {
     ...(claimRows ? [{ field: "claimRows", filename: "claimRows.json", contentType: "application/json" }] : []),
   ];
 
-  const createResponse = await fetch(`${AWS_API_URL}/jobs`, {
+  const createResponse = await fetch(`${apiUrl}/jobs`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...requireAwsAuthHeaders() },
     body: JSON.stringify({
@@ -276,7 +287,7 @@ async function startAwsScrapeJob(formData: FormData): Promise<string> {
     if (!uploadResponse.ok) throw new Error(`Failed to upload ${upload.field}: ${uploadResponse.status}`);
   }
 
-  const confirmResponse = await fetch(`${AWS_API_URL}/jobs/${encodeURIComponent(createBody.jobId)}/confirm`, {
+  const confirmResponse = await fetch(`${apiUrl}/jobs/${encodeURIComponent(createBody.jobId)}/confirm`, {
     method: "POST",
     headers: { ...requireAwsAuthHeaders() },
   });
@@ -291,7 +302,8 @@ async function startAwsScrapeJob(formData: FormData): Promise<string> {
 
 export async function submitScrapeJobInput(options: { jobId: string; inputName: string; value: string }): Promise<void> {
   if (isAwsMode()) {
-    const response = await fetch(`${AWS_API_URL}/jobs/${encodeURIComponent(options.jobId)}/otp`, {
+    const apiUrl = requireAwsApiUrl();
+    const response = await fetch(`${apiUrl}/jobs/${encodeURIComponent(options.jobId)}/otp`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...requireAwsAuthHeaders() },
       body: JSON.stringify({ inputName: options.inputName, otp: options.value, value: options.value }),
@@ -332,7 +344,8 @@ export async function getCurrentScrapeJob(): Promise<CurrentScrapeJob | null> {
 
 export async function cancelScrapeJob(jobId: string): Promise<void> {
   if (isAwsMode()) {
-    const response = await fetch(`${AWS_API_URL}/jobs/${encodeURIComponent(jobId)}/cancel`, {
+    const apiUrl = requireAwsApiUrl();
+    const response = await fetch(`${apiUrl}/jobs/${encodeURIComponent(jobId)}/cancel`, {
       method: "POST",
       headers: { ...requireAwsAuthHeaders() },
     });
@@ -360,7 +373,8 @@ export async function forceStopScrapeJob(jobId: string, reason = "Force stop req
     return;
   }
 
-  const response = await fetch(`${AWS_API_URL}/jobs/${encodeURIComponent(jobId)}/force-stop`, {
+  const apiUrl = requireAwsApiUrl();
+  const response = await fetch(`${apiUrl}/jobs/${encodeURIComponent(jobId)}/force-stop`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...requireAwsAuthHeaders() },
     body: JSON.stringify({ reason }),
@@ -410,7 +424,8 @@ export async function listScrapeJobs(limit = 25, options?: { scope?: "mine" | "a
     return body.jobs ?? [];
   }
 
-  const response = await fetch(`${AWS_API_URL}/jobs?limit=${encodeURIComponent(String(limit))}${scope}`, {
+  const apiUrl = requireAwsApiUrl();
+  const response = await fetch(`${apiUrl}/jobs?limit=${encodeURIComponent(String(limit))}${scope}`, {
     headers: { ...requireAwsAuthHeaders() },
   });
   await throwForAwsAuthResponse(response);
@@ -435,7 +450,8 @@ export async function getScrapeJobDetails(jobId: string): Promise<ScrapeJobDetai
     return normalizeJobDetails(body.job ?? {}, body.job?.logs ?? []);
   }
 
-  const response = await fetch(`${AWS_API_URL}/jobs/${encodeURIComponent(jobId)}`, {
+  const apiUrl = requireAwsApiUrl();
+  const response = await fetch(`${apiUrl}/jobs/${encodeURIComponent(jobId)}`, {
     headers: { ...requireAwsAuthHeaders() },
   });
   await throwForAwsAuthResponse(response);
@@ -472,7 +488,8 @@ export async function getScrapeJobDownload(jobId: string): Promise<{ filename: s
     };
   }
 
-  const response = await fetch(`${AWS_API_URL}/jobs/${encodeURIComponent(jobId)}/download`, {
+  const apiUrl = requireAwsApiUrl();
+  const response = await fetch(`${apiUrl}/jobs/${encodeURIComponent(jobId)}/download`, {
     headers: { ...requireAwsAuthHeaders() },
   });
   await throwForAwsAuthResponse(response);
@@ -496,6 +513,7 @@ async function subscribeToAwsScrapeJobEvents(options: {
   onStreamError: (error: unknown) => void;
 }): Promise<void> {
   let after = 0;
+  const apiUrl = requireAwsApiUrl();
   let socket: WebSocket | null = null;
   let reconnectTimer: number | null = null;
   let reconnectAttempt = 0;
@@ -608,7 +626,7 @@ async function subscribeToAwsScrapeJobEvents(options: {
 
   while (!options.signal.aborted) {
     try {
-      const response = await fetch(`${AWS_API_URL}/jobs/${encodeURIComponent(options.jobId)}?after=${after}`, {
+      const response = await fetch(`${apiUrl}/jobs/${encodeURIComponent(options.jobId)}?after=${after}`, {
         headers: { ...requireAwsAuthHeaders() },
         signal: options.signal,
       });

@@ -118,36 +118,6 @@ function firstDateKeyFromText(value: string): string {
   return dateKeysFromText(value)[0] ?? "";
 }
 
-function newestDateKeyFromText(...values: string[]): string {
-  return values
-    .flatMap(dateKeysFromText)
-    .sort()
-    .at(-1) ?? "";
-}
-
-function claimRecencyKey(claim: BlueShieldClaimSummary): string {
-  return firstDateKeyFromText(claim.listClaimStatusLastModified)
-    || newestDateKeyFromText(
-      claim.paidDate,
-      claim.checkEftDate,
-      claim.claimReceived,
-    )
-    || newestDateKeyFromText(
-      claim.serviceLineDatesOfService,
-      claim.detailDatesOfService,
-      claim.datesOfService,
-      claim.serviceDate,
-    );
-}
-
-function keepMostRecentClaims(claims: BlueShieldClaimSummary[]): BlueShieldClaimSummary[] {
-  const keys = claims.map(claimRecencyKey).filter(Boolean);
-  if (!keys.length) return claims;
-
-  const newestKey = keys.sort().at(-1);
-  return claims.filter((claim) => claimRecencyKey(claim) === newestKey);
-}
-
 function outputClaimIdentityKey(claim: BlueShieldClaimSummary): string {
   return [
     claim.serviceLineNumber,
@@ -318,9 +288,9 @@ export function alignClaimsToInputRows(rows: BlueShieldInputRow[], member: BlueS
     const matchingClaims = inputCpt
       ? dosMatchedClaims.filter((claim) => normalizeProcedureCode(claim.procedureCode) === inputCpt)
       : dosMatchedClaims;
-    const newestMatchingClaims = uniqueClaimsForOutput(keepMostRecentClaims(matchingClaims));
+    const selectedClaim = uniqueClaimsForOutput(matchingClaims)[0];
 
-    if (!newestMatchingClaims.length) {
+    if (!selectedClaim) {
       const extractedDos = Array.from(new Set(claims.flatMap((claim) => [
         claim.serviceLineDatesOfService,
         claim.detailDatesOfService,
@@ -329,16 +299,16 @@ export function alignClaimsToInputRows(rows: BlueShieldInputRow[], member: BlueS
       const extractedCpt = Array.from(new Set(dosMatchedClaims.map((claim) => claim.procedureCode).filter(Boolean))).join(", ") || "(blank)";
       outputRows.push(outputRowWithoutClaim(
         row,
-        inputCpt
+        !dosMatchedClaims.length
+          ? `No claims found for input DOS ${row.dos}. Portal DOS: ${extractedDos}.`
+          : inputCpt
           ? `No service line matched input DOS ${row.dos} and CPT ${row.cptCode}. Portal DOS: ${extractedDos}; portal CPT: ${extractedCpt}.`
           : `No matching claim or service line was found for input DOS ${row.dos}. Portal DOS: ${extractedDos}.`,
       ));
       continue;
     }
 
-    for (const claim of newestMatchingClaims) {
-      outputRows.push(outputRowForClaim(row, claim, inputCpt ? "Matched by Member ID, DOS, and CPT." : "Matched by Member ID and DOS."));
-    }
+    outputRows.push(outputRowForClaim(row, selectedClaim, inputCpt ? "Matched by Member ID, DOS, and CPT." : "Matched by Member ID and DOS."));
   }
 
   return outputRows;

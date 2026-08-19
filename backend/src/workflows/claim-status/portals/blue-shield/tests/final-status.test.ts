@@ -170,7 +170,7 @@ test("aligns Blue Shield output rows by exact input DOS and CPT inside a wider m
   );
 });
 
-test("writes every Blue Shield claim tied for the most recent matching date", () => {
+test("writes the first exact Blue Shield DOS and CPT match without applying Astrona date ranking", () => {
   const rows = [inputRow({ inputRowId: 2, dos: "09/16/2024", cptCode: "99310" })];
   const member: BlueShieldMemberWorkItem = {
     memberId: "ABC123",
@@ -206,7 +206,7 @@ test("writes every Blue Shield claim tied for the most recent matching date", ()
 
   assert.deepEqual(
     outputRows.map((row) => row.botClaimNumber),
-    ["BSC-RECENT-1", "BSC-RECENT-2"],
+    ["BSC-OLD"],
   );
 });
 
