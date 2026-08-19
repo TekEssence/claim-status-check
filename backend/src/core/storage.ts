@@ -7,12 +7,19 @@ export function ensureDirectory(dirPath: string): string {
   return dirPath;
 }
 
-export function getJobDataPath(jobId: string, area: "outputs" | "screenshots" | "downloads" | "logs" | "jobs"): string {
-  const baseDir = process.env.SCRAPE_DATA_DIR ||
+export function getWorkflowRuntimeBaseDir(): string {
+  return process.env.SCRAPE_DATA_DIR ||
     process.env.DATA_DIR ||
     process.env.CLAIM_STATUS_RUNTIME_DIR ||
     (process.env.NODE_ENV === "production" || process.env.VERCEL || process.env.LAMBDA_TASK_ROOT
       ? path.join(os.tmpdir(), "claim-status-artifacts")
       : path.join(process.cwd(), "data"));
-  return ensureDirectory(path.join(baseDir, area, jobId));
+}
+
+export function getWorkflowRuntimePath(...segments: string[]): string {
+  return ensureDirectory(path.join(getWorkflowRuntimeBaseDir(), ...segments));
+}
+
+export function getJobDataPath(jobId: string, area: "outputs" | "screenshots" | "downloads" | "logs" | "jobs"): string {
+  return getWorkflowRuntimePath(area, jobId);
 }

@@ -499,6 +499,9 @@ async function subscribeToAwsScrapeJobEvents(options: {
   let socket: WebSocket | null = null;
   let reconnectTimer: number | null = null;
   let reconnectAttempt = 0;
+  let socketFailureCount = 0;
+  let socketDisabled = false;
+  let downloadableEventSeen = false;
   let terminal = false;
 
   const clearReconnectTimer = () => {
@@ -510,6 +513,7 @@ async function subscribeToAwsScrapeJobEvents(options: {
 
   const shouldKeepSocketOpen = () =>
     Boolean(AWS_WS_URL) &&
+    !socketDisabled &&
     !terminal &&
     !options.signal.aborted &&
     (typeof document === "undefined" || document.visibilityState === "visible") &&
@@ -529,6 +533,11 @@ async function subscribeToAwsScrapeJobEvents(options: {
   const scheduleReconnect = () => {
     clearReconnectTimer();
     if (!shouldKeepSocketOpen()) return;
+    if (socketFailureCount >= 3) {
+      socketDisabled = true;
+      closeSocket();
+      return;
+    }
     const delay = Math.min(15000, 1000 * 2 ** Math.min(reconnectAttempt, 4));
     reconnectAttempt += 1;
     reconnectTimer = window.setTimeout(() => {
@@ -548,6 +557,7 @@ async function subscribeToAwsScrapeJobEvents(options: {
     socket = new WebSocket(url.toString());
     socket.onopen = () => {
       reconnectAttempt = 0;
+      socketFailureCount = 0;
     };
     socket.onmessage = async (message) => {
       try {
@@ -559,11 +569,13 @@ async function subscribeToAwsScrapeJobEvents(options: {
       }
     };
     socket.onerror = () => {
+      socketFailureCount += 1;
       closeSocket();
       scheduleReconnect();
     };
     socket.onclose = () => {
       socket = null;
+      socketFailureCount += 1;
       scheduleReconnect();
     };
   };
@@ -603,7 +615,7 @@ async function subscribeToAwsScrapeJobEvents(options: {
       await throwForAwsAuthResponse(response);
       if (response.ok) {
         const body = await response.json() as {
-          job?: { status?: string };
+          job?: { status?: string; errorMessage?: string | null };
           events?: Array<{ id: number; payload: ScrapeJobEvent }>;
         };
         const jobStatus = body.job?.status;
@@ -612,18 +624,28 @@ async function subscribeToAwsScrapeJobEvents(options: {
           if (isOtpReplayEvent(event.payload) && jobStatus !== "waiting_otp") {
             continue;
           }
+          if (isDownloadableOutputEvent(event.payload)) {
+            downloadableEventSeen = true;
+          }
+          if (event.payload.type === "failed") {
+            await options.onEvent({ ...event.payload, type: "error", message: event.payload.message || body.job?.errorMessage || "Workflow failed." });
+            continue;
+          }
           await options.onEvent(event.payload);
         }
         if (jobStatus === "completed" || jobStatus === "failed" || jobStatus === "cancelled") {
           terminal = true;
-          if (jobStatus === "completed") {
+          if (jobStatus === "failed") {
+            await options.onEvent({ type: "error", message: body.job?.errorMessage || "Workflow failed." });
+          }
+          if (!downloadableEventSeen) {
             try {
-              const filename = await autoDownloadCompletedJobOutput(options.jobId);
+              const filename = await autoDownloadTerminalJobOutput(options.jobId);
               if (filename) {
                 await options.onEvent({ type: "log", message: `Output ready. Download started for ${filename}.` });
               }
             } catch (error) {
-              await options.onEvent({ type: "log", message: `Output is ready, but automatic download did not start: ${error instanceof Error ? error.message : "Unknown error"}` });
+              await options.onEvent({ type: "log", message: `Automatic output download did not start: ${error instanceof Error ? error.message : "Unknown error"}` });
             }
           }
           await options.onEvent({ type: "done" });
@@ -641,6 +663,15 @@ async function subscribeToAwsScrapeJobEvents(options: {
 
 function isOtpReplayEvent(event: ScrapeJobEvent): boolean {
   return event.type === "input_request" || event.type === "otp_required";
+}
+
+function isDownloadableOutputEvent(event: ScrapeJobEvent): boolean {
+  if (event.type !== "file_download" && event.type !== "output_snapshot") return false;
+  const filename = String(event.filename || "").toLowerCase();
+  const mimeType = String(event.mimeType || "").toLowerCase();
+  if (filename.endsWith(".pdf") || mimeType === "application/pdf") return false;
+  if (filename.endsWith(".log") || mimeType === "text/plain") return false;
+  return true;
 }
 
 function autoDownloadStorageKey(jobId: string): string {
@@ -665,16 +696,23 @@ function rememberAutoDownloadedJob(jobId: string): void {
   }
 }
 
-async function autoDownloadCompletedJobOutput(jobId: string): Promise<string | null> {
+async function autoDownloadTerminalJobOutput(jobId: string): Promise<string | null> {
   if (hasAutoDownloadedJob(jobId)) return null;
-  const { filename, downloadUrl } = await getScrapeJobDownload(jobId);
+  let output: { filename: string; downloadUrl: string };
+  try {
+    output = await getScrapeJobDownload(jobId);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.includes("No output is available yet")) return null;
+    throw error;
+  }
   const link = document.createElement("a");
-  link.href = downloadUrl;
-  link.download = filename;
+  link.href = output.downloadUrl;
+  link.download = output.filename;
   link.rel = "noreferrer";
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
   rememberAutoDownloadedJob(jobId);
-  return filename;
+  return output.filename;
 }

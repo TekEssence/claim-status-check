@@ -30,7 +30,6 @@ import {
 import { publishWorkflowEvent } from "@/backend/src/aws/runtime/websocket-publisher";
 import {
   appendScrapeJobArtifact,
-  appendScrapeJobLog,
   createPersistentScrapeJob,
   updateScrapeJobSnapshot,
   type PersistentScrapeJobStatus,
@@ -112,6 +111,30 @@ function requiredEnv(name: string): string {
 
 function optionalEnv(name: string): string {
   return process.env[name]?.trim() || "";
+}
+
+function writeCloudWatchLog(event: {
+  jobId: string;
+  workflowId: string;
+  portalId: string;
+  level?: string;
+  message: string;
+  eventName?: string;
+  rowIndex?: number;
+  meta?: unknown;
+}): void {
+  console.log(JSON.stringify({
+    timestamp: new Date().toISOString(),
+    source: "workflow-worker",
+    jobId: event.jobId,
+    workflowId: event.workflowId,
+    portalId: event.portalId,
+    level: event.level ?? "info",
+    eventName: event.eventName,
+    rowIndex: event.rowIndex,
+    message: event.message,
+    meta: event.meta,
+  }));
 }
 
 function hasDatabase(): boolean {
@@ -250,13 +273,10 @@ function appendIfSet(formData: FormData, key: string, value: string): void {
 async function persistEvent(jobId: string, data: Record<string, unknown>): Promise<void> {
   if (!hasDatabase()) return;
 
-  const eventId = await appendWorkflowEvent(jobId, String(data.type ?? "event"), data).catch(() => null);
+  const eventId = isPersistentWorkflowEvent(data)
+    ? await appendWorkflowEvent(jobId, persistentWorkflowEventType(data), persistentWorkflowEventPayload(data)).catch(() => null)
+    : null;
   await publishWorkflowEvent(jobId, data, eventId).catch(() => {});
-
-  if (data.type === "log" && typeof data.message === "string" && data.message.trim()) {
-    await appendScrapeJobLog(jobId, data.message).catch(() => {});
-    return;
-  }
 
   if (data.type === "progress") {
     await updateWorkflowJob({
@@ -344,7 +364,9 @@ function isAutomationWorkflowId(value: string): value is AutomationWorkflowId {
 async function persistAutomationEvent(jobId: string, workflowId: AutomationWorkflowId, data: Record<string, unknown>): Promise<void> {
   if (!hasDatabase()) return;
 
-  const eventId = await appendWorkflowEvent(jobId, String(data.type ?? "event"), data).catch(() => null);
+  const eventId = isPersistentWorkflowEvent(data)
+    ? await appendWorkflowEvent(jobId, persistentWorkflowEventType(data), persistentWorkflowEventPayload(data)).catch(() => null)
+    : null;
   await publishWorkflowEvent(jobId, data, eventId).catch(() => {});
 
   if (data.type === "progress") {
@@ -465,6 +487,53 @@ function isArtifactEvent(data: Record<string, unknown>): boolean {
   );
 }
 
+function isPersistentWorkflowEvent(data: Record<string, unknown>): boolean {
+  const type = String(data.type ?? "");
+  return (
+    type === "job_started" ||
+    type === "task_starting" ||
+    type === "progress" ||
+    type === "row_progress" ||
+    type === "input_request" ||
+    type === "otp_request" ||
+    type === "input_submitted" ||
+    type === "cancellation_acknowledged" ||
+    type === "cancelled" ||
+    type === "completed" ||
+    type === "failed" ||
+    type === "output_ready"
+  );
+}
+
+function persistentWorkflowEventType(data: Record<string, unknown>): string {
+  const type = String(data.type ?? "event");
+  if (type === "otp_request") return "input_request";
+  return type;
+}
+
+function persistentWorkflowEventPayload(data: Record<string, unknown>): Record<string, unknown> {
+  const type = String(data.type ?? "event");
+  if (type === "progress") {
+    const payload: Record<string, unknown> = { type };
+    if (typeof data.completed === "number") payload.completed = data.completed;
+    if (typeof data.total === "number") payload.total = data.total;
+    if (typeof data.currentRow === "number") payload.currentRow = data.currentRow;
+    return payload;
+  }
+  if (type === "row_progress") {
+    const payload: Record<string, unknown> = { type };
+    if (typeof data.completed === "number") payload.completed = data.completed;
+    if (typeof data.current === "number") payload.current = data.current;
+    if (typeof data.total === "number") payload.total = data.total;
+    return payload;
+  }
+  if (type === "input_request" || type === "otp_request") {
+    const { value: _value, otp: _otp, secret: _secret, ...payload } = data;
+    return payload;
+  }
+  return data;
+}
+
 function artifactFilename(data: Record<string, unknown>): string {
   const type = String(data.type ?? "artifact");
   const row = typeof data.index === "number" ? `row_${data.index + 1}_` : "";
@@ -498,7 +567,50 @@ function numberField(formData: FormData, key: string): number {
   return Number.isFinite(value) && value > 0 ? value : 0;
 }
 
-function startCancellationPoll(jobId: string): { isCancelled: () => boolean; waitForCancellation: Promise<void>; stop: () => void } {
+type CancellationPoll = {
+  isCancelled: () => boolean;
+  waitForCancellation: Promise<void>;
+  stop: () => void;
+};
+
+function cancellationGraceMs(): number {
+  const parsed = Number(process.env.WORKFLOW_CANCEL_GRACE_MS || "120000");
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 120000;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForRunWithCancellation(
+  runPromise: Promise<"completed">,
+  cancellation: CancellationPoll,
+  log: (message: string) => Promise<void>,
+): Promise<"completed" | "cancelled"> {
+  const firstResult = await Promise.race([
+    runPromise,
+    cancellation.waitForCancellation.then(() => "cancel_requested" as const),
+  ]);
+
+  if (firstResult !== "cancel_requested") return firstResult;
+
+  const graceMs = cancellationGraceMs();
+  await log(`Cancellation requested. Waiting up to ${Math.round(graceMs / 1000)}s for portal cleanup and partial output.`);
+  const graceResult = await Promise.race([
+    runPromise.then((result) => ({ type: "run_completed" as const, result })),
+    delay(graceMs).then(() => ({ type: "cancel_timeout" as const })),
+  ]);
+
+  if (graceResult.type === "run_completed") return graceResult.result;
+
+  runPromise.catch((error) => {
+    const message = error instanceof Error ? error.message : String(error);
+    void log(`Portal cleanup continued after cancellation timeout and failed: ${message}`);
+  });
+  return "cancelled";
+}
+
+function startCancellationPoll(jobId: string): CancellationPoll {
   if (!hasDatabase()) return { isCancelled: () => false, waitForCancellation: new Promise(() => {}), stop: () => {} };
 
   let cancelled = false;
@@ -596,17 +708,27 @@ async function runAutomationWorkflow(params: {
         rowIndex: event.rowIndex,
         meta: event.meta,
       };
-      console.log(`[${event.level ?? "info"}] ${event.message}`);
+      writeCloudWatchLog({
+        jobId: params.jobId,
+        workflowId: params.workflowId,
+        portalId: params.portalId,
+        level: event.level,
+        message: event.message,
+        eventName: event.eventName,
+        rowIndex: event.rowIndex,
+        meta: event.meta,
+      });
       emitScrapeJobEvent(job.id, payload);
       await persistAutomationEvent(params.jobId, params.workflowId, payload);
     },
   };
 
   try {
-    const runResult = await Promise.race([
+    const runResult = await waitForRunWithCancellation(
       runner.run(input, context).then(() => "completed" as const),
-      cancellation.waitForCancellation.then(() => "cancelled" as const),
-    ]);
+      cancellation,
+      (message) => context.log({ level: "warn", message }),
+    );
     if (runResult === "cancelled") {
       workflowErrorMessage = "";
     }
@@ -617,7 +739,7 @@ async function runAutomationWorkflow(params: {
     const status: AwsWorkflowJobStatus = runResult === "cancelled" || cancellation.isCancelled() ? "cancelled" : "completed";
     await updateWorkflowJob({ jobId: params.jobId, status, currentCompleted: completed, totalRows: total }).catch(() => {});
     const finalEvent = { type: status === "cancelled" ? "cancelled" : "completed" };
-    const finalEventId = await appendWorkflowEvent(params.jobId, "completed", finalEvent).catch(() => null);
+    const finalEventId = await appendWorkflowEvent(params.jobId, finalEvent.type, finalEvent).catch(() => null);
     await publishWorkflowEvent(params.jobId, finalEvent, finalEventId).catch(() => {});
     const doneEvent = { type: "done" };
     emitScrapeJobEvent(job.id, doneEvent);
@@ -626,9 +748,9 @@ async function runAutomationWorkflow(params: {
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unexpected worker error.";
     await updateWorkflowJob({ jobId: params.jobId, status: "failed", errorMessage: message }).catch(() => {});
-    const errorEvent = { type: "error", message };
-    const eventId = await appendWorkflowEvent(params.jobId, "error", errorEvent).catch(() => null);
-    await publishWorkflowEvent(params.jobId, errorEvent, eventId).catch(() => {});
+    const failedEvent = { type: "failed", message };
+    const failedEventId = await appendWorkflowEvent(params.jobId, "failed", failedEvent).catch(() => null);
+    await publishWorkflowEvent(params.jobId, failedEvent, failedEventId).catch(() => {});
     await publishWorkflowEvent(params.jobId, { type: "done" }).catch(() => {});
     console.error(error);
   } finally {
@@ -691,17 +813,27 @@ export async function main(): Promise<void> {
         rowIndex: event.rowIndex,
         meta: event.meta,
       };
-      console.log(`[${event.level ?? "info"}] ${event.message}`);
+      writeCloudWatchLog({
+        jobId,
+        workflowId,
+        portalId,
+        level: event.level,
+        message: event.message,
+        eventName: event.eventName,
+        rowIndex: event.rowIndex,
+        meta: event.meta,
+      });
       emitScrapeJobEvent(job.id, payload);
       await persistEvent(job.id, payload);
     },
   };
 
   try {
-    const runResult = await Promise.race([
+    const runResult = await waitForRunWithCancellation(
       scraper.run(input, context).then(() => "completed" as const),
-      cancellation.waitForCancellation.then(() => "cancelled" as const),
-    ]);
+      cancellation,
+      (message) => context.log({ level: "warn", message }),
+    );
     if (runResult === "cancelled") {
       scraperErrorMessage = "";
     }
@@ -726,7 +858,7 @@ export async function main(): Promise<void> {
     await updateWorkflowJob({ jobId, status: awsStatus, currentCompleted: completed, totalRows: total }).catch(() => {});
     await updateScrapeJobSnapshot({ jobId, status, currentCompleted: completed, totalRows: total }).catch(() => {});
     const finalEvent = { type: status === "cancelled" ? "cancelled" : "completed" };
-    const finalEventId = await appendWorkflowEvent(jobId, "completed", finalEvent).catch(() => null);
+    const finalEventId = await appendWorkflowEvent(jobId, finalEvent.type, finalEvent).catch(() => null);
     await publishWorkflowEvent(jobId, finalEvent, finalEventId).catch(() => {});
     const doneEvent = { type: "done" };
     emitScrapeJobEvent(job.id, doneEvent);
@@ -739,7 +871,6 @@ export async function main(): Promise<void> {
         console.error("IEHP partial workbook upload failed", uploadError);
       });
     }
-    await appendScrapeJobLog(jobId, `ERROR: ${message}`).catch(() => {});
     await updateWorkflowJob({
       jobId,
       status: cancellation.isCancelled() ? "cancelled" : "failed",

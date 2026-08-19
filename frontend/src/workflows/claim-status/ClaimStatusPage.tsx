@@ -2234,7 +2234,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
   }
 
   async function downloadWorkflowRun(job: ScrapeJobSummary) {
-    if (!job.artifactCount || downloadingWorkflowJobId) return;
+    if (downloadingWorkflowJobId) return;
 
     setDownloadingWorkflowJobId(job.jobId);
     setStatus(`Preparing download for ${job.portalId.toUpperCase()} run ${formatShortJobId(job.jobId)}...`);
@@ -2657,7 +2657,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     let hasError = false;
     let wasCancelled = false;
     let finalErrorMessage = "";
-    let subscribedJobId = "";
+    const subscribedJobId = "";
     const streamAbortController = new AbortController();
 
     try {
@@ -3705,7 +3705,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     let hasError = false;
     let wasCancelled = false;
     let finalErrorMessage = "";
-    let subscribedJobId = "";
+    const subscribedJobId = "";
     const streamAbortController = new AbortController();
 
     const handleJobEvent = async (eventData: ScrapeJobEvent) => {
@@ -4730,7 +4730,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
                         <button
                           type="button"
                           onClick={() => void downloadWorkflowRun(job)}
-                          disabled={!job.artifactCount || downloadingWorkflowJobId === job.jobId}
+                          disabled={downloadingWorkflowJobId === job.jobId}
                           className="rounded-[0.75rem] border border-emerald-100 bg-white px-3 py-2 text-xs font-semibold text-emerald-700 transition hover:bg-emerald-50 disabled:cursor-not-allowed disabled:text-slate-300"
                         >
                           {downloadingWorkflowJobId === job.jobId ? "Preparing" : "Download"}

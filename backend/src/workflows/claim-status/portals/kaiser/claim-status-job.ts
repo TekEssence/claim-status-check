@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { Browser, Frame, Locator, Page } from "playwright-core";
 import { closeAutomationResources } from "@/backend/src/core/runtime-config";
+import { getJobDataPath } from "@/backend/src/core/storage";
 import type { ScraperContext } from "../../types";
 import { launchKaiserBrowser } from "./browser";
 import { kaiserConfig } from "./config";
@@ -422,8 +423,7 @@ async function acceptLoginMessageIfPresent(page: Page, context: ScraperContext, 
 
 async function captureDiagnostics(context: ScraperContext, page: Page, inputRow: KaiserInputRow | null, reason: string): Promise<void> {
   const safeReason = reason.replace(/[^a-z0-9_-]+/gi, "-").slice(0, 60) || "error";
-  const dir = path.join(process.cwd(), ".tmp", "kaiser", context.jobId);
-  await fs.mkdir(dir, { recursive: true }).catch(() => {});
+  const dir = getJobDataPath(context.jobId, "screenshots");
   const rowLabel = inputRow ? `row-${inputRow.inputRowId}` : "job";
   const screenshotPath = path.join(dir, `${rowLabel}-${safeReason}.jpg`);
   const htmlPath = path.join(dir, `${rowLabel}-${safeReason}.html`);

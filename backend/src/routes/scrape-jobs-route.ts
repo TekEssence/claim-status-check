@@ -15,7 +15,6 @@ import {
 import { getSessionFromCookies } from "@/lib/auth/session";
 import {
   appendScrapeJobArtifact,
-  appendScrapeJobLog,
   createPersistentScrapeJob,
   getActiveScrapeJobForUser,
   getScrapeJobById,
@@ -38,6 +37,29 @@ export const maxDuration = 300;
 patchPlaywrightBrowserEvalHelpers();
 
 let persistenceListenerRegistered = false;
+
+function writeCloudWatchLog(event: {
+  jobId: string;
+  portalId?: string;
+  level?: string;
+  message: string;
+  eventName?: string;
+  rowIndex?: number;
+  meta?: unknown;
+}) {
+  console.log(JSON.stringify({
+    timestamp: new Date().toISOString(),
+    source: "claim-status-route",
+    workflowId: "claim-status",
+    jobId: event.jobId,
+    portalId: event.portalId,
+    level: event.level || "info",
+    eventName: event.eventName,
+    rowIndex: event.rowIndex,
+    message: event.message,
+    meta: event.meta,
+  }));
+}
 
 function ensurePersistenceListenerRegistered() {
   if (persistenceListenerRegistered) return;
@@ -115,6 +137,15 @@ export async function POST(req: Request) {
         return currentJob?.status === "cancelled" || currentJob?.cancelRequested === true;
       },
       log: async (event) => {
+        writeCloudWatchLog({
+          jobId: job.id,
+          portalId,
+          level: event.level,
+          message: event.message,
+          eventName: event.eventName,
+          rowIndex: event.rowIndex,
+          meta: event.meta,
+        });
         emitScrapeJobEvent(job.id, {
           type: "log",
           message: event.message,
@@ -336,7 +367,6 @@ function getTotalRows(formData: FormData): number {
 
 async function persistScrapeJobEvent(jobId: string, data: Record<string, unknown>): Promise<void> {
   if (data.type === "log" && typeof data.message === "string" && data.message.trim()) {
-    await appendScrapeJobLog(jobId, data.message).catch(() => {});
     return;
   }
 
@@ -396,9 +426,6 @@ async function persistScrapeJobEvent(jobId: string, data: Record<string, unknown
 
   if (data.type === "error") {
     await updateScrapeJobSnapshot({ jobId, status: "failed" }).catch(() => {});
-    if (typeof data.message === "string" && data.message.trim()) {
-      await appendScrapeJobLog(jobId, `ERROR: ${data.message}`).catch(() => {});
-    }
     return;
   }
 

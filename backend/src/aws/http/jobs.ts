@@ -295,11 +295,8 @@ export async function downloadJob(event: ApiEvent) {
     if (!job) return jsonResponse(404, { error: "Job not found." });
     const artifacts = await listArtifactsForJob(jobId);
     const artifact = artifacts.find((item) => item.artifactType === "output_snapshot")
-      ?? artifacts.find((item) =>
-        item.artifactType === "file_download" &&
-        !item.filename.toLowerCase().endsWith(".pdf") &&
-        item.mimeType !== "application/pdf"
-      );
+      ?? artifacts.find((item) => item.artifactType === "file_download" && isPreferredOutputArtifact(item.filename, item.mimeType))
+      ?? artifacts.find((item) => item.artifactType === "file_download" && isDownloadableNonDiagnosticArtifact(item.filename, item.mimeType));
     if (!artifact) return jsonResponse(404, { error: "No output is available yet." });
     if (!artifact.bucket) return jsonResponse(500, { error: "Output artifact is missing its S3 bucket." });
     const downloadUrl = await createDownloadUrl({
@@ -312,6 +309,25 @@ export async function downloadJob(event: ApiEvent) {
   } catch (error) {
     return jsonResponse(500, { error: error instanceof Error ? error.message : "Failed to create download URL." });
   }
+}
+
+function isPreferredOutputArtifact(filename: string, mimeType?: string | null): boolean {
+  const normalizedFilename = filename.toLowerCase();
+  const normalizedMimeType = (mimeType || "").toLowerCase();
+  return (
+    normalizedFilename.endsWith(".xlsx") ||
+    normalizedFilename.endsWith(".xls") ||
+    normalizedMimeType.includes("spreadsheet")
+  );
+}
+
+function isDownloadableNonDiagnosticArtifact(filename: string, mimeType?: string | null): boolean {
+  const normalizedFilename = filename.toLowerCase();
+  const normalizedMimeType = (mimeType || "").toLowerCase();
+  if (normalizedFilename.endsWith(".pdf") || normalizedMimeType === "application/pdf") return false;
+  if (normalizedFilename.endsWith(".log") || normalizedFilename.endsWith(".txt") || normalizedMimeType.startsWith("text/")) return false;
+  if (normalizedFilename.endsWith(".html") || normalizedMimeType === "text/html") return false;
+  return true;
 }
 
 export async function putClaimRowsJson(bucket: string, key: string, value: unknown) {

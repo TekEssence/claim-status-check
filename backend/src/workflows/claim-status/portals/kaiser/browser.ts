@@ -1,21 +1,23 @@
 import fs from "node:fs/promises";
-import path from "node:path";
+import { getAutomationRuntimeConfig } from "@/backend/src/core/runtime-config";
+import { getWorkflowRuntimePath } from "@/backend/src/core/storage";
 import { chromium, type Browser } from "playwright-core";
 
-async function launchOnce(executablePath: string | undefined): Promise<Browser> {
+async function launchOnce(executablePath: string | undefined, headless: boolean): Promise<Browser> {
   return chromium.launch({
     executablePath,
-    headless: false,
-    args: ["--start-maximized"],
+    headless,
+    args: headless ? [] : ["--start-maximized"],
     timeout: 60000,
   });
 }
 
 export async function launchKaiserBrowser(log: (message: string) => Promise<void>): Promise<Browser> {
   const executablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || undefined;
-  const profileRoot = process.env.PORTAL_KAISER_DOWNLOAD_DIR || path.join(process.cwd(), ".tmp", "kaiser");
+  const runtimeConfig = getAutomationRuntimeConfig();
+  const profileRoot = process.env.PORTAL_KAISER_DOWNLOAD_DIR || getWorkflowRuntimePath("browser", "kaiser");
   await fs.mkdir(profileRoot, { recursive: true });
-  await log("Launching Kaiser browser.");
+  await log(`Launching Kaiser browser (${runtimeConfig.headless ? "headless" : "headed"}).`);
 
   // chromium.launch() can resolve with a Browser handle even when the underlying chrome.exe
   // process gets killed immediately after starting (commonly by antivirus/EDR, a corporate
@@ -25,7 +27,7 @@ export async function launchKaiserBrowser(log: (message: string) => Promise<void
   // actually still connected right after launch, and retry once before failing with a clear,
   // actionable message.
   for (let attempt = 1; attempt <= 2; attempt++) {
-    const browser = await launchOnce(executablePath);
+    const browser = await launchOnce(executablePath, runtimeConfig.headless);
     if (browser.isConnected()) {
       browser.on("disconnected", () => {
         log("Kaiser browser disconnected (Chrome process closed or was closed externally).").catch(() => {});

@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { Browser, Locator, Page } from "playwright-core";
 import { closeAutomationResources } from "@/backend/src/core/runtime-config";
+import { getJobDataPath } from "@/backend/src/core/storage";
 import { waitForScrapeJobInput } from "@/backend/src/jobs/job-store";
 import type { ScraperContext } from "../../types";
 import { launchCignaBrowser } from "./browser";
@@ -431,8 +432,7 @@ async function visibleBodyText(page: Page): Promise<string> {
 
 async function captureDiagnostics(context: ScraperContext, page: Page, inputRow: CignaInputRow | null, reason: string): Promise<void> {
   const safeReason = reason.replace(/[^a-z0-9_-]+/gi, "-").slice(0, 60) || "error";
-  const dir = path.join(process.cwd(), ".tmp", "cigna", context.jobId);
-  await fs.mkdir(dir, { recursive: true }).catch(() => {});
+  const dir = getJobDataPath(context.jobId, "screenshots");
   const rowLabel = inputRow ? `row-${inputRow.inputRowId}` : "job";
   const screenshotPath = path.join(dir, `${rowLabel}-${safeReason}.jpg`);
   const htmlPath = path.join(dir, `${rowLabel}-${safeReason}.html`);
