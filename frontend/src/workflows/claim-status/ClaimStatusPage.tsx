@@ -10,6 +10,8 @@ import {
   Activity,
   ArrowLeft,
   CheckCheck,
+  Download,
+  FileSpreadsheet,
   LayoutDashboard,
   LogOut,
   ShieldEllipsis,
@@ -236,6 +238,25 @@ function formatUploadedJobFiles(job: ScrapeJobSummary): string {
     .map((name) => String(name || "").trim())
     .filter(Boolean);
   return files.length > 0 ? files.join(", ") : "Uploaded files";
+}
+
+function isExcelOutputArtifact(artifact: CurrentScrapeJob["artifacts"][number]): boolean {
+  const filename = artifact.filename.toLowerCase();
+  const mimeType = artifact.mimeType.toLowerCase();
+  const isOutputArtifact = artifact.artifactType === "output_snapshot" || artifact.artifactType === "file_download";
+  if (!isOutputArtifact) return false;
+  return (
+    filename.endsWith(".xlsx") ||
+    filename.endsWith(".xls") ||
+    filename.endsWith(".csv") ||
+    mimeType.includes("spreadsheet") ||
+    mimeType.includes("excel") ||
+    mimeType.includes("csv")
+  );
+}
+
+function hasExcelOutput(job: ScrapeJobSummary): boolean {
+  return (job.artifacts ?? []).some(isExcelOutputArtifact);
 }
 
 function formatUserRole(role: AuthUser["role"]): string {
@@ -966,7 +987,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
   const [authStatus, setAuthStatus] = useState("");
   const [authSubmitting, setAuthSubmitting] = useState(false);
   const [forgotPasswordMode, setForgotPasswordMode] = useState(false);
-  const [activeView, setActiveView] = useState<"portal-selection" | "manage-users" | "reset-password">("portal-selection");
+  const [activeView, setActiveView] = useState<"portal-selection" | "manage-users" | "reset-password" | "outputs">("portal-selection");
   const [manageTab, setManageTab] = useState<"add" | "employees">("add");
   const [managedUsers, setManagedUsers] = useState<ManagedUser[]>([]);
   const [manageError, setManageError] = useState("");
@@ -1149,6 +1170,13 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
   const runningWorkflowRunCount = useMemo(
     () => visibleWorkflowRuns.length,
     [visibleWorkflowRuns],
+  );
+  const outputWorkflowRuns = useMemo(
+    () =>
+      workflowRuns.filter((job) =>
+        hasExcelOutput(job),
+      ),
+    [workflowRuns],
   );
   const userDisplayName = useMemo(() => {
     const raw = authUser?.email || authUser?.username || "Afrin";
@@ -4667,6 +4695,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
                   ? Math.min(100, Math.round((job.currentCompleted / job.totalRows) * 100))
                   : 0;
                 const isActiveStatus = isLiveWorkflowStatus(job.status);
+                const hasOutput = hasExcelOutput(job);
                 const statusClassName =
                   job.status === "completed"
                     ? "bg-emerald-50 text-emerald-700"
@@ -4730,10 +4759,11 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
                         <button
                           type="button"
                           onClick={() => void downloadWorkflowRun(job)}
-                          disabled={downloadingWorkflowJobId === job.jobId}
+                          disabled={!hasOutput || downloadingWorkflowJobId === job.jobId}
+                          title={hasOutput ? "Download the latest partial output workbook" : "No partial output workbook has been saved yet"}
                           className="rounded-[0.75rem] border border-emerald-100 bg-white px-3 py-2 text-xs font-semibold text-emerald-700 transition hover:bg-emerald-50 disabled:cursor-not-allowed disabled:text-slate-300"
                         >
-                          {downloadingWorkflowJobId === job.jobId ? "Preparing" : "Download"}
+                          {downloadingWorkflowJobId === job.jobId ? "Preparing" : hasOutput ? "Partial" : "No partial"}
                         </button>
                         <button
                           type="button"
@@ -4873,6 +4903,120 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
                           className="rounded-[0.75rem] border border-amber-100 bg-white px-3 py-2 text-xs font-semibold text-amber-700 transition hover:bg-amber-50 disabled:cursor-not-allowed disabled:text-slate-300"
                         >
                           {forceStoppingWorkflowJobId === job.jobId ? "Stopping" : "Force Stop"}
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  ) : null;
+
+  const outputsPanel = workflowRunTrackingEnabled ? (
+    <div className="mx-auto w-full max-w-5xl rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <div>
+          <p className="text-[0.7rem] font-semibold uppercase tracking-[0.22em] text-emerald-600">Outputs</p>
+          <h1 className="mt-1 text-xl font-semibold text-slate-950">Excel output files</h1>
+          <p className="mt-1 text-sm text-slate-600">
+            Completed workbooks remain available here after the browser is closed because downloads are created from S3.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => void refreshWorkflowRuns()}
+          className="inline-flex h-10 items-center justify-center rounded-[0.95rem] border border-emerald-100 bg-white px-4 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-emerald-50"
+        >
+          {workflowRunsLoading ? "Refreshing..." : "Refresh"}
+        </button>
+      </div>
+
+      {workflowRunsError ? (
+        <div className="mt-5 rounded-[1rem] border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-700">
+          Failed to load outputs: {workflowRunsError}
+        </div>
+      ) : outputWorkflowRuns.length === 0 ? (
+        <div className="mt-5 rounded-[1rem] border border-dashed border-emerald-200 bg-emerald-50/60 px-4 py-8 text-center text-sm text-slate-500">
+          No Excel outputs are available yet.
+        </div>
+      ) : (
+        <div className="mt-5 overflow-x-auto">
+          <table className="min-w-full text-left text-sm">
+            <thead>
+              <tr className="border-b border-emerald-100 text-xs uppercase tracking-[0.14em] text-slate-400">
+                <th className="whitespace-nowrap px-3 py-3 font-semibold">Output</th>
+                <th className="whitespace-nowrap px-3 py-3 font-semibold">Workflow</th>
+                <th className="whitespace-nowrap px-3 py-3 font-semibold">Portal</th>
+                <th className="min-w-[14rem] px-3 py-3 font-semibold">Source File</th>
+                <th className="min-w-[10rem] px-3 py-3 font-semibold">Created By</th>
+                <th className="whitespace-nowrap px-3 py-3 font-semibold">Status</th>
+                <th className="whitespace-nowrap px-3 py-3 font-semibold">Created</th>
+                <th className="whitespace-nowrap px-3 py-3 font-semibold">End Time</th>
+                <th className="whitespace-nowrap px-3 py-3 text-right font-semibold">Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {outputWorkflowRuns.map((job) => {
+                const portalName = claimStatusPortalRegistry.find((portal) => portal.id === job.portalId)?.name ?? job.portalId.toUpperCase();
+                const outputArtifact = (job.artifacts ?? []).find(isExcelOutputArtifact);
+                const creator = job.createdByName && job.createdByName !== "unknown"
+                  ? job.createdByName
+                  : job.createdByEmail || job.userId || "unknown";
+                const statusClassName =
+                  job.status === "completed"
+                    ? "bg-emerald-50 text-emerald-700"
+                    : job.status === "failed"
+                      ? "bg-red-50 text-red-700"
+                      : job.status === "cancelled"
+                        ? "bg-slate-100 text-slate-600"
+                        : "bg-blue-50 text-blue-700";
+
+                return (
+                  <tr key={job.jobId} className="border-b border-emerald-50 last:border-0 hover:bg-emerald-50/35">
+                    <td className="px-3 py-3">
+                      <div className="flex min-w-[12rem] items-center gap-2">
+                        <FileSpreadsheet className="h-4 w-4 shrink-0 text-emerald-600" strokeWidth={2} />
+                        <div className="min-w-0">
+                          <div className="truncate text-sm font-semibold text-slate-800" title={outputArtifact?.filename || "Output workbook"}>
+                            {outputArtifact?.filename || "Output workbook"}
+                          </div>
+                          <div className="font-mono text-[0.7rem] text-slate-400">{formatShortJobId(job.jobId)}</div>
+                        </div>
+                      </div>
+                    </td>
+                    <td className="whitespace-nowrap px-3 py-3 text-slate-700">{formatWorkflowLabel(job.workflowId)}</td>
+                    <td className="whitespace-nowrap px-3 py-3 text-slate-700">{portalName}</td>
+                    <td className="px-3 py-3">
+                      <div className="max-w-[18rem] truncate text-xs text-slate-500" title={formatUploadedJobFiles(job)}>
+                        {formatUploadedJobFiles(job)}
+                      </div>
+                    </td>
+                    <td className="px-3 py-3">
+                      <div className="max-w-[12rem] truncate text-xs text-slate-600" title={job.createdByEmail || creator}>
+                        {creator}
+                      </div>
+                    </td>
+                    <td className="whitespace-nowrap px-3 py-3">
+                      <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${statusClassName}`}>
+                        {job.status.replace(/_/g, " ")}
+                      </span>
+                    </td>
+                    <td className="whitespace-nowrap px-3 py-3 text-xs text-slate-500">{formatRunTimestamp(job.createdAt)}</td>
+                    <td className="whitespace-nowrap px-3 py-3 text-xs text-slate-500">{formatRunTimestamp(job.finishedAt || job.updatedAt)}</td>
+                    <td className="px-3 py-3">
+                      <div className="flex justify-end">
+                        <button
+                          type="button"
+                          onClick={() => void downloadWorkflowRun(job)}
+                          disabled={downloadingWorkflowJobId === job.jobId}
+                          className="inline-flex items-center gap-2 rounded-[0.75rem] border border-emerald-100 bg-white px-3 py-2 text-xs font-semibold text-emerald-700 transition hover:bg-emerald-50 disabled:cursor-not-allowed disabled:text-slate-300"
+                        >
+                          <Download className="h-3.5 w-3.5" strokeWidth={2.1} />
+                          {downloadingWorkflowJobId === job.jobId ? "Preparing" : "Download"}
                         </button>
                       </div>
                     </td>
@@ -5203,11 +5347,33 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
             <nav className="mt-6 space-y-1.5">
               <button
                 type="button"
-                onClick={() => router.push("/portal")}
-                className="flex w-full items-center gap-3 rounded-[1rem] bg-[linear-gradient(90deg,rgba(37,99,235,0.12)_0%,rgba(37,99,235,0.04)_100%)] px-3 py-2.5 text-left text-sm font-medium text-blue-700 transition"
+                onClick={() => {
+                  setActiveView("portal-selection");
+                  router.push("/portal");
+                }}
+                className={`flex w-full items-center gap-3 rounded-[1rem] px-3 py-2.5 text-left text-sm font-medium transition ${
+                  activeView === "portal-selection"
+                    ? "bg-[linear-gradient(90deg,rgba(37,99,235,0.12)_0%,rgba(37,99,235,0.04)_100%)] text-blue-700"
+                    : "text-slate-600 hover:bg-sky-50 hover:text-slate-900"
+                }`}
               >
                 <LayoutDashboard className="h-4 w-4" strokeWidth={2} />
                 Dashboard
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveView("outputs");
+                  void refreshWorkflowRuns();
+                }}
+                className={`flex w-full items-center gap-3 rounded-[1rem] px-3 py-2.5 text-left text-sm font-medium transition ${
+                  activeView === "outputs"
+                    ? "bg-[linear-gradient(90deg,rgba(16,185,129,0.13)_0%,rgba(16,185,129,0.04)_100%)] text-emerald-700"
+                    : "text-slate-600 hover:bg-sky-50 hover:text-slate-900"
+                }`}
+              >
+                <FileSpreadsheet className="h-4 w-4" strokeWidth={2} />
+                Outputs
               </button>
               {effectivePortalId && !authUser.mustResetPassword ? (
                 <button
@@ -5252,7 +5418,9 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
           </aside>
 
           <div className="min-w-0">
-        {activeView === "reset-password" ? (
+        {activeView === "outputs" ? (
+          outputsPanel
+        ) : activeView === "reset-password" ? (
           <div className="mx-auto w-full max-w-xl rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
             <div className="flex flex-wrap items-center justify-between gap-4">
               <div>

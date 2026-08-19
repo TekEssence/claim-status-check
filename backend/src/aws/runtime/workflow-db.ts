@@ -239,22 +239,50 @@ export async function consumePendingWorkflowCommands(jobId: string) {
 
 export async function registerConnection(params: { connectionId: string; userId: string; jobId?: string }) {
   const now = new Date().toISOString();
-  await runDbWithRetry((db) =>
-    db.insert(workflowJobConnections).values({
-      connectionId: params.connectionId,
-      userId: params.userId,
-      jobId: params.jobId ?? null,
-      createdAt: now,
-      updatedAt: now,
-    }).onConflictDoUpdate({
-      target: workflowJobConnections.connectionId,
-      set: {
-        userId: params.userId,
-        jobId: params.jobId ?? null,
-        updatedAt: now,
-      },
-    }),
-  );
+  await runDbWithRetry(async (db) => {
+    const result = await db.execute<{ column_name: string }>(sql`
+      SELECT column_name
+      FROM information_schema.columns
+      WHERE table_schema = current_schema()
+        AND table_name = 'workflow_job_connections'
+    `);
+    const columns = new Set(result.rows.map((row) => row.column_name));
+    const insertColumns = ["connection_id", "user_id", "job_id"];
+    const insertValues = [
+      params.connectionId,
+      params.userId,
+      params.jobId ?? null,
+    ];
+    const updateSet = [
+      sql`"user_id" = ${params.userId}`,
+      sql`"job_id" = ${params.jobId ?? null}`,
+    ];
+
+    if (columns.has("created_at")) {
+      insertColumns.push("created_at");
+      insertValues.push(now);
+    }
+    if (columns.has("updated_at")) {
+      insertColumns.push("updated_at");
+      insertValues.push(now);
+      updateSet.push(sql`"updated_at" = ${now}`);
+    }
+    if (columns.has("connected_at")) {
+      insertColumns.push("connected_at");
+      insertValues.push(now);
+    }
+    if (columns.has("last_seen_at")) {
+      insertColumns.push("last_seen_at");
+      insertValues.push(now);
+      updateSet.push(sql`"last_seen_at" = ${now}`);
+    }
+
+    await db.execute(sql`
+      INSERT INTO "workflow_job_connections" (${sql.raw(insertColumns.map((column) => `"${column}"`).join(", "))})
+      VALUES (${sql.join(insertValues, sql`, `)})
+      ON CONFLICT ("connection_id") DO UPDATE SET ${sql.join(updateSet, sql`, `)}
+    `);
+  });
 }
 
 export async function removeConnection(connectionId: string) {

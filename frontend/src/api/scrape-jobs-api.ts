@@ -451,7 +451,7 @@ export async function getScrapeJobDetails(jobId: string): Promise<ScrapeJobDetai
   }
 
   const apiUrl = requireAwsApiUrl();
-  const response = await fetch(`${apiUrl}/jobs/${encodeURIComponent(jobId)}`, {
+  const response = await fetch(`${apiUrl}/jobs/${encodeURIComponent(jobId)}?includeLogs=true`, {
     headers: { ...requireAwsAuthHeaders() },
   });
   await throwForAwsAuthResponse(response);
@@ -464,10 +464,12 @@ export async function getScrapeJobDetails(jobId: string): Promise<ScrapeJobDetai
     job?: Partial<ScrapeJobDetails>;
     events?: Array<{ payload?: unknown }>;
     artifacts?: CurrentScrapeJob["artifacts"];
+    logs?: string[];
   };
-  const logs = (body.events ?? [])
+  const eventLogs = (body.events ?? [])
     .map((event) => eventPayloadToLog(event.payload))
     .filter(Boolean);
+  const logs = body.logs && body.logs.length > 0 ? body.logs : eventLogs;
   return normalizeJobDetails({ ...(body.job ?? {}), artifacts: body.artifacts ?? body.job?.artifacts }, logs);
 }
 
@@ -517,8 +519,7 @@ async function subscribeToAwsScrapeJobEvents(options: {
   let socket: WebSocket | null = null;
   let reconnectTimer: number | null = null;
   let reconnectAttempt = 0;
-  let socketFailureCount = 0;
-  let socketDisabled = false;
+  let socketErrorAlreadyHandled = false;
   let downloadableEventSeen = false;
   let terminal = false;
 
@@ -531,10 +532,8 @@ async function subscribeToAwsScrapeJobEvents(options: {
 
   const shouldKeepSocketOpen = () =>
     Boolean(AWS_WS_URL) &&
-    !socketDisabled &&
     !terminal &&
     !options.signal.aborted &&
-    (typeof document === "undefined" || document.visibilityState === "visible") &&
     (typeof navigator === "undefined" || navigator.onLine !== false);
 
   const closeSocket = () => {
@@ -551,12 +550,7 @@ async function subscribeToAwsScrapeJobEvents(options: {
   const scheduleReconnect = () => {
     clearReconnectTimer();
     if (!shouldKeepSocketOpen()) return;
-    if (socketFailureCount >= 3) {
-      socketDisabled = true;
-      closeSocket();
-      return;
-    }
-    const delay = Math.min(15000, 1000 * 2 ** Math.min(reconnectAttempt, 4));
+    const delay = Math.min(30000, 1000 * 2 ** Math.min(reconnectAttempt, 5));
     reconnectAttempt += 1;
     reconnectTimer = window.setTimeout(() => {
       reconnectTimer = null;
@@ -573,27 +567,34 @@ async function subscribeToAwsScrapeJobEvents(options: {
     url.searchParams.set("jobId", options.jobId);
     if (token) url.searchParams.set("token", token);
     socket = new WebSocket(url.toString());
+    socketErrorAlreadyHandled = false;
     socket.onopen = () => {
       reconnectAttempt = 0;
-      socketFailureCount = 0;
     };
     socket.onmessage = async (message) => {
       try {
         const parsed = JSON.parse(String(message.data)) as ScrapeJobEvent & { id?: number; payload?: ScrapeJobEvent };
         if (typeof parsed.id === "number") after = Math.max(after, parsed.id);
-        await options.onEvent(parsed.payload ?? parsed);
+        const event = parsed.payload ?? parsed;
+        if (isDownloadableOutputEvent(event)) {
+          downloadableEventSeen = true;
+        }
+        await options.onEvent(event);
       } catch (error) {
         options.onStreamError(error);
       }
     };
     socket.onerror = () => {
-      socketFailureCount += 1;
+      socketErrorAlreadyHandled = true;
       closeSocket();
       scheduleReconnect();
     };
     socket.onclose = () => {
       socket = null;
-      socketFailureCount += 1;
+      if (socketErrorAlreadyHandled) {
+        socketErrorAlreadyHandled = false;
+        return;
+      }
       scheduleReconnect();
     };
   };
@@ -656,7 +657,7 @@ async function subscribeToAwsScrapeJobEvents(options: {
           if (jobStatus === "failed") {
             await options.onEvent({ type: "error", message: body.job?.errorMessage || "Workflow failed." });
           }
-          if (!downloadableEventSeen) {
+          if (jobStatus === "cancelled" || !downloadableEventSeen) {
             try {
               const filename = await autoDownloadTerminalJobOutput(options.jobId);
               if (filename) {

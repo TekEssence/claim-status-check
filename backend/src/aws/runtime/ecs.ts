@@ -74,6 +74,8 @@ export async function runWorkerTask(params: {
     taskDefinition: env("WORKER_TASK_DEFINITION_ARN"),
     launchType: "FARGATE",
     count: 1,
+    enableECSManagedTags: true,
+    propagateTags: "TASK_DEFINITION",
     networkConfiguration: {
       awsvpcConfiguration: {
         subnets: subnetIds,

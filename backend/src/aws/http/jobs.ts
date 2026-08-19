@@ -1,4 +1,5 @@
 import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { CloudWatchLogsClient, FilterLogEventsCommand } from "@aws-sdk/client-cloudwatch-logs";
 import { WORKFLOW_IDS, type WorkflowId } from "@/backend/src/workflows/types";
 import { jsonResponse, parseJsonBody, getAuthUserId, getAuthUserSnapshot, getJobId, createJobId, hasFullWorkflowAccess, type ApiEvent } from "../runtime/http";
 import { describeWorkerTask, runWorkerTask, stopWorkerTask } from "../runtime/ecs";
@@ -25,11 +26,17 @@ type CreateJobBody = {
 
 const uploadFields = new Set(["claimExcel", "loginExcel", "inputExcel", "credentialExcel", "inputFile", "credentialFile", "referenceExcel", "claimRows"]);
 let s3Client: S3Client | null = null;
+let cloudWatchLogsClient: CloudWatchLogsClient | null = null;
 const activeJobStatuses = new Set(["queued", "running", "waiting_otp", "cancelling"]);
 
 function s3(): S3Client {
   if (!s3Client) s3Client = new S3Client({});
   return s3Client;
+}
+
+function cloudWatchLogs(): CloudWatchLogsClient {
+  if (!cloudWatchLogsClient) cloudWatchLogsClient = new CloudWatchLogsClient({});
+  return cloudWatchLogsClient;
 }
 
 function required(name: string): string {
@@ -44,6 +51,41 @@ function normalizeWorkflowId(value: string | undefined): WorkflowId {
 
 function isActiveJobStatus(status: string): boolean {
   return activeJobStatuses.has(status);
+}
+
+function optional(name: string): string {
+  return process.env[name]?.trim() || "";
+}
+
+function parseCloudWatchJobLog(jobId: string, message: string | undefined): string | null {
+  const raw = String(message || "").trim();
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as { jobId?: unknown; message?: unknown };
+    if (parsed.jobId !== jobId) return null;
+    return typeof parsed.message === "string" && parsed.message.trim() ? parsed.message.trim() : null;
+  } catch {
+    return raw.includes(jobId) ? raw : null;
+  }
+}
+
+async function listCloudWatchJobLogs(job: Awaited<ReturnType<typeof getWorkflowJobById>>): Promise<string[]> {
+  if (!job) return [];
+  const logGroupName = optional("WORKER_LOG_GROUP");
+  if (!logGroupName) return [];
+  const startMs = Date.parse(String(job.startedAt || job.createdAt || ""));
+  const endMs = Date.parse(String(job.finishedAt || job.updatedAt || ""));
+  const result = await cloudWatchLogs().send(new FilterLogEventsCommand({
+    logGroupName,
+    filterPattern: `"${job.jobId}"`,
+    startTime: Number.isFinite(startMs) ? Math.max(0, startMs - 5 * 60 * 1000) : undefined,
+    endTime: Number.isFinite(endMs) ? endMs + 5 * 60 * 1000 : undefined,
+    limit: 200,
+  }));
+  return (result.events ?? [])
+    .sort((left, right) => (left.timestamp ?? 0) - (right.timestamp ?? 0))
+    .map((event) => parseCloudWatchJobLog(job.jobId, event.message))
+    .filter((line): line is string => Boolean(line));
 }
 
 async function reconcileAwsJobRuntime(job: Awaited<ReturnType<typeof getWorkflowJobForUser>>) {
@@ -184,7 +226,10 @@ export async function getJob(event: ApiEvent) {
     if (!job) return jsonResponse(404, { error: "Job not found." });
     const events = await listWorkflowEvents(jobId, Number(event.queryStringParameters?.after || 0));
     const artifacts = await listArtifactsForJob(jobId);
-    return jsonResponse(200, { job, events, artifacts });
+    const logs = event.queryStringParameters?.includeLogs === "true"
+      ? await listCloudWatchJobLogs(job).catch(() => [])
+      : undefined;
+    return jsonResponse(200, { job, events, artifacts, logs });
   } catch (error) {
     return jsonResponse(500, { error: error instanceof Error ? error.message : "Failed to load job." });
   }

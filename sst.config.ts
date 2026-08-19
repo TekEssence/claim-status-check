@@ -209,12 +209,13 @@ export default $config({
             args.environment.WORKER_CLUSTER_ARN = cluster.id;
             args.environment.WORKER_TASK_DEFINITION_ARN = workerTask.nodes.taskDefinition.arn;
             args.environment.WORKER_CONTAINER_NAME = "worker";
+            args.environment.WORKER_LOG_GROUP = $interpolate`/claim-status/${$app.stage}/worker`;
             args.environment.WORKER_SUBNET_IDS = $jsonStringify(workerTask.subnets);
             args.environment.WORKER_SECURITY_GROUP_IDS = $jsonStringify(workerTask.securityGroups);
             args.permissions ??= [];
             args.permissions.push(
               {
-                actions: ["ecs:RunTask", "ecs:StopTask", "ecs:DescribeTasks"],
+                actions: ["ecs:RunTask", "ecs:StopTask", "ecs:DescribeTasks", "ecs:TagResource"],
                 resources: ["*"],
               },
               {
@@ -231,6 +232,10 @@ export default $config({
               {
                 actions: ["s3:ListBucket"],
                 resources: [inputsBucket.arn, outputsBucket.arn],
+              },
+              {
+                actions: ["logs:FilterLogEvents"],
+                resources: [$interpolate`arn:aws:logs:${aws.getRegionOutput({}).name}:${aws.getCallerIdentityOutput({}).accountId}:log-group:/claim-status/${$app.stage}/worker:*`],
               },
             );
           },
