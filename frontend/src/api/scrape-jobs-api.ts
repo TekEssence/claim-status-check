@@ -616,15 +616,14 @@ async function subscribeToAwsScrapeJobEvents(options: {
         }
         if (jobStatus === "completed" || jobStatus === "failed" || jobStatus === "cancelled") {
           terminal = true;
-          if (jobStatus === "completed") {
-            try {
-              const filename = await autoDownloadCompletedJobOutput(options.jobId);
-              if (filename) {
-                await options.onEvent({ type: "log", message: `Output ready. Download started for ${filename}.` });
-              }
-            } catch (error) {
-              await options.onEvent({ type: "log", message: `Output is ready, but automatic download did not start: ${error instanceof Error ? error.message : "Unknown error"}` });
+          try {
+            const filename = await autoDownloadCompletedJobOutput(options.jobId);
+            if (filename) {
+              const label = jobStatus === "completed" ? "Output" : "Partial output";
+              await options.onEvent({ type: "log", message: `${label} ready. Download started for ${filename}.` });
             }
+          } catch (error) {
+            await options.onEvent({ type: "log", message: `Output download did not start: ${error instanceof Error ? error.message : "Unknown error"}` });
           }
           await options.onEvent({ type: "done" });
           cleanup();

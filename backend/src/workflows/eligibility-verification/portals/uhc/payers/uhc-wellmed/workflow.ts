@@ -36,8 +36,8 @@ const UHC_SAVE_INTERVAL = 5;
 
 const SELECTORS = {
   eligibilityLink: "div[data-testid='eligibility-link']",
-  memberId: "#eligibility-memberid-input, input[name='search.memberId'], input[data-testid='eligibility-search-member-id-abyss-text-input']",
-  dateOfBirth: "#eligibility-dateofbirth-input, input[name='search.dateOfBirth'], input[name='search.dob'], input[data-testid='eligibility-search-DOB-abyss-date-picker-input']",
+  memberId: "#eligibility-memberid-input, input[name='search.memberId'], input[data-testid='eligibility-search-member-id-abyss-text-input'], input[aria-label*='Member ID' i], input[placeholder*='Member ID' i]",
+  dateOfBirth: "#eligibility-dateofbirth-input, input[name='search.dateOfBirth'], input[name='search.dob'], input[data-testid='eligibility-search-DOB-abyss-date-picker-input'], input[aria-label*='Date of Birth' i], input[placeholder*='Date of Birth' i], input[placeholder*='MM/DD/YYYY' i]",
   submit: "button#submit-search-button, button:has-text('Verify Eligibility')",
   newSearch: "button[data-testid='overview-new-search-button-abyss-button-root'], button:has-text('New Search')",
 } as const;
@@ -500,8 +500,24 @@ async function openNewSearchForm(page: Page): Promise<void> {
   // UHC replaces the initial panel DOM during its opening animation. Wait for
   // that replacement before resolving fresh input locators for the next row.
   await page.waitForTimeout(1_500);
-  await firstVisibleLocator(page, SELECTORS.memberId, 60_000, "Member ID field");
-  await firstVisibleLocator(page, SELECTORS.dateOfBirth, 60_000, "date of birth field");
+  try {
+    await firstVisibleLocator(page, SELECTORS.memberId, 25_000, "Member ID field");
+    await firstVisibleLocator(page, SELECTORS.dateOfBirth, 25_000, "date of birth field");
+    return;
+  } catch {
+    // Some UHC result pages acknowledge New Search without replacing the result
+    // panel. Re-enter through Eligibility once before failing only this row.
+    const eligibility = page.locator(SELECTORS.eligibilityLink).filter({ hasText: /^\s*Eligibility\s*$/ });
+    const count = await eligibility.count().catch(() => 0);
+    for (let index = 0; index < count; index += 1) {
+      const link = eligibility.nth(index);
+      if (!(await link.isVisible().catch(() => false))) continue;
+      await link.click().catch(() => {});
+      break;
+    }
+    await firstVisibleLocator(page, SELECTORS.memberId, 20_000, "Member ID field");
+    await firstVisibleLocator(page, SELECTORS.dateOfBirth, 20_000, "date of birth field");
+  }
 }
 function cleanPortalMessage(value: string): string {
   return value.replace(/\s+/g, " ").replace(/^(?:close|cancel)\s+/i, "").trim();
@@ -740,6 +756,12 @@ export async function runUhcWellmedEligibilityWorkflow(options: {
         if (screenshot) await options.context.emit({ type: "error_screenshot", index: row.worksheetRow, image: screenshot.toString("base64") });
         await options.context.emit({ type: "eligibility_uhc_result", rowIndex: row.worksheetRow, update: result });
         await dismissPortalError(options.page);
+        await options.context.log({
+          level: "warn",
+          message: `Skipping failed UHC row ${row.worksheetRow} and continuing with the next input row.`,
+          rowIndex: row.worksheetRow,
+          eventName: "eligibility_uhc_row_skipped",
+        });
         break;
       }
     }

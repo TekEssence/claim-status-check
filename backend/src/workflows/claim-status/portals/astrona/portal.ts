@@ -344,12 +344,14 @@ export function astronaResultDosMatches(value: string, dos: string): boolean {
 
 export async function getAstronaClaimNumbersForRow(page: Page, inputRow: AstronaInputRow): Promise<string[]> {
   const matches = new Set<string>();
+  const discovered = new Set<string>();
   await scrollAstronaResults(page, async () => {
     const claims = astronaClaimLinks(page);
     for (let index = 0; index < await claims.count(); index += 1) {
       const claim = claims.nth(index);
       const claimNumber = (await claim.innerText().catch(() => "")).trim();
       if (!claimNumber) continue;
+      discovered.add(claimNumber);
       const summaryDos = await claim.evaluate((element) => {
         const row = element.closest("tr,[role=row]") as HTMLElement | null;
         const table = row?.closest("table,[role=table],[role=grid]");
@@ -370,7 +372,11 @@ export async function getAstronaClaimNumbersForRow(page: Page, inputRow: Astrona
       }
     }
   });
-  return [...matches];
+  // Astrona virtualizes its results grid and can render the claim-number and
+  // DOS columns independently. If the summary DOS lookup rejects every claim,
+  // preserve completeness by opening the discovered claims and verifying DOS
+  // and CPT against their detail service lines instead.
+  return matches.size ? [...matches] : [...discovered];
 }
 
 export async function goToNextAstronaClaimsPage(page: Page): Promise<boolean> {
