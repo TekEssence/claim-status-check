@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { motion } from "framer-motion";
 import { FormEvent, useEffect, useMemo, useState } from "react";
@@ -728,6 +728,21 @@ function downloadZip(filename: string, files: DownloadFile[]): void {
   downloadBlob(filename, new Blob([arrayBuffer], { type: "application/zip" }));
 }
 
+async function downloadStoredJobOutputOnce(jobId: string): Promise<string | null> {
+  if (typeof window === "undefined" || !jobId) return null;
+  const storageKey = `claim-status:auto-downloaded:${jobId}`;
+  if (window.localStorage.getItem(storageKey) === "true") return null;
+  const { filename, downloadUrl } = await getScrapeJobDownload(jobId);
+  const link = document.createElement("a");
+  link.href = downloadUrl;
+  link.download = filename;
+  link.rel = "noreferrer";
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  window.localStorage.setItem(storageKey, "true");
+  return filename;
+}
 function downloadBase64File(filename: string, base64: string, type: string): void {
   const bytes = base64ToBytes(base64);
   const arrayBuffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
@@ -1748,6 +1763,44 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     }
   }, [authUser, selectedPortalId, forcedPortalId, pathname]);
 
+  useEffect(() => {
+    if (!isProcessing || !activeJobId) return;
+
+    let cancelled = false;
+    const synchronizeActiveJobProgress = async () => {
+      const details = await getScrapeJobDetails(activeJobId).catch(() => null);
+      if (cancelled || !details) return;
+      if (details.totalRows > 0) {
+        setProgress((previous) => {
+          const previousCompleted = previous?.completed ?? 0;
+          const completed = Math.max(previousCompleted, details.currentCompleted);
+          return {
+            completed,
+            total: details.totalRows,
+            currentRow: details.currentCompleted > previousCompleted ? undefined : previous?.currentRow,
+          };
+        });
+      }
+      if (isTerminalWorkflowStatus(details.status)) {
+        try {
+          const filename = await downloadStoredJobOutputOnce(details.jobId);
+          setStatus(filename
+            ? `${details.portalId.toUpperCase()} run finished. Download started for ${filename}.`
+            : `${details.portalId.toUpperCase()} run ${formatShortJobId(details.jobId)} is ${details.status.replace(/_/g, " ")}.`);
+        } catch (error) {
+          setStatus(`${details.portalId.toUpperCase()} run finished, but automatic output download failed: ${getErrorMessage(error)}`);
+        }
+        setIsProcessing(false);
+      }
+    };
+
+    void synchronizeActiveJobProgress();
+    const timer = window.setInterval(() => void synchronizeActiveJobProgress(), 5000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [activeJobId, isProcessing]);
   useEffect(() => {
     if (!authUser) {
       setDashboardStatsData({

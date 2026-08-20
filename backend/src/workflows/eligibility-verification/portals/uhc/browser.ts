@@ -12,14 +12,7 @@ const OPTUM_STYLE_CHROMIUM_ARGS = [
   "--use-gl=desktop",
   "--enable-webgl",
 ];
-const MAC_CHROME_122_USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
-
-function parseBoolean(value: string | undefined, fallback: boolean): boolean {
-  const normalized = String(value ?? "").trim().toLowerCase();
-  if (["1", "true", "yes", "y", "on"].includes(normalized)) return true;
-  if (["0", "false", "no", "n", "off"].includes(normalized)) return false;
-  return fallback;
-}
+const STANDARD_CHROME_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
 function summarize(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
@@ -33,9 +26,18 @@ export async function launchUhcEligibilityBrowser(
   const contextOptions = {
     acceptDownloads: true,
     viewport: { width: 1280, height: 800 },
-    ...(parseBoolean(process.env.PORTAL_UHC_ELIGIBILITY_CUSTOM_USER_AGENT, false)
-      ? { userAgent: process.env.PORTAL_UHC_ELIGIBILITY_USER_AGENT?.trim() || MAC_CHROME_122_USER_AGENT }
-      : {}),
+    userAgent: process.env.PORTAL_UHC_ELIGIBILITY_USER_AGENT?.trim() || STANDARD_CHROME_USER_AGENT,
+    locale: "en-US",
+    timezoneId: "America/Los_Angeles",
+  };
+
+  const prepareContext = async (context: BrowserContext): Promise<BrowserContext> => {
+    await context.addInitScript(() => {
+      Object.defineProperty(Navigator.prototype, "webdriver", { get: () => undefined });
+      Object.defineProperty(Navigator.prototype, "languages", { get: () => ["en-US", "en"] });
+      Object.defineProperty(Navigator.prototype, "platform", { get: () => "Win32" });
+    });
+    return context;
   };
 
   if (runtime.environment === "vercel") {
@@ -45,10 +47,10 @@ export async function launchUhcEligibilityBrowser(
       executablePath: await chromium.executablePath(),
       headless: true,
     });
-    return { browser, context: await browser.newContext(contextOptions) };
+    return { browser, context: await prepareContext(await browser.newContext(contextOptions)) };
   }
 
-  const headless = parseBoolean(process.env.PORTAL_UHC_ELIGIBILITY_HEADLESS, runtime.headless);
+  const headless = true;
   const executablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || "";
   await log(`Launching UHC eligibility with the Optum Pro Chromium configuration in ${headless ? "headless" : "headed"} mode.`);
 
@@ -58,7 +60,7 @@ export async function launchUhcEligibilityBrowser(
       args: OPTUM_STYLE_CHROMIUM_ARGS,
       ...(executablePath ? { executablePath } : { channel: "chromium" as const }),
     });
-    return { browser, context: await browser.newContext(contextOptions) };
+    return { browser, context: await prepareContext(await browser.newContext(contextOptions)) };
   } catch (error) {
     throw new Error(`UHC eligibility browser could not start: ${summarize(error)}`);
   }

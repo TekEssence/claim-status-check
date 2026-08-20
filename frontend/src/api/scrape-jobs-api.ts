@@ -661,7 +661,8 @@ async function subscribeToAwsScrapeJobEvents(options: {
             try {
               const filename = await autoDownloadTerminalJobOutput(options.jobId);
               if (filename) {
-                await options.onEvent({ type: "log", message: `Output ready. Download started for ${filename}.` });
+                const label = jobStatus === "completed" ? "Output" : "Partial output";
+                await options.onEvent({ type: "log", message: `${label} ready. Download started for ${filename}.` });
               }
             } catch (error) {
               await options.onEvent({ type: "log", message: `Automatic output download did not start: ${error instanceof Error ? error.message : "Unknown error"}` });

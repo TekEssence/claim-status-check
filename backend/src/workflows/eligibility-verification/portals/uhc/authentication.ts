@@ -1,41 +1,63 @@
-import type { Page, Response } from "playwright-core";
+import type { Locator, Page, Response } from "playwright-core";
 import type { UhcEligibilityCredentials } from "./credentials";
 import { generateUhcEligibilityTotp } from "./totp";
 
 const SELECTORS = {
-  username: "input#username[data-testid='username']",
+  username: "input#username, input[data-testid='username'], input[name='username'], input[name='email'], input[type='email']",
   usernameError: "#notificationMessage, .notification-message, [role='alert'], .alert, .error, #vr_username",
-  loginContinue: "button#btnLogin",
-  password: "input#login-pwd[data-testid='login-pwd']",
+  loginContinue: "button#btnLogin, button[data-testid='btnLogin'], button:has-text('Continue'), button:has-text('Sign in')",
+  password: "input#login-pwd, input[data-testid='login-pwd'], input[name='password'], input[type='password']",
   identityHeading: "h1#page-title",
   authenticatorMethod: "button#totp",
-  otp: "input#totp[data-testid='totp']",
-  verify: "button#btnVerify",
+  otp: "input#totp, input[data-testid='totp'], input[name='totp'], input[autocomplete='one-time-code']",
+  verify: "button#btnVerify, button[data-testid='btnVerify'], button:has-text('Verify')",
   eligibility: "[data-testid='eligibility-link']",
   invalidOtp: "text=/invalid|incorrect|expired|try again/i",
 } as const;
 
 const wait = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
+async function findVisibleLocator(page: Page, selector: string, timeout: number): Promise<Locator> {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    for (const frame of page.frames()) {
+      const locator = frame.locator(selector).first();
+      if (await locator.isVisible({ timeout: 250 }).catch(() => false)) return locator;
+    }
+    await wait(250);
+  }
+
+  const title = await page.title().catch(() => "");
+  let location = page.url();
+  try {
+    const url = new URL(location);
+    location = `${url.origin}${url.pathname}`;
+  } catch {}
+  throw new Error(
+    `UHC login input did not become visible within ${timeout}ms. Page title: ${title || "(blank)"}. URL: ${location || "(blank)"}. Frames: ${page.frames().length}.`,
+  );
+}
+
 async function visible(page: Page, selector: string, timeout: number): Promise<boolean> {
-  return page.locator(selector).first().isVisible({ timeout }).catch(() => false);
+  return findVisibleLocator(page, selector, timeout).then(() => true).catch(() => false);
 }
 
 async function visibleText(page: Page, selector: string): Promise<string> {
-  const locators = page.locator(selector);
-  const count = await locators.count().catch(() => 0);
-  for (let index = 0; index < count; index += 1) {
-    const locator = locators.nth(index);
-    if (!(await locator.isVisible({ timeout: 300 }).catch(() => false))) continue;
-    const text = await locator.innerText({ timeout: 500 }).catch(() => "");
-    if (text.trim()) return text.replace(/s+/g, " ").trim();
+  for (const frame of page.frames()) {
+    const locators = frame.locator(selector);
+    const count = await locators.count().catch(() => 0);
+    for (let index = 0; index < count; index += 1) {
+      const locator = locators.nth(index);
+      if (!(await locator.isVisible({ timeout: 300 }).catch(() => false))) continue;
+      const text = await locator.innerText({ timeout: 500 }).catch(() => "");
+      if (text.trim()) return text.replace(/\s+/g, " ").trim();
+    }
   }
   return "";
 }
 
 async function enterText(page: Page, selector: string, value: string, delay = 90): Promise<void> {
-  const field = page.locator(selector).first();
-  await field.waitFor({ state: "visible", timeout: 30_000 });
+  const field = await findVisibleLocator(page, selector, 30_000);
   await field.click();
   await wait(250);
   await page.keyboard.press("Control+A");
@@ -50,8 +72,7 @@ async function enterText(page: Page, selector: string, value: string, delay = 90
 }
 
 async function typeUsernameLikeOptum(page: Page, username: string): Promise<string> {
-  const field = page.locator(SELECTORS.username).first();
-  await field.waitFor({ state: "visible", timeout: 45_000 });
+  const field = await findVisibleLocator(page, SELECTORS.username, 45_000);
   await field.click();
   await page.keyboard.press("Control+A");
   await page.keyboard.press("Backspace");
@@ -68,7 +89,7 @@ function watchLoginOptions(page: Page): Promise<Response | null> {
 async function responseUserExists(response: Response | null): Promise<boolean | null> {
   if (!response) return null;
   const body = await response.text().catch(() => "");
-  const match = body.match(/"userExists"s*:s*(true|false)/i);
+  const match = body.match(/"userExists"\s*:\s*(true|false)/i);
   return match ? match[1].toLowerCase() === "true" : null;
 }
 
@@ -97,7 +118,7 @@ async function submitUsernameLikeOptum(page: Page, rawUsername: string): Promise
 
   await wait(2_000);
   const responsePromise = watchLoginOptions(page);
-  await page.locator(SELECTORS.loginContinue).first().click();
+  await (await findVisibleLocator(page, SELECTORS.loginContinue, 10_000)).click();
   const response = await responsePromise;
   const userExists = await responseUserExists(response);
 
@@ -112,11 +133,10 @@ async function submitUsernameLikeOptum(page: Page, rawUsername: string): Promise
 
 async function submitOtp(page: Page, secret: string): Promise<void> {
   if (!(await visible(page, SELECTORS.otp, 3_000))) {
-    await page.locator(SELECTORS.identityHeading).waitFor({ state: "visible" });
-    const authenticator = page.locator(SELECTORS.authenticatorMethod).first();
-    await authenticator.waitFor({ state: "visible" });
+    await findVisibleLocator(page, SELECTORS.identityHeading, 30_000);
+    const authenticator = await findVisibleLocator(page, SELECTORS.authenticatorMethod, 30_000);
     await authenticator.click();
-    await page.locator(SELECTORS.otp).waitFor({ state: "visible" });
+    await findVisibleLocator(page, SELECTORS.otp, 30_000);
   }
 
   const secondsRemaining = 30 - (Math.floor(Date.now() / 1000) % 30);
@@ -125,7 +145,7 @@ async function submitOtp(page: Page, secret: string): Promise<void> {
 
   await enterText(page, SELECTORS.otp, code, 80);
   await wait(650);
-  await page.locator(SELECTORS.verify).click();
+  await (await findVisibleLocator(page, SELECTORS.verify, 10_000)).click();
 
   const deadline = Date.now() + 60_000;
   while (Date.now() < deadline) {
@@ -157,7 +177,7 @@ export async function authenticateUhcEligibility(
   await wait(650);
   await Promise.all([
     page.waitForLoadState("domcontentloaded").catch(() => {}),
-    page.locator(SELECTORS.loginContinue).first().click(),
+    findVisibleLocator(page, SELECTORS.loginContinue, 10_000).then((button) => button.click()),
   ]);
   await page.waitForLoadState("networkidle", { timeout: 15_000 }).catch(() => {});
   await submitOtp(page, credentials.totpSecret);

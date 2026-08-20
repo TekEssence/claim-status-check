@@ -51,6 +51,51 @@ export function selectMostRecentlyPaidAstronaClaim<T extends { details: Pick<Ast
   );
 }
 
+async function processAstronaRowWithRelogin(
+  page: Page,
+  row: AstronaInputRow,
+  credentials: Parameters<typeof loginToAstrona>[1],
+  auditRows: Record<string, unknown>[],
+  context: ScraperContext,
+): Promise<Record<string, unknown>[]> {
+  try {
+    return await processRow(page, row, auditRows, context);
+  } catch (firstError) {
+    await context.log({
+      level: "warn",
+      message: `[Astrona row ${row.inputRowId}] Portal action failed (${errorMessage(firstError)}). Re-logging in once and retrying this row.`,
+      rowIndex: row.inputRowId,
+    });
+    await loginToAstrona(page, credentials);
+    await selectAstronaProviderPortal(page, credentials.payer);
+    await goToAstronaClaims(page);
+    return processRow(page, row, auditRows, context);
+  }
+}
+
+async function emitAstronaPartialSnapshot(
+  context: ScraperContext,
+  outputRows: Record<string, unknown>[],
+  errorRows: Record<string, unknown>[],
+  auditRows: Record<string, unknown>[],
+  completed: number,
+  total: number,
+): Promise<void> {
+  const rows = [...outputRows].sort((left, right) => Number(left.input_row_id || 0) - Number(right.input_row_id || 0));
+  const workbook = createAstronaWorkbook(rows, errorRows, auditRows);
+  try {
+    await context.emit({
+      type: "output_snapshot",
+      filename: "astrona-partial-output.xlsx",
+      base64: workbook.toString("base64"),
+      mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      completed,
+      total,
+    });
+  } catch (error) {
+    await context.log({ level: "warn", message: `Astrona partial-output snapshot could not be saved: ${errorMessage(error)}` });
+  }
+}
 function record(auditRows: Record<string, unknown>[], row: AstronaInputRow | null, step: string, status: string, message: string): void {
   auditRows.push({ timestamp: new Date().toISOString(), input_row_id: row?.inputRowId ?? "", group: row?.group ?? "", payer: row?.payer ?? "", member_id: row?.memberId ?? "", step, status, message });
 }
@@ -216,6 +261,8 @@ export async function runAstronaClaimStatusJob(formData: FormData, context: Scra
         browser = session.browser;
         browserContext = session.context;
         page = await browserContext.newPage();
+        page.setDefaultTimeout(15000);
+        page.setDefaultNavigationTimeout(30000);
         await context.log({ level: "info", message: `Opening Astrona login for ${batch.credentials.group}/${batch.credentials.payer}.` });
         await loginToAstrona(page, batch.credentials);
         await context.log({ level: "info", message: `Astrona login successful for ${batch.credentials.group}/${batch.credentials.payer}. Selecting provider portal.` });
@@ -229,7 +276,7 @@ export async function runAstronaClaimStatusJob(formData: FormData, context: Scra
           try {
             const cacheKey = astronaRowCacheKey(row);
             const cached = rowCache.get(cacheKey);
-            const rowOutput = cached ? reuseAstronaOutput(row, cached) : await processRow(page, row, auditRows, context);
+            const rowOutput = cached ? reuseAstronaOutput(row, cached) : await processAstronaRowWithRelogin(page, row, batch.credentials, auditRows, context);
             if (cached) {
               await context.log({ level: "info", message: `[Astrona row ${row.inputRowId}] Reused verified extraction for an identical member/DOS/CPT row.`, rowIndex: row.inputRowId });
             } else {
@@ -243,10 +290,15 @@ export async function runAstronaClaimStatusJob(formData: FormData, context: Scra
             failure(errorRows, row, "claim_processing", "row_failed", message);
             outputRows.push(...astronaOutputRows(row, blankDetails(), "failed", message));
             await context.captureScreenshot?.("astrona-row-error", row.inputRowId);
+            await context.log({ level: "warn", message: `[Astrona row ${row.inputRowId}] Recovering the Claims page before continuing with the next input row.`, rowIndex: row.inputRowId });
+            await goToAstronaClaims(page).catch(async (recoveryError) => {
+              await context.log({ level: "error", message: `[Astrona row ${row.inputRowId}] Claims-page recovery failed: ${errorMessage(recoveryError)}`, rowIndex: row.inputRowId });
+            });
           }
           completed += 1;
           batchCompleted += 1;
           await context.emit({ type: "progress", completed, total, currentRow: row.inputRowId });
+          await emitAstronaPartialSnapshot(context, outputRows, errorRows, auditRows, completed, total);
         }
       } catch (error) {
         const message = errorMessage(error);
@@ -256,6 +308,7 @@ export async function runAstronaClaimStatusJob(formData: FormData, context: Scra
           outputRows.push(...astronaOutputRows(row, blankDetails(), "failed", message));
           completed += 1;
           await context.emit({ type: "progress", completed, total, currentRow: row.inputRowId });
+          await emitAstronaPartialSnapshot(context, outputRows, errorRows, auditRows, completed, total);
         }
         await context.log({ level: "error", message: `Astrona ${batch.credentials.group}/${batch.credentials.payer} batch failed: ${message}` });
       } finally {
