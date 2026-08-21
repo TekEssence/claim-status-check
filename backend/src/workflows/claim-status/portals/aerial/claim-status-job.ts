@@ -37,7 +37,7 @@ type AerialRuntimeConfig = {
   claimsUrl: string;
 };
 
-const { loginToAerial, goToClaims } = require("./legacy/aerial-login.js") as AerialLoginModule;
+const { loginToAerial, goToClaims } = require("./aerial-login.js") as AerialLoginModule;
 const {
   verifyClaimsSearchForm,
   searchClaims,
@@ -46,8 +46,8 @@ const {
   openClaimDetailPopup,
   getPaginationState,
   goToNextResultsPage,
-} = require("./legacy/claims-page.js") as AerialClaimsPageModule;
-const { openEobAndExtractDetails } = require("./legacy/claim-detail-page.js") as AerialDetailModule;
+} = require("./claims-page.js") as AerialClaimsPageModule;
+const { openEobAndExtractDetails } = require("./claim-detail-page.js") as AerialDetailModule;
 
 type AerialRunState = {
   outputRows: Record<string, any>[];

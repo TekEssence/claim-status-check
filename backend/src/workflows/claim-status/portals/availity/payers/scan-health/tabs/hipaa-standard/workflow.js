@@ -1,9 +1,9 @@
 "use strict";
 
-const logger = require("../../../../legacy/utils/logger");
-const { waitForSearchTabs } = require("../../../../legacy/pages/claim-status-hipaa.page");
-const { renderFailedSummary } = require("../../../../legacy/services/summary-renderer");
-const { runHipaaProviderSearch } = require("../../../../legacy/workflows/shared-claim-workflow");
+const logger = require("../../../../utils/logger");
+const { waitForSearchTabs } = require("../../../../pages/claim-status-hipaa.page");
+const { renderFailedSummary } = require("../../../../services/summary-renderer");
+const { runHipaaProviderSearch } = require("../../../../workflows/shared-claim-workflow");
 
 const SCAN_HEALTH_PROVIDER_ORDER = ["DAO, THUAN DUC", "TRINITY PAIN MANAGEMENT"];
 

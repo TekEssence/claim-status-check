@@ -1,12 +1,12 @@
 "use strict";
 
-const logger = require("../../../../legacy/utils/logger");
-const { getClaimStatusFrame } = require("../../../../legacy/pages/navigation.page");
-const { PROVIDERS } = require("../../../../legacy/pages/claim-status-member.page");
-const { normalizeDateText, waitForSearchResultsToSettle } = require("../../../../legacy/pages/results.page");
-const { normalizeStatus } = require("../../../../legacy/services/status-normalizer");
-const { renderFailedSummary } = require("../../../../legacy/services/summary-renderer");
-const { processParsedSearchResults } = require("../../../../legacy/workflows/shared-claim-workflow");
+const logger = require("../../../../utils/logger");
+const { getClaimStatusFrame } = require("../../../../pages/navigation.page");
+const { PROVIDERS } = require("../../../../pages/claim-status-member.page");
+const { normalizeDateText, waitForSearchResultsToSettle } = require("../../../../pages/results.page");
+const { normalizeStatus } = require("../../../../services/status-normalizer");
+const { renderFailedSummary } = require("../../../../services/summary-renderer");
+const { processParsedSearchResults } = require("../../../../workflows/shared-claim-workflow");
 const { searchBluecareMemberWithProvider } = require("./bluecare-member-search");
 
 async function getBluecareMemberResultRows(page) {

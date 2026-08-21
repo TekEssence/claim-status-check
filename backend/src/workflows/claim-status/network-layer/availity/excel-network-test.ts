@@ -8,10 +8,10 @@ import { AvailityClaimSearchService } from "./claim-search-service";
 import type { AvailityNormalizedSummaryRow } from "./types";
 
 const require = createRequire(import.meta.url);
-const { submitLogin } = require("../../portals/availity/legacy/pages/login.page.js");
-const { handleMfa } = require("../../portals/availity/legacy/pages/mfa.page.js");
-const { acceptCookiesIfPresent, logoutIfPresent, openClaimStatus } = require("../../portals/availity/legacy/pages/navigation.page.js");
-const { selectPayer } = require("../../portals/availity/legacy/pages/claim-status-member.page.js");
+const { submitLogin } = require("../../portals/availity/pages/login.page.js");
+const { handleMfa } = require("../../portals/availity/pages/mfa.page.js");
+const { acceptCookiesIfPresent, logoutIfPresent, openClaimStatus } = require("../../portals/availity/pages/navigation.page.js");
+const { selectPayer } = require("../../portals/availity/pages/claim-status-member.page.js");
 
 type WorkbookRows = {
   headers: string[];

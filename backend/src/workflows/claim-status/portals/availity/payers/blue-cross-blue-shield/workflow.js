@@ -1,12 +1,12 @@
 "use strict";
 
-const logger = require("../../legacy/utils/logger");
-const { waitForSearchTabs } = require("../../legacy/pages/claim-status-hipaa.page");
-const { PROVIDERS } = require("../../legacy/pages/claim-status-member.page");
-const { renderFailedSummary } = require("../../legacy/services/summary-renderer");
+const logger = require("../../utils/logger");
+const { waitForSearchTabs } = require("../../pages/claim-status-hipaa.page");
+const { PROVIDERS } = require("../../pages/claim-status-member.page");
+const { renderFailedSummary } = require("../../services/summary-renderer");
 const { runBluecareHipaaDirectSearch } = require("./tabs/hipaa-standard/bluecare-hipaa-direct-detail");
 const { runBluecareMemberProviderSearch } = require("./tabs/member/bluecare-member-results");
-const { runHipaaProviderSearch, runMemberProviderSearch } = require("../../legacy/workflows/shared-claim-workflow");
+const { runHipaaProviderSearch, runMemberProviderSearch } = require("../../workflows/shared-claim-workflow");
 
 function normalize(value) {
   return String(value || "").replace(/\s+/g, " ").trim().toUpperCase();

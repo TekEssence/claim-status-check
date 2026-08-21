@@ -1,6 +1,6 @@
 import * as XLSX from "xlsx";
 
-type AerialLegacyValidation = {
+type AerialValidation = {
   valid: boolean;
   errors: Array<{ message: string }>;
   normalized: {
@@ -9,11 +9,11 @@ type AerialLegacyValidation = {
   };
 };
 
-type AerialLegacyValidationModule = {
-  validateInputRow(row: Record<string, unknown>): AerialLegacyValidation;
+type AerialValidationModule = {
+  validateInputRow(row: Record<string, unknown>): AerialValidation;
 };
 
-const { validateInputRow } = require("./legacy/validation.js") as AerialLegacyValidationModule;
+const { validateInputRow } = require("./validation.js") as AerialValidationModule;
 
 export type AerialInputRow = Record<string, unknown> & {
   input_row_id: number;
@@ -23,8 +23,8 @@ export type AerialInputRow = Record<string, unknown> & {
   "Service Date": string;
   validation_status: "valid" | "invalid";
   validation_message: string;
-  normalized: AerialLegacyValidation["normalized"];
-  validation_errors: AerialLegacyValidation["errors"];
+  normalized: AerialValidation["normalized"];
+  validation_errors: AerialValidation["errors"];
 };
 
 const FALLBACK_EXCEL_COLUMNS = {

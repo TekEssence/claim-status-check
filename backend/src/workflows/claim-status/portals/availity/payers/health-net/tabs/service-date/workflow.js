@@ -1,19 +1,19 @@
 "use strict";
 
-const logger = require("../../../../legacy/utils/logger");
-const { humanDelay, withRetry } = require("../../../../legacy/utils/browser");
-const { getClaimStatusFrame } = require("../../../../legacy/pages/navigation.page");
-const { PROVIDERS } = require("../../../../legacy/pages/claim-status-member.page");
-const { waitForSearchResultsToSettle, normalizeMoney, normalizeDateText } = require("../../../../legacy/pages/results.page");
-const { renderClaimSummary, renderFailedSummary } = require("../../../../legacy/services/summary-renderer");
-const { normalizeStatus } = require("../../../../legacy/services/status-normalizer");
+const logger = require("../../../../utils/logger");
+const { humanDelay, withRetry } = require("../../../../utils/browser");
+const { getClaimStatusFrame } = require("../../../../pages/navigation.page");
+const { PROVIDERS } = require("../../../../pages/claim-status-member.page");
+const { waitForSearchResultsToSettle, normalizeMoney, normalizeDateText } = require("../../../../pages/results.page");
+const { renderClaimSummary, renderFailedSummary } = require("../../../../services/summary-renderer");
+const { normalizeStatus } = require("../../../../services/status-normalizer");
 const {
   extractInProcess,
   extractWellcareDenied: extractHealthNetDenied,
   extractWellcarePaid: extractHealthNetPaid,
   returnToResults,
   waitForClaimDetailPage
-} = require("../../../../legacy/pages/claim-detail.page");
+} = require("../../../../pages/claim-detail.page");
 
 const SELECTORS = {
   serviceDateTab: "button[role='tab']:has-text('Service Dates'), a[role='button']:has-text('Service Dates')",

@@ -1,13 +1,13 @@
 "use strict";
 
-const logger = require("../../../../legacy/utils/logger");
-const { humanDelay, withRetry } = require("../../../../legacy/utils/browser");
-const { getClaimStatusFrame } = require("../../../../legacy/pages/navigation.page");
-const { PROVIDERS } = require("../../../../legacy/pages/claim-status-member.page");
-const { fillHipaaSearchForm, HIPAA_SELECTORS, selectHipaaTab, selectProvider } = require("../../../../legacy/pages/claim-status-hipaa.page");
-const { normalizeDateText, normalizeMoney } = require("../../../../legacy/pages/results.page");
-const { normalizeStatus } = require("../../../../legacy/services/status-normalizer");
-const { renderClaimSummary, renderFailedSummary } = require("../../../../legacy/services/summary-renderer");
+const logger = require("../../../../utils/logger");
+const { humanDelay, withRetry } = require("../../../../utils/browser");
+const { getClaimStatusFrame } = require("../../../../pages/navigation.page");
+const { PROVIDERS } = require("../../../../pages/claim-status-member.page");
+const { fillHipaaSearchForm, HIPAA_SELECTORS, selectHipaaTab, selectProvider } = require("../../../../pages/claim-status-hipaa.page");
+const { normalizeDateText, normalizeMoney } = require("../../../../pages/results.page");
+const { normalizeStatus } = require("../../../../services/status-normalizer");
+const { renderClaimSummary, renderFailedSummary } = require("../../../../services/summary-renderer");
 
 function clean(value) {
   return String(value || "").replace(/\s+/g, " ").trim();

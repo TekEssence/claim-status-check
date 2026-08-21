@@ -1,8 +1,8 @@
 "use strict";
 
-const logger = require("../../../../legacy/utils/logger");
-const { humanDelay, withRetry } = require("../../../../legacy/utils/browser");
-const { getClaimStatusFrame } = require("../../../../legacy/pages/navigation.page");
+const logger = require("../../../../utils/logger");
+const { humanDelay, withRetry } = require("../../../../utils/browser");
+const { getClaimStatusFrame } = require("../../../../pages/navigation.page");
 
 const SELECTORS = {
   memberTabButton: "button[role='tab']:has-text('Member')",

@@ -12,14 +12,14 @@ import { applyProjectOutputStrategy } from "./project-output";
 import type { AvailityAuditRow, AvailityErrorRow, AvailityInputRow, AvailityOutputRow, AvailityProviderMapping } from "./types";
 
 const require = createRequire(import.meta.url);
-const { submitLogin } = require("./legacy/pages/login.page.js");
-const { handleMfa } = require("./legacy/pages/mfa.page.js");
-const { acceptCookiesIfPresent, getClaimStatusFrame, logoutIfPresent, openClaimStatus } = require("./legacy/pages/navigation.page.js");
-const { selectPayer } = require("./legacy/pages/claim-status-member.page.js");
-const { validateRow } = require("./legacy/services/row-validator.js");
-const { renderFailedSummary } = require("./legacy/services/summary-renderer.js");
+const { submitLogin } = require("./pages/login.page.js");
+const { handleMfa } = require("./pages/mfa.page.js");
+const { acceptCookiesIfPresent, getClaimStatusFrame, logoutIfPresent, openClaimStatus } = require("./pages/navigation.page.js");
+const { selectPayer } = require("./pages/claim-status-member.page.js");
+const { validateRow } = require("./services/row-validator.js");
+const { renderFailedSummary } = require("./services/summary-renderer.js");
 const { getWorkflowForPayer } = require("./payers/registry.js");
-const legacyLogger = require("./legacy/utils/logger.js");
+const availityLogger = require("./utils/logger.js");
 
 const ROW_PROCESS_MAX_ATTEMPTS = 3;
 const MEDREVENU_REQUIRED_FIELDS = ["Payer Name", "Service Date", "Charges"];
@@ -387,7 +387,7 @@ export async function runAvailityClaimStatusJob(formData: FormData, context: Scr
   let outputWorkbookEmitted = false;
 
   const log = async (message: string) => context.log({ level: "info", message });
-  legacyLogger.setLogSink((entry: { level: string; message: string; line: string }) => {
+  availityLogger.setLogSink((entry: { level: string; message: string; line: string }) => {
     void context.log({
       level: legacyLevelToContextLevel(entry.level),
       message: entry.line,
@@ -592,7 +592,7 @@ export async function runAvailityClaimStatusJob(formData: FormData, context: Scr
     }
     await context.emit({ type: "error", message });
   } finally {
-    legacyLogger.setLogSink(null);
+    availityLogger.setLogSink(null);
     if (session?.page && !session.page.isClosed()) {
       await logoutIfPresent(session.page).catch(() => {});
     }

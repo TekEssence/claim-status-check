@@ -1,10 +1,10 @@
 "use strict";
 
-const logger = require("../../../../legacy/utils/logger");
-const { waitForSearchTabs } = require("../../../../legacy/pages/claim-status-hipaa.page");
-const { PROVIDERS } = require("../../../../legacy/pages/claim-status-member.page");
-const { renderFailedSummary } = require("../../../../legacy/services/summary-renderer");
-const { runHipaaProviderSearch } = require("../../../../legacy/workflows/shared-claim-workflow");
+const logger = require("../../../../utils/logger");
+const { waitForSearchTabs } = require("../../../../pages/claim-status-hipaa.page");
+const { PROVIDERS } = require("../../../../pages/claim-status-member.page");
+const { renderFailedSummary } = require("../../../../services/summary-renderer");
+const { runHipaaProviderSearch } = require("../../../../workflows/shared-claim-workflow");
 
 async function processClaim(page, row, options = {}) {
   logger.info("Using Wellpoint workflow: HIPAA Standard search only.");

@@ -6,7 +6,7 @@ import { buildAerialFinalStatus, buildAerialNoDataOutputRow, shouldDownloadAeria
 import { createAerialOutputWorkbookBuffer, readAerialInputWorkbookFromBuffer } from "../workbook";
 
 const require = createRequire(import.meta.url);
-const { extractClaimStatusFromText, extractLabelValueFromText } = require("../legacy/claim-detail-page.js") as {
+const { extractClaimStatusFromText, extractLabelValueFromText } = require("../claim-detail-page.js") as {
   extractClaimStatusFromText: (text: string) => string;
   extractLabelValueFromText: (text: string, label: string) => string;
 };

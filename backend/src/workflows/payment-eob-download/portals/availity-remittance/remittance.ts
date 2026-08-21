@@ -17,9 +17,9 @@ import { uploadPaymentEobOutputToSharePoint } from "./sharepoint";
 import { createStoredZipFromFolder } from "./zip";
 
 const require = createRequire(import.meta.url);
-const { submitLogin } = require("../../../claim-status/portals/availity/legacy/pages/login.page.js");
-const { handleMfa } = require("../../../claim-status/portals/availity/legacy/pages/mfa.page.js");
-const { acceptCookiesIfPresent, logoutIfPresent } = require("../../../claim-status/portals/availity/legacy/pages/navigation.page.js");
+const { submitLogin } = require("../../../claim-status/portals/availity/pages/login.page.js");
+const { handleMfa } = require("../../../claim-status/portals/availity/pages/mfa.page.js");
+const { acceptCookiesIfPresent, logoutIfPresent } = require("../../../claim-status/portals/availity/pages/navigation.page.js");
 
 type RunInput = {
   credentials: PaymentEobCredentials;
