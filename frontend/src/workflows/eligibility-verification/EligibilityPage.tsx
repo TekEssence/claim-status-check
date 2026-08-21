@@ -153,10 +153,11 @@ export function EligibilityPage() {
       downloadBase64File(artifact.filename, artifact.base64, artifact.mimeType);
       setLogs((current) => [...current, `Downloaded ${event.filename}.`]);
     }
-    if (event.type === "error") {
+    if (event.type === "error" || event.type === "failed") {
       jobFailed.current = true;
       setStatus(event.message || "Eligibility verification failed.");
       setIsRunning(false);
+      setHasCompleted(false);
     }
     if (event.type === "cancelled") {
       jobFailed.current = true;

@@ -35,7 +35,19 @@ export function createUhcEligibilityRunner(payerId = "uhc-wellmed"): AutomationR
       page.setDefaultNavigationTimeout(Number(process.env.PORTAL_UHC_ELIGIBILITY_NAVIGATION_TIMEOUT_MS || 45_000));
       try {
         await log("Opening UHC login page with the TPM/UHC credential row.");
-        await authenticateUhcEligibility(page, credentials);
+        try {
+          await authenticateUhcEligibility(page, credentials);
+        } catch (error) {
+          const screenshot = await page.screenshot({ type: "jpeg", quality: 80, fullPage: true }).catch(() => null);
+          if (screenshot) {
+            await context.emit({
+              type: "error_screenshot",
+              index: 0,
+              image: screenshot.toString("base64"),
+            });
+          }
+          throw error;
+        }
         await log("UHC login and authenticator OTP verification completed.");
         await runUhcWellmedEligibilityWorkflow({ page, inputFile: input.inputFile, context });
       } finally {

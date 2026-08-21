@@ -9,10 +9,13 @@ export type UhcEligibilityBrowserSession = {
 
 const OPTUM_STYLE_CHROMIUM_ARGS = [
   "--disable-blink-features=AutomationControlled",
-  "--use-gl=desktop",
-  "--enable-webgl",
 ];
-const STANDARD_CHROME_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+const PRODUCTION_CHROME_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36";
+const PRODUCTION_CHROME_CLIENT_HINTS = {
+  "sec-ch-ua": '"Not_A Brand";v="99", "Chromium";v="148", "Google Chrome";v="148"',
+  "sec-ch-ua-mobile": "?0",
+  "sec-ch-ua-platform": '"Windows"',
+};
 
 function summarize(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
@@ -26,7 +29,8 @@ export async function launchUhcEligibilityBrowser(
   const contextOptions = {
     acceptDownloads: true,
     viewport: { width: 1280, height: 800 },
-    userAgent: process.env.PORTAL_UHC_ELIGIBILITY_USER_AGENT?.trim() || STANDARD_CHROME_USER_AGENT,
+    userAgent: process.env.PORTAL_UHC_ELIGIBILITY_USER_AGENT?.trim() || PRODUCTION_CHROME_USER_AGENT,
+    extraHTTPHeaders: PRODUCTION_CHROME_CLIENT_HINTS,
     locale: "en-US",
     timezoneId: "America/Los_Angeles",
   };
