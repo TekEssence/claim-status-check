@@ -44,7 +44,7 @@ function writeCloudWatchLog(event: {
   level?: string;
   message: string;
   eventName?: string;
-  rowIndex?: number;
+  rowIndex?: number | string;
   meta?: unknown;
 }) {
   console.log(JSON.stringify({

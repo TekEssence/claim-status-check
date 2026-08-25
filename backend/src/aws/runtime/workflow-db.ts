@@ -249,9 +249,9 @@ export async function registerConnection(params: { connectionId: string; userId:
     const columns = new Set(result.rows.map((row) => row.column_name));
     const insertColumns = ["connection_id", "user_id", "job_id"];
     const insertValues = [
-      params.connectionId,
-      params.userId,
-      params.jobId ?? null,
+      sql`${params.connectionId}`,
+      sql`${params.userId}`,
+      sql`${params.jobId ?? null}`,
     ];
     const updateSet = [
       sql`"user_id" = ${params.userId}`,
@@ -260,20 +260,20 @@ export async function registerConnection(params: { connectionId: string; userId:
 
     if (columns.has("created_at")) {
       insertColumns.push("created_at");
-      insertValues.push(now);
+      insertValues.push(sql`${now}`);
     }
     if (columns.has("updated_at")) {
       insertColumns.push("updated_at");
-      insertValues.push(now);
+      insertValues.push(sql`${now}`);
       updateSet.push(sql`"updated_at" = ${now}`);
     }
     if (columns.has("connected_at")) {
       insertColumns.push("connected_at");
-      insertValues.push(now);
+      insertValues.push(sql`${now}`);
     }
     if (columns.has("last_seen_at")) {
       insertColumns.push("last_seen_at");
-      insertValues.push(now);
+      insertValues.push(sql`${now}`);
       updateSet.push(sql`"last_seen_at" = ${now}`);
     }
 

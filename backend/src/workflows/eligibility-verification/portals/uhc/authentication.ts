@@ -3,7 +3,7 @@ import type { UhcEligibilityCredentials } from "./credentials";
 import { generateUhcEligibilityTotp } from "./totp";
 
 const SELECTORS = {
-  username: "input#username, input[data-testid='username'], input[name='username'], input[name='email'], input[type='email']",
+  username: "input#username, input[data-testid='username'], input[name='username'], input[name='email'], input[autocomplete='username'], input[type='email'], input[type='text']",
   usernameError: "#notificationMessage, .notification-message, [role='alert'], .alert, .error, #vr_username",
   loginContinue: "button#btnLogin, button[data-testid='btnLogin'], button:has-text('Continue'), button:has-text('Sign in')",
   password: "input#login-pwd, input[data-testid='login-pwd'], input[name='password'], input[type='password']",
@@ -72,7 +72,7 @@ async function enterText(page: Page, selector: string, value: string, delay = 90
 }
 
 async function typeUsernameLikeOptum(page: Page, username: string): Promise<string> {
-  const field = await findVisibleLocator(page, SELECTORS.username, 45_000);
+  const field = await findVisibleLocator(page, SELECTORS.username, 60_000);
   await field.click();
   await page.keyboard.press("Control+A");
   await page.keyboard.press("Backspace");

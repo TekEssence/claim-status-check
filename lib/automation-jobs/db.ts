@@ -190,7 +190,7 @@ export async function listAutomationJobsForUser(
     db
       .select()
       .from(automationJobs)
-      .where(and(eq(automationJobs.userId, userId), eq(automationJobs.workflowId, "eligibility-verification")))
+      .where(eq(automationJobs.userId, userId))
       .orderBy(desc(automationJobs.updatedAt))
       .limit(safeLimit),
   );

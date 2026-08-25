@@ -3,7 +3,7 @@
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
-import { ArrowLeft, ArrowRight, LoaderCircle, LogOut, ReceiptText } from "lucide-react";
+import { ArrowLeft, ArrowRight, FileSpreadsheet, LoaderCircle, LogOut, ReceiptText } from "lucide-react";
 import {
   cancelAutomationJob,
   getCurrentAutomationJob,
@@ -12,6 +12,7 @@ import {
   subscribeToAutomationJob,
 } from "../../api/automation-jobs-api";
 import { ActiveWorkflowRunsPanel } from "../../components/workflow-runs/ActiveWorkflowRunsPanel";
+import { WorkflowOutputsPanel } from "../../components/workflow-runs/WorkflowOutputsPanel";
 import type { JobProgressValue, ScrapeJobEvent } from "../../types/job";
 import { getCognitoAccessToken, isCognitoMode, redirectToCognitoLogin, redirectToCognitoLogout, storeCognitoTokenFromHash } from "../../api/cognito-auth";
 import { getPaymentEobPortal, paymentEobPortals } from "./registry";
@@ -67,6 +68,7 @@ export function PaymentEobPage({ portalId: initialPortalId }: PaymentEobPageProp
   const [errors, setErrors] = useState<string[]>([]);
   const [isRunning, setIsRunning] = useState(false);
   const [isStopping, setIsStopping] = useState(false);
+  const [showOutputs, setShowOutputs] = useState(false);
   const [otpRequest, setOtpRequest] = useState<{ inputName: string; label: string; message: string } | null>(null);
   const [otpValue, setOtpValue] = useState("");
   const streamController = useRef<AbortController | null>(null);
@@ -300,16 +302,15 @@ export function PaymentEobPage({ portalId: initialPortalId }: PaymentEobPageProp
               {portal?.description ?? "Choose a payment portal to start remittance comparison and EOB download automation."}
             </p>
           </div>
-          <button
-            onClick={selectedPortalId ? backFromPortal : () => router.push("/portal")}
-            disabled={Boolean(selectedPortalId && isRunning)}
-            className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
-          >
-            <ArrowLeft className="h-4 w-4" />
-            {selectedPortalId ? "Portals" : "Back"}
-          </button>
+          <div className="flex gap-2">
+            <button type="button" onClick={() => setShowOutputs((current) => !current)} className="inline-flex items-center gap-2 rounded-md border border-emerald-200 bg-white px-3 py-2 text-sm font-medium text-emerald-700 hover:bg-emerald-50"><FileSpreadsheet className="h-4 w-4" />Outputs</button>
+            <button onClick={selectedPortalId ? backFromPortal : () => router.push("/portal")} disabled={Boolean(selectedPortalId && isRunning)} className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"><ArrowLeft className="h-4 w-4" />{selectedPortalId ? "Portals" : "Back"}</button>
+          </div>
         </div>
 
+        {showOutputs ? <WorkflowOutputsPanel workflowId={WORKFLOW_ID} title="Payment EOB Download outputs" /> : null}
+
+        {!showOutputs ? <>
         <ActiveWorkflowRunsPanel
           currentWorkflowId={WORKFLOW_ID}
           currentPortalId={selectedPortalId ?? undefined}
@@ -367,6 +368,7 @@ export function PaymentEobPage({ portalId: initialPortalId }: PaymentEobPageProp
             />
           </div>
         )}
+        </> : null}
       </div>
     </main>
   );

@@ -8,6 +8,7 @@ import {
   Activity,
   ArrowLeft,
   Building2,
+  FileSpreadsheet,
   LayoutDashboard,
   LoaderCircle,
   LogOut,
@@ -31,6 +32,7 @@ import { AvailityInputForm } from "./portals/availity/AvailityInputForm";
 import { UhcInputForm } from "./portals/uhc/UhcInputForm";
 import { getCognitoAccessToken, isCognitoMode, redirectToCognitoLogin, redirectToCognitoLogout, storeCognitoTokenFromHash } from "../../api/cognito-auth";
 import { ActiveWorkflowRunsPanel } from "../../components/workflow-runs/ActiveWorkflowRunsPanel";
+import { WorkflowOutputsPanel } from "../../components/workflow-runs/WorkflowOutputsPanel";
 
 type AuthUser = {
   username: string;
@@ -73,6 +75,7 @@ export function EligibilityPage() {
   const [progress, setProgress] = useState<JobProgressValue | null>(null);
   const [hasCompleted, setHasCompleted] = useState(false);
   const [isRunning, setIsRunning] = useState(false);
+  const [showOutputs, setShowOutputs] = useState(false);
   const streamController = useRef<AbortController | null>(null);
   const jobFailed = useRef(false);
 
@@ -153,10 +156,11 @@ export function EligibilityPage() {
       downloadBase64File(artifact.filename, artifact.base64, artifact.mimeType);
       setLogs((current) => [...current, `Downloaded ${event.filename}.`]);
     }
-    if (event.type === "error") {
+    if (event.type === "error" || event.type === "failed") {
       jobFailed.current = true;
       setStatus(event.message || "Eligibility verification failed.");
       setIsRunning(false);
+      setHasCompleted(false);
     }
     if (event.type === "cancelled") {
       jobFailed.current = true;
@@ -290,8 +294,11 @@ export function EligibilityPage() {
               </div>
             </div>
             <div className="mt-6 space-y-1.5">
-              <button type="button" onClick={() => router.push("/portal")} className="flex w-full items-center gap-3 rounded-[1rem] bg-[linear-gradient(90deg,rgba(37,99,235,0.12)_0%,rgba(37,99,235,0.04)_100%)] px-3 py-2.5 text-left text-sm font-medium text-blue-700">
+              <button type="button" onClick={() => { setShowOutputs(false); router.push("/portal"); }} className={`flex w-full items-center gap-3 rounded-[1rem] px-3 py-2.5 text-left text-sm font-medium ${showOutputs ? "text-slate-600 hover:bg-sky-50" : "bg-[linear-gradient(90deg,rgba(37,99,235,0.12)_0%,rgba(37,99,235,0.04)_100%)] text-blue-700"}`}>
                 <LayoutDashboard className="h-4 w-4" /> Dashboard
+              </button>
+              <button type="button" onClick={() => setShowOutputs((current) => !current)} className={`flex w-full items-center gap-3 rounded-[1rem] px-3 py-2.5 text-left text-sm font-medium transition ${showOutputs ? "bg-emerald-50 text-emerald-700" : "text-slate-600 hover:bg-sky-50 hover:text-slate-900"}`}>
+                <FileSpreadsheet className="h-4 w-4" /> Outputs
               </button>
               {portal && (
                 <button type="button" disabled={isRunning} onClick={() => router.push("/eligibility")} className="flex w-full items-center gap-3 rounded-[1rem] px-3 py-2.5 text-left text-sm font-medium text-slate-600 transition hover:bg-sky-50 hover:text-slate-900 disabled:cursor-not-allowed disabled:text-slate-400">
@@ -305,7 +312,7 @@ export function EligibilityPage() {
           </aside>
 
           <section className="min-w-0">
-            {!portal ? (
+            {showOutputs ? <WorkflowOutputsPanel workflowId="eligibility-verification" title="Eligibility Verification outputs" /> : !portal ? (
               <>
                 <div className="rounded-[1.7rem] border border-sky-100 bg-white/88 p-6 shadow-[0_16px_38px_rgba(148,163,184,0.12)]">
                   <p className="text-[0.7rem] font-semibold uppercase tracking-[0.22em] text-sky-600">Portal Selection</p>
