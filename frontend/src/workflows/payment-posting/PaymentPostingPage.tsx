@@ -3,7 +3,7 @@
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
-import { ArrowLeft, ArrowRight, LoaderCircle, LogOut, ReceiptText, ShieldCheck } from "lucide-react";
+import { ArrowLeft, ArrowRight, FileSpreadsheet, LoaderCircle, LogOut, ReceiptText, ShieldCheck } from "lucide-react";
 import {
   cancelAutomationJob,
   getCurrentAutomationJob,
@@ -11,6 +11,7 @@ import {
   subscribeToAutomationJob,
 } from "../../api/automation-jobs-api";
 import { ActiveWorkflowRunsPanel } from "../../components/workflow-runs/ActiveWorkflowRunsPanel";
+import { WorkflowOutputsPanel } from "../../components/workflow-runs/WorkflowOutputsPanel";
 import type { JobProgressValue, ScrapeJobEvent } from "../../types/job";
 import { getCognitoAccessToken, isCognitoMode, redirectToCognitoLogin, redirectToCognitoLogout, storeCognitoTokenFromHash } from "../../api/cognito-auth";
 import { getPaymentPostingPortal, paymentPostingPortals } from "./registry";
@@ -61,6 +62,7 @@ export function PaymentPostingPage() {
   const [errors, setErrors] = useState<string[]>([]);
   const [isRunning, setIsRunning] = useState(false);
   const [isStopping, setIsStopping] = useState(false);
+  const [showOutputs, setShowOutputs] = useState(false);
   const streamController = useRef<AbortController | null>(null);
 
   const canStart = Boolean(selectedPortalId && credentialFile && inputFile && !isRunning);
@@ -266,16 +268,15 @@ export function PaymentPostingPage() {
               Dry Run - Nothing Will Be Posted
             </p>
           </div>
-          <button
-            onClick={selectedPortalId ? backFromPortal : () => router.push("/portal")}
-            disabled={Boolean(selectedPortalId && isRunning)}
-            className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
-          >
-            <ArrowLeft className="h-4 w-4" />
-            {selectedPortalId ? "Portals" : "Back"}
-          </button>
+          <div className="flex gap-2">
+            <button type="button" onClick={() => setShowOutputs((current) => !current)} className="inline-flex items-center gap-2 rounded-md border border-emerald-200 bg-white px-3 py-2 text-sm font-medium text-emerald-700 hover:bg-emerald-50"><FileSpreadsheet className="h-4 w-4" />Outputs</button>
+            <button onClick={selectedPortalId ? backFromPortal : () => router.push("/portal")} disabled={Boolean(selectedPortalId && isRunning)} className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"><ArrowLeft className="h-4 w-4" />{selectedPortalId ? "Portals" : "Back"}</button>
+          </div>
         </div>
 
+        {showOutputs ? <WorkflowOutputsPanel workflowId={WORKFLOW_ID} title="Payment Posting outputs" /> : null}
+
+        {!showOutputs ? <>
         <ActiveWorkflowRunsPanel
           currentWorkflowId={WORKFLOW_ID}
           currentPortalId={selectedPortalId ?? undefined}
@@ -331,6 +332,7 @@ export function PaymentPostingPage() {
             />
           </div>
         )}
+        </> : null}
       </div>
     </main>
   );

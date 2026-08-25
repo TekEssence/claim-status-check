@@ -28,6 +28,7 @@ export async function GET(req: Request) {
         createdAt: job.createdAt,
         updatedAt: job.updatedAt,
         finishedAt: job.finishedAt,
+        artifactCount: job.artifacts.length,
       })),
     });
   } catch (error) {

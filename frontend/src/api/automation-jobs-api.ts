@@ -22,6 +22,7 @@ export type AutomationJobSummary = {
   createdAt: string;
   updatedAt: string;
   finishedAt: string | null;
+  artifactCount: number;
 };
 
 type AutomationJobScope = Pick<AutomationJobSummary, "workflowId" | "portalId">;
@@ -103,6 +104,7 @@ export async function listAutomationJobs(limit = 25): Promise<AutomationJobSumma
         createdAt: job.createdAt,
         updatedAt: job.updatedAt,
         finishedAt: job.finishedAt,
+        artifactCount: job.artifactCount,
       }));
   }
 
