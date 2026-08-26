@@ -145,6 +145,23 @@ function digestForAlgorithm(algorithm) {
 
 function resolveTotpConfig(secret, options = {}) {
   if (options.totpSecretFormat === "google-authenticator-migration") {
+    const rawSecret = String(secret || "").trim();
+    const compactSecret = normalizeSecret(rawSecret);
+    const isMigrationValue =
+      /^otpauth-migration:\/\//i.test(rawSecret) ||
+      /[?&]data=/i.test(rawSecret);
+    const isBase32Secret = /^[A-Z2-7]+=*$/i.test(compactSecret);
+
+    // Charm workbooks may contain either the raw Base32 key or the exported
+    // Google Authenticator migration value. Do not parse Base32 as protobuf.
+    if (!isMigrationValue && isBase32Secret) {
+      return {
+        key: base32Decode(compactSecret),
+        digest: "sha1",
+        digits: 6
+      };
+    }
+
     const migration = decodeGoogleAuthenticatorMigration(secret);
     return {
       key: migration.key,
