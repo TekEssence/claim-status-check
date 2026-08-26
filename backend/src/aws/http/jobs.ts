@@ -339,7 +339,11 @@ export async function downloadJob(event: ApiEvent) {
     const job = hasFullWorkflowAccess(event) ? await getWorkflowJobById(jobId) : await getWorkflowJobForUser(jobId, userId);
     if (!job) return jsonResponse(404, { error: "Job not found." });
     const artifacts = await listArtifactsForJob(jobId);
-    const artifact = artifacts.find((item) => item.artifactType === "output_snapshot")
+    const paymentEobZip = job.workflowId === "payment-eob-download"
+      ? artifacts.find((item) => item.artifactType === "file_download" && isZipArtifact(item.filename, item.mimeType))
+      : undefined;
+    const artifact = paymentEobZip
+      ?? artifacts.find((item) => item.artifactType === "output_snapshot")
       ?? artifacts.find((item) => item.artifactType === "file_download" && isPreferredOutputArtifact(item.filename, item.mimeType))
       ?? artifacts.find((item) => item.artifactType === "file_download" && isDownloadableNonDiagnosticArtifact(item.filename, item.mimeType));
     if (!artifact) return jsonResponse(404, { error: "No output is available yet." });
@@ -354,6 +358,10 @@ export async function downloadJob(event: ApiEvent) {
   } catch (error) {
     return jsonResponse(500, { error: error instanceof Error ? error.message : "Failed to create download URL." });
   }
+}
+
+function isZipArtifact(filename: string, mimeType?: string | null): boolean {
+  return filename.toLowerCase().endsWith(".zip") || (mimeType || "").toLowerCase() === "application/zip";
 }
 
 function isPreferredOutputArtifact(filename: string, mimeType?: string | null): boolean {
