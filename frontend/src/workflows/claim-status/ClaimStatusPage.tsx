@@ -85,23 +85,7 @@ import { PhysiciansInputForm } from "./portals/physicians/PhysiciansInputForm";
 import { PhysiciansResultView } from "./portals/physicians/PhysiciansResultView";
 import { WaystarInputForm } from "./portals/waystar/WaystarInputForm";
 import { WaystarResultView } from "./portals/waystar/WaystarResultView";
-import {
-  aerialFrontendPortalConfig,
-  allCareFrontendPortalConfig,
-  astronaFrontendPortalConfig,
-  availityFrontendPortalConfig,
-  blueShieldFrontendPortalConfig,
-  claimStatusPortalRegistry,
-  cignaFrontendPortalConfig,
-  iehpFrontendPortalConfig,
-  kaiserFrontendPortalConfig,
-  myFamilyFrontendPortalConfig,
-  optumProFrontendPortalConfig,
-  physiciansFrontendPortalConfig,
-  regalFrontendPortalConfig,
-  uhcFrontendPortalConfig,
-  waystarFrontendPortalConfig,
-} from "./registry";
+import { claimStatusPortalRegistry } from "./registry";
 
 type AuthUser = {
   userId: string;
@@ -1127,36 +1111,9 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     () => claimStatusPortalRegistry,
     [],
   );
-  const selectedPortal =
-    effectivePortalId === "iehp"
-      ? iehpFrontendPortalConfig
-      : effectivePortalId === "aerial"
-        ? aerialFrontendPortalConfig
-        : effectivePortalId === "all-care"
-          ? allCareFrontendPortalConfig
-        : effectivePortalId === "astrona"
-          ? astronaFrontendPortalConfig
-        : effectivePortalId === "regal"
-          ? regalFrontendPortalConfig
-          : effectivePortalId === "blue-shield"
-            ? blueShieldFrontendPortalConfig
-            : effectivePortalId === "availity"
-              ? availityFrontendPortalConfig
-              : effectivePortalId === "cigna"
-                ? cignaFrontendPortalConfig
-              : effectivePortalId === "kaiser"
-                ? kaiserFrontendPortalConfig
-              : effectivePortalId === "my-family"
-                ? myFamilyFrontendPortalConfig
-              : effectivePortalId === "optum-pro"
-                ? optumProFrontendPortalConfig
-              : effectivePortalId === "physicians"
-                ? physiciansFrontendPortalConfig
-              : effectivePortalId === "uhc"
-                ? uhcFrontendPortalConfig
-              : effectivePortalId === "waystar"
-                ? waystarFrontendPortalConfig
-            : null;
+  const selectedPortal = effectivePortalId
+    ? availablePortals.find((portal) => portal.id === effectivePortalId) ?? null
+    : null;
   const selectedPortalUiMeta = effectivePortalId ? PORTAL_UI_META[effectivePortalId] : null;
   const filteredPortals = useMemo(() => {
     const normalizedQuery = portalSearch.trim().toLowerCase();
@@ -1277,36 +1234,24 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     () => Boolean(waystarLoginFile && waystarInputFile && canStartAnotherRun),
     [waystarInputFile, waystarLoginFile, canStartAnotherRun],
   );
-  const currentCanSubmit =
-    effectivePortalId === "iehp"
-      ? canSubmitIehp
-      : effectivePortalId === "aerial"
-        ? canSubmitAerial
-        : effectivePortalId === "all-care"
-          ? canSubmitAllCare
-        : effectivePortalId === "astrona"
-          ? canSubmitAstrona
-        : effectivePortalId === "regal"
-          ? canSubmitRegal
-          : effectivePortalId === "blue-shield"
-            ? canSubmitBlueShield
-            : effectivePortalId === "availity"
-              ? canSubmitAvaility
-              : effectivePortalId === "cigna"
-                ? canSubmitCigna
-              : effectivePortalId === "kaiser"
-                ? canSubmitKaiser
-              : effectivePortalId === "my-family"
-                ? canSubmitMyFamily
-              : effectivePortalId === "optum-pro"
-                ? canSubmitOptumPro
-              : effectivePortalId === "physicians"
-                ? canSubmitPhysicians
-              : effectivePortalId === "uhc"
-                ? canSubmitUhc
-              : effectivePortalId === "waystar"
-                ? canSubmitWaystar
-            : false;
+  const canSubmitByPortal: Record<PortalId, boolean> = {
+    iehp: canSubmitIehp,
+    aerial: canSubmitAerial,
+    "all-care": canSubmitAllCare,
+    astrona: canSubmitAstrona,
+    regal: canSubmitRegal,
+    "blue-shield": canSubmitBlueShield,
+    availity: canSubmitAvaility,
+    cigna: canSubmitCigna,
+    kaiser: canSubmitKaiser,
+    medpoint: false,
+    "my-family": canSubmitMyFamily,
+    "optum-pro": canSubmitOptumPro,
+    physicians: canSubmitPhysicians,
+    uhc: canSubmitUhc,
+    waystar: canSubmitWaystar,
+  };
+  const currentCanSubmit = effectivePortalId ? canSubmitByPortal[effectivePortalId] : false;
   const portalWorkflowMeta = effectivePortalId ? PORTAL_WORKSPACE_META[effectivePortalId] : null;
   const portalFileState = useMemo(() => {
     if (effectivePortalId === "iehp") {
@@ -3679,16 +3624,89 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     }
   }
 
+  async function runStandardPortalJob(options: {
+    portalName: string;
+    formData: FormData;
+    clearFiles: () => void;
+    progressMessage?: (completed: number, total: number) => string;
+  }): Promise<void> {
+    let hasError = false;
+    let wasCancelled = false;
+    let finalErrorMessage = "";
+    let subscribedJobId = "";
+    const streamAbortController = new AbortController();
+
+    const handleJobEvent = async (eventData: ScrapeJobEvent) => {
+      if (eventData.type === "log" && eventData.message) {
+        setLogs((previous) => [...previous, eventData.message ?? ""]);
+      } else if (eventData.type === "progress" && typeof eventData.completed === "number" && typeof eventData.total === "number") {
+        setProgress({ completed: eventData.completed, total: eventData.total, currentRow: eventData.currentRow });
+        if (options.progressMessage) setStatus(options.progressMessage(eventData.completed, eventData.total));
+      } else if (eventData.type === "error_screenshot" && typeof eventData.index === "number" && eventData.image) {
+        setErrorScreenshots((previous) => [...previous, { index: eventData.index ?? -1, image: eventData.image ?? "" }]);
+      } else if (eventData.type === "file_download" && eventData.filename && eventData.base64) {
+        const artifactKey = buildDownloadArtifactKey(eventData);
+        if (!hasDownloadedArtifact(subscribedJobId, artifactKey)) {
+          downloadBase64File(eventData.filename, eventData.base64, eventData.mimeType || "application/octet-stream");
+          rememberDownloadedArtifact(subscribedJobId, artifactKey);
+          setStatus(`Downloaded ${eventData.filename}`);
+        }
+      } else if (eventData.type === "warning" && eventData.message) {
+        setLogs((previous) => [...previous, eventData.message ?? ""]);
+        setStatus(eventData.message);
+      } else if (eventData.type === "error" && eventData.message) {
+        finalErrorMessage = eventData.message;
+        hasError = true;
+        setLogs((previous) => [...previous, `ERROR: ${eventData.message}`]);
+        setStatus(`Error: ${eventData.message}`);
+      } else if (eventData.type === "cancelled") {
+        wasCancelled = true;
+        setLogs((previous) => [...previous, eventData.message || "Processing cancelled."]);
+        setStatus(eventData.message || "Processing cancelled.");
+      }
+    };
+
+    try {
+      const jobId = await startScrapeJob(options.formData);
+      subscribedJobId = jobId;
+      setActiveJobId(jobId);
+      options.clearFiles();
+      void refreshWorkflowRuns({ silent: true });
+      await subscribeToScrapeJobEvents({
+        jobId,
+        signal: streamAbortController.signal,
+        onEvent: handleJobEvent,
+        onStreamError(error) {
+          finalErrorMessage = getErrorMessage(error);
+          hasError = true;
+          console.error(`${options.portalName} stream error:`, error);
+          setLogs((previous) => [...previous, `STREAM ERROR: ${finalErrorMessage}`]);
+          setStatus(`Stream error: ${finalErrorMessage}`);
+        },
+      });
+      setStatus(
+        wasCancelled
+          ? `${options.portalName} processing cancelled.`
+          : hasError
+            ? `${options.portalName} processing finished with errors${finalErrorMessage ? `: ${finalErrorMessage}` : "."}`
+            : `${options.portalName} processing completed.`,
+      );
+    } catch (error) {
+      setStatus(`Failed to process ${options.portalName} claims: ${getErrorMessage(error)}`);
+    } finally {
+      setIsProcessing(false);
+      setActiveJobId("");
+    }
+  }
+
   async function submitAvaility(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
-
     if (!availityCredentialFile || !availityInputFile) {
       setStatus("Please provide both the Availity login Excel and claim Excel files.");
       return;
     }
 
     resetRunState("Starting Availity scraper...");
-
     const formData = new FormData();
     formData.append("portalId", "availity");
     formData.append("projectId", availityProjectId);
@@ -3697,248 +3715,54 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     formData.append("loginFileName", availityCredentialFile.name);
     formData.append("claimFileName", availityInputFile.name);
 
-    let hasError = false;
-    let wasCancelled = false;
-    let finalErrorMessage = "";
-    let subscribedJobId = "";
-    const streamAbortController = new AbortController();
-
-    const handleJobEvent = async (eventData: ScrapeJobEvent) => {
-      if (eventData.type === "log" && eventData.message) {
-        setLogs((prev) => [...prev, eventData.message ?? ""]);
-      } else if (eventData.type === "progress" && typeof eventData.completed === "number" && typeof eventData.total === "number") {
-        setProgress({ completed: eventData.completed, total: eventData.total, currentRow: eventData.currentRow });
-      } else if (eventData.type === "error_screenshot" && typeof eventData.index === "number" && eventData.image) {
-        setErrorScreenshots((prev) => [...prev, { index: eventData.index ?? -1, image: eventData.image ?? "" }]);
-      } else if (eventData.type === "file_download" && eventData.filename && eventData.base64) {
-        const artifactKey = buildDownloadArtifactKey(eventData);
-        if (!hasDownloadedArtifact(subscribedJobId, artifactKey)) {
-          downloadBase64File(eventData.filename, eventData.base64, eventData.mimeType || "application/octet-stream");
-          rememberDownloadedArtifact(subscribedJobId, artifactKey);
-          setStatus(`Downloaded ${eventData.filename}`);
-        }
-      } else if (eventData.type === "warning" && eventData.message) {
-        setLogs((prev) => [...prev, eventData.message ?? ""]);
-        setStatus(eventData.message);
-      } else if (eventData.type === "error" && eventData.message) {
-        finalErrorMessage = eventData.message;
-        setLogs((prev) => [...prev, `ERROR: ${eventData.message}`]);
-        setStatus(`Error: ${eventData.message}`);
-        hasError = true;
-      } else if (eventData.type === "cancelled") {
-        wasCancelled = true;
-        setLogs((prev) => [...prev, eventData.message || "Processing cancelled."]);
-        setStatus(eventData.message || "Processing cancelled.");
-      }
-    };
-
-    try {
-      const jobId = await startScrapeJob(formData);
-      subscribedJobId = jobId;
-      setActiveJobId(jobId);
-      setAvailityCredentialFile(null);
-      setAvailityInputFile(null);
-      void refreshWorkflowRuns({ silent: true });
-      await subscribeToScrapeJobEvents({
-        jobId,
-        signal: streamAbortController.signal,
-        onEvent: handleJobEvent,
-        onStreamError(error) {
-          console.error("Availity stream error:", error);
-          finalErrorMessage = getErrorMessage(error);
-          setLogs((prev) => [...prev, `STREAM ERROR: ${finalErrorMessage}`]);
-          setStatus(`Stream error: ${finalErrorMessage}`);
-          hasError = true;
-        },
-      });
-      setStatus(
-        wasCancelled
-          ? "Availity processing cancelled."
-          : hasError
-          ? `Availity processing finished with errors${finalErrorMessage ? `: ${finalErrorMessage}` : "."}`
-          : "Availity processing completed.",
-      );
-    } catch (error) {
-      setStatus(`Failed to process Availity claims: ${getErrorMessage(error)}`);
-    } finally {
-      setIsProcessing(false);
-      setActiveJobId("");
-    }
+    await runStandardPortalJob({
+      portalName: "Availity",
+      formData,
+      clearFiles: () => {
+        setAvailityCredentialFile(null);
+        setAvailityInputFile(null);
+      },
+    });
   }
-
   async function submitWaystar(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
-
     if (!waystarLoginFile || !waystarInputFile) {
       setStatus("Please provide both the Waystar login Excel and claim Excel files.");
       return;
     }
-
     resetRunState("Starting Waystar processing...");
-
     const formData = new FormData();
     formData.append("portalId", "waystar");
     formData.append("loginExcel", waystarLoginFile);
     formData.append("inputExcel", waystarInputFile);
     formData.append("loginFileName", waystarLoginFile.name);
     formData.append("claimFileName", waystarInputFile.name);
-
-    let hasError = false;
-    let wasCancelled = false;
-    let finalErrorMessage = "";
-    let subscribedJobId = "";
-    const streamAbortController = new AbortController();
-
-    const handleJobEvent = async (eventData: ScrapeJobEvent) => {
-      if (eventData.type === "log" && eventData.message) {
-        setLogs((prev) => [...prev, eventData.message ?? ""]);
-      } else if (eventData.type === "progress" && typeof eventData.completed === "number" && typeof eventData.total === "number") {
-        setProgress({ completed: eventData.completed, total: eventData.total, currentRow: eventData.currentRow });
-        setStatus(`Waystar processing ${eventData.completed} of ${eventData.total} row(s)...`);
-      } else if (eventData.type === "error_screenshot" && typeof eventData.index === "number" && eventData.image) {
-        setErrorScreenshots((prev) => [...prev, { index: eventData.index ?? -1, image: eventData.image ?? "" }]);
-      } else if (eventData.type === "file_download" && eventData.filename && eventData.base64) {
-        const artifactKey = buildDownloadArtifactKey(eventData);
-        if (!hasDownloadedArtifact(subscribedJobId, artifactKey)) {
-          downloadBase64File(eventData.filename, eventData.base64, eventData.mimeType || "application/octet-stream");
-          rememberDownloadedArtifact(subscribedJobId, artifactKey);
-          setStatus(`Downloaded ${eventData.filename}`);
-        }
-      } else if (eventData.type === "warning" && eventData.message) {
-        setLogs((prev) => [...prev, eventData.message ?? ""]);
-        setStatus(eventData.message);
-      } else if (eventData.type === "error" && eventData.message) {
-        finalErrorMessage = eventData.message;
-        setLogs((prev) => [...prev, `ERROR: ${eventData.message}`]);
-        setStatus(`Error: ${eventData.message}`);
-        hasError = true;
-      } else if (eventData.type === "cancelled") {
-        wasCancelled = true;
-        setLogs((prev) => [...prev, eventData.message || "Processing cancelled."]);
-        setStatus(eventData.message || "Processing cancelled.");
-      }
-    };
-
-    try {
-      const jobId = await startScrapeJob(formData);
-      subscribedJobId = jobId;
-      setActiveJobId(jobId);
-      setWaystarLoginFile(null);
-      setWaystarInputFile(null);
-      void refreshWorkflowRuns({ silent: true });
-      await subscribeToScrapeJobEvents({
-        jobId,
-        signal: streamAbortController.signal,
-        onEvent: handleJobEvent,
-        onStreamError(error) {
-          console.error("Waystar stream error:", error);
-          finalErrorMessage = getErrorMessage(error);
-          setLogs((prev) => [...prev, `STREAM ERROR: ${finalErrorMessage}`]);
-          setStatus(`Stream error: ${finalErrorMessage}`);
-          hasError = true;
-        },
-      });
-      setStatus(
-        wasCancelled
-          ? "Waystar processing cancelled."
-          : hasError
-          ? `Waystar processing finished with errors${finalErrorMessage ? `: ${finalErrorMessage}` : "."}`
-          : "Waystar processing completed.",
-      );
-    } catch (error) {
-      setStatus(`Failed to process Waystar claims: ${getErrorMessage(error)}`);
-    } finally {
-      setIsProcessing(false);
-      setActiveJobId("");
-    }
+    await runStandardPortalJob({
+      portalName: "Waystar",
+      formData,
+      clearFiles: () => { setWaystarLoginFile(null); setWaystarInputFile(null); },
+      progressMessage: (completed, total) => `Waystar processing ${completed} of ${total} row(s)...`,
+    });
   }
-
   async function submitKaiser(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
-
     if (!kaiserCredentialFile || !kaiserInputFile) {
       setStatus("Please provide both the Kaiser login Excel and claim Excel files.");
       return;
     }
-
     resetRunState("Starting Kaiser scraper...");
-
     const formData = new FormData();
     formData.append("portalId", "kaiser");
     formData.append("credentialExcel", kaiserCredentialFile);
     formData.append("inputExcel", kaiserInputFile);
     formData.append("loginFileName", kaiserCredentialFile.name);
     formData.append("claimFileName", kaiserInputFile.name);
-
-    let hasError = false;
-    let wasCancelled = false;
-    let finalErrorMessage = "";
-    let subscribedJobId = "";
-    const streamAbortController = new AbortController();
-
-    const handleJobEvent = async (eventData: ScrapeJobEvent) => {
-      if (eventData.type === "log" && eventData.message) {
-        setLogs((prev) => [...prev, eventData.message ?? ""]);
-      } else if (eventData.type === "progress" && typeof eventData.completed === "number" && typeof eventData.total === "number") {
-        setProgress({ completed: eventData.completed, total: eventData.total });
-      } else if (eventData.type === "error_screenshot" && typeof eventData.index === "number" && eventData.image) {
-        setErrorScreenshots((prev) => [...prev, { index: eventData.index ?? -1, image: eventData.image ?? "" }]);
-      } else if (eventData.type === "file_download" && eventData.filename && eventData.base64) {
-        const artifactKey = buildDownloadArtifactKey(eventData);
-        if (!hasDownloadedArtifact(subscribedJobId, artifactKey)) {
-          downloadBase64File(eventData.filename, eventData.base64, eventData.mimeType || "application/octet-stream");
-          rememberDownloadedArtifact(subscribedJobId, artifactKey);
-          setStatus(`Downloaded ${eventData.filename}`);
-        }
-      } else if (eventData.type === "warning" && eventData.message) {
-        setLogs((prev) => [...prev, eventData.message ?? ""]);
-        setStatus(eventData.message);
-      } else if (eventData.type === "error" && eventData.message) {
-        finalErrorMessage = eventData.message;
-        setLogs((prev) => [...prev, `ERROR: ${eventData.message}`]);
-        setStatus(`Error: ${eventData.message}`);
-        hasError = true;
-      } else if (eventData.type === "cancelled") {
-        wasCancelled = true;
-        setLogs((prev) => [...prev, eventData.message || "Processing cancelled."]);
-        setStatus(eventData.message || "Processing cancelled.");
-      }
-    };
-
-    try {
-      const jobId = await startScrapeJob(formData);
-      subscribedJobId = jobId;
-      setActiveJobId(jobId);
-      setKaiserCredentialFile(null);
-      setKaiserInputFile(null);
-      void refreshWorkflowRuns({ silent: true });
-      await subscribeToScrapeJobEvents({
-        jobId,
-        signal: streamAbortController.signal,
-        onEvent: handleJobEvent,
-        onStreamError(error) {
-          console.error("Kaiser stream error:", error);
-          finalErrorMessage = getErrorMessage(error);
-          setLogs((prev) => [...prev, `STREAM ERROR: ${finalErrorMessage}`]);
-          setStatus(`Stream error: ${finalErrorMessage}`);
-          hasError = true;
-        },
-      });
-      setStatus(
-        wasCancelled
-          ? "Kaiser processing cancelled."
-          : hasError
-            ? `Kaiser processing finished with errors${finalErrorMessage ? `: ${finalErrorMessage}` : "."}`
-            : "Kaiser processing completed.",
-      );
-    } catch (error) {
-      setStatus(`Failed to process Kaiser claims: ${getErrorMessage(error)}`);
-    } finally {
-      setIsProcessing(false);
-      setActiveJobId("");
-    }
+    await runStandardPortalJob({
+      portalName: "Kaiser",
+      formData,
+      clearFiles: () => { setKaiserCredentialFile(null); setKaiserInputFile(null); },
+    });
   }
-
   async function submitCigna(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
 
@@ -4053,178 +3877,42 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
 
   async function submitMyFamily(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
-
     if (!myFamilyCredentialFile || !myFamilyInputFile) {
       setStatus("Please provide both the My family login Excel and claim Excel files.");
       return;
     }
-
     resetRunState("Starting My family scraper...");
-
     const formData = new FormData();
     formData.append("portalId", "my-family");
     formData.append("credentialExcel", myFamilyCredentialFile);
     formData.append("inputExcel", myFamilyInputFile);
     formData.append("loginFileName", myFamilyCredentialFile.name);
     formData.append("claimFileName", myFamilyInputFile.name);
-
-    let hasError = false;
-    let wasCancelled = false;
-    let finalErrorMessage = "";
-    let subscribedJobId = "";
-    const streamAbortController = new AbortController();
-
-    const handleJobEvent = async (eventData: ScrapeJobEvent) => {
-      if (eventData.type === "log" && eventData.message) {
-        setLogs((prev) => [...prev, eventData.message ?? ""]);
-      } else if (eventData.type === "progress" && typeof eventData.completed === "number" && typeof eventData.total === "number") {
-        setProgress({ completed: eventData.completed, total: eventData.total });
-      } else if (eventData.type === "error_screenshot" && typeof eventData.index === "number" && eventData.image) {
-        setErrorScreenshots((prev) => [...prev, { index: eventData.index ?? -1, image: eventData.image ?? "" }]);
-      } else if (eventData.type === "file_download" && eventData.filename && eventData.base64) {
-        const artifactKey = buildDownloadArtifactKey(eventData);
-        if (!hasDownloadedArtifact(subscribedJobId, artifactKey)) {
-          downloadBase64File(eventData.filename, eventData.base64, eventData.mimeType || "application/octet-stream");
-          rememberDownloadedArtifact(subscribedJobId, artifactKey);
-          setStatus(`Downloaded ${eventData.filename}`);
-        }
-      } else if (eventData.type === "warning" && eventData.message) {
-        setLogs((prev) => [...prev, eventData.message ?? ""]);
-        setStatus(eventData.message);
-      } else if (eventData.type === "error" && eventData.message) {
-        finalErrorMessage = eventData.message;
-        setLogs((prev) => [...prev, `ERROR: ${eventData.message}`]);
-        setStatus(`Error: ${eventData.message}`);
-        hasError = true;
-      } else if (eventData.type === "cancelled") {
-        wasCancelled = true;
-        setLogs((prev) => [...prev, eventData.message || "Processing cancelled."]);
-        setStatus(eventData.message || "Processing cancelled.");
-      }
-    };
-
-    try {
-      const jobId = await startScrapeJob(formData);
-      subscribedJobId = jobId;
-      setActiveJobId(jobId);
-      setMyFamilyCredentialFile(null);
-      setMyFamilyInputFile(null);
-      void refreshWorkflowRuns({ silent: true });
-      await subscribeToScrapeJobEvents({
-        jobId,
-        signal: streamAbortController.signal,
-        onEvent: handleJobEvent,
-        onStreamError(error) {
-          console.error("My family stream error:", error);
-          finalErrorMessage = getErrorMessage(error);
-          setLogs((prev) => [...prev, `STREAM ERROR: ${finalErrorMessage}`]);
-          setStatus(`Stream error: ${finalErrorMessage}`);
-          hasError = true;
-        },
-      });
-      setStatus(
-        wasCancelled
-          ? "My family processing cancelled."
-          : hasError
-            ? `My family processing finished with errors${finalErrorMessage ? `: ${finalErrorMessage}` : "."}`
-            : "My family processing completed.",
-      );
-    } catch (error) {
-      setStatus(`Failed to process My family claims: ${getErrorMessage(error)}`);
-    } finally {
-      setIsProcessing(false);
-      setActiveJobId("");
-    }
+    await runStandardPortalJob({
+      portalName: "My family",
+      formData,
+      clearFiles: () => { setMyFamilyCredentialFile(null); setMyFamilyInputFile(null); },
+    });
   }
-
   async function submitPhysicians(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
-
     if (!physiciansCredentialFile || !physiciansInputFile) {
       setStatus("Please provide both the Physicians login Excel and claim Excel files.");
       return;
     }
-
     resetRunState("Starting Physicians scraper...");
-
     const formData = new FormData();
     formData.append("portalId", "physicians");
     formData.append("credentialExcel", physiciansCredentialFile);
     formData.append("inputExcel", physiciansInputFile);
     formData.append("loginFileName", physiciansCredentialFile.name);
     formData.append("claimFileName", physiciansInputFile.name);
-
-    let hasError = false;
-    let wasCancelled = false;
-    let finalErrorMessage = "";
-    let subscribedJobId = "";
-    const streamAbortController = new AbortController();
-
-    const handleJobEvent = async (eventData: ScrapeJobEvent) => {
-      if (eventData.type === "log" && eventData.message) {
-        setLogs((prev) => [...prev, eventData.message ?? ""]);
-      } else if (eventData.type === "progress" && typeof eventData.completed === "number" && typeof eventData.total === "number") {
-        setProgress({ completed: eventData.completed, total: eventData.total });
-      } else if (eventData.type === "error_screenshot" && typeof eventData.index === "number" && eventData.image) {
-        setErrorScreenshots((prev) => [...prev, { index: eventData.index ?? -1, image: eventData.image ?? "" }]);
-      } else if (eventData.type === "file_download" && eventData.filename && eventData.base64) {
-        const artifactKey = buildDownloadArtifactKey(eventData);
-        if (!hasDownloadedArtifact(subscribedJobId, artifactKey)) {
-          downloadBase64File(eventData.filename, eventData.base64, eventData.mimeType || "application/octet-stream");
-          rememberDownloadedArtifact(subscribedJobId, artifactKey);
-          setStatus(`Downloaded ${eventData.filename}`);
-        }
-      } else if (eventData.type === "warning" && eventData.message) {
-        setLogs((prev) => [...prev, eventData.message ?? ""]);
-        setStatus(eventData.message);
-      } else if (eventData.type === "error" && eventData.message) {
-        finalErrorMessage = eventData.message;
-        setLogs((prev) => [...prev, `ERROR: ${eventData.message}`]);
-        setStatus(`Error: ${eventData.message}`);
-        hasError = true;
-      } else if (eventData.type === "cancelled") {
-        wasCancelled = true;
-        setLogs((prev) => [...prev, eventData.message || "Processing cancelled."]);
-        setStatus(eventData.message || "Processing cancelled.");
-      }
-    };
-
-    try {
-      const jobId = await startScrapeJob(formData);
-      subscribedJobId = jobId;
-      setActiveJobId(jobId);
-      setPhysiciansCredentialFile(null);
-      setPhysiciansInputFile(null);
-      void refreshWorkflowRuns({ silent: true });
-      await subscribeToScrapeJobEvents({
-        jobId,
-        signal: streamAbortController.signal,
-        onEvent: handleJobEvent,
-        onStreamError(error) {
-          console.error("Physicians stream error:", error);
-          finalErrorMessage = getErrorMessage(error);
-          setLogs((prev) => [...prev, `STREAM ERROR: ${finalErrorMessage}`]);
-          setStatus(`Stream error: ${finalErrorMessage}`);
-          hasError = true;
-        },
-      });
-      setStatus(
-        wasCancelled
-          ? "Physicians processing cancelled."
-          : hasError
-            ? `Physicians processing finished with errors${finalErrorMessage ? `: ${finalErrorMessage}` : "."}`
-            : "Physicians processing completed.",
-      );
-    } catch (error) {
-      setStatus(`Failed to process Physicians claims: ${getErrorMessage(error)}`);
-    } finally {
-      setIsProcessing(false);
-      setActiveJobId("");
-    }
+    await runStandardPortalJob({
+      portalName: "Physicians",
+      formData,
+      clearFiles: () => { setPhysiciansCredentialFile(null); setPhysiciansInputFile(null); },
+    });
   }
-
-
-
   async function submitAstrona(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const isAllCare = effectivePortalId === "all-care";
