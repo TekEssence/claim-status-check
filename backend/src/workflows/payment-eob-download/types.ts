@@ -50,3 +50,13 @@ export type PaymentEobComparisonRow = {
   filename: string;
   message: string;
 };
+
+export type PaymentTrackerRow = {
+  source: "Availity";
+  eraDownloadedDate: string;
+  payerName: string;
+  payeeName: string;
+  checkNumber: string;
+  checkDate: string;
+  checkAmount: string;
+};

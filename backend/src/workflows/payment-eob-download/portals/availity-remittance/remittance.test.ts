@@ -27,3 +27,13 @@ test("parses portal CSV with exact Availity Remittance columns", () => {
     },
   ]);
 });
+
+test("preserves the original Availity Check/EFT number for downstream output and filenames", () => {
+  const records = parseRemittanceCsv([
+    "Check/EFT #,Payer,Payee,Check/EFT Date,Received by Availity,Check/EFT Amount",
+    "000321780536,PAYER,PAYEE,08/19/2026,08/18/2026,$69.71",
+  ].join("\n"));
+
+  assert.equal(records[0].checkNumber, "000321780536");
+  assert.equal(records[0].raw["Check/EFT #"], "000321780536");
+});

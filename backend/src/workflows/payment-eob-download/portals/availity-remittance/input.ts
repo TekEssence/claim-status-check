@@ -11,6 +11,12 @@ export function normalizeCheckNumber(value: unknown): string {
     .replace(/\s+/g, "");
 }
 
+export function normalizeCheckNumberForComparison(value: unknown): string {
+  const normalizedCase = String(value ?? "").trim().toUpperCase();
+  if (!/^\d+$/.test(normalizedCase)) return normalizedCase;
+  return normalizedCase.replace(/^0+(?=\d)/, "");
+}
+
 function asText(value: unknown): string {
   if (value == null) return "";
   if (value instanceof Date) {

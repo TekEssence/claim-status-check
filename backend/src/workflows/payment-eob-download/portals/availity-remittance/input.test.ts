@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import ExcelJS from "exceljs";
-import { normalizeCheckNumber, normalizeTotpSecret, readAvailityRemittanceCredentials, readReferenceRows } from "./input";
+import { normalizeCheckNumber, normalizeCheckNumberForComparison, normalizeTotpSecret, readAvailityRemittanceCredentials, readReferenceRows } from "./input";
 
 const GOOGLE_AUTHENTICATOR_DATA_VALUE =
   "CnMKQMpxyRlBK7V3XEtbtGw2wbIXxBK%2Frq3qOdpQgOvynXsG1Xy4Y44HCE2TGNy2p8CMbe%2BCgnTvLKkADXvmTS3AetoSCnJjbWJyYW5kb24aCEF2YWlsaXR5IAEoATACQhNiYmM3NTQxNzgwMzIyNDkwMTI2EAIYASAA";
@@ -35,6 +35,28 @@ test("normalizes Check/EFT numbers without stripping leading zeros", () => {
   assert.equal(normalizeCheckNumber(" 0300191744 "), "0300191744");
   assert.equal(normalizeCheckNumber("1254526643.0"), "1254526643");
   assert.equal(normalizeCheckNumber("0900 562787"), "0900562787");
+});
+
+test("normalizes numeric Check/EFT comparison keys by removing leading zeros", () => {
+  assert.equal(normalizeCheckNumberForComparison("000321780536"), "321780536");
+  assert.equal(normalizeCheckNumberForComparison("09150603"), "9150603");
+  assert.equal(normalizeCheckNumberForComparison("000312308014"), "312308014");
+  assert.equal(normalizeCheckNumberForComparison("010009600834"), "10009600834");
+  assert.equal(normalizeCheckNumberForComparison("3420955202"), "3420955202");
+  assert.equal(normalizeCheckNumberForComparison("0000"), "0");
+});
+
+test("preserves alphanumeric Check/EFT zero structure while trimming and uppercasing", () => {
+  assert.equal(normalizeCheckNumberForComparison(" AN0009070320 "), "AN0009070320");
+  assert.equal(normalizeCheckNumberForComparison("5931435232wa6"), "5931435232WA6");
+  assert.equal(normalizeCheckNumberForComparison("ww0009048872"), "WW0009048872");
+});
+
+test("matches numeric leading-zero variants using normalized comparison keys", () => {
+  const trackerNumbers = new Set(["321780536", "09150603"].map(normalizeCheckNumberForComparison));
+  assert.equal(trackerNumbers.has(normalizeCheckNumberForComparison("000321780536")), true);
+  assert.equal(trackerNumbers.has(normalizeCheckNumberForComparison("9150603")), true);
+  assert.equal(trackerNumbers.has(normalizeCheckNumberForComparison("000999")), false);
 });
 
 test("keeps plain base32 Availity TOTP secrets compatible with existing MFA helper", () => {

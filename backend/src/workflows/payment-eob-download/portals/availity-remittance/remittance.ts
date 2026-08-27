@@ -10,10 +10,12 @@ import type {
   PaymentEobCredentials,
   PaymentEobPortalRecord,
   PaymentEobReferenceRow,
+  PaymentTrackerRow,
 } from "../../types";
-import { normalizeCheckNumber } from "./input";
-import { createPaymentEobResultWorkbookBuffer } from "./output-builder";
+import { normalizeCheckNumber, normalizeCheckNumberForComparison } from "./input";
+import { createPaymentEobResultWorkbookBuffer, createPaymentTrackerWorkbookBuffer } from "./output-builder";
 import { uploadPaymentEobOutputToSharePoint } from "./sharepoint";
+import { addPaymentTrackerRow } from "./tracker";
 import { createStoredZipFromFolder } from "./zip";
 
 const require = createRequire(import.meta.url);
@@ -91,7 +93,7 @@ function findValue(row: Record<string, string>, aliases: string[]): string {
 }
 
 function portalRecordFromCsv(row: Record<string, string>): PaymentEobPortalRecord | null {
-  const checkNumber = normalizeCheckNumber(findValue(row, ["Check/EFT #", "Check/EFT Number", "Check EFT Number", "Check Number", "EFT Number"]));
+  const checkNumber = findValue(row, ["Check/EFT #", "Check/EFT Number", "Check EFT Number", "Check Number", "EFT Number"]);
   if (!checkNumber) return null;
   return {
     checkNumber,
@@ -820,8 +822,11 @@ export async function runAvailityRemittanceJob(input: RunInput, context: Automat
   const outputPdfFolder = path.join(outputRoot, "PDFs");
   await fs.mkdir(outputPdfFolder, { recursive: true });
 
-  const referenceNumbers = new Set(input.referenceRows.map((row) => row.checkNumber));
+  const referenceNumbers = new Set(input.referenceRows.map((row) => normalizeCheckNumberForComparison(row.checkNumber)));
   const comparisonRows: PaymentEobComparisonRow[] = [];
+  const paymentTrackerRows: PaymentTrackerRow[] = [];
+  const trackedPayments = new Set<string>();
+  const eraDownloadedDate = todayMmDdYyyy();
   const log = async (message: string) => context.log({ level: "info", message });
   let session: Awaited<ReturnType<typeof launchAvailityBrowser>> | null = null;
   let page: Page | null = null;
@@ -839,7 +844,7 @@ export async function runAvailityRemittanceJob(input: RunInput, context: Automat
 
     const portalRecords = await downloadPortalCsv(remittanceSurface, page, context, outputRoot, input.credentials);
     const uniqueRecords = portalRecords.filter((record) => {
-      if (referenceNumbers.has(record.checkNumber)) {
+      if (referenceNumbers.has(normalizeCheckNumberForComparison(record.checkNumber))) {
         comparisonRows.push({
           checkNumber: record.checkNumber,
           checkDate: record.checkDate,
@@ -864,7 +869,7 @@ export async function runAvailityRemittanceJob(input: RunInput, context: Automat
       try {
         await context.log({ level: "info", message: `Searching unmatched Check/EFT ${record.checkNumber} (${record.checkDate}).`, eventName: "payment_eob_pdf_search" });
         const result = await searchAndDownloadPdf(remittanceSurface, page, record, outputPdfFolder, context);
-        comparisonRows.push({
+        const comparisonRow: PaymentEobComparisonRow = {
           checkNumber: record.checkNumber,
           checkDate: record.checkDate,
           comparison: "Unique",
@@ -872,7 +877,9 @@ export async function runAvailityRemittanceJob(input: RunInput, context: Automat
           pdfStatus: result.found ? "Downloaded" : "Not downloaded",
           filename: result.filename,
           message: result.message,
-        });
+        };
+        comparisonRows.push(comparisonRow);
+        addPaymentTrackerRow(paymentTrackerRows, trackedPayments, record, comparisonRow, eraDownloadedDate);
       } catch (error) {
         comparisonRows.push({
           checkNumber: record.checkNumber,
@@ -904,6 +911,10 @@ export async function runAvailityRemittanceJob(input: RunInput, context: Automat
     const workbookBuffer = await createPaymentEobResultWorkbookBuffer(comparisonRows);
     await fs.writeFile(path.join(outputRoot, "comparison_result.xlsx"), workbookBuffer);
     await context.emit(downloadableFileEvent("comparison_result.xlsx", workbookBuffer, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"));
+
+    const trackerWorkbookBuffer = await createPaymentTrackerWorkbookBuffer(paymentTrackerRows);
+    await fs.writeFile(path.join(outputRoot, "payment_tracker.xlsx"), trackerWorkbookBuffer);
+    await context.emit(downloadableFileEvent("payment_tracker.xlsx", trackerWorkbookBuffer, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"));
 
     await emitRunZip(outputRoot, context);
     await uploadToSharePointIfEnabled(input.credentials, outputRoot, context);
