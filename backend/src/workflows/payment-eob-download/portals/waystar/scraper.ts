@@ -279,6 +279,33 @@ async function closeEobViewer(page: Page): Promise<void> {
   await page.locator(".ui-dialog:visible").first().waitFor({ state: "hidden", timeout: 10000 }).catch(() => {});
 }
 
+type EobOpenOutcome =
+  | { kind: "download"; download: Download }
+  | { kind: "modal" }
+  | { kind: "popup"; popup: Page };
+
+async function openEobAndWaitForFirstOutcome(page: Page, action: Locator, force = false): Promise<EobOpenOutcome> {
+  const existingPages = new Set(page.context().pages());
+  const modal = page.locator(".ui-dialog:visible").filter({ hasText: /View EOB/i }).first();
+  const directDownload = page.waitForEvent("download", { timeout: 10000 })
+    .then((download): EobOpenOutcome => ({ kind: "download", download }));
+  const popupOpened = page.context().waitForEvent("page", { timeout: 10000 })
+    .then((popup): EobOpenOutcome => ({ kind: "popup", popup }));
+  const modalOpened = modal.waitFor({ state: "visible", timeout: 10000 })
+    .then((): EobOpenOutcome => ({ kind: "modal" }));
+
+  await action.click({ force });
+  const outcome = await Promise.race([directDownload, popupOpened, modalOpened]).catch(() => null);
+  if (outcome) return outcome;
+
+  // Preserve the prior fallbacks if two browser events settle at nearly the
+  // same time as the safety timeout.
+  if (await modal.isVisible().catch(() => false)) return { kind: "modal" };
+  const popup = page.context().pages().find((candidate) => !existingPages.has(candidate));
+  if (popup) return { kind: "popup", popup };
+  throw new Error("Waystar View EOB did not open a modal, popup, or PDF download.");
+}
+
 async function findPaymentRow(page: Page, paymentNumber: string): Promise<Locator | null> {
   const rows = page.locator("#paymentsTableGrid tr.gridViewRow[data-paymentnumber]");
   for (let index = 0; index < await rows.count(); index += 1) {
@@ -485,20 +512,13 @@ async function downloadSelectedZeroPaymentEob(page: Page, record: WaystarPayment
   }
   await action.waitFor({ state: "visible", timeout: 10000 });
 
-  const existingPages = new Set(page.context().pages());
-  const immediateDownloadPromise = page.waitForEvent("download", { timeout: 10000 }).catch(() => null);
-  const popupPromise = page.context().waitForEvent("page", { timeout: 10000 }).catch(() => null);
-  const modal = page.locator(".ui-dialog:visible").filter({ hasText: /View EOB/i }).first();
-  await action.click({ force: true });
+  const outcome = await openEobAndWaitForFirstOutcome(page, action, true);
   const filename = `${safePart(record.paymentNumber)}_${safePart(record.paymentDate)}.pdf`;
   const outputPath = path.join(folder, filename);
-  const modalOpened = await modal.waitFor({ state: "visible", timeout: 10000 }).then(() => true).catch(() => false);
-  const immediateDownload = await immediateDownloadPromise;
-  const popup = (await popupPromise) ?? page.context().pages().find((candidate) => !existingPages.has(candidate)) ?? null;
 
-  if (immediateDownload) {
-    await immediateDownload.saveAs(outputPath);
-  } else if (modalOpened) {
+  if (outcome.kind === "download") {
+    await outcome.download.saveAs(outputPath);
+  } else if (outcome.kind === "modal") {
     const viewerDownload = await clickViewerDownload(page);
     if (viewerDownload) {
       await viewerDownload.saveAs(outputPath);
@@ -508,7 +528,8 @@ async function downloadSelectedZeroPaymentEob(page: Page, record: WaystarPayment
       await fs.writeFile(outputPath, pdf);
     }
     await closeEobViewer(page);
-  } else if (popup) {
+  } else {
+    const popup = outcome.popup;
     await popup.waitForLoadState("domcontentloaded", { timeout: 30000 }).catch(() => {});
     const viewerDownload = await clickViewerDownload(popup);
     if (viewerDownload) {
@@ -519,8 +540,6 @@ async function downloadSelectedZeroPaymentEob(page: Page, record: WaystarPayment
       await fs.writeFile(outputPath, pdf);
     }
     await popup.close().catch(() => {});
-  } else {
-    throw new Error("Waystar View EOB did not open a modal, popup, or PDF download.");
   }
   return filename;
 }
@@ -657,20 +676,13 @@ async function runZeroPaymentsPhase(
 async function downloadEob(page: Page, record: WaystarPaymentRecord, folder: string): Promise<string> {
   const row = page.locator("#paymentsTableGrid tr.gridViewRow[data-paymentnumber]").nth(record.rowIndex);
   const action = await revealViewEob(page, row);
-  const existingPages = new Set(page.context().pages());
-  const immediateDownloadPromise = page.waitForEvent("download", { timeout: 10000 }).catch(() => null);
-  const popupPromise = page.context().waitForEvent("page", { timeout: 10000 }).catch(() => null);
-  const modal = page.locator(".ui-dialog:visible").filter({ hasText: /View EOB/i }).first();
-  await action.click();
+  const outcome = await openEobAndWaitForFirstOutcome(page, action);
   const filename = `${safePart(record.paymentNumber)}_${safePart(record.paymentDate)}.pdf`;
   const outputPath = path.join(folder, filename);
-  const modalOpened = await modal.waitFor({ state: "visible", timeout: 10000 }).then(() => true).catch(() => false);
-  const immediateDownload = await immediateDownloadPromise;
-  const popup = (await popupPromise) ?? page.context().pages().find((candidate) => !existingPages.has(candidate)) ?? null;
 
-  if (immediateDownload) {
-    await immediateDownload.saveAs(outputPath);
-  } else if (modalOpened) {
+  if (outcome.kind === "download") {
+    await outcome.download.saveAs(outputPath);
+  } else if (outcome.kind === "modal") {
     const viewerDownload = await clickViewerDownload(page);
     if (viewerDownload) {
       await viewerDownload.saveAs(outputPath);
@@ -680,7 +692,8 @@ async function downloadEob(page: Page, record: WaystarPaymentRecord, folder: str
       await fs.writeFile(outputPath, pdf);
     }
     await closeEobViewer(page);
-  } else if (popup) {
+  } else {
+    const popup = outcome.popup;
     await popup.waitForLoadState("domcontentloaded", { timeout: 30000 }).catch(() => {});
     const viewerDownload = await clickViewerDownload(popup);
     if (viewerDownload) {
@@ -691,8 +704,6 @@ async function downloadEob(page: Page, record: WaystarPaymentRecord, folder: str
       await fs.writeFile(outputPath, pdf);
     }
     await popup.close().catch(() => {});
-  } else {
-    throw new Error("Waystar View EOB did not open a modal, popup, or PDF download.");
   }
 
   return filename;
