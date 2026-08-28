@@ -10,7 +10,7 @@ export function UhcInputForm({
   isProcessing,
   loginFileName,
   onBrowserTypeChange,
-  onClaimFileSelect,
+  onClaimFileChange,
   onGroupChange,
   onLoginFileChange,
   onSubmit,
@@ -22,7 +22,7 @@ export function UhcInputForm({
   isProcessing: boolean;
   loginFileName?: string;
   onBrowserTypeChange: (browserType: "chrome" | "firefox") => void;
-  onClaimFileSelect: () => void;
+  onClaimFileChange: (file: File | null) => void;
   onGroupChange: (groupId: string) => void;
   onLoginFileChange: (file: File | null) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
@@ -96,14 +96,16 @@ export function UhcInputForm({
           title="Upload Login File"
         />
         <PortalUploadCard
-          mode="action"
+          mode="file"
+          accept=".xlsx,.xls"
           acceptedFormats=".xlsx, .xls"
-          description="Pick the UHC claim workbook to update directly as rows complete."
+          description="Upload the UHC claim workbook. Results are generated as downloadable output files without writing back to your local file."
           fileName={claimFileName}
           icon={FileSpreadsheet}
-          onAction={onClaimFileSelect}
+          inputId="uhcClaimExcel"
+          onFileSelect={onClaimFileChange}
           sizeHint="25 MB"
-          title="Select Claim File"
+          title="Upload Claim File"
         />
       </div>
 
@@ -115,7 +117,7 @@ export function UhcInputForm({
         <Play className="h-4 w-4" strokeWidth={2.2} />
         {isProcessing ? "Processing..." : "Start processing"}
       </button>
-      <p className="text-center text-sm text-slate-500">The selected claim workbook updates in place after each UHC row.</p>
+      <p className="text-center text-sm text-slate-500">The original claim workbook is read only once; updated results download as Excel files.</p>
     </form>
   );
 }

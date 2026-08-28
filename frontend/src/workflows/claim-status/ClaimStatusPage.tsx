@@ -53,7 +53,7 @@ import {
   type ScrapeJobSummary,
 } from "../../api/scrape-jobs-api";
 import { clearCognitoAccessToken, getCognitoAccessToken, getCognitoUserProfile, isCognitoMode, redirectToCognitoLogin, redirectToCognitoLogout, storeCognitoTokenFromHash } from "../../api/cognito-auth";
-import { clearStoredRunContext, loadClaimFileHandle, loadIehpLoginFile, saveClaimFileHandle, saveIehpLoginFile } from "../../lib/run-context-store";
+import { clearStoredRunContext, loadIehpClaimFile, loadIehpLoginFile, saveIehpClaimFile, saveIehpLoginFile } from "../../lib/run-context-store";
 import type { FileSystemFileHandle, WindowWithFilePicker } from "../../types/file-system-access";
 import type { ClaimRow, ErrorScreenshot, JobProgressValue, ScrapeJobEvent } from "../../types/job";
 import { IehpInputForm } from "./portals/iehp/IehpInputForm";
@@ -840,14 +840,6 @@ function isFileAccessPermissionError(error: unknown): boolean {
   );
 }
 
-function getMissingLocalExcelMessage(fileName: string): string {
-  return `The previously selected Excel file${fileName ? ` (${fileName})` : ""} was not found on this computer. Please reselect the same claim file and continue.`;
-}
-
-function getExcelReauthorizeMessage(fileName: string): string {
-  return `Please click Allow And Continue to allow access to the same claim Excel${fileName ? ` (${fileName})` : ""} and continue the previous IEHP run.`;
-}
-
 async function selectExcelFileHandle(): Promise<FileSystemFileHandle | null> {
   const picker = (window as WindowWithFilePicker).showOpenFilePicker;
   if (!picker) {
@@ -872,33 +864,9 @@ async function selectExcelFileHandle(): Promise<FileSystemFileHandle | null> {
 }
 
 async function loadIehpWorkbookBundle(
-  claimFileHandle: FileSystemFileHandle,
-  options: { requestPermission?: boolean; fileNameForErrors?: string } = {},
+  claimFile: File,
 ): Promise<IehpWorkbookBundle> {
-  const fileNameForErrors = options.fileNameForErrors ?? "";
-  const currentPermission = await claimFileHandle.queryPermission({ mode: "readwrite" }).catch(() => "prompt" as const);
-  if (currentPermission !== "granted") {
-    if (!options.requestPermission) {
-      throw new Error(getExcelReauthorizeMessage(fileNameForErrors));
-    }
-    if ((await claimFileHandle.requestPermission({ mode: "readwrite" }).catch(() => "denied" as const)) !== "granted") {
-      throw new Error("Write permission denied. Cannot update Excel file.");
-    }
-  }
-
-  let file: File;
-  try {
-    file = await claimFileHandle.getFile();
-  } catch (error) {
-    if (isMissingLocalFileError(error)) {
-      throw new Error(getMissingLocalExcelMessage(fileNameForErrors));
-    }
-    if (isFileAccessPermissionError(error)) {
-      throw new Error(getExcelReauthorizeMessage(fileNameForErrors));
-    }
-    throw error;
-  }
-  const arrayBuffer = await file.arrayBuffer();
+  const arrayBuffer = await claimFile.arrayBuffer();
   const xlsxWb = XLSX.read(arrayBuffer, { type: "array", cellDates: false });
   const sheetName = xlsxWb.SheetNames[0];
   const rawClaimRows = XLSX.utils.sheet_to_json(xlsxWb.Sheets[sheetName]) as Record<string, unknown>[];
@@ -923,16 +891,8 @@ async function loadIehpWorkbookBundle(
   };
 }
 
-async function loadUhcWorkbookBundle(claimFileHandle: FileSystemFileHandle, groupId: string): Promise<UhcWorkbookBundle> {
-  const currentPermission = await claimFileHandle.queryPermission({ mode: "readwrite" }).catch(() => "prompt" as const);
-  if (currentPermission !== "granted") {
-    if ((await claimFileHandle.requestPermission({ mode: "readwrite" }).catch(() => "denied" as const)) !== "granted") {
-      throw new Error("Write permission denied. Cannot update UHC Excel file.");
-    }
-  }
-
-  const file = await claimFileHandle.getFile();
-  const arrayBuffer = await file.arrayBuffer();
+async function loadUhcWorkbookBundle(claimFile: File, groupId: string): Promise<UhcWorkbookBundle> {
+  const arrayBuffer = await claimFile.arrayBuffer();
   const excelWb = new ExcelJS.Workbook();
   await excelWb.xlsx.load(arrayBuffer);
   const worksheet = excelWb.worksheets[0];
@@ -955,21 +915,6 @@ async function loadUhcWorkbookBundle(claimFileHandle: FileSystemFileHandle, grou
   };
 }
 
-async function writeWorkbookToClaimFile(claimFileHandle: FileSystemFileHandle, excelWb: ExcelJS.Workbook): Promise<void> {
-  const permission = await claimFileHandle.queryPermission({ mode: "readwrite" });
-  if (permission !== "granted") {
-    const requestedPermission = await claimFileHandle.requestPermission({ mode: "readwrite" });
-    if (requestedPermission !== "granted") {
-      throw new Error("Browser write permission was denied. Please allow file access and run again.");
-    }
-  }
-
-  const updatedBuffer = await excelWb.xlsx.writeBuffer();
-  const writable = await claimFileHandle.createWritable();
-  await writable.write(updatedBuffer);
-  await writable.close();
-}
-
 async function cloneWorkbook(excelWb: ExcelJS.Workbook): Promise<ExcelJS.Workbook> {
   const buffer = await excelWb.xlsx.writeBuffer();
   const clonedWb = new ExcelJS.Workbook();
@@ -977,17 +922,26 @@ async function cloneWorkbook(excelWb: ExcelJS.Workbook): Promise<ExcelJS.Workboo
   return clonedWb;
 }
 
-async function writeIehpPostProcessedCheckpoint(
-  claimFileHandle: FileSystemFileHandle,
-  excelWb: ExcelJS.Workbook,
-): Promise<void> {
+async function downloadIehpWorkbook(filename: string, excelWb: ExcelJS.Workbook): Promise<void> {
   const checkpointWb = await cloneWorkbook(excelWb);
   const checkpointWorksheet = checkpointWb.getWorksheet(1);
   if (!checkpointWorksheet) {
     throw new Error("Claim Excel file does not contain a worksheet.");
   }
   postProcessWorksheet(checkpointWorksheet);
-  await writeWorkbookToClaimFile(claimFileHandle, checkpointWb);
+  const buffer = await checkpointWb.xlsx.writeBuffer();
+  downloadBlob(filename, new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }));
+}
+
+async function downloadUhcWorkbook(filename: string, excelWb: ExcelJS.Workbook): Promise<void> {
+  const outputWb = await cloneWorkbook(excelWb);
+  const worksheet = outputWb.getWorksheet(1);
+  if (!worksheet) {
+    throw new Error("UHC claim Excel file does not contain a worksheet.");
+  }
+  postProcessUhcWorksheet(worksheet);
+  const buffer = await outputWb.xlsx.writeBuffer();
+  downloadBlob(filename, new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }));
 }
 
 export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: PortalId | null }) {
@@ -1024,8 +978,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
   const [settingsPasswordSubmitting, setSettingsPasswordSubmitting] = useState(false);
   const [selectedPortalId, setSelectedPortalId] = useState<PortalId | null>(null);
   const [iehpLoginFile, setIehpLoginFile] = useState<File | null>(null);
-  const [claimFileHandle, setClaimFileHandle] = useState<FileSystemFileHandle | null>(null);
-  const [claimFileName, setClaimFileName] = useState<string>("");
+  const [iehpClaimFile, setIehpClaimFile] = useState<File | null>(null);
   const [aerialCredentialFile, setAerialCredentialFile] = useState<File | null>(null);
   const [aerialInputFile, setAerialInputFile] = useState<File | null>(null);
   const [aerialSubportal, setAerialSubportal] = useState<AerialSubportal | null>(null);
@@ -1043,8 +996,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
   const [allCareCredentialFile, setAllCareCredentialFile] = useState<File | null>(null);
   const [allCareInputFile, setAllCareInputFile] = useState<File | null>(null);
   const [uhcLoginFile, setUhcLoginFile] = useState<File | null>(null);
-  const [uhcClaimFileHandle, setUhcClaimFileHandle] = useState<FileSystemFileHandle | null>(null);
-  const [uhcClaimFileName, setUhcClaimFileName] = useState<string>("");
+  const [uhcClaimFile, setUhcClaimFile] = useState<File | null>(null);
   const [uhcGroupId, setUhcGroupId] = useState("minimax");
   const [uhcBrowserType, setUhcBrowserType] = useState<"chrome" | "firefox">("chrome");
   const [uhcJobId, setUhcJobId] = useState<string>("");
@@ -1216,8 +1168,8 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
   const canStartAnotherRun = workflowRunTrackingEnabled || !isProcessing;
   const blockPortalFormForProcessing = isProcessing && !workflowRunTrackingEnabled;
   const canSubmitIehp = useMemo(
-    () => Boolean(iehpLoginFile && claimFileHandle && canStartAnotherRun),
-    [iehpLoginFile, claimFileHandle, canStartAnotherRun],
+    () => Boolean(iehpLoginFile && iehpClaimFile && canStartAnotherRun),
+    [iehpLoginFile, iehpClaimFile, canStartAnotherRun],
   );
   const selectedAerialSubportal = getAerialSubportal(aerialSubportal);
   const canSubmitAerial = useMemo(
@@ -1234,8 +1186,8 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     [availityProjectId, availityCredentialFile, availityInputFile, canStartAnotherRun],
   );
   const canSubmitUhc = useMemo(
-    () => Boolean(uhcLoginFile && uhcClaimFileHandle && canStartAnotherRun),
-    [uhcClaimFileHandle, uhcLoginFile, canStartAnotherRun],
+    () => Boolean(uhcLoginFile && uhcClaimFile && canStartAnotherRun),
+    [uhcClaimFile, uhcLoginFile, canStartAnotherRun],
   );
   const canSubmitAstrona = useMemo(
     () => Boolean(astronaCredentialFile && astronaInputFile && canStartAnotherRun),
@@ -1311,8 +1263,8 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
   const portalFileState = useMemo(() => {
     if (effectivePortalId === "iehp") {
       return {
-        claimFileLabel: claimFileName,
-        claimReady: Boolean(claimFileName),
+        claimFileLabel: iehpClaimFile?.name ?? "",
+        claimReady: Boolean(iehpClaimFile),
         loginFileLabel: iehpLoginFile?.name ?? "",
         loginReady: Boolean(iehpLoginFile),
       };
@@ -1356,8 +1308,8 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
 
     if (effectivePortalId === "uhc") {
       return {
-        claimFileLabel: uhcClaimFileName,
-        claimReady: Boolean(uhcClaimFileHandle),
+        claimFileLabel: uhcClaimFile?.name ?? "",
+        claimReady: Boolean(uhcClaimFile),
         loginFileLabel: uhcLoginFile?.name ?? "",
         loginReady: Boolean(uhcLoginFile),
       };
@@ -1454,7 +1406,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     blueShieldInputFile,
     cignaCredentialFile,
     cignaInputFile,
-    claimFileName,
+    iehpClaimFile,
     effectivePortalId,
     iehpLoginFile,
     kaiserCredentialFile,
@@ -1467,8 +1419,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     physiciansInputFile,
     regalClaimFile,
     regalLoginFile,
-    uhcClaimFileHandle,
-    uhcClaimFileName,
+    uhcClaimFile,
     uhcLoginFile,
     waystarInputFile,
     waystarLoginFile,
@@ -1638,34 +1589,21 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
         setActiveView("portal-selection");
 
         if (currentJob.portalId === "iehp") {
-          const [storedClaimHandle, storedLoginFile] = await Promise.all([loadClaimFileHandle(), loadIehpLoginFile()]);
+          const [storedClaimFile, storedLoginFile] = await Promise.all([loadIehpClaimFile(), loadIehpLoginFile()]);
           if (cancelled) return;
-          let canAutoResumeIehp = true;
-
-          if (storedClaimHandle) {
-            setClaimFileHandle(storedClaimHandle);
-            setClaimFileName(currentJob.claimFileName || "");
-            const currentPermission = await storedClaimHandle.queryPermission({ mode: "readwrite" }).catch(() => "prompt" as const);
-            if (currentPermission !== "granted") {
-              canAutoResumeIehp = false;
-            }
+          if (storedClaimFile) {
+            setIehpClaimFile(storedClaimFile);
           }
           if (storedLoginFile) {
             setIehpLoginFile(storedLoginFile);
           }
 
-          if (storedClaimHandle && storedLoginFile && canAutoResumeIehp) {
-            await resumeExistingIehpRun(currentJob, storedClaimHandle, storedLoginFile);
+          if (storedClaimFile && storedLoginFile) {
+            await resumeExistingIehpRun(currentJob, storedClaimFile, storedLoginFile);
           } else {
             setPendingIehpRestoreJob(currentJob);
-            if (!storedClaimHandle) {
-              setStatus(`Could not restore the active run: ${getMissingLocalExcelMessage(currentJob.claimFileName)}`);
-            } else if (!canAutoResumeIehp) {
-              const normalizedResumeMessage = `Previous IEHP run restored. Click Allow And Continue to continue from row ${currentJob.currentCompleted + 1}.`;
-              setStatus(normalizedResumeMessage);
-              if (typeof window !== "undefined") {
-                window.alert(normalizedResumeMessage);
-              }
+            if (!storedClaimFile) {
+              setStatus(`A run is active, but the IEHP claim workbook copy could not be restored. Please upload the claim file again to continue from row ${currentJob.currentCompleted + 1}.`);
             } else {
               setStatus("A run is active, but the local IEHP login file context could not be restored automatically. Please upload the login file again if needed.");
             }
@@ -2200,8 +2138,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     setSettingsPasswordSubmitting(false);
     setSelectedPortalId(null);
     setIehpLoginFile(null);
-    setClaimFileHandle(null);
-    setClaimFileName("");
+    setIehpClaimFile(null);
     setAerialCredentialFile(null);
     setAerialInputFile(null);
     setAerialSubportal(null);
@@ -2456,39 +2393,10 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     }
   }
 
-  async function selectClaimFile() {
-    try {
-      const fileHandle = await selectExcelFileHandle();
-      if (!fileHandle) return null;
-
-      setClaimFileHandle(fileHandle);
-      await saveClaimFileHandle(fileHandle).catch(() => {});
-      const file = await fileHandle.getFile();
-      setClaimFileName(file.name);
-
-      if (pendingIehpRestoreJob) {
-        const loginFileToUse = iehpLoginFile ?? (await loadIehpLoginFile().catch(() => null));
-        if (!loginFileToUse) {
-          setStatus("The active IEHP run is waiting, but the login file could not be restored. Please upload the login file again.");
-          return fileHandle;
-        }
-
-        setIehpLoginFile(loginFileToUse);
-        setPendingIehpRestoreJob(null);
-        void resumeExistingIehpRun(pendingIehpRestoreJob, fileHandle, loginFileToUse).catch((error) => {
-          setPendingIehpRestoreJob(pendingIehpRestoreJob);
-          setStatus(`Could not restore the active run: ${getErrorMessage(error)}`);
-          setIsProcessing(false);
-        });
-      }
-
-      return fileHandle;
-    } catch (error) {
-      if ((error as Error).name !== "AbortError") {
-        console.error("Failed to select file:", error);
-        setStatus(`Failed to select file: ${getErrorMessage(error)}`);
-      }
-      return null;
+  function handleIehpClaimFileChange(file: File | null) {
+    setIehpClaimFile(file);
+    if (file) {
+      void saveIehpClaimFile(file).catch(() => {});
     }
   }
 
@@ -2500,26 +2408,20 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
   }
 
   async function runIehpSession(options: {
-    claimFileHandle: FileSystemFileHandle;
+    claimFile: File;
     loginFile: File;
     existingJobId?: string;
     initialStartIndex?: number;
     attachToRunningJob?: boolean;
     initialLogs?: string[];
     initialProgress?: JobProgressValue | null;
-    allowPermissionPrompt?: boolean;
   }) {
-    const workbookBundle = await loadIehpWorkbookBundle(options.claimFileHandle, {
-      requestPermission: options.allowPermissionPrompt ?? true,
-      fileNameForErrors: options.claimFileHandle ? claimFileName : "",
-    });
+    const workbookBundle = await loadIehpWorkbookBundle(options.claimFile);
     const { claimRows, totalRows, excelWb, worksheet } = workbookBundle;
 
-    setClaimFileHandle(options.claimFileHandle);
-    const liveClaimFile = await options.claimFileHandle.getFile();
-    setClaimFileName(liveClaimFile.name);
+    setIehpClaimFile(options.claimFile);
     setIehpLoginFile(options.loginFile);
-    await saveClaimFileHandle(options.claimFileHandle).catch(() => {});
+    await saveIehpClaimFile(options.claimFile).catch(() => {});
     await saveIehpLoginFile(options.loginFile).catch(() => {});
 
     setIsProcessing(true);
@@ -2542,33 +2444,9 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     ): Promise<void> => {
       let currentCompleted = startIndex;
       let chunkHasError = false;
-      let writeQueue = Promise.resolve();
-      let writeFailure: Error | null = null;
-      let writeFailureAlertShown = false;
       let subscribedJobId = logicalJobId;
       let cancellationRequested = false;
       const streamAbortController = new AbortController();
-
-      const handleWriteFailure = (error: unknown): never => {
-        const message = getErrorMessage(error);
-        const userMessage = `Excel update failed. The workbook may be open, locked, moved, or browser file permission may have been lost. Please close Excel, verify file access, and run again. Some recent updates may not have been saved. Details: ${message}`;
-        const failure = new Error(userMessage);
-        writeFailure = failure;
-        chunkHasError = true;
-        setStatus(`Error: ${userMessage}`);
-        streamAbortController.abort();
-        if (!cancellationRequested && subscribedJobId) {
-          cancellationRequested = true;
-          void cancelScrapeJobRequest(subscribedJobId).catch((cancelError) => {
-            console.error("Failed to cancel scrape job after Excel write failure", cancelError);
-          });
-        }
-        if (!writeFailureAlertShown) {
-          writeFailureAlertShown = true;
-          window.alert(userMessage);
-        }
-        throw failure;
-      };
 
         const handleJobEvent = async (eventData: ScrapeJobEvent) => {
           if (eventData.type === "log" && eventData.message) {
@@ -2580,15 +2458,6 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
           applyClaimRowUpdateToWorksheet(worksheet, {
             index: eventData.index ?? 0,
             update: eventData.update ?? {},
-          });
-
-          writeQueue = writeQueue.then(async () => {
-            try {
-              await writeWorkbookToClaimFile(options.claimFileHandle, excelWb);
-            } catch (writeErr) {
-              console.error("Failed to write to file:", writeErr);
-              handleWriteFailure(writeErr);
-            }
           });
           } else if (eventData.type === "error_screenshot" && eventData.image) {
             setErrorScreenshots((prev) => [...prev, { index: getEventRowIndex(eventData), image: eventData.image ?? "" }]);
@@ -2622,7 +2491,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
           formData.append("portalId", "iehp");
           formData.append("loginExcel", options.loginFile);
           formData.append("loginFileName", options.loginFile.name);
-          formData.append("claimFileName", liveClaimFile.name);
+          formData.append("claimFileName", options.claimFile.name);
           formData.append("claimRows", JSON.stringify(claimRows));
           formData.append("startIndex", startIndex.toString());
           if (logicalJobId) {
@@ -2631,8 +2500,6 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
           subscribedJobId = await startScrapeJob(formData);
           setActiveJobId(subscribedJobId);
           setIehpLoginFile(null);
-          setClaimFileHandle(null);
-          setClaimFileName("");
           setIsProcessing(false);
           void refreshWorkflowRuns({ silent: true });
         }
@@ -2647,23 +2514,19 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
           },
         });
 
-        await writeQueue;
         if (!chunkHasError) {
           try {
-            setStatus(`Saving IEHP checkpoint after row ${currentCompleted}...`);
-            await writeIehpPostProcessedCheckpoint(options.claimFileHandle, excelWb);
+            setStatus(`Downloading IEHP checkpoint after row ${currentCompleted}...`);
+            await downloadIehpWorkbook(`iehp_checkpoint_row_${currentCompleted}.xlsx`, excelWb);
           } catch (checkpointError) {
-            console.error("Failed to write IEHP checkpoint:", checkpointError);
-            handleWriteFailure(checkpointError);
+            console.error("Failed to download IEHP checkpoint:", checkpointError);
+            chunkHasError = true;
+            setStatus(`Processing succeeded for this batch, but checkpoint download failed: ${getErrorMessage(checkpointError)}`);
           }
         }
       } catch (error) {
-        if (writeFailure) {
-          console.error("Processing stopped because Excel write failed", writeFailure);
-        } else {
-          console.error("fetchEventSource failed", error);
-          chunkHasError = true;
-        }
+        console.error("fetchEventSource failed", error);
+        chunkHasError = true;
       }
 
       const effectiveJobId = subscribedJobId || logicalJobId || options.existingJobId || "";
@@ -2676,8 +2539,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
       } else {
         try {
           setStatus("Running post-processing (generating summary columns & duplicating rows)...");
-          postProcessWorksheet(worksheet);
-          await writeWorkbookToClaimFile(options.claimFileHandle, excelWb);
+          await downloadIehpWorkbook("iehp_output.xlsx", excelWb);
           setStatus("IEHP processing completed.");
           await clearStoredRunContext().catch(() => {});
         } catch (postError) {
@@ -2694,10 +2556,10 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     setActiveJobId("");
   }
 
-  async function resumeExistingIehpRun(currentJob: CurrentScrapeJob, storedClaimHandle: FileSystemFileHandle, storedLoginFile: File) {
+  async function resumeExistingIehpRun(currentJob: CurrentScrapeJob, storedClaimFile: File, storedLoginFile: File) {
     if (currentJob.status === "waiting_resume") {
       await runIehpSession({
-        claimFileHandle: storedClaimHandle,
+        claimFile: storedClaimFile,
         loginFile: storedLoginFile,
         existingJobId: currentJob.jobId,
         initialStartIndex: currentJob.currentCompleted,
@@ -2709,7 +2571,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     }
 
     await runIehpSession({
-      claimFileHandle: storedClaimHandle,
+      claimFile: storedClaimFile,
       loginFile: storedLoginFile,
       existingJobId: currentJob.jobId,
       initialStartIndex: currentJob.currentCompleted,
@@ -3297,7 +3159,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
   async function submitIehp(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
 
-    if (!iehpLoginFile || !claimFileHandle) {
+    if (!iehpLoginFile || !iehpClaimFile) {
       setStatus("Please provide both required files.");
       return;
     }
@@ -3309,13 +3171,13 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
         setPendingIehpRestoreJob(null);
         setIsProcessing(true);
         setStatus(`Resuming previous IEHP run from row ${resumeJob.currentCompleted + 1}...`);
-        await resumeExistingIehpRun(resumeJob, claimFileHandle, iehpLoginFile);
+        await resumeExistingIehpRun(resumeJob, iehpClaimFile, iehpLoginFile);
         return;
       }
 
       resetRunState("Reading claim file...");
       await runIehpSession({
-        claimFileHandle,
+        claimFile: iehpClaimFile,
         loginFile: iehpLoginFile,
       });
     } catch (error) {
@@ -3465,16 +3327,8 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     }
   }
 
-  async function selectUhcClaimFile() {
-    try {
-      const handle = await selectExcelFileHandle();
-      if (!handle) return;
-      const file = await handle.getFile();
-      setUhcClaimFileHandle(handle);
-      setUhcClaimFileName(file.name);
-    } catch (error) {
-      setStatus(`Unable to select UHC claim file: ${getErrorMessage(error)}`);
-    }
+  function handleUhcClaimFileChange(file: File | null) {
+    setUhcClaimFile(file);
   }
 
   async function submitUhcOtp() {
@@ -3517,7 +3371,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
   async function submitUhc(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
 
-    if (!uhcLoginFile || !uhcClaimFileHandle) {
+    if (!uhcLoginFile || !uhcClaimFile) {
       setStatus("Please provide both the UHC login Excel and claim Excel files.");
       return;
     }
@@ -3527,7 +3381,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
 
     let workbookBundle: UhcWorkbookBundle;
     try {
-      workbookBundle = await loadUhcWorkbookBundle(uhcClaimFileHandle, uhcGroupId);
+      workbookBundle = await loadUhcWorkbookBundle(uhcClaimFile, uhcGroupId);
     } catch (error) {
       setStatus(`Unable to read UHC claim workbook: ${getErrorMessage(error)}`);
       setIsProcessing(false);
@@ -3538,7 +3392,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     formData.append("portalId", "uhc");
     formData.append("loginExcel", uhcLoginFile);
     formData.append("loginFileName", uhcLoginFile.name);
-    formData.append("claimFileName", uhcClaimFileName);
+    formData.append("claimFileName", uhcClaimFile.name);
     formData.append("claimRows", JSON.stringify(workbookBundle.claimRows));
     formData.append("startIndex", "0");
     formData.append("attempt", "1");
@@ -3549,22 +3403,8 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     let wasCancelled = false;
     let finalErrorMessage = "";
     let subscribedJobId = "";
-    let writeQueue = Promise.resolve();
     let uhcRowsSinceCheckpoint = 0;
     const streamAbortController = new AbortController();
-
-    const failForWriteError = (error: unknown) => {
-      const message = `UHC Excel update failed. Close Excel, verify file access, and run again. Details: ${getErrorMessage(error)}`;
-      hasError = true;
-      setStatus(`Error: ${message}`);
-      streamAbortController.abort();
-      if (subscribedJobId) {
-        void cancelScrapeJobRequest(subscribedJobId).catch((cancelError) => {
-          console.error("Failed to cancel UHC job after Excel write failure", cancelError);
-        });
-      }
-      window.alert(message);
-    };
 
     const handleJobEvent = async (eventData: ScrapeJobEvent) => {
       if (eventData.type === "log" && eventData.message) {
@@ -3574,20 +3414,19 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
       } else if (eventData.type === "row_update") {
         applyUhcRowUpdateToWorksheet(workbookBundle.worksheet, eventData);
         uhcRowsSinceCheckpoint += 1;
-        const shouldWriteFullUhcCheckpoint = uhcRowsSinceCheckpoint >= 10;
-        if (shouldWriteFullUhcCheckpoint) {
+        const shouldDownloadFullUhcCheckpoint = uhcRowsSinceCheckpoint >= 10;
+        if (shouldDownloadFullUhcCheckpoint) {
           uhcRowsSinceCheckpoint = 0;
-        }
-        writeQueue = writeQueue.then(async () => {
           try {
-            if (shouldWriteFullUhcCheckpoint) {
-              postProcessUhcWorksheet(workbookBundle.worksheet);
+            if (shouldDownloadFullUhcCheckpoint) {
+              await downloadUhcWorkbook(`uhc_checkpoint_row_${(eventData.index ?? 0) + 1}.xlsx`, workbookBundle.excelWb);
             }
-            await writeWorkbookToClaimFile(uhcClaimFileHandle, workbookBundle.excelWb);
-          } catch (writeError) {
-            failForWriteError(writeError);
+          } catch (downloadError) {
+            finalErrorMessage = getErrorMessage(downloadError);
+            setStatus(`UHC checkpoint download failed: ${finalErrorMessage}`);
+            hasError = true;
           }
-        });
+        }
       } else if (eventData.type === "error_screenshot" && typeof eventData.index === "number" && eventData.image) {
         setErrorScreenshots((prev) => [...prev, { index: eventData.index ?? -1, image: eventData.image ?? "" }]);
       } else if (eventData.type === "debug_html" && typeof eventData.index === "number" && eventData.html) {
@@ -3636,8 +3475,6 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
       setActiveJobId(jobId);
       setUhcJobId(jobId);
       setUhcLoginFile(null);
-      setUhcClaimFileHandle(null);
-      setUhcClaimFileName("");
       setIsProcessing(false);
       void refreshWorkflowRuns({ silent: true });
       await subscribeToScrapeJobEvents({
@@ -3653,13 +3490,10 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
         },
       });
 
-      await writeQueue;
       if (!hasError && !wasCancelled) {
-        postProcessUhcWorksheet(workbookBundle.worksheet);
-        await writeWorkbookToClaimFile(uhcClaimFileHandle, workbookBundle.excelWb);
+        await downloadUhcWorkbook("uhc_output.xlsx", workbookBundle.excelWb);
       } else if (uhcRowsSinceCheckpoint > 0) {
-        postProcessUhcWorksheet(workbookBundle.worksheet);
-        await writeWorkbookToClaimFile(uhcClaimFileHandle, workbookBundle.excelWb);
+        await downloadUhcWorkbook(`uhc_partial_output.xlsx`, workbookBundle.excelWb);
         uhcRowsSinceCheckpoint = 0;
       }
 
@@ -5996,12 +5830,12 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
                   ) : effectivePortalId === "iehp" ? (
                     <IehpInputForm
                       canSubmit={canSubmitIehp}
-                      claimFileName={claimFileName}
+                      claimFileName={iehpClaimFile?.name ?? ""}
                       isProcessing={blockPortalFormForProcessing}
                       isResumePending={Boolean(pendingIehpRestoreJob)}
                       loginFileName={iehpLoginFile?.name ?? ""}
+                      onClaimFileChange={handleIehpClaimFileChange}
                       onLoginFileChange={handleLoginFileChange}
-                      onSelectClaimFile={selectClaimFile}
                       onSubmit={submitIehp}
                     />
                   ) : effectivePortalId === "aerial" ? (
@@ -6042,12 +5876,12 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
                     <UhcInputForm
                       browserType={uhcBrowserType}
                       canSubmit={canSubmitUhc}
-                      claimFileName={uhcClaimFileName}
+                      claimFileName={uhcClaimFile?.name ?? ""}
                       groupId={uhcGroupId}
                       isProcessing={blockPortalFormForProcessing}
                       loginFileName={uhcLoginFile?.name ?? ""}
                       onBrowserTypeChange={setUhcBrowserType}
-                      onClaimFileSelect={selectUhcClaimFile}
+                      onClaimFileChange={handleUhcClaimFileChange}
                       onGroupChange={setUhcGroupId}
                       onLoginFileChange={setUhcLoginFile}
                       onSubmit={submitUhc}
