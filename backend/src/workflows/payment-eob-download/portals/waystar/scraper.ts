@@ -25,6 +25,36 @@ function datePart(): string {
 
 function safePart(value: string): string { return value.trim().replace(/[<>:"/\\|?*]/g, "_") || "payment"; }
 
+function normalizedAccountText(value: string): string {
+  return value.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+function chooseAccountMatch(accountNames: string[], searchText: string): { index: number; name: string } {
+  const wanted = normalizedAccountText(searchText);
+  const candidates = accountNames
+    .map((name, index) => ({ index, name: name.trim(), normalized: normalizedAccountText(name) }))
+    .filter((candidate) => candidate.normalized.includes(wanted));
+
+  const exact = candidates.filter((candidate) => candidate.normalized === wanted);
+  if (exact.length === 1) return exact[0];
+
+  // Prefer account codes/names at the beginning, for example "AHK - ..." or
+  // "Posada Ambulatory ...", over incidental matches later in an account name.
+  const prefix = candidates.filter((candidate) => {
+    if (!candidate.normalized.startsWith(wanted)) return false;
+    const nextCharacter = candidate.normalized.charAt(wanted.length);
+    return !nextCharacter || /[\s\-(]/.test(nextCharacter);
+  });
+  if (prefix.length === 1) return prefix[0];
+  if (candidates.length === 1) return candidates[0];
+
+  const ambiguous = prefix.length > 1 ? prefix : candidates;
+  if (ambiguous.length > 1) {
+    throw new Error(`Waystar account search "${searchText}" matched multiple accounts: ${ambiguous.map((candidate) => candidate.name).join("; ")}. Use a more specific account value.`);
+  }
+  throw new Error(`No Waystar account matched "${searchText}".`);
+}
+
 async function selectAccount(page: Page, credentials: WaystarPaymentCredentials, context: AutomationContext): Promise<void> {
   await context.log({ level: "info", message: `Checking Waystar account selection for ${credentials.account}.`, eventName: "waystar_payment_account_check" });
   const current = page.locator(".header-account-search-text").first();
@@ -39,11 +69,24 @@ async function selectAccount(page: Page, credentials: WaystarPaymentCredentials,
   const input = page.locator("#accountSearchChildModal .header-account-search-input").first();
   await input.fill(credentials.account);
   await page.locator("#accountSearchChildButton").click();
-  const result = page.locator("#accountSearchChildModal a.change-account-link").filter({ hasText: credentials.account }).first();
-  await result.waitFor({ state: "visible", timeout: 30000 });
+  const results = page.locator("#accountSearchChildModal a.change-account-link");
+  await page.waitForFunction((searchText) => {
+    const wanted = String(searchText).trim().toLowerCase();
+    return [...document.querySelectorAll("#accountSearchChildModal a.change-account-link")]
+      .some((element) => (element.textContent ?? "").trim().toLowerCase().includes(wanted));
+  }, credentials.account, { timeout: 30000 }).catch(() => {});
+
+  const visibleResults: Array<{ locator: Locator; name: string }> = [];
+  for (let index = 0; index < await results.count(); index += 1) {
+    const locator = results.nth(index);
+    if (!await locator.isVisible().catch(() => false)) continue;
+    visibleResults.push({ locator, name: (await locator.innerText()).trim() });
+  }
+  const selected = chooseAccountMatch(visibleResults.map((result) => result.name), credentials.account);
+  const result = visibleResults[selected.index].locator;
   await Promise.all([page.waitForLoadState("networkidle").catch(() => {}), result.click()]);
   await page.locator("#changeSuccess, #accountName").first().waitFor({ state: "visible", timeout: 30000 }).catch(() => {});
-  await context.log({ level: "info", message: `Waystar account selected: ${credentials.account}.`, eventName: "waystar_payment_account_selected" });
+  await context.log({ level: "info", message: `Waystar account selected: ${selected.name}.`, eventName: "waystar_payment_account_selected" });
 }
 
 async function navigateToPayments(page: Page, context: AutomationContext): Promise<void> {
