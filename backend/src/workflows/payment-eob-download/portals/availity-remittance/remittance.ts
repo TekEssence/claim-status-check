@@ -518,6 +518,13 @@ async function clickFirstVisible(candidates: Locator[], timeoutMs: number): Prom
   throw new Error(`Unable to click visible menu item after ${timeoutMs}ms.${lastError ? ` Last error: ${lastError}` : ""}`);
 }
 
+class NonRetryablePdfDownloadError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "NonRetryablePdfDownloadError";
+  }
+}
+
 async function waitForNewPage(page: Page, timeoutMs: number): Promise<Page | null> {
   const context = page.context();
   const popupPromise = page.waitForEvent("popup", { timeout: timeoutMs }).catch(() => null);
@@ -536,26 +543,31 @@ async function clickPayerIssuedModalDownload(surface: RemittanceSurface): Promis
   const popover = surface.locator(".popover-body").filter({ has: surface.locator('input[name="documentRadio"]') }).first();
   const title = surface.getByText(/Payer-Issued Remittance Advice Downloads/i).first();
   const modalVisible = await Promise.race([
-    popover.waitFor({ state: "visible", timeout: 10000 }).then(() => true).catch(() => false),
-    title.waitFor({ state: "visible", timeout: 10000 }).then(() => true).catch(() => false),
+    popover.waitFor({ state: "visible", timeout: 3000 }).then(() => true).catch(() => false),
+    title.waitFor({ state: "visible", timeout: 3000 }).then(() => true).catch(() => false),
   ]);
   if (!modalVisible) return false;
 
-  const radio = surface.locator('input[name="documentRadio"]').first();
-  const label = surface.locator('label[for="document0"]').first();
-  if (await label.isVisible({ timeout: 5000 }).catch(() => false)) {
-    await label.click({ timeout: 10000 });
-  } else {
-    await radio.check({ force: true, timeout: 10000 });
+  const radios = surface.locator('input[name="documentRadio"]');
+  const enabledRadio = surface.locator('input[name="documentRadio"]:not(:disabled)').first();
+  if (await enabledRadio.count() === 0) {
+    const radioCount = await radios.count();
+    throw new NonRetryablePdfDownloadError(
+      radioCount > 0
+        ? "Payer-issued PDF is unavailable because all document options are disabled."
+        : "Payer-issued PDF modal has no document options.",
+    );
   }
 
+  await enabledRadio.check({ force: true, timeout: 3000 });
+
   const downloadButton = surface.locator("button.btn-primary").filter({ hasText: /^Download$/ }).first();
-  await downloadButton.waitFor({ state: "visible", timeout: 10000 });
+  await downloadButton.waitFor({ state: "visible", timeout: 3000 });
   await surface.waitForFunction(() => {
     const buttons = [...document.querySelectorAll("button.btn-primary")];
     return buttons.some((button) => button.textContent?.trim() === "Download" && !button.hasAttribute("disabled"));
-  }, null, { timeout: 10000 });
-  await downloadButton.click({ timeout: 10000 });
+  }, null, { timeout: 3000 });
+  await downloadButton.click({ timeout: 3000 });
   return true;
 }
 
@@ -571,9 +583,9 @@ async function waitForPayerIssuedPdf(
   clickPdfIcon: () => Promise<void>,
   pdfPath: string,
 ): Promise<{ message: string }> {
-  const directPagePromise = waitForNewPage(page, 90000);
+  const directPagePromise = waitForNewPage(page, 10000);
   const modalPromise = surface.getByText("Payer-Issued Remittance Advice Downloads:", { exact: true })
-    .waitFor({ state: "visible", timeout: 15000 })
+    .waitFor({ state: "visible", timeout: 5000 })
     .then(() => "modal" as const)
     .catch(() => null);
   let pdfPage: Page | null = null;
@@ -591,12 +603,9 @@ async function waitForPayerIssuedPdf(
     return { message: "Success via payer-issued PDF icon direct tab" };
   }
 
-  if (firstResult === "modal" || await clickPayerIssuedModalDownload(surface)) {
-    const modalDownloadPromise = page.waitForEvent("download", { timeout: 90000 }).catch(() => null);
-    const modalPagePromise = waitForNewPage(page, 90000);
-    if (firstResult === "modal") {
-      await clickPayerIssuedModalDownload(surface);
-    }
+  const modalDownloadPromise = page.waitForEvent("download", { timeout: 30000 }).catch(() => null);
+  const modalPagePromise = waitForNewPage(page, 30000);
+  if (await clickPayerIssuedModalDownload(surface)) {
     const modalResult = await Promise.race([modalDownloadPromise, modalPagePromise]);
     if (modalResult && "saveAs" in modalResult) {
       await modalResult.saveAs(pdfPath);
@@ -677,7 +686,7 @@ async function downloadFromActionMenu(
       page.locator('[role="menuitem"]').filter({ hasText: menuItemName }),
       surface.getByText(menuItemName, { exact: true }),
       page.getByText(menuItemName, { exact: true }),
-    ], 10000);
+    ], 3000);
   } catch (error) {
     void downloadPromise.catch(() => {});
     throw error;
@@ -696,7 +705,7 @@ async function downloadFromPayerIssuedPdfIcon(
 ): Promise<{ message: string }> {
   const pdfButton = matchingRow.getByRole("button", { name: "Download Check Payer-Issued Admittance Advice" });
   return await waitForPayerIssuedPdf(surface, page, async () => {
-    await pdfButton.click({ timeout: 30000 });
+    await pdfButton.click({ timeout: 10000 });
   }, pdfPath);
 }
 
@@ -711,12 +720,13 @@ async function downloadPdfFromMatchingRow(
   const filename = `${safeFilePart(record.checkNumber)}_${dateFilePart(record.checkDate)}.pdf`;
   const pdfPath = path.join(outputPdfFolder, filename);
   let lastError = "";
+  const maxAttempts = 2;
 
-  for (let attempt = 1; attempt <= 3; attempt += 1) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
       await context.log({
         level: "info",
-        message: `Opening PDF action menu for ${record.checkNumber} (attempt ${attempt}/3).`,
+        message: `Opening PDF action menu for ${record.checkNumber} (attempt ${attempt}/${maxAttempts}).`,
         eventName: "payment_eob_pdf_menu_open",
       });
       await matchingRow.scrollIntoViewIfNeeded({ timeout: 10000 }).catch(() => {});
@@ -726,7 +736,7 @@ async function downloadPdfFromMatchingRow(
       lastError = error instanceof Error ? error.message : String(error);
       await context.log({
         level: "warn",
-        message: `Multiple-claims PDF menu download attempt ${attempt}/3 failed for ${record.checkNumber}: ${lastError}`,
+        message: `Multiple-claims PDF menu download attempt ${attempt}/${maxAttempts} failed for ${record.checkNumber}: ${lastError}`,
         eventName: "payment_eob_pdf_download_retry",
       });
       await page.keyboard.press("Escape").catch(() => {});
@@ -735,7 +745,7 @@ async function downloadPdfFromMatchingRow(
       try {
         await context.log({
           level: "info",
-          message: `Trying payer-issued PDF icon fallback for ${record.checkNumber} (attempt ${attempt}/3).`,
+          message: `Trying payer-issued PDF icon fallback for ${record.checkNumber} (attempt ${attempt}/${maxAttempts}).`,
           eventName: "payment_eob_pdf_icon_fallback",
         });
         await matchingRow.scrollIntoViewIfNeeded({ timeout: 10000 }).catch(() => {});
@@ -745,13 +755,16 @@ async function downloadPdfFromMatchingRow(
         lastError = fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
         await context.log({
           level: "warn",
-          message: `Payer-issued PDF icon fallback attempt ${attempt}/3 failed for ${record.checkNumber}: ${lastError}`,
+          message: `Payer-issued PDF icon fallback attempt ${attempt}/${maxAttempts} failed for ${record.checkNumber}: ${lastError}`,
           eventName: "payment_eob_pdf_icon_fallback_retry",
         });
+        if (fallbackError instanceof NonRetryablePdfDownloadError) {
+          break;
+        }
       }
 
-      if (attempt < 3) {
-        await page.waitForTimeout(2000);
+      if (attempt < maxAttempts) {
+        await page.waitForTimeout(500);
       }
     }
   }

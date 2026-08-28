@@ -423,13 +423,140 @@ async function readAllVisiblePaymentRecords(page: Page): Promise<WaystarPaymentR
   return records;
 }
 
-async function readRowArchiveAction(page: Page, paymentNumber: string): Promise<"Archive" | "Unarchive"> {
+async function selectZeroPaymentRow(page: Page, paymentNumber: string): Promise<Locator> {
+  await page.keyboard.press("Escape").catch(() => {});
   const row = await findPaymentRow(page, paymentNumber);
   if (!row) throw new Error(`${paymentNumber}: zero-payment row could not be found.`);
-  const menu = await activatePaymentRow(page, row);
-  if (await menu.locator("a").filter({ hasText: /^\s*Unarchive\s*$/i }).first().isVisible({ timeout: 1000 }).catch(() => false)) return "Unarchive";
-  if (await menu.locator("a").filter({ hasText: /^\s*Archive\s*$/i }).first().isVisible({ timeout: 1000 }).catch(() => false)) return "Archive";
-  throw new Error(`${paymentNumber}: neither Archive nor Unarchive was available.`);
+  await row.scrollIntoViewIfNeeded();
+  const checkbox = row.locator("input.selectedRow").first();
+  await checkbox.waitFor({ state: "visible", timeout: 10000 });
+
+  // Preserve the target selection after the EOB viewer closes, but clear any
+  // other selected rows so toolbar actions always apply to exactly one payment.
+  await page.locator("#paymentsTableGrid input.selectedRow").evaluateAll((checkboxes, targetPaymentNumber) => {
+    const wanted = String(targetPaymentNumber).trim().toLowerCase();
+    for (const element of checkboxes) {
+      const input = element as HTMLInputElement;
+      const rowPaymentNumber = input.closest("tr[data-paymentnumber]")?.getAttribute("data-paymentnumber")?.trim().toLowerCase() ?? "";
+      if (rowPaymentNumber === wanted || !input.checked) continue;
+      input.checked = false;
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+  }, paymentNumber);
+
+  if (!await checkbox.isChecked()) {
+    await checkbox.click({ force: true }).catch(() => {});
+  }
+  if (!await checkbox.isChecked()) {
+    // Waystar's legacy row handler can toggle a normal Playwright click back
+    // off. Restore the native state and notify its input/change listeners.
+    await checkbox.evaluate((element) => {
+      const input = element as HTMLInputElement;
+      input.checked = true;
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+  }
+
+  await page.waitForFunction((targetPaymentNumber) => {
+    const wanted = String(targetPaymentNumber).trim().toLowerCase();
+    const checked = [...document.querySelectorAll<HTMLInputElement>("#paymentsTableGrid input.selectedRow:checked")];
+    return checked.length === 1
+      && (checked[0].closest("tr[data-paymentnumber]")?.getAttribute("data-paymentnumber")?.trim().toLowerCase() ?? "") === wanted;
+  }, paymentNumber, { timeout: 5000 }).catch(() => {});
+
+  const checkedRows = page.locator("#paymentsTableGrid input.selectedRow:checked");
+  if (await checkedRows.count() !== 1 || !await checkbox.isChecked()) {
+    throw new Error(`${paymentNumber}: Waystar did not retain exactly one selected payment row.`);
+  }
+  return row;
+}
+
+async function downloadSelectedZeroPaymentEob(page: Page, record: WaystarPaymentRecord, folder: string): Promise<string> {
+  const row = await selectZeroPaymentRow(page, record.paymentNumber);
+  const action = page.locator("#paymentsTableGrid .gridActionMenu:visible a")
+    .filter({ hasText: /^\s*View EOB\s*$/i })
+    .first();
+  if (!await action.isVisible({ timeout: 3000 }).catch(() => false)) {
+    // Some Waystar versions expose View EOB only after the selected row is
+    // clicked. A forced click avoids a leftover action menu intercepting it.
+    await row.click({ force: true });
+  }
+  await action.waitFor({ state: "visible", timeout: 10000 });
+
+  const existingPages = new Set(page.context().pages());
+  const immediateDownloadPromise = page.waitForEvent("download", { timeout: 10000 }).catch(() => null);
+  const popupPromise = page.context().waitForEvent("page", { timeout: 10000 }).catch(() => null);
+  const modal = page.locator(".ui-dialog:visible").filter({ hasText: /View EOB/i }).first();
+  await action.click({ force: true });
+  const filename = `${safePart(record.paymentNumber)}_${safePart(record.paymentDate)}.pdf`;
+  const outputPath = path.join(folder, filename);
+  const modalOpened = await modal.waitFor({ state: "visible", timeout: 10000 }).then(() => true).catch(() => false);
+  const immediateDownload = await immediateDownloadPromise;
+  const popup = (await popupPromise) ?? page.context().pages().find((candidate) => !existingPages.has(candidate)) ?? null;
+
+  if (immediateDownload) {
+    await immediateDownload.saveAs(outputPath);
+  } else if (modalOpened) {
+    const viewerDownload = await clickViewerDownload(page);
+    if (viewerDownload) {
+      await viewerDownload.saveAs(outputPath);
+    } else {
+      const pdf = await readPdfFromVisibleViewer(page);
+      if (!pdf) throw new Error("Waystar View EOB opened, but its Download control and PDF content could not be accessed.");
+      await fs.writeFile(outputPath, pdf);
+    }
+    await closeEobViewer(page);
+  } else if (popup) {
+    await popup.waitForLoadState("domcontentloaded", { timeout: 30000 }).catch(() => {});
+    const viewerDownload = await clickViewerDownload(popup);
+    if (viewerDownload) {
+      await viewerDownload.saveAs(outputPath);
+    } else {
+      const pdf = await readPdfFromVisibleViewer(popup);
+      if (!pdf) throw new Error("Waystar EOB popup opened, but its Download control and PDF content could not be accessed.");
+      await fs.writeFile(outputPath, pdf);
+    }
+    await popup.close().catch(() => {});
+  } else {
+    throw new Error("Waystar View EOB did not open a modal, popup, or PDF download.");
+  }
+  return filename;
+}
+
+async function archiveSelectedZeroPayment(page: Page, record: WaystarPaymentRecord, context: AutomationContext): Promise<void> {
+  const row = await selectZeroPaymentRow(page, record.paymentNumber);
+  const archive = page.locator("#paymentsTableGrid .gridActionMenu:visible a")
+    .filter({ hasText: /^\s*Archive\s*$/i })
+    .first();
+  if (!await archive.isVisible({ timeout: 3000 }).catch(() => false)) {
+    // Reopen the selected row's action strip without hover. The checkbox
+    // remains the single source of truth for which payment is active.
+    await row.click({ force: true });
+  }
+  await archive.waitFor({ state: "visible", timeout: 10000 });
+  if (!await row.locator("input.selectedRow").first().isChecked()) {
+    throw new Error(`${record.paymentNumber}: row selection was lost before its Archive action could be clicked.`);
+  }
+  await context.log({ level: "info", message: `${record.paymentNumber}: selecting the row-level Archive action after EOB download.`, eventName: "waystar_zero_payment_archive_start" });
+  await archive.click({ force: true });
+
+  const confirmation = page.locator(".ui-dialog:visible").first();
+  if (await confirmation.isVisible({ timeout: 1500 }).catch(() => false)) {
+    const confirm = confirmation.locator("button, input[type='button'], input[type='submit']")
+      .filter({ hasText: /^\s*(?:Archive|OK|Yes)\s*$/i })
+      .or(confirmation.locator("input[value='Archive'], input[value='OK'], input[value='Yes']"))
+      .first();
+    if (await confirm.isVisible({ timeout: 1000 }).catch(() => false)) await confirm.click();
+  }
+  await waitForWaystarGridProgress(page);
+  await page.waitForFunction((paymentNumber) => {
+    const wanted = String(paymentNumber).trim().toLowerCase();
+    return ![...document.querySelectorAll("#paymentsTableGrid tr.gridViewRow[data-paymentnumber]")]
+      .some((row) => (row.getAttribute("data-paymentnumber") ?? "").trim().toLowerCase() === wanted);
+  }, record.paymentNumber, { timeout: 30000 });
+  await context.log({ level: "info", message: `${record.paymentNumber}: archived successfully and removed from Unarchived results.`, eventName: "waystar_zero_payment_archive_complete" });
 }
 
 async function runZeroPaymentsPhase(
@@ -452,7 +579,7 @@ async function runZeroPaymentsPhase(
   await page.locator("#SearchOptions_ReceivedDate").selectOption("5");
   await setWaystarDateFilterInput(page, "#SearchOptions_ReceivedDateFrom", fromText);
   await setWaystarDateFilterInput(page, "#SearchOptions_ReceivedDateTo", toText);
-  await page.locator("#SearchOptions_ViewOptions").selectOption("0");
+  await page.locator("#SearchOptions_ViewOptions").selectOption({ label: "Unarchived" });
   const includeZero = page.locator("#SearchOptions_IncludeZeroPayment").first();
   if (await includeZero.isVisible().catch(() => false)) await includeZero.check().catch(() => {});
 
@@ -462,7 +589,7 @@ async function runZeroPaymentsPhase(
   await search.click();
   await page.locator("#filterContainer [data-controlid='SearchOptions_Amount']").filter({ hasText: /Amount:\s*0/i }).first().waitFor({ state: "visible", timeout: 45000 });
   await waitForWaystarGridProgress(page);
-  await context.log({ level: "info", message: "Phase 2 zero-payment filters applied: Amount=0, View Options=All, and custom Received Date range.", eventName: "waystar_zero_payments_filtered" });
+  await context.log({ level: "info", message: "Phase 2 zero-payment filters applied: Amount=0, View Options=Unarchived, and custom Received Date range.", eventName: "waystar_zero_payments_filtered" });
 
   const perPage = page.locator("#paymentsTableGrid #PagerDiv .pageSize select").first();
   if (await perPage.isVisible({ timeout: 5000 }).catch(() => false)) {
@@ -502,21 +629,14 @@ async function runZeroPaymentsPhase(
       error: "",
     };
     try {
-      const archiveAction = await readRowArchiveAction(page, record.paymentNumber);
-      if (archiveAction === "Unarchive") {
-        await context.log({ level: "info", message: `${record.paymentNumber}: zero payment is already archived; skipped.`, eventName: "waystar_zero_payment_already_archived" });
-        continue;
-      }
-
       await context.log({ level: "info", message: `${record.paymentNumber}: new zero payment (${index + 1} of ${records.length}); downloading View EOB.`, eventName: "waystar_zero_payment_download_start" });
-      const filename = await downloadEob(page, record, outputFolder);
+      const filename = await downloadSelectedZeroPaymentEob(page, record, outputFolder);
       outputRow.pdfFileName = filename;
       outputRow.downloadStatus = "DOWNLOAD_SUCCESS";
       await context.log({ level: "info", message: `${record.paymentNumber}: zero-payment EOB downloaded as ${filename}.`, eventName: "waystar_zero_payment_download_complete" });
       try {
-        outputRow.archiveStatus = await archiveDownloadedPayment(page, record, context, 0) === "ARCHIVED_SUCCESS"
-          ? "ARCHIVED_SUCCESS"
-          : "ARCHIVE_FAILED";
+        await archiveSelectedZeroPayment(page, record, context);
+        outputRow.archiveStatus = "ARCHIVED_SUCCESS";
       } catch (archiveError) {
         outputRow.archiveStatus = "ARCHIVE_FAILED";
         outputRow.error = `EOB downloaded, but Archive failed: ${archiveError instanceof Error ? archiveError.message : String(archiveError)}`;
