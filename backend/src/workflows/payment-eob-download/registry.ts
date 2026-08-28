@@ -4,12 +4,14 @@ import { createAvailityRemittanceRunner } from "./portals/availity-remittance/sc
 import { createEchoRemittanceRunner } from "./portals/echo-remittance/scraper";
 import { createInstamedRemittanceRunner } from "./portals/instamed-remittance/scraper";
 import { createZelisRunner } from "./portals/zelis/scraper";
+import { createWaystarPaymentEobRunner } from "./portals/waystar/scraper";
 
 export const paymentEobPortalRegistry = {
   "availity-remittance": createAvailityRemittanceRunner,
   "echo-remittance": createEchoRemittanceRunner,
   "instamed-remittance": createInstamedRemittanceRunner,
   zelis: createZelisRunner,
+  waystar: createWaystarPaymentEobRunner,
 } satisfies Record<string, () => AutomationRunner>;
 
 export function getPaymentEobRunner(portalId: string): AutomationRunner {

@@ -722,17 +722,24 @@ async function handleAdditionalAuthentication(
   verificationAnswers: WaystarSecurityQuestion[],
 ): Promise<void> {
   const authenticationOutcome = await Promise.race([
-    page.locator(WAYSTAR_SELECTORS.additionalAuth.answer).first()
-      .waitFor({ state: "visible", timeout: 30000 })
+    page.waitForURL(/AdditionalAuthentication/i, { timeout: 30000 })
       .then(() => "additional-auth" as const),
     page.locator(WAYSTAR_SELECTORS.navigation.eligibility).first()
       .waitFor({ state: "visible", timeout: 30000 })
       .then(() => "eligibility" as const),
+    page.locator(".header-account-search-text").first()
+      .waitFor({ state: "visible", timeout: 30000 })
+      .then(() => "authenticated-home" as const),
   ]).catch(() => {
-    throw new Error("Waystar did not show either the additional authentication form or the Eligibility navigation after login.");
+    throw new Error("Waystar did not show the additional authentication page or an authenticated home page after login.");
   });
 
-  if (authenticationOutcome === "eligibility") return;
+  if (authenticationOutcome !== "additional-auth") return;
+
+  await page.locator(WAYSTAR_SELECTORS.additionalAuth.answer).first().waitFor({
+    state: "visible",
+    timeout: 30000,
+  });
 
   const questionText = await readAdditionalAuthQuestion(page);
   const answer = resolveWaystarSecurityAnswer(questionText, verificationAnswers);
@@ -746,10 +753,21 @@ async function handleAdditionalAuthentication(
   }
 
   await fillVerifiedText(page, WAYSTAR_SELECTORS.additionalAuth.answer, answer, "Verification Answer");
+  const verify = page.locator(WAYSTAR_SELECTORS.additionalAuth.verify).first();
+  await verify.waitFor({ state: "visible", timeout: 30000 });
   await Promise.all([
-    page.waitForLoadState("networkidle").catch(() => {}),
-    page.locator(WAYSTAR_SELECTORS.additionalAuth.verify).first().click(),
+    Promise.race([
+      page.waitForURL((url) => !/AdditionalAuthentication/i.test(url.toString()), { timeout: 30000 }),
+      page.locator(WAYSTAR_SELECTORS.navigation.eligibility).first().waitFor({ state: "visible", timeout: 30000 }),
+    ]).catch(() => {}),
+    verify.click({ force: true }).catch(async () => {
+      await verify.evaluate((element) => (element as HTMLElement).click());
+    }),
   ]);
+
+  if (await page.locator(WAYSTAR_SELECTORS.additionalAuth.answer).first().isVisible().catch(() => false)) {
+    throw new Error("Waystar verification answer was entered, but the Verify action did not complete authentication.");
+  }
 }
 
 async function readAdditionalAuthQuestion(page: Page): Promise<string> {
