@@ -17,8 +17,8 @@ if (process.env.RENDER === 'true' || process.env.NETLIFY === 'true' || process.e
 import { chromium as playwrightChromium, firefox as playwrightFirefox, type Browser, type BrowserContext, type Page } from 'playwright-core';
 import chromium from '@sparticuz/chromium';
 import { linuxChromeUserAgent } from '@/backend/src/core/browser-fingerprint';
-import { generateTOTP, totpSecondsRemaining } from './totp';
 import type { ClaimRow, BotFields } from './excel';
+import { generateTOTP, totpSecondsRemaining } from './totp';
 
 // ── Exact selectors from LoginFlow.md HTML dumps ─────────────────────────────
 const SEL = {
@@ -48,7 +48,7 @@ const SEL = {
 
   //Step 3 - MedRevenu
   // Step 3a — Verify Identity (method selection)
-  STEP3_TEXT_MSG_BTN: 'button#textMsg',
+  STEP3_TEXT_MSG_BTN: 'button#textMsg, button[data-cy="data-textMsg-field"], button:has-text("Via Text Message")',
 
   // Step 3b — Authenticator Code page
   STEP3_SMS_INPUT: 'input#otpBox',
@@ -1006,24 +1006,36 @@ async function clickWithRetry(
     maxAttempts   = 3,
     retryDelayMs  = 2_000,
     disappearsSel = selector,   // selector we wait to disappear (confirms click worked)
+    appearsSel,
   }: {
     label?:         string;
     maxAttempts?:   number;
     retryDelayMs?:  number;
     disappearsSel?: string;
+    appearsSel?:    string;
   },
   log: (msg: string) => Promise<void>
 ): Promise<void> {
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
-      const btn = page.locator(selector);
+      const btn = page.locator(selector).first();
       await btn.waitFor({ state: 'visible', timeout: 5_000 });
-      await btn.click();
+      await btn.scrollIntoViewIfNeeded().catch(() => {});
+      await btn.click({ timeout: 5_000 }).catch(async () => {
+        await btn.click({ force: true, timeout: 5_000 }).catch(async () => {
+          await btn.evaluate((element: HTMLElement) => element.click());
+        });
+      });
       await waitAfterOperation(page, log, `${label} click`);
       await log(`  🖱️  Clicked ${label} (attempt ${attempt}/${maxAttempts}).`);
 
       // Wait briefly to see if the page reacts (button disappears = success)
       try {
+        if (appearsSel) {
+          await page.locator(appearsSel).first().waitFor({ state: 'visible', timeout: retryDelayMs });
+          await log(`  ✅  ${label} click confirmed (${appearsSel} appeared).`);
+          return; // success
+        }
         await page.locator(disappearsSel).waitFor({ state: 'detached', timeout: retryDelayMs });
         await log(`  ✔️  ${label} click confirmed (element detached).`);
         return; // success
@@ -1335,55 +1347,35 @@ async function login(
     }
   }
 
-  // ══════════════════════════════════════════════════════════════════════════
-  // STEP 3a — Verify Identity page: select "Via Microsoft Authenticator"
-  // Page HTML: <button id="totp">Via Microsoft Authenticator</button>
-  // ══════════════════════════════════════════════════════════════════════════
-  await log('  📋 Step 3/3 — Verify Identity: selecting Authenticator...');
-  const isMedRevenu = normalizeOptionText(clientType) === 'medrevenu';
+  // STEP 3a - Verify Identity page: Minimax uses Authenticator, MedRevenu uses Text Message.
+  const isMedRevenuStep3 = normalizeOptionText(clientType) === 'medrevenu';
+  await log(`  Step 3/3 - Verify Identity: selecting ${isMedRevenuStep3 ? 'Text Message' : 'Microsoft Authenticator'}...`);
   try {
-    const methodButton = isMedRevenu
-        ? SEL.STEP3_TEXT_MSG_BTN
-        : SEL.STEP3_TOTP_BTN;
-
-    const methodLabel = isMedRevenu
-        ? 'Via Text Message (Step 3a)'
-        : 'Via Microsoft Authenticator (Step 3a)';
+    const methodButton = isMedRevenuStep3 ? SEL.STEP3_TEXT_MSG_BTN : SEL.STEP3_TOTP_BTN;
+    const methodLabel = isMedRevenuStep3 ? 'Via Text Message (Step 3a)' : 'Via Microsoft Authenticator (Step 3a)';
 
     await clickWithRetry(
-        page,
-        methodButton,
-        {
-            label: methodLabel,
-            maxAttempts: 3,
-            retryDelayMs: 2000,
-            disappearsSel: methodButton
-        },
-        log
+      page,
+      methodButton,
+      {
+        label: methodLabel,
+        maxAttempts: 3,
+        retryDelayMs: 2000,
+        disappearsSel: methodButton,
+        appearsSel: isMedRevenuStep3 ? SEL.STEP3_SMS_INPUT : SEL.STEP3_CODE_INPUT,
+      },
+      log
     );
-    await log(
-        isMedRevenu
-            ? '  ✅ Step 3a complete (Text Message selected).'
-            : '  ✅ Step 3a complete (Microsoft Authenticator selected).'
-    );
+    await log(`  Step 3a complete (${isMedRevenuStep3 ? 'Text Message' : 'Microsoft Authenticator'} selected).`);
   } catch {
     await failWithDiagnostics(
-        isMedRevenu
-            ? 'Step 3a failed: Via Text Message button could not be clicked.'
-            : 'Step 3a failed: Via Microsoft Authenticator button could not be clicked.'
+      `Step 3a failed: ${isMedRevenuStep3 ? 'Via Text Message' : 'Via Microsoft Authenticator'} button could not be clicked.`
     );
   }
 
-  // ══════════════════════════════════════════════════════════════════════════
-  // STEP 3b — Enter OTP and continue
-  // Minimax: Authenticator TOTP
-  // MedRevenu: SMS OTP entered through frontend popup
-  // ══════════════════════════════════════════════════════════════════════════
-
-  const isMedRevenuStep3 = normalizeOptionText(clientType) === 'medrevenu';
-
+  // STEP 3b - Enter OTP and continue.
   if (isMedRevenuStep3) {
-    await log('  📋 Step 3b — Waiting for SMS OTP page...');
+    await log('  Step 3b - Waiting for SMS OTP page...');
 
     try {
       if (
@@ -1401,7 +1393,7 @@ async function login(
       }
     } catch {
       await failWithDiagnostics(
-        'Step 3b failed: SMS OTP page did not appear — input#otpBox not found after 30s.'
+        'Step 3b failed: SMS OTP page did not appear - input#otpBox not found after 30s.'
       );
     }
 
@@ -1409,25 +1401,25 @@ async function login(
 
     if (typeof otpRequester !== 'function') {
       await failWithDiagnostics(
-        'Step 3b failed: MedRevenu OTP prompt is not configured.'
+        'Step 3b failed: UHC OTP prompt is not configured.'
       );
       return;
     }
 
-    await log('  ⏳ Waiting for MedRevenu OTP from UI popup...');
+    await log('  Waiting for UHC OTP from UI popup...');
 
     const otp = (await otpRequester()).replace(/\D/g, '').slice(0, 10);
 
     if (!/^\d{4,10}$/.test(otp)) {
       await failWithDiagnostics(
-        'Step 3b failed: MedRevenu OTP must contain 4 to 10 digits.'
+        'Step 3b failed: UHC OTP must contain 4 to 10 digits.'
       );
     }
 
     await page.fill(SEL.STEP3_SMS_INPUT, '');
     await page.fill(SEL.STEP3_SMS_INPUT, otp);
 
-    await log('  ✏️ Entered SMS OTP into input#otpBox.');
+    await log('  Entered SMS OTP into input#otpBox.');
 
     try {
       await clickWithRetry(
@@ -1442,14 +1434,14 @@ async function login(
         log
       );
 
-      await log('  ✅ Step 3b complete (SMS OTP submitted successfully).');
+      await log('  Step 3b complete (SMS OTP submitted successfully).');
     } catch {
       await failWithDiagnostics(
         'Step 3b failed: button#continuebtn could not be clicked after 3 attempts.'
       );
     }
   } else {
-    await log('  📋 Step 3b — Authenticator Code page: generating TOTP...');
+    await log('  Step 3b - Authenticator Code page: entering TOTP...');
 
     try {
       if (
@@ -1457,7 +1449,7 @@ async function login(
           page,
           SEL.STEP3_CODE_INPUT,
           {
-            label: 'login authenticator code field',
+            label: 'authenticator code field',
             totalTimeoutMs: 30_000
           },
           log
@@ -1467,36 +1459,29 @@ async function login(
       }
     } catch {
       await failWithDiagnostics(
-        'Step 3b failed: Authenticator Code page did not appear — input#totp not found after 30s.'
+        'Step 3b failed: Authenticator Code page did not appear - input#totp not found after 30s.'
       );
     }
 
-    const remaining = totpSecondsRemaining();
-
-    if (remaining < 5) {
-      await log(
-        `  ⏳ TOTP window expires in ${remaining}s — waiting ${remaining + 1}s for a fresh code...`
-      );
-      await page.waitForTimeout((remaining + 1) * 1_000);
+    let totp = generateTOTP();
+    const secondsRemaining = totpSecondsRemaining();
+    if (secondsRemaining <= 5) {
+      await log(`  TOTP expires in ${secondsRemaining}s. Waiting for a fresh authenticator code...`);
+      await page.waitForTimeout((secondsRemaining + 1) * 1000);
+      totp = generateTOTP();
     }
-
-    const otp = generateTOTP();
-
-    await log(
-      `  🔑 Generated TOTP code (${totpSecondsRemaining()}s left in window).`
-    );
 
     await page.fill(SEL.STEP3_CODE_INPUT, '');
-    await page.fill(SEL.STEP3_CODE_INPUT, otp);
+    await page.fill(SEL.STEP3_CODE_INPUT, totp);
 
-    await log('  ✏️ Entered TOTP code into input#totp.');
+    await log('  Entered authenticator code into input#totp.');
 
     try {
       await clickWithRetry(
         page,
         SEL.STEP3_VERIFY,
         {
-          label: 'Continue (TOTP Verify)',
+          label: 'Continue (TOTP)',
           maxAttempts: 3,
           retryDelayMs: 2_000,
           disappearsSel: SEL.STEP3_CODE_INPUT
@@ -1504,14 +1489,13 @@ async function login(
         log
       );
 
-      await log('  ✅ Step 3b complete (TOTP submitted successfully).');
+      await log('  Step 3b complete (TOTP submitted successfully).');
     } catch {
       await failWithDiagnostics(
         'Step 3b failed: button#btnVerify could not be clicked after 3 attempts.'
       );
     }
   }
-
   // ── Wait for post-login dashboard ─────────────────────────────────────────
   await log('  ⏳  Waiting for dashboard to confirm successful login...');
   try {
@@ -1521,7 +1505,7 @@ async function login(
     await log('✅ Login complete — dashboard confirmed.');
   } catch {
     await failWithDiagnostics(
-      'Login verification failed: dashboard not visible 30s after TOTP submission.'
+      'Login verification failed: dashboard not visible 30s after OTP submission.'
     );
   }
 }

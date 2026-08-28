@@ -1,7 +1,6 @@
 import type { FormEvent } from "react";
 import { FileSpreadsheet, KeyRound, Play } from "lucide-react";
 import { PortalUploadCard } from "../../../../components/portal-workflow/PortalUploadCard";
-import type { FileSystemFileHandle } from "../../../../types/file-system-access";
 
 export function IehpInputForm({
   canSubmit,
@@ -9,6 +8,7 @@ export function IehpInputForm({
   loginFileName,
   isProcessing,
   isResumePending,
+  onClaimFileChange,
   onLoginFileChange,
   onSelectClaimFile,
   onSubmit,
@@ -18,8 +18,9 @@ export function IehpInputForm({
   loginFileName?: string;
   isProcessing: boolean;
   isResumePending?: boolean;
+  onClaimFileChange?: (file: File | null) => void;
   onLoginFileChange: (file: File | null) => void;
-  onSelectClaimFile: () => Promise<FileSystemFileHandle | null> | void;
+  onSelectClaimFile?: () => unknown;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
 }) {
   return (
@@ -37,18 +38,34 @@ export function IehpInputForm({
           sizeHint="10 MB"
           title="Upload Login File"
         />
-        <PortalUploadCard
-          mode="action"
-          acceptedFormats=".xlsx, .xls"
-          actionLabel="Select Claim File"
-          description="Choose the exact claims workbook that will be updated in place as processing continues."
-          fileName={claimFileName}
-          helperText="Browser file-system access keeps the workbook linked for live write-back updates."
-          icon={FileSpreadsheet}
-          onAction={() => void onSelectClaimFile()}
-          sizeHint="25 MB"
-          title="Upload Claim File"
-        />
+        {onClaimFileChange ? (
+          <PortalUploadCard
+            mode="file"
+            accept=".xlsx,.xls"
+            acceptedFormats=".xlsx, .xls"
+            description="Upload the IEHP claims workbook. Results are generated as downloadable output files without writing back to your local file."
+            fileName={claimFileName}
+            helperText="The original workbook is read only once and is never updated in place."
+            icon={FileSpreadsheet}
+            inputId="iehpClaimExcel"
+            onFileSelect={onClaimFileChange}
+            sizeHint="25 MB"
+            title="Upload Claim File"
+          />
+        ) : (
+          <PortalUploadCard
+            mode="action"
+            acceptedFormats=".xlsx, .xls"
+            actionLabel="Select Claim File"
+            description="Choose the exact claims workbook that will be updated in place as processing continues."
+            fileName={claimFileName}
+            helperText="Browser file-system access keeps the workbook linked for live write-back updates."
+            icon={FileSpreadsheet}
+            onAction={() => void onSelectClaimFile?.()}
+            sizeHint="25 MB"
+            title="Upload Claim File"
+          />
+        )}
       </div>
       <button
         type="submit"
