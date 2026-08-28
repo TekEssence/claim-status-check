@@ -86,14 +86,15 @@ export async function readWaystarControlLog(file: File): Promise<{ headers: stri
   if (!controlRows.some((row) => isEligibleWaystarControlRow(row))) {
     throw new Error("Control Log has no rows where Entry Status is In Progress/In-Process and Source is Waystar.");
   }
-  const eligibleMissingCheck = controlRows.filter((row) => isEligibleWaystarControlRow(row) && !row.checkNumber);
-  if (eligibleMissingCheck.length) {
-    throw new Error(`Control Log In-Process row(s) ${eligibleMissingCheck.map((row) => row.rowNumber).join(", ")} have no Check Number. Supported headers include Check number and Check / EFT Trace #.`);
-  }
   return { headers: parsed.headers, rows: controlRows };
 }
 
 export const normalizePaymentNumber = (value: unknown) => text(value).replace(/\.0$/, "").replace(/\s+/g, "").toUpperCase();
+export function isUsableCheckNumber(value: unknown): boolean {
+  const normalized = normalizePaymentNumber(value).replace(/[^A-Z0-9]/g, "");
+  return Boolean(normalized && !["NA", "NONE", "NULL", "NIL"].includes(normalized));
+}
+
 export function isInProgressStatus(value: unknown): boolean {
   const normalized = key(text(value));
   return normalized === "inprogress" || normalized === "inprocess";

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { isEligibleWaystarControlRow, isInProgressStatus, isWaystarSource, normalizeAmount, normalizePaymentNumber } from "./input";
+import { isEligibleWaystarControlRow, isInProgressStatus, isUsableCheckNumber, isWaystarSource, normalizeAmount, normalizePaymentNumber } from "./input";
 
 test("Waystar payment comparison normalizes check numbers and currency", () => {
   assert.equal(normalizePaymentNumber(" 001 23.0 "), "00123");
@@ -22,4 +22,9 @@ test("Waystar processes a row only when Source and Entry Status both qualify", (
   assert.equal(isEligibleWaystarControlRow({ source: "Waystar", entryStatus: "In-Process" }), true);
   assert.equal(isEligibleWaystarControlRow({ source: "Web", entryStatus: "In-Process" }), false);
   assert.equal(isEligibleWaystarControlRow({ source: "Waystar", entryStatus: "Completed" }), false);
+});
+
+test("Waystar rejects placeholder check numbers", () => {
+  for (const value of ["", "-", "N/A", "none", "null"]) assert.equal(isUsableCheckNumber(value), false, value);
+  assert.equal(isUsableCheckNumber("R35060729007230"), true);
 });

@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { Locator, Page } from "playwright-core";
+import type { Download, Locator, Page } from "playwright-core";
 import { launchAutomationBrowser } from "@/backend/src/core/browser";
 import { getJobDataPath } from "@/backend/src/core/storage";
 import type { AutomationContext, AutomationRunner } from "../../../types";
@@ -8,7 +8,7 @@ import type { PaymentEobRunInput } from "../../types";
 import { loginToWaystarClaimStatus } from "../../../claim-status/portals/waystar/portal";
 import { createStoredZipFromFolder } from "../availity-remittance/zip";
 import { waystarPaymentEobConfig } from "./config";
-import { isEligibleWaystarControlRow, normalizeAmount, normalizePaymentNumber, readWaystarControlLog, readWaystarPaymentCredentials } from "./input";
+import { isEligibleWaystarControlRow, isUsableCheckNumber, normalizeAmount, normalizePaymentNumber, readWaystarControlLog, readWaystarPaymentCredentials } from "./input";
 import { buildWaystarControlLog, buildWaystarSearchResults } from "./output-builder";
 import type { WaystarControlLogRow, WaystarPaymentCredentials, WaystarPaymentRecord, WaystarSearchResult } from "./types";
 
@@ -97,16 +97,44 @@ async function searchPayment(page: Page, checkNumber: string, context: Automatio
   }
   await page.locator("#SearchOptions_PayNumSearchType").selectOption("0");
   await context.log({ level: "info", message: `${checkNumber}: Payment # entered and Search Type set to Exact.`, eventName: "waystar_payment_filter_filled", rowIndex: rowNumber });
-  const before = await page.locator("#paymentsTableGrid tbody").innerText().catch(() => "");
   const search = page.locator('#searchButton, #ulSearchOptions input[type="submit"][value="Search"], #btnSearch').first();
   await search.waitFor({ state: "visible", timeout: 30000 });
   await search.scrollIntoViewIfNeeded();
   await context.log({ level: "info", message: `${checkNumber}: clicking Search.`, eventName: "waystar_payment_search_click", rowIndex: rowNumber });
   await search.click();
-  await page.waitForFunction((previous) => {
-    const body = document.querySelector("#paymentsTableGrid tbody")?.textContent?.trim() ?? "";
-    return body !== previous || /no results|returned no results/i.test(document.body.innerText);
-  }, before, { timeout: 30000 }).catch(() => {});
+  await page.locator("#filterContainer [data-controlid='SearchOptions_PaymentNum']")
+    .filter({ hasText: checkNumber })
+    .first()
+    .waitFor({ state: "visible", timeout: 45000 });
+
+  const progress = page.locator("#GridContentProgress").first();
+  if (await progress.isVisible({ timeout: 1000 }).catch(() => false)) {
+    await progress.waitFor({ state: "hidden", timeout: 45000 });
+  }
+
+  const settleDeadline = Date.now() + 15000;
+  let emptyVisibleSince = 0;
+  while (Date.now() < settleDeadline) {
+    const candidateRows = page.locator("#paymentsTableGrid tr.gridViewRow[data-paymentnumber]");
+    let foundExpected = false;
+    for (let index = 0; index < await candidateRows.count(); index += 1) {
+      const candidate = normalizePaymentNumber(await candidateRows.nth(index).getAttribute("data-paymentnumber"));
+      if (candidate === normalizePaymentNumber(checkNumber)) {
+        foundExpected = true;
+        break;
+      }
+    }
+    if (foundExpected) break;
+
+    const emptyVisible = await page.locator("#paymentsTableGrid tr.gridViewEmpty").first().isVisible().catch(() => false);
+    if (emptyVisible) {
+      emptyVisibleSince ||= Date.now();
+      if (Date.now() - emptyVisibleSince >= 2000) break;
+    } else {
+      emptyVisibleSince = 0;
+    }
+    await page.waitForTimeout(250);
+  }
 
   const rows = page.locator("#paymentsTableGrid tr.gridViewRow[data-paymentnumber]");
   const records: WaystarPaymentRecord[] = [];
@@ -144,32 +172,111 @@ async function revealViewEob(page: Page, row: Locator): Promise<Locator> {
   return menuAction;
 }
 
+async function clickViewerDownload(page: Page): Promise<Download | null> {
+  const downloadPromise = page.waitForEvent("download", { timeout: 30000 }).catch(() => null);
+  const selectors = [
+    "viewer-download-controls #save",
+    "cr-icon-button#download",
+    "cr-icon-button[aria-label='Download']",
+    "cr-icon-button[title='Download']",
+    "button[aria-label='Download']",
+    "button[title='Download']",
+    "[role='button'][aria-label='Download']",
+  ];
+
+  for (const frame of page.frames()) {
+    for (const selector of selectors) {
+      const button = frame.locator(selector).first();
+      if (!(await button.isVisible({ timeout: 500 }).catch(() => false))) continue;
+      await button.click({ force: true }).catch(async () => {
+        await button.evaluate((element) => (element as HTMLElement).click());
+      });
+      return downloadPromise;
+    }
+  }
+  return null;
+}
+
+async function readPdfFromVisibleViewer(page: Page): Promise<Buffer | null> {
+  const pdfResponse = await page.waitForResponse((response) =>
+    /application\/pdf/i.test(response.headers()["content-type"] ?? "") || /ViewEOB|\.pdf(?:[?#]|$)/i.test(response.url()),
+  { timeout: 5000 }).catch(() => null);
+  if (pdfResponse?.ok()) {
+    const body = await pdfResponse.body().catch(() => null);
+    if (body?.subarray(0, 5).equals(Buffer.from("%PDF-"))) return body;
+  }
+
+  const candidates = new Set<string>();
+  for (const frame of page.frames()) {
+    if (/ViewEOB|\.pdf(?:[?#]|$)/i.test(frame.url())) candidates.add(frame.url());
+    const urls = await frame.locator("iframe[src], embed[src], object[data]").evaluateAll((elements) => elements.map((element) => {
+      const raw = element.getAttribute("src") || element.getAttribute("data") || "";
+      try { return raw ? new URL(raw, document.baseURI).toString() : ""; } catch { return ""; }
+    })).catch(() => [] as string[]);
+    urls.filter(Boolean).forEach((url) => candidates.add(url));
+  }
+
+  for (const url of candidates) {
+    if (!url || url.startsWith("blob:") || !/ViewEOB|\.pdf(?:[?#]|$)/i.test(url)) continue;
+    const response = await page.request.get(url, { headers: { accept: "application/pdf,*/*", referer: page.url() } }).catch(() => null);
+    if (!response?.ok()) continue;
+    const body = await response.body();
+    if (body.subarray(0, 5).equals(Buffer.from("%PDF-"))) return body;
+  }
+  return null;
+}
+
+async function closeEobViewer(page: Page): Promise<void> {
+  const close = page.locator(".ui-dialog:visible .ui-dialog-titlebar-close, a.ui-dialog-titlebar-close:visible, button[aria-label='Close']:visible").first();
+  if (await close.isVisible({ timeout: 2000 }).catch(() => false)) {
+    await close.click({ force: true }).catch(async () => {
+      await close.evaluate((element) => (element as HTMLElement).click()).catch(() => {});
+    });
+  }
+  await page.locator(".ui-dialog:visible").first().waitFor({ state: "hidden", timeout: 10000 }).catch(() => {});
+}
+
 async function downloadEob(page: Page, record: WaystarPaymentRecord, folder: string): Promise<string> {
   const row = page.locator("#paymentsTableGrid tr.gridViewRow[data-paymentnumber]").nth(record.rowIndex);
   const action = await revealViewEob(page, row);
-  const downloadPromise = page.waitForEvent("download", { timeout: 15000 }).catch(() => null);
-  const popupPromise = page.context().waitForEvent("page", { timeout: 15000 }).catch(() => null);
+  const existingPages = new Set(page.context().pages());
+  const immediateDownloadPromise = page.waitForEvent("download", { timeout: 10000 }).catch(() => null);
+  const popupPromise = page.context().waitForEvent("page", { timeout: 10000 }).catch(() => null);
+  const modal = page.locator(".ui-dialog:visible").filter({ hasText: /View EOB/i }).first();
   await action.click();
-  const download = await downloadPromise;
-  const popup = await popupPromise;
   const filename = `${safePart(record.paymentNumber)}_${safePart(record.paymentDate)}.pdf`;
   const outputPath = path.join(folder, filename);
+  const modalOpened = await modal.waitFor({ state: "visible", timeout: 10000 }).then(() => true).catch(() => false);
+  const immediateDownload = await immediateDownloadPromise;
+  const popup = (await popupPromise) ?? page.context().pages().find((candidate) => !existingPages.has(candidate)) ?? null;
 
-  if (download) {
-    await download.saveAs(outputPath);
+  if (immediateDownload) {
+    await immediateDownload.saveAs(outputPath);
+  } else if (modalOpened) {
+    const viewerDownload = await clickViewerDownload(page);
+    if (viewerDownload) {
+      await viewerDownload.saveAs(outputPath);
+    } else {
+      const pdf = await readPdfFromVisibleViewer(page);
+      if (!pdf) throw new Error("Waystar View EOB opened, but its Download control and PDF content could not be accessed.");
+      await fs.writeFile(outputPath, pdf);
+    }
+    await closeEobViewer(page);
   } else if (popup) {
     await popup.waitForLoadState("domcontentloaded", { timeout: 30000 }).catch(() => {});
-    const response = await popup.request.get(popup.url(), { headers: { accept: "application/pdf,*/*" } });
-    if (!response.ok()) throw new Error(`Waystar EOB request returned HTTP ${response.status()}.`);
-    const buffer = await response.body();
-    if (!buffer.subarray(0, 5).equals(Buffer.from("%PDF-"))) throw new Error("Waystar View EOB did not return a PDF.");
-    await fs.writeFile(outputPath, buffer);
+    const viewerDownload = await clickViewerDownload(popup);
+    if (viewerDownload) {
+      await viewerDownload.saveAs(outputPath);
+    } else {
+      const pdf = await readPdfFromVisibleViewer(popup);
+      if (!pdf) throw new Error("Waystar EOB popup opened, but its Download control and PDF content could not be accessed.");
+      await fs.writeFile(outputPath, pdf);
+    }
     await popup.close().catch(() => {});
   } else {
-    throw new Error("Waystar View EOB did not open or download a PDF.");
+    throw new Error("Waystar View EOB did not open a modal, popup, or PDF download.");
   }
 
-  await page.locator("a.ui-dialog-titlebar-close").filter({ hasText: /close/i }).first().click().catch(() => {});
   return filename;
 }
 
@@ -201,6 +308,16 @@ async function runJob(credentials: WaystarPaymentCredentials, headers: string[],
     for (let index = 0; index < eligible.length; index += 1) {
       const input = eligible[index];
       const result = baseResult(input);
+      if (!isUsableCheckNumber(input.checkNumber)) {
+        result.searchResult = "ERROR";
+        result.finalResult = "ERROR";
+        result.error = "No Check number";
+        results.push(result);
+        byRow.set(input.rowNumber, result);
+        await context.log({ level: "warn", message: "No Check number", eventName: "waystar_payment_no_check_number", rowIndex: input.rowNumber });
+        await context.emit({ type: "progress", completed: index + 1, total: eligible.length });
+        continue;
+      }
       try {
         await context.log({ level: "info", message: `Searching Waystar for payment ${input.checkNumber} (${index + 1} of ${eligible.length}).`, eventName: "waystar_payment_search_start", rowIndex: input.rowNumber });
         const matches = await searchPayment(page, input.checkNumber, context, input.rowNumber);
@@ -213,8 +330,8 @@ async function runJob(credentials: WaystarPaymentCredentials, headers: string[],
           await context.log({ level: "warn", message: `No Waystar payment found for ${input.checkNumber}.`, eventName: "waystar_payment_not_found", rowIndex: input.rowNumber });
         } else if (!exact) {
           result.searchResult = "AMOUNT_MISMATCH"; result.finalResult = "AMOUNT_MISMATCH";
-          result.error = "Payment number matched, but Payment Amount did not equal Batch Total Amount.";
-          await context.log({ level: "warn", message: `${input.checkNumber}: portal amount ${portal.paymentAmount} does not match input amount ${input.batchTotalAmount}.`, eventName: "waystar_payment_amount_mismatch", rowIndex: input.rowNumber });
+          result.error = "Payment amount not matched";
+          await context.log({ level: "warn", message: `${input.checkNumber}: Payment amount not matched. Portal amount ${portal.paymentAmount}; input amount ${input.batchTotalAmount}.`, eventName: "waystar_payment_amount_mismatch", rowIndex: input.rowNumber });
         } else {
           try {
             await context.log({ level: "info", message: `${input.checkNumber}: payment and amount matched; downloading View EOB.`, eventName: "waystar_payment_download_start", rowIndex: input.rowNumber });
