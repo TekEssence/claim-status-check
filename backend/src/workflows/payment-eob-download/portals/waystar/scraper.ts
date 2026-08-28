@@ -9,8 +9,8 @@ import { loginToWaystarClaimStatus } from "../../../claim-status/portals/waystar
 import { createStoredZipFromFolder } from "../availity-remittance/zip";
 import { waystarPaymentEobConfig } from "./config";
 import { isEligibleWaystarControlRow, isUsableCheckNumber, normalizeAmount, normalizePaymentNumber, readWaystarControlLog, readWaystarPaymentCredentials } from "./input";
-import { buildWaystarControlLog, buildWaystarSearchResults } from "./output-builder";
-import type { WaystarControlLogRow, WaystarPaymentCredentials, WaystarPaymentRecord, WaystarSearchResult } from "./types";
+import { buildWaystarSearchResults, buildWaystarZeroPayments } from "./output-builder";
+import type { WaystarControlLogRow, WaystarPaymentCredentials, WaystarPaymentRecord, WaystarSearchResult, WaystarZeroPaymentOutputRow } from "./types";
 
 function requireFile(formData: FormData, key: string, label: string): File {
   const value = formData.get(key);
@@ -292,6 +292,205 @@ async function archiveDownloadedPayment(page: Page, record: WaystarPaymentRecord
   return "ARCHIVED_SUCCESS";
 }
 
+function formatWaystarFilterDate(date: Date): string {
+  return `${date.getMonth() + 1}/${date.getDate()}/${date.getFullYear()}`;
+}
+
+async function setLegacyFilterInput(page: Page, selector: string, value: string): Promise<void> {
+  const input = page.locator(selector).first();
+  await input.waitFor({ state: "visible", timeout: 30000 });
+  await input.click();
+  await input.press("Control+A").catch(() => {});
+  await input.press("Backspace").catch(() => {});
+  if (value) await input.pressSequentially(value, { delay: 60 });
+  await input.evaluate((element) => {
+    element.dispatchEvent(new Event("input", { bubbles: true }));
+    element.dispatchEvent(new Event("change", { bubbles: true }));
+    element.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true }));
+    element.dispatchEvent(new Event("blur", { bubbles: true }));
+  });
+}
+
+async function setWaystarDateFilterInput(page: Page, selector: string, value: string): Promise<void> {
+  const input = page.locator(selector).first();
+  await input.waitFor({ state: "visible", timeout: 30000 });
+
+  // These fields use a legacy jQuery datepicker. Updating both the input and
+  // datepicker state avoids the value being cleared when the calendar closes.
+  await input.evaluate((element, dateValue) => {
+    const dateInput = element as HTMLInputElement;
+    const jquery = (window as typeof window & {
+      jQuery?: (target: Element) => { datepicker?: (action: string, value?: string) => void };
+    }).jQuery;
+
+    if (jquery) {
+      try {
+        jquery(dateInput).datepicker?.("setDate", dateValue);
+      } catch {
+        dateInput.value = dateValue;
+      }
+    } else {
+      dateInput.value = dateValue;
+    }
+
+    // Some Waystar pages do not have the datepicker plugin attached yet.
+    if (dateInput.value !== dateValue) dateInput.value = dateValue;
+    dateInput.dispatchEvent(new Event("input", { bubbles: true }));
+    dateInput.dispatchEvent(new Event("change", { bubbles: true }));
+    dateInput.dispatchEvent(new Event("blur", { bubbles: true }));
+  }, value);
+
+  await page.keyboard.press("Escape").catch(() => {});
+  const datepicker = page.locator("#ui-datepicker-div").first();
+  if (await datepicker.isVisible({ timeout: 500 }).catch(() => false)) {
+    await datepicker.evaluate((element) => {
+      (element as HTMLElement).style.display = "none";
+    });
+  }
+  await datepicker.waitFor({ state: "hidden", timeout: 5000 }).catch(() => {});
+
+  const retainedValue = (await input.inputValue()).trim();
+  if (retainedValue !== value) {
+    throw new Error(`Waystar date field ${selector} did not retain ${value}; current value is ${retainedValue || "empty"}.`);
+  }
+}
+
+async function waitForWaystarGridProgress(page: Page): Promise<void> {
+  const progress = page.locator("#GridContentProgress").first();
+  if (await progress.isVisible({ timeout: 1000 }).catch(() => false)) {
+    await progress.waitFor({ state: "hidden", timeout: 45000 });
+  }
+  await page.waitForTimeout(500);
+}
+
+async function readAllVisiblePaymentRecords(page: Page): Promise<WaystarPaymentRecord[]> {
+  const rows = page.locator("#paymentsTableGrid tr.gridViewRow[data-paymentnumber]");
+  const records: WaystarPaymentRecord[] = [];
+  for (let index = 0; index < await rows.count(); index += 1) {
+    const row = rows.nth(index);
+    records.push({
+      paymentAmount: (await row.getAttribute("data-paymentamount"))?.trim() ?? "",
+      paymentDate: (await row.getAttribute("data-paymentdate"))?.trim() ?? "",
+      payer: (await row.getAttribute("data-payer"))?.trim() ?? "",
+      type: (await row.getAttribute("data-type"))?.trim() ?? "",
+      paymentNumber: normalizePaymentNumber(await row.getAttribute("data-paymentnumber")),
+      rowIndex: index,
+    });
+  }
+  return records;
+}
+
+async function readRowArchiveAction(page: Page, paymentNumber: string): Promise<"Archive" | "Unarchive"> {
+  const row = await findPaymentRow(page, paymentNumber);
+  if (!row) throw new Error(`${paymentNumber}: zero-payment row could not be found.`);
+  const menu = await activatePaymentRow(page, row);
+  if (await menu.locator("a").filter({ hasText: /^\s*Unarchive\s*$/i }).first().isVisible({ timeout: 1000 }).catch(() => false)) return "Unarchive";
+  if (await menu.locator("a").filter({ hasText: /^\s*Archive\s*$/i }).first().isVisible({ timeout: 1000 }).catch(() => false)) return "Archive";
+  throw new Error(`${paymentNumber}: neither Archive nor Unarchive was available.`);
+}
+
+async function runZeroPaymentsPhase(
+  page: Page,
+  credentials: WaystarPaymentCredentials,
+  outputFolder: string,
+  context: AutomationContext,
+): Promise<WaystarZeroPaymentOutputRow[]> {
+  const toDate = new Date();
+  const fromDate = new Date(toDate);
+  fromDate.setDate(fromDate.getDate() - credentials.lookbackDays);
+  const fromText = formatWaystarFilterDate(fromDate);
+  const toText = formatWaystarFilterDate(toDate);
+
+  await context.log({ level: "info", message: `Starting Phase 2: zero payments from ${fromText} through ${toText} (${credentials.lookbackDays} lookback days).`, eventName: "waystar_zero_payments_start" });
+  await setLegacyFilterInput(page, "#SearchOptions_PaymentNum", "");
+  await page.locator("#SearchOptions_PayNumSearchType").selectOption("0");
+  await setLegacyFilterInput(page, "#SearchOptions_Amount", "0");
+  await page.locator("#SearchOptions_Type").selectOption("0");
+  await page.locator("#SearchOptions_ReceivedDate").selectOption("5");
+  await setWaystarDateFilterInput(page, "#SearchOptions_ReceivedDateFrom", fromText);
+  await setWaystarDateFilterInput(page, "#SearchOptions_ReceivedDateTo", toText);
+  await page.locator("#SearchOptions_ViewOptions").selectOption("0");
+  const includeZero = page.locator("#SearchOptions_IncludeZeroPayment").first();
+  if (await includeZero.isVisible().catch(() => false)) await includeZero.check().catch(() => {});
+
+  const search = page.locator("#searchButton").first();
+  await page.locator("#ui-datepicker-div").first().waitFor({ state: "hidden", timeout: 5000 }).catch(() => {});
+  await search.scrollIntoViewIfNeeded();
+  await search.click();
+  await page.locator("#filterContainer [data-controlid='SearchOptions_Amount']").filter({ hasText: /Amount:\s*0/i }).first().waitFor({ state: "visible", timeout: 45000 });
+  await waitForWaystarGridProgress(page);
+  await context.log({ level: "info", message: "Phase 2 zero-payment filters applied: Amount=0, View Options=All, and custom Received Date range.", eventName: "waystar_zero_payments_filtered" });
+
+  const perPage = page.locator("#paymentsTableGrid #PagerDiv .pageSize select").first();
+  if (await perPage.isVisible({ timeout: 5000 }).catch(() => false)) {
+    const values = await perPage.locator("option").evaluateAll((options) => options.map((option) => Number((option as HTMLOptionElement).value)).filter(Number.isFinite));
+    const highest = Math.max(...values);
+    if (Number.isFinite(highest)) {
+      await perPage.selectOption(String(highest));
+      await waitForWaystarGridProgress(page);
+      await page.waitForFunction((expected) => {
+        const select = document.querySelector<HTMLSelectElement>("#paymentsTableGrid #PagerDiv .pageSize select");
+        const progress = document.querySelector<HTMLElement>("#GridContentProgress");
+        const progressVisible = Boolean(progress && window.getComputedStyle(progress).display !== "none");
+        if (!select || select.value !== expected || progressVisible) return false;
+        const total = Number(document.querySelector("#paymentsTableGrid .total-records")?.textContent?.trim() || "0");
+        const visibleRows = document.querySelectorAll("#paymentsTableGrid tr.gridViewRow[data-paymentnumber]").length;
+        return visibleRows >= Math.min(total, Number(expected));
+      }, String(highest), { timeout: 45000 }).catch(() => {});
+      await context.log({ level: "info", message: `Phase 2 Per Page set to the highest available value: ${highest}.`, eventName: "waystar_zero_payments_page_size" });
+    }
+  }
+
+  const records = (await readAllVisiblePaymentRecords(page)).filter((record) => normalizeAmount(record.paymentAmount) === 0);
+  await context.log({ level: "info", message: `Phase 2 found ${records.length} visible zero-payment row(s).`, eventName: "waystar_zero_payments_results" });
+  const outputRows: WaystarZeroPaymentOutputRow[] = [];
+
+  for (let index = 0; index < records.length; index += 1) {
+    const record = records[index];
+    const outputRow: WaystarZeroPaymentOutputRow = {
+      source: "Waystar",
+      modeOfPayment: record.type,
+      checkNumber: record.paymentNumber,
+      depositDatePaymentPostingDate: record.paymentDate,
+      batchTotalAmount: record.paymentAmount,
+      pdfFileName: "",
+      downloadStatus: "DOWNLOAD_FAILED",
+      archiveStatus: "NOT_ATTEMPTED",
+      error: "",
+    };
+    try {
+      const archiveAction = await readRowArchiveAction(page, record.paymentNumber);
+      if (archiveAction === "Unarchive") {
+        await context.log({ level: "info", message: `${record.paymentNumber}: zero payment is already archived; skipped.`, eventName: "waystar_zero_payment_already_archived" });
+        continue;
+      }
+
+      await context.log({ level: "info", message: `${record.paymentNumber}: new zero payment (${index + 1} of ${records.length}); downloading View EOB.`, eventName: "waystar_zero_payment_download_start" });
+      const filename = await downloadEob(page, record, outputFolder);
+      outputRow.pdfFileName = filename;
+      outputRow.downloadStatus = "DOWNLOAD_SUCCESS";
+      await context.log({ level: "info", message: `${record.paymentNumber}: zero-payment EOB downloaded as ${filename}.`, eventName: "waystar_zero_payment_download_complete" });
+      try {
+        outputRow.archiveStatus = await archiveDownloadedPayment(page, record, context, 0) === "ARCHIVED_SUCCESS"
+          ? "ARCHIVED_SUCCESS"
+          : "ARCHIVE_FAILED";
+      } catch (archiveError) {
+        outputRow.archiveStatus = "ARCHIVE_FAILED";
+        outputRow.error = `EOB downloaded, but Archive failed: ${archiveError instanceof Error ? archiveError.message : String(archiveError)}`;
+        await context.log({ level: "error", message: `${record.paymentNumber}: ${outputRow.error}`, eventName: "waystar_zero_payment_archive_failed" });
+      }
+    } catch (error) {
+      outputRow.error = error instanceof Error ? error.message : String(error);
+      await context.log({ level: "error", message: `${record.paymentNumber}: zero-payment processing failed: ${outputRow.error}`, eventName: "waystar_zero_payment_failed" });
+    }
+    outputRows.push(outputRow);
+  }
+
+  const downloadedCount = outputRows.filter((row) => row.downloadStatus === "DOWNLOAD_SUCCESS").length;
+  await context.log({ level: "info", message: `Phase 2 completed with ${downloadedCount} newly downloaded zero-payment EOB(s).`, eventName: "waystar_zero_payments_complete" });
+  return outputRows;
+}
+
 async function downloadEob(page: Page, record: WaystarPaymentRecord, folder: string): Promise<string> {
   const row = page.locator("#paymentsTableGrid tr.gridViewRow[data-paymentnumber]").nth(record.rowIndex);
   const action = await revealViewEob(page, row);
@@ -337,19 +536,44 @@ async function downloadEob(page: Page, record: WaystarPaymentRecord, folder: str
 }
 
 function baseResult(row: WaystarControlLogRow): WaystarSearchResult {
-  return { clientName: row.clientName, inputCheckNumber: row.checkNumber, inputBatchTotalAmount: row.batchTotalAmount,
+  return { phase: "Cash Log", clientName: row.clientName, inputCheckNumber: row.checkNumber, inputBatchTotalAmount: row.batchTotalAmount,
     searchResult: "NOT_FOUND", portalPaymentNumber: "", portalPaymentAmount: "", portalPaymentDate: "", portalPayer: "", portalType: "",
     amountMatch: "", pdfStatus: "NOT_DOWNLOADED", pdfFileName: "", archiveStatus: "NOT_ATTEMPTED", finalResult: "NOT_FOUND", error: "" };
 }
 
-async function runJob(credentials: WaystarPaymentCredentials, headers: string[], allRows: WaystarControlLogRow[], context: AutomationContext): Promise<void> {
+function zeroPaymentSearchResult(row: WaystarZeroPaymentOutputRow): WaystarSearchResult {
+  const archiveFailed = row.archiveStatus === "ARCHIVE_FAILED";
+  const downloadSucceeded = row.downloadStatus === "DOWNLOAD_SUCCESS";
+  return {
+    phase: "Zero Payments",
+    clientName: "",
+    inputCheckNumber: "",
+    inputBatchTotalAmount: "",
+    searchResult: "FOUND",
+    portalPaymentNumber: row.checkNumber,
+    portalPaymentAmount: row.batchTotalAmount,
+    portalPaymentDate: row.depositDatePaymentPostingDate,
+    portalPayer: "",
+    portalType: row.modeOfPayment,
+    amountMatch: "",
+    pdfStatus: row.downloadStatus,
+    pdfFileName: row.pdfFileName,
+    archiveStatus: row.archiveStatus,
+    finalResult: archiveFailed ? "ERROR" : downloadSucceeded ? "DOWNLOAD_SUCCESS" : "DOWNLOAD_FAILED",
+    error: row.error,
+  };
+}
+
+async function runJob(credentials: WaystarPaymentCredentials, allRows: WaystarControlLogRow[], context: AutomationContext): Promise<void> {
   const eligible = allRows.filter(isEligibleWaystarControlRow);
   const rootName = `WaystarPaymentEobDownloads_${datePart()}_${context.jobId}`;
   const root = path.join(getJobDataPath(context.jobId, "outputs"), rootName);
   const pdfFolder = path.join(root, "PDFs");
+  const zeroPaymentPdfFolder = path.join(root, "Zero Payment PDFs");
   await fs.mkdir(pdfFolder, { recursive: true });
+  await fs.mkdir(zeroPaymentPdfFolder, { recursive: true });
   const results: WaystarSearchResult[] = [];
-  const byRow = new Map<number, WaystarSearchResult>();
+  let zeroPaymentRows: WaystarZeroPaymentOutputRow[] = [];
   let browser: Awaited<ReturnType<typeof launchAutomationBrowser>> | null = null;
   await context.emit({ type: "progress", completed: 0, total: eligible.length });
   try {
@@ -370,7 +594,6 @@ async function runJob(credentials: WaystarPaymentCredentials, headers: string[],
         result.archiveStatus = "NOT_APPLICABLE";
         result.error = "No Check number";
         results.push(result);
-        byRow.set(input.rowNumber, result);
         await context.log({ level: "warn", message: "No Check number", eventName: "waystar_payment_no_check_number", rowIndex: input.rowNumber });
         await context.emit({ type: "progress", completed: index + 1, total: eligible.length });
         continue;
@@ -412,19 +635,25 @@ async function runJob(credentials: WaystarPaymentCredentials, headers: string[],
         result.searchResult = "ERROR"; result.finalResult = "ERROR";
         result.error = error instanceof Error ? error.message : String(error);
       }
-      results.push(result); byRow.set(input.rowNumber, result);
+      results.push(result);
       await context.log({ level: result.finalResult === "DOWNLOAD_SUCCESS" ? "info" : "warn", message: `${input.checkNumber}: ${result.finalResult}.`, eventName: "waystar_payment_eob_row_complete", rowIndex: input.rowNumber });
       await context.emit({ type: "progress", completed: index + 1, total: eligible.length });
+    }
+    try {
+      zeroPaymentRows = await runZeroPaymentsPhase(page, credentials, zeroPaymentPdfFolder, context);
+      results.push(...zeroPaymentRows.map(zeroPaymentSearchResult));
+    } catch (error) {
+      await context.log({ level: "error", message: `Phase 2 zero-payment workflow failed: ${error instanceof Error ? error.message : String(error)}`, eventName: "waystar_zero_payments_failed" });
     }
   } finally {
     await browser?.browser?.close().catch(() => {});
   }
 
   const searchName = `Waystar_Search_Results_${datePart()}.xlsx`;
-  const controlName = `Waystar_Control_Log_Output_${datePart()}.xlsx`;
+  const zeroPaymentsName = `Zero Payments_${datePart()}.xlsx`;
   await fs.writeFile(path.join(root, searchName), await buildWaystarSearchResults(results));
-  await fs.writeFile(path.join(root, controlName), await buildWaystarControlLog(headers, allRows, byRow));
-  await context.log({ level: "info", message: "Waystar Search Results and Control Log output workbooks created.", eventName: "waystar_payment_outputs_created" });
+  await fs.writeFile(path.join(root, zeroPaymentsName), await buildWaystarZeroPayments(zeroPaymentRows));
+  await context.log({ level: "info", message: "Waystar Search Results and Zero Payments output workbooks created.", eventName: "waystar_payment_outputs_created" });
   const zip = await createStoredZipFromFolder(root, rootName);
   await context.emit({ type: "file_download", filename: `${rootName}.zip`, base64: zip.toString("base64"), mimeType: "application/zip" });
   await context.log({ level: "info", message: `Waystar output package ready: ${rootName}.zip.`, eventName: "waystar_payment_package_ready" });
@@ -442,6 +671,6 @@ export function createWaystarPaymentEobRunner(): AutomationRunner<PaymentEobRunI
       const control = await readWaystarControlLog(input.referenceExcel!);
       const eligibleCount = control.rows.filter(isEligibleWaystarControlRow).length;
       await context.log({ level: "info", message: `Input validation completed. ${eligibleCount} row(s) with Source=Waystar and Entry Status=In-Process will be processed.`, eventName: "waystar_payment_input_complete" });
-      await runJob(credentials, control.headers, control.rows, context);
+      await runJob(credentials, control.rows, context);
     } };
 }

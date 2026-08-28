@@ -1,6 +1,6 @@
 import type { WaystarCredentials } from "../../../eligibility-verification/portals/waystar/credentials";
 
-export type WaystarPaymentCredentials = WaystarCredentials & { account: string };
+export type WaystarPaymentCredentials = WaystarCredentials & { account: string; lookbackDays: number };
 
 export type WaystarControlLogRow = {
   rowNumber: number;
@@ -22,6 +22,7 @@ export type WaystarPaymentRecord = {
 };
 
 export type WaystarSearchResult = {
+  phase: "Cash Log" | "Zero Payments";
   clientName: string;
   inputCheckNumber: string;
   inputBatchTotalAmount: string;
@@ -36,5 +37,17 @@ export type WaystarSearchResult = {
   pdfFileName: string;
   archiveStatus: "ARCHIVED_SUCCESS" | "ALREADY_ARCHIVED" | "ARCHIVE_FAILED" | "NOT_ATTEMPTED" | "NOT_APPLICABLE";
   finalResult: "DOWNLOAD_SUCCESS" | "DOWNLOAD_FAILED" | "NOT_FOUND" | "AMOUNT_MISMATCH" | "ERROR";
+  error: string;
+};
+
+export type WaystarZeroPaymentOutputRow = {
+  source: "Waystar";
+  modeOfPayment: string;
+  checkNumber: string;
+  depositDatePaymentPostingDate: string;
+  batchTotalAmount: string;
+  pdfFileName: string;
+  downloadStatus: "DOWNLOAD_SUCCESS" | "DOWNLOAD_FAILED";
+  archiveStatus: "ARCHIVED_SUCCESS" | "ARCHIVE_FAILED" | "NOT_ATTEMPTED";
   error: string;
 };

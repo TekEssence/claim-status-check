@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import ExcelJS from "exceljs";
-import { buildWaystarControlLog, buildWaystarSearchResults } from "./output-builder";
+import { buildWaystarControlLog, buildWaystarSearchResults, buildWaystarZeroPayments } from "./output-builder";
 import type { WaystarControlLogRow, WaystarSearchResult } from "./types";
 
 const result: WaystarSearchResult = {
-  clientName: "Clinic A", inputCheckNumber: "00123", inputBatchTotalAmount: "$10.00", searchResult: "FOUND",
+  phase: "Cash Log", clientName: "Clinic A", inputCheckNumber: "00123", inputBatchTotalAmount: "$10.00", searchResult: "FOUND",
   portalPaymentNumber: "00123", portalPaymentAmount: "$10.00", portalPaymentDate: "08/27/2026", portalPayer: "Payer A",
   portalType: "ACH", amountMatch: "YES", pdfStatus: "DOWNLOAD_SUCCESS", pdfFileName: "00123.pdf",
   archiveStatus: "ARCHIVED_SUCCESS", finalResult: "DOWNLOAD_SUCCESS", error: "",
@@ -16,10 +16,10 @@ test("Waystar search results use the required column order", async () => {
   const output = await buildWaystarSearchResults([result]);
   await workbook.xlsx.load(output.buffer.slice(output.byteOffset, output.byteOffset + output.byteLength) as ArrayBuffer);
   const sheet = workbook.worksheets[0];
-  assert.deepEqual(sheet.getRow(1).values, [undefined, "Client Name", "Input Check Number", "Input Batch Total Amount", "Search Result",
+  assert.deepEqual(sheet.getRow(1).values, [undefined, "Phase", "Client Name", "Input Check Number", "Input Batch Total Amount", "Search Result",
     "Portal Payment #", "Portal Payment Amount", "Portal Payment Date", "Portal Payer", "Portal Type", "Amount Match", "PDF Status",
     "PDF File Name", "Archive Status", "Final Result", "Error"]);
-  assert.equal(sheet.getRow(2).getCell(8).value, "Payer A");
+  assert.equal(sheet.getRow(2).getCell(9).value, "Payer A");
 });
 
 test("Waystar control output preserves rows and updates only successful payments", async () => {
@@ -31,4 +31,25 @@ test("Waystar control output preserves rows and updates only successful payments
   await workbook.xlsx.load(output.buffer.slice(output.byteOffset, output.byteOffset + output.byteLength) as ArrayBuffer);
   const values = workbook.worksheets[0].getRow(2).values;
   assert.deepEqual(values, [undefined, "Clinic A", "00123.pdf", "Web", "ACH", "00123", "08/27/2026", "$10.00", "original"]);
+});
+
+test("Waystar zero-payment output uses the requested columns", async () => {
+  const workbook = new ExcelJS.Workbook();
+  const output = await buildWaystarZeroPayments([{
+    source: "Waystar",
+    modeOfPayment: "NON",
+    checkNumber: "NO-PAY-1",
+    depositDatePaymentPostingDate: "08/28/2026",
+    batchTotalAmount: "$0.00",
+    pdfFileName: "NO-PAY-1_08_28_2026.pdf",
+    downloadStatus: "DOWNLOAD_SUCCESS",
+    archiveStatus: "ARCHIVED_SUCCESS",
+    error: "",
+  }]);
+  await workbook.xlsx.load(output.buffer.slice(output.byteOffset, output.byteOffset + output.byteLength) as ArrayBuffer);
+  const sheet = workbook.worksheets[0];
+  assert.deepEqual(sheet.getRow(1).values, [undefined, "Source", "Mode of Payment", "Check Number", "Deposit Date / Payment Posting Date", "Batch Total Amount",
+    "PDF File Name", "Download Status", "Archive Status", "Error"]);
+  assert.deepEqual(sheet.getRow(2).values, [undefined, "Waystar", "NON", "NO-PAY-1", "08/28/2026", "$0.00",
+    "NO-PAY-1_08_28_2026.pdf", "DOWNLOAD_SUCCESS", "ARCHIVED_SUCCESS", ""]);
 });
