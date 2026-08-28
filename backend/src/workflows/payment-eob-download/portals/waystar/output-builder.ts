@@ -15,7 +15,8 @@ export async function buildWaystarSearchResults(rows: WaystarSearchResult[]): Pr
     ["Client Name", "clientName", 28], ["Input Check Number", "inputCheckNumber", 24], ["Input Batch Total Amount", "inputBatchTotalAmount", 22],
     ["Search Result", "searchResult", 20], ["Portal Payment #", "portalPaymentNumber", 24], ["Portal Payment Amount", "portalPaymentAmount", 22],
     ["Portal Payment Date", "portalPaymentDate", 20], ["Portal Payer", "portalPayer", 36], ["Portal Type", "portalType", 14], ["Amount Match", "amountMatch", 16],
-    ["PDF Status", "pdfStatus", 20], ["PDF File Name", "pdfFileName", 38], ["Final Result", "finalResult", 20], ["Error", "error", 60],
+    ["PDF Status", "pdfStatus", 20], ["PDF File Name", "pdfFileName", 38], ["Archive Status", "archiveStatus", 22],
+    ["Final Result", "finalResult", 20], ["Error", "error", 60],
   ];
   sheet.columns = columns.map(([header, key, width]) => ({ header, key, width }));
   sheet.getRow(1).font = { bold: true };

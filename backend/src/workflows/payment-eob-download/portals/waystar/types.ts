@@ -34,6 +34,7 @@ export type WaystarSearchResult = {
   amountMatch: "YES" | "NO" | "";
   pdfStatus: "DOWNLOAD_SUCCESS" | "DOWNLOAD_FAILED" | "NOT_DOWNLOADED";
   pdfFileName: string;
+  archiveStatus: "ARCHIVED_SUCCESS" | "ALREADY_ARCHIVED" | "ARCHIVE_FAILED" | "NOT_ATTEMPTED" | "NOT_APPLICABLE";
   finalResult: "DOWNLOAD_SUCCESS" | "DOWNLOAD_FAILED" | "NOT_FOUND" | "AMOUNT_MISMATCH" | "ERROR";
   error: string;
 };

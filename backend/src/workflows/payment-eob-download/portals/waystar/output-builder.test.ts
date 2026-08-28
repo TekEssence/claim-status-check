@@ -8,7 +8,7 @@ const result: WaystarSearchResult = {
   clientName: "Clinic A", inputCheckNumber: "00123", inputBatchTotalAmount: "$10.00", searchResult: "FOUND",
   portalPaymentNumber: "00123", portalPaymentAmount: "$10.00", portalPaymentDate: "08/27/2026", portalPayer: "Payer A",
   portalType: "ACH", amountMatch: "YES", pdfStatus: "DOWNLOAD_SUCCESS", pdfFileName: "00123.pdf",
-  finalResult: "DOWNLOAD_SUCCESS", error: "",
+  archiveStatus: "ARCHIVED_SUCCESS", finalResult: "DOWNLOAD_SUCCESS", error: "",
 };
 
 test("Waystar search results use the required column order", async () => {
@@ -18,7 +18,7 @@ test("Waystar search results use the required column order", async () => {
   const sheet = workbook.worksheets[0];
   assert.deepEqual(sheet.getRow(1).values, [undefined, "Client Name", "Input Check Number", "Input Batch Total Amount", "Search Result",
     "Portal Payment #", "Portal Payment Amount", "Portal Payment Date", "Portal Payer", "Portal Type", "Amount Match", "PDF Status",
-    "PDF File Name", "Final Result", "Error"]);
+    "PDF File Name", "Archive Status", "Final Result", "Error"]);
   assert.equal(sheet.getRow(2).getCell(8).value, "Payer A");
 });
 

@@ -236,6 +236,62 @@ async function closeEobViewer(page: Page): Promise<void> {
   await page.locator(".ui-dialog:visible").first().waitFor({ state: "hidden", timeout: 10000 }).catch(() => {});
 }
 
+async function findPaymentRow(page: Page, paymentNumber: string): Promise<Locator | null> {
+  const rows = page.locator("#paymentsTableGrid tr.gridViewRow[data-paymentnumber]");
+  for (let index = 0; index < await rows.count(); index += 1) {
+    if (normalizePaymentNumber(await rows.nth(index).getAttribute("data-paymentnumber")) === normalizePaymentNumber(paymentNumber)) {
+      return rows.nth(index);
+    }
+  }
+  return null;
+}
+
+async function activatePaymentRow(page: Page, row: Locator): Promise<Locator> {
+  await row.scrollIntoViewIfNeeded();
+  await row.hover();
+  await row.click().catch(() => {});
+  const menu = page.locator("#paymentsTableGrid .gridActionMenu:visible .innerGridActionDiv, .gridActionMenu:visible .innerGridActionDiv").first();
+  await menu.waitFor({ state: "visible", timeout: 10000 });
+  return menu;
+}
+
+async function archiveDownloadedPayment(page: Page, record: WaystarPaymentRecord, context: AutomationContext, rowNumber: number): Promise<"ARCHIVED_SUCCESS" | "ALREADY_ARCHIVED"> {
+  const row = await findPaymentRow(page, record.paymentNumber);
+  if (!row) throw new Error(`Downloaded payment ${record.paymentNumber} could not be found again for archiving.`);
+  const menu = await activatePaymentRow(page, row);
+  const unarchive = menu.locator("a").filter({ hasText: /^\s*Unarchive\s*$/i }).first();
+  if (await unarchive.isVisible({ timeout: 1000 }).catch(() => false)) {
+    await context.log({ level: "info", message: `${record.paymentNumber}: already archived; Unarchive is displayed, so no archive action was taken.`, eventName: "waystar_payment_already_archived", rowIndex: rowNumber });
+    return "ALREADY_ARCHIVED";
+  }
+
+  const archive = menu.locator("a").filter({ hasText: /^\s*Archive\s*$/i }).first();
+  await archive.waitFor({ state: "visible", timeout: 10000 });
+  await context.log({ level: "info", message: `${record.paymentNumber}: selecting Archive after EOB download.`, eventName: "waystar_payment_archive_start", rowIndex: rowNumber });
+  await archive.click();
+
+  const confirmation = page.locator(".ui-dialog:visible").first();
+  if (await confirmation.isVisible({ timeout: 1500 }).catch(() => false)) {
+    const confirm = confirmation.locator("button, input[type='button'], input[type='submit']")
+      .filter({ hasText: /^\s*(?:Archive|OK|Yes)\s*$/i })
+      .or(confirmation.locator("input[value='Archive'], input[value='OK'], input[value='Yes']"))
+      .first();
+    if (await confirm.isVisible({ timeout: 1000 }).catch(() => false)) await confirm.click();
+  }
+
+  const progress = page.locator("#GridContentProgress").first();
+  if (await progress.isVisible({ timeout: 1000 }).catch(() => false)) {
+    await progress.waitFor({ state: "hidden", timeout: 30000 });
+  }
+
+  const refreshedRow = await findPaymentRow(page, record.paymentNumber);
+  if (!refreshedRow) throw new Error(`${record.paymentNumber}: payment row disappeared after Archive was clicked.`);
+  const refreshedMenu = await activatePaymentRow(page, refreshedRow);
+  await refreshedMenu.locator("a").filter({ hasText: /^\s*Unarchive\s*$/i }).first().waitFor({ state: "visible", timeout: 15000 });
+  await context.log({ level: "info", message: `${record.paymentNumber}: archived successfully; the row now shows Unarchive.`, eventName: "waystar_payment_archive_complete", rowIndex: rowNumber });
+  return "ARCHIVED_SUCCESS";
+}
+
 async function downloadEob(page: Page, record: WaystarPaymentRecord, folder: string): Promise<string> {
   const row = page.locator("#paymentsTableGrid tr.gridViewRow[data-paymentnumber]").nth(record.rowIndex);
   const action = await revealViewEob(page, row);
@@ -283,7 +339,7 @@ async function downloadEob(page: Page, record: WaystarPaymentRecord, folder: str
 function baseResult(row: WaystarControlLogRow): WaystarSearchResult {
   return { clientName: row.clientName, inputCheckNumber: row.checkNumber, inputBatchTotalAmount: row.batchTotalAmount,
     searchResult: "NOT_FOUND", portalPaymentNumber: "", portalPaymentAmount: "", portalPaymentDate: "", portalPayer: "", portalType: "",
-    amountMatch: "", pdfStatus: "NOT_DOWNLOADED", pdfFileName: "", finalResult: "NOT_FOUND", error: "" };
+    amountMatch: "", pdfStatus: "NOT_DOWNLOADED", pdfFileName: "", archiveStatus: "NOT_ATTEMPTED", finalResult: "NOT_FOUND", error: "" };
 }
 
 async function runJob(credentials: WaystarPaymentCredentials, headers: string[], allRows: WaystarControlLogRow[], context: AutomationContext): Promise<void> {
@@ -311,6 +367,7 @@ async function runJob(credentials: WaystarPaymentCredentials, headers: string[],
       if (!isUsableCheckNumber(input.checkNumber)) {
         result.searchResult = "ERROR";
         result.finalResult = "ERROR";
+        result.archiveStatus = "NOT_APPLICABLE";
         result.error = "No Check number";
         results.push(result);
         byRow.set(input.rowNumber, result);
@@ -338,6 +395,14 @@ async function runJob(credentials: WaystarPaymentCredentials, headers: string[],
             result.pdfFileName = await downloadEob(page, exact, pdfFolder);
             result.pdfStatus = "DOWNLOAD_SUCCESS"; result.finalResult = "DOWNLOAD_SUCCESS";
             await context.log({ level: "info", message: `${input.checkNumber}: downloaded ${result.pdfFileName}.`, eventName: "waystar_payment_download_complete", rowIndex: input.rowNumber });
+            try {
+              result.archiveStatus = await archiveDownloadedPayment(page, exact, context, input.rowNumber);
+            } catch (archiveError) {
+              result.archiveStatus = "ARCHIVE_FAILED";
+              result.finalResult = "ERROR";
+              result.error = `EOB downloaded, but Archive failed: ${archiveError instanceof Error ? archiveError.message : String(archiveError)}`;
+              await context.log({ level: "error", message: `${input.checkNumber}: ${result.error}`, eventName: "waystar_payment_archive_failed", rowIndex: input.rowNumber });
+            }
           } catch (error) {
             result.pdfStatus = "DOWNLOAD_FAILED"; result.finalResult = "DOWNLOAD_FAILED";
             result.error = error instanceof Error ? error.message : String(error);
