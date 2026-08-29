@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { parseRemittanceCsv } from "./remittance";
+import { checkNumberSearchVariants, parseRemittanceCsv } from "./remittance";
+
+test("builds safe leading-zero search variants only for numeric Check/EFT numbers", () => {
+  assert.deepEqual(checkNumberSearchVariants("0900470853"), ["0900470853", "900470853"]);
+  assert.deepEqual(checkNumberSearchVariants("900470853"), ["900470853", "0900470853"]);
+  assert.deepEqual(checkNumberSearchVariants("ABC00123"), ["ABC00123"]);
+});
 
 test("parses portal CSV with exact Availity Remittance columns", () => {
   const records = parseRemittanceCsv([

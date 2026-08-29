@@ -96,6 +96,7 @@ test("reads Availity Remittance credentials from workbook aliases", async () => 
   assert.equal(credentials.totpSecret, "JBSWY3DPEHPK3PXP");
   assert.equal(credentials.organization, "BENTONVILLE PEDIATRICS, P.A.");
   assert.equal(credentials.lookbackDays, 20);
+  assert.equal(credentials.project, "charm");
   assert.match(credentials.loginUrl, /^https:\/\/essentials\.availity\.com/);
   assert.deepEqual(credentials.sharePoint, {
     tenantId: "tenant-from-excel",
@@ -177,7 +178,32 @@ test("reads reference workbook with exact Payment EOB column names", async () =>
   assert.equal(rows[0].checkDate, "07/15/2026");
 });
 
-test("requires reference workbook tracker sheet", async () => {
+test("reads MedRevenue routing and Pending EFT control-log fields", async () => {
+  const credentialsFile = await workbookFile("credentials.xlsx", [
+    ["User ID", "Password", "Secret Key", "Project", "Client Name"],
+    ["user", "password", "JBSWY3DPEHPK3PXP", "Med Revenue", "Client A"],
+  ]);
+  const controlLog = await workbookFileWithSheets("control-log.xlsx", [{
+    name: "tracker",
+    rows: [
+      ["Check/EFT #", "Entry Status", "Mode of Payment"],
+      ["EFT-100", "Pending", "EFT"],
+      ["EFT-200", "Complete", "EFT"],
+    ],
+  }]);
+
+  const credentials = await readAvailityRemittanceCredentials(credentialsFile);
+  const rows = await readReferenceRows(controlLog);
+
+  assert.equal(credentials.project, "medrevenue");
+  assert.equal(credentials.clientName, "Client A");
+  assert.deepEqual(rows.map((row) => ({ checkNumber: row.checkNumber, entryStatus: row.entryStatus, modeOfPayment: row.modeOfPayment })), [
+    { checkNumber: "EFT-100", entryStatus: "Pending", modeOfPayment: "EFT" },
+    { checkNumber: "EFT-200", entryStatus: "Complete", modeOfPayment: "EFT" },
+  ]);
+});
+
+test("requires a supported control-log worksheet", async () => {
   const file = await workbookFile("reference.xlsx", [
     ["Check/EFT #", "Check / EFT Date"],
     ["0900562787", "07/15/2026"],
@@ -185,6 +211,22 @@ test("requires reference workbook tracker sheet", async () => {
 
   await assert.rejects(
     () => readReferenceRows(file),
-    /must contain a "tracker" worksheet/,
+    /must contain a "tracker" or "Payments" worksheet/,
   );
+});
+
+test("accepts Payments as a control-log worksheet without removing tracker support", async () => {
+  const file = await workbookFileWithSheets("control-log.xlsx", [{
+    name: "Payments",
+    rows: [
+      ["Check/EFT #", "Entry Status", "Mode of Payment"],
+      ["EFT-300", "Pending", "EFT"],
+    ],
+  }]);
+
+  const rows = await readReferenceRows(file);
+
+  assert.equal(rows[0].checkNumber, "EFT-300");
+  assert.equal(rows[0].entryStatus, "Pending");
+  assert.equal(rows[0].modeOfPayment, "EFT");
 });

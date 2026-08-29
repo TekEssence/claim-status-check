@@ -14,6 +14,8 @@ export type PaymentEobCredentials = {
   startDate?: string;
   endDate?: string;
   lookbackDays: number;
+  project?: "charm" | "medrevenue";
+  clientName?: string;
 };
 
 export type PaymentEobSharePointCredentials = {
@@ -28,6 +30,8 @@ export type PaymentEobReferenceRow = {
   rowNumber: number;
   checkNumber: string;
   checkDate?: string;
+  entryStatus?: string;
+  modeOfPayment?: string;
   raw: Record<string, string>;
 };
 

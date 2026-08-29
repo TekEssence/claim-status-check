@@ -17,6 +17,7 @@ import { createPaymentEobResultWorkbookBuffer, createPaymentTrackerWorkbookBuffe
 import { uploadPaymentEobOutputToSharePoint } from "./sharepoint";
 import { addPaymentTrackerRow } from "./tracker";
 import { createStoredZipFromFolder } from "./zip";
+import { isMedRevenuePendingEftRow, resolveAvailityRemittanceProcess } from "./process-registry";
 
 const require = createRequire(import.meta.url);
 const { submitLogin } = require("../../../claim-status/portals/availity/pages/login.page.js");
@@ -178,7 +179,6 @@ function remittanceMarkers(surface: RemittanceSurface): Locator[] {
     surface.locator("#checkEFTorganizationId"),
     surface.locator("#checkSearchInput"),
     surface.locator('[role="table"][aria-label="Remits"]'),
-    surface.getByText("Remittance Viewer", { exact: true }),
   ];
 }
 
@@ -208,8 +208,30 @@ async function findRemittanceViewerSurface(page: Page, timeoutMs = 60000): Promi
 }
 
 async function openRemittanceViewer(page: Page, context: AutomationContext, outputRoot: string): Promise<RemittanceSurface> {
-  await page.getByRole("button", { name: "Claims & Payments" }).click();
-  await page.getByTitle("Remittance Viewer").click();
+  await page.waitForLoadState("domcontentloaded", { timeout: 30000 }).catch(() => {});
+  const menuCandidates = [
+    page.locator("button.NavDropdown__trigger[aria-label='Claims & Payments']"),
+    page.getByRole("button", { name: "Claims & Payments", exact: true }),
+    page.locator("button").filter({ hasText: /^Claims & Payments$/ }),
+  ];
+  try {
+    await clickFirstVisible(menuCandidates, 60000);
+  } catch (error) {
+    await captureDiagnostics(page, outputRoot, "claims-payments-menu-not-found");
+    throw new Error(`Unable to open Availity Claims & Payments menu. ${error instanceof Error ? error.message : String(error)}`);
+  }
+
+  const remittanceCandidates = [
+    page.locator('[title="Remittance Viewer"]'),
+    page.getByRole("link", { name: "Remittance Viewer", exact: true }),
+    page.getByText("Remittance Viewer", { exact: true }),
+  ];
+  try {
+    await clickFirstVisible(remittanceCandidates, 30000);
+  } catch (error) {
+    await captureDiagnostics(page, outputRoot, "remittance-viewer-link-not-found");
+    throw new Error(`Unable to open Availity Remittance Viewer link. ${error instanceof Error ? error.message : String(error)}`);
+  }
   await page.waitForLoadState("domcontentloaded", { timeout: 30000 }).catch(() => {});
   await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
   try {
@@ -372,7 +394,29 @@ async function waitForResultsRefresh(surface: RemittanceSurface): Promise<void> 
   await surface.locator('[role="table"][aria-label="Remits"]').waitFor({ state: "visible", timeout: 30000 });
 }
 
-async function downloadPortalCsv(surface: RemittanceSurface, page: Page, context: AutomationContext, outputFolder: string, credentials: PaymentEobCredentials): Promise<PaymentEobPortalRecord[]> {
+async function setZeroAmountFilter(surface: RemittanceSurface): Promise<void> {
+  const candidates = [
+    surface.locator("#checkAmount"),
+    surface.locator("#checkcheckAmount"),
+    surface.locator('input[name="checkAmount"]'),
+    surface.locator('input[id*="amount" i]'),
+    surface.getByLabel(/Check.*Amount|Amount/i),
+  ];
+  for (const candidate of candidates) {
+    const input = candidate.first();
+    if (await input.isVisible().catch(() => false)) {
+      await input.fill("0");
+      const enteredAmount = (await input.inputValue()).replace(/[$,\s]/g, "");
+      if (Number(enteredAmount) !== 0) {
+        throw new Error(`Availity Check / EFT Amount did not retain zero (current value: "${await input.inputValue()}").`);
+      }
+      return;
+    }
+  }
+  throw new Error("MedRevenue zero-payments process could not find the Availity Amount filter.");
+}
+
+async function downloadPortalCsv(surface: RemittanceSurface, page: Page, context: AutomationContext, outputFolder: string, credentials: PaymentEobCredentials, options: { zeroAmount?: boolean } = {}): Promise<PaymentEobPortalRecord[]> {
   const startDate = credentials.startDate || daysAgoMmDdYyyy(credentials.lookbackDays);
   const endDate = credentials.endDate || todayMmDdYyyy();
 
@@ -399,8 +443,25 @@ async function downloadPortalCsv(surface: RemittanceSurface, page: Page, context
   }
 
   const filterButton = surface.locator("#checkFilterButton");
+  if (options.zeroAmount) {
+    try {
+      await setZeroAmountFilter(surface);
+    } catch (error) {
+      await captureDiagnostics(page, outputFolder, "zero-amount-filter-not-found");
+      throw error;
+    }
+    await context.log({ level: "info", message: "Amount filter set to 0 for MedRevenue zero payments.", eventName: "payment_eob_zero_amount_set" });
+  }
   await context.log({ level: "info", message: "Clicking organization Filter.", eventName: "payment_eob_filter_click" });
-  await filterButton.click();
+  try {
+    await filterButton.click();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!/intercepts pointer events/i.test(message)) throw error;
+    await context.log({ level: "warn", message: "An Availity overlay intercepted Filter; closing it and retrying once.", eventName: "payment_eob_filter_overlay_retry" });
+    await page.keyboard.press("Escape");
+    await filterButton.click();
+  }
   await waitForResultsRefresh(surface);
   await context.log({ level: "info", message: "Organization-filtered results loaded.", eventName: "payment_eob_filter_loaded" });
 
@@ -464,22 +525,58 @@ async function clearSearchFilterChips(surface: RemittanceSurface, context?: Auto
   }
 }
 
-async function findMatchingResultRow(surface: RemittanceSurface, checkNumber: string, checkDate: string): Promise<Locator | null> {
+async function findMatchingResultRows(surface: RemittanceSurface, checkNumber: string, checkDate?: string): Promise<Locator[]> {
   const table = surface.locator('[role="table"][aria-label="Remits"]');
   await table.waitFor({ state: "visible", timeout: 60000 }).catch(() => {});
   const resultRows = table.locator('[role="row"]');
   const count = await resultRows.count();
+  const matches: Locator[] = [];
   for (let index = 0; index < count; index += 1) {
     const row = resultRows.nth(index);
     const cells = row.locator('[role="cell"]');
     if ((await cells.count()) < 4) continue;
-    const displayedCheckNumber = normalizeCheckNumber(await cells.nth(0).innerText());
+    const displayedCheckNumber = normalizeCheckNumberForComparison(await cells.nth(0).innerText());
     const displayedCheckDate = (await cells.nth(3).innerText()).trim();
-    if (displayedCheckNumber === normalizeCheckNumber(checkNumber) && displayedCheckDate === checkDate) {
-      return row;
+    if (displayedCheckNumber === normalizeCheckNumberForComparison(checkNumber) && (!checkDate || displayedCheckDate === checkDate)) {
+      matches.push(row);
     }
   }
-  return null;
+  return matches;
+}
+
+export function checkNumberSearchVariants(checkNumber: string): string[] {
+  const exact = normalizeCheckNumber(checkNumber);
+  if (!/^\d+$/.test(exact)) return [exact];
+  const withoutLeadingZeros = exact.replace(/^0+(?=\d)/, "");
+  return [...new Set([exact, withoutLeadingZeros, `0${withoutLeadingZeros}`])];
+}
+
+async function searchMatchingRows(
+  surface: RemittanceSurface,
+  checkNumber: string,
+  startDate: string,
+  endDate: string,
+  exactCheckDate?: string,
+): Promise<Locator[]> {
+  for (const searchValue of checkNumberSearchVariants(checkNumber)) {
+    await clearSearchFilterChips(surface);
+    await surface.locator("#checkSearchInput").fill(searchValue);
+    await selectCheckSuggestion(surface, searchValue);
+    await fillDate(surface.locator("#checkcheckDates-start"), startDate);
+    await fillDate(surface.locator("#checkcheckDates-end"), endDate);
+    await surface.locator("#checkSearchButton").click();
+    await waitForResultsRefresh(surface);
+    const matches = await findMatchingResultRows(surface, checkNumber, exactCheckDate);
+    if (matches.length) return matches;
+  }
+  return [];
+}
+
+function requireSingleMatchingRow(rows: Locator[], checkNumber: string): Locator | null {
+  if (rows.length > 1) {
+    throw new Error(`Needs Review - Multiple Matches Found for Check/EFT ${checkNumber}.`);
+  }
+  return rows[0] ?? null;
 }
 
 async function verifyPdf(pdfPath: string): Promise<void> {
@@ -774,19 +871,42 @@ async function downloadPdfFromMatchingRow(
 
 async function searchAndDownloadPdf(surface: RemittanceSurface, page: Page, record: PaymentEobPortalRecord, outputPdfFolder: string, context: AutomationContext): Promise<{ filename: string; message: string; found: boolean }> {
   try {
-    await clearSearchFilterChips(surface, context);
-    await surface.locator("#checkSearchInput").fill(record.checkNumber);
-    await selectCheckSuggestion(surface, record.checkNumber);
-    await fillDate(surface.locator("#checkcheckDates-start"), record.checkDate);
-    await fillDate(surface.locator("#checkcheckDates-end"), record.checkDate);
-    await surface.locator("#checkSearchButton").click();
-
-    const matchingRow = await findMatchingResultRow(surface, record.checkNumber, record.checkDate);
+    await context.log({ level: "info", message: `Searching Check/EFT ${record.checkNumber} with leading-zero normalization.`, eventName: "payment_eob_normalized_search" });
+    const matchingRows = await searchMatchingRows(surface, record.checkNumber, record.checkDate, record.checkDate, record.checkDate);
+    const matchingRow = requireSingleMatchingRow(matchingRows, record.checkNumber);
     if (!matchingRow) {
       return { filename: "", message: "No matching result row.", found: false };
     }
 
     return await downloadPdfFromMatchingRow(surface, page, matchingRow, record, outputPdfFolder, context);
+  } finally {
+    await clearInput(surface.locator("#checkSearchInput")).catch(() => {});
+    await clearInput(surface.locator("#checkcheckDates-start")).catch(() => {});
+    await clearInput(surface.locator("#checkcheckDates-end")).catch(() => {});
+    await clearSearchFilterChips(surface).catch(() => {});
+  }
+}
+
+async function searchPendingEftAndDownloadPdf(
+  surface: RemittanceSurface,
+  page: Page,
+  checkNumber: string,
+  credentials: PaymentEobCredentials,
+  outputPdfFolder: string,
+  context: AutomationContext,
+): Promise<{ record: PaymentEobPortalRecord; filename: string; message: string; found: boolean }> {
+  const startDate = credentials.startDate || daysAgoMmDdYyyy(credentials.lookbackDays);
+  const endDate = credentials.endDate || todayMmDdYyyy();
+  const emptyRecord: PaymentEobPortalRecord = { checkNumber, checkDate: "", payer: "", payee: "", receivedByAvaility: "", amount: "", raw: {} };
+  try {
+    await context.log({ level: "info", message: `Searching pending EFT ${checkNumber} with leading-zero normalization.`, eventName: "payment_eob_normalized_search" });
+    const matchingRows = await searchMatchingRows(surface, checkNumber, startDate, endDate);
+    const matchingRow = requireSingleMatchingRow(matchingRows, checkNumber);
+    if (!matchingRow) return { record: emptyRecord, filename: "", message: "No matching result row in the configured lookback range.", found: false };
+    const cells = matchingRow.locator('[role="cell"]');
+    const record = { ...emptyRecord, checkDate: (await cells.count()) > 3 ? (await cells.nth(3).innerText()).trim() : "" };
+    const result = await downloadPdfFromMatchingRow(surface, page, matchingRow, record, outputPdfFolder, context);
+    return { record, ...result };
   } finally {
     await clearInput(surface.locator("#checkSearchInput")).catch(() => {});
     await clearInput(surface.locator("#checkcheckDates-start")).catch(() => {});
@@ -855,21 +975,61 @@ export async function runAvailityRemittanceJob(input: RunInput, context: Automat
     const remittanceSurface = await openRemittanceViewer(page, context, outputRoot);
     await context.log({ level: "info", message: "Availity Remittance Viewer opened.", eventName: "payment_eob_remittance_viewer_opened" });
 
-    const portalRecords = await downloadPortalCsv(remittanceSurface, page, context, outputRoot, input.credentials);
-    const uniqueRecords = portalRecords.filter((record) => {
-      if (referenceNumbers.has(normalizeCheckNumberForComparison(record.checkNumber))) {
-        comparisonRows.push({
-          checkNumber: record.checkNumber,
-          checkDate: record.checkDate,
-          comparison: "Existing",
-          searchResult: "Skipped",
-          pdfStatus: "Skipped",
-          filename: "",
-          message: "Found in uploaded Excel",
-        });
-        return false;
+    const processId = resolveAvailityRemittanceProcess(input.credentials.project || "");
+    await context.log({
+      level: "info",
+      message: `Availity project resolved to ${processId === "charm" ? "CHARM" : "MedRevenue"}${input.credentials.clientName ? ` for client ${input.credentials.clientName}` : ""}.`,
+      eventName: "payment_eob_availity_process_resolved",
+    });
+
+    if (processId === "medrevenue") {
+      if (!input.credentials.clientName?.trim()) throw new Error("MedRevenue Availity credentials must contain a Client Name.");
+      const pendingRows = input.referenceRows.filter(isMedRevenuePendingEftRow);
+      const seenPending = new Set<string>();
+      const uniquePendingRows = pendingRows.filter((row) => {
+        const key = normalizeCheckNumberForComparison(row.checkNumber);
+        if (seenPending.has(key)) return false;
+        seenPending.add(key);
+        return true;
+      });
+      await context.log({
+        level: "info",
+        message: `MedRevenue Phase 1 found ${uniquePendingRows.length} unique control-log row(s) where Entry Status=Pending and Mode of Payment=EFT.`,
+        eventName: "payment_eob_medrevenue_pending_loaded",
+      });
+      await context.emit({ type: "progress", completed: 0, total: Math.max(uniquePendingRows.length, 1) });
+      for (let index = 0; index < uniquePendingRows.length; index += 1) {
+        const row = uniquePendingRows[index];
+        if (context.isCancelled?.()) break;
+        try {
+          await context.log({ level: "info", message: `MedRevenue Phase 1 searching pending EFT ${row.checkNumber}.`, eventName: "payment_eob_medrevenue_pending_search", rowIndex: row.rowNumber });
+          const result = await searchPendingEftAndDownloadPdf(remittanceSurface, page, row.checkNumber, input.credentials, outputPdfFolder, context);
+          const comparisonRow: PaymentEobComparisonRow = {
+            checkNumber: row.checkNumber, checkDate: result.record.checkDate, comparison: "Unique",
+            searchResult: result.found ? "Found" : "Not found", pdfStatus: result.found ? "Downloaded" : "Not downloaded",
+            filename: result.filename, message: `MedRevenue Phase 1: ${result.message}`,
+          };
+          comparisonRows.push(comparisonRow);
+          addPaymentTrackerRow(paymentTrackerRows, trackedPayments, result.record, comparisonRow, eraDownloadedDate);
+        } catch (error) {
+          comparisonRows.push({ checkNumber: row.checkNumber, checkDate: row.checkDate || "", comparison: "Unique", searchResult: "Error", pdfStatus: "Error", filename: "", message: `MedRevenue Phase 1: ${error instanceof Error ? error.message : String(error)}` });
+        }
+        await context.emit({ type: "progress", completed: index + 1, total: Math.max(uniquePendingRows.length, 1) });
       }
-      return true;
+      await context.log({ level: "info", message: "Starting MedRevenue Phase 2 zero-payments comparison.", eventName: "payment_eob_medrevenue_zero_start" });
+    }
+
+    const cancelledBeforeComparison = Boolean(context.isCancelled?.());
+    if (cancelledBeforeComparison) {
+      await context.emit({ type: "cancelled", message: "Payment EOB download cancelled before the next phase." });
+    }
+    const portalRecords = cancelledBeforeComparison
+      ? []
+      : await downloadPortalCsv(remittanceSurface, page, context, outputRoot, input.credentials, { zeroAmount: processId === "medrevenue" });
+    const uniqueRecords = portalRecords.filter((record) => {
+      if (!referenceNumbers.has(normalizeCheckNumberForComparison(record.checkNumber))) return true;
+      comparisonRows.push({ checkNumber: record.checkNumber, checkDate: record.checkDate, comparison: "Existing", searchResult: "Skipped", pdfStatus: "Skipped", filename: "", message: processId === "medrevenue" ? "MedRevenue Phase 2: found in Control Log" : "Found in uploaded Excel" });
+      return false;
     });
 
     await context.emit({ type: "progress", completed: 0, total: Math.max(uniqueRecords.length, 1) });
@@ -880,7 +1040,7 @@ export async function runAvailityRemittanceJob(input: RunInput, context: Automat
         break;
       }
       try {
-        await context.log({ level: "info", message: `Searching unmatched Check/EFT ${record.checkNumber} (${record.checkDate}).`, eventName: "payment_eob_pdf_search" });
+        await context.log({ level: "info", message: `${processId === "medrevenue" ? "MedRevenue Phase 2 searching unique zero-payment" : "Searching unmatched"} Check/EFT ${record.checkNumber} (${record.checkDate}).`, eventName: "payment_eob_pdf_search" });
         const result = await searchAndDownloadPdf(remittanceSurface, page, record, outputPdfFolder, context);
         const comparisonRow: PaymentEobComparisonRow = {
           checkNumber: record.checkNumber,
@@ -889,7 +1049,7 @@ export async function runAvailityRemittanceJob(input: RunInput, context: Automat
           searchResult: result.found ? "Found" : "Not found",
           pdfStatus: result.found ? "Downloaded" : "Not downloaded",
           filename: result.filename,
-          message: result.message,
+          message: processId === "medrevenue" ? `MedRevenue Phase 2: ${result.message}` : result.message,
         };
         comparisonRows.push(comparisonRow);
         addPaymentTrackerRow(paymentTrackerRows, trackedPayments, record, comparisonRow, eraDownloadedDate);
@@ -907,7 +1067,7 @@ export async function runAvailityRemittanceJob(input: RunInput, context: Automat
       await context.emit({ type: "progress", completed: index + 1, total: Math.max(uniqueRecords.length, 1) });
     }
 
-    if (!portalRecords.length) {
+    if (!portalRecords.length && processId === "charm") {
       for (const row of input.referenceRows) {
         comparisonRows.push({
           checkNumber: row.checkNumber,
