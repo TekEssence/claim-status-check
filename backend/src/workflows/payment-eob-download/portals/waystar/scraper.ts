@@ -9,13 +9,19 @@ import { loginToWaystarClaimStatus } from "../../../claim-status/portals/waystar
 import { createStoredZipFromFolder } from "../availity-remittance/zip";
 import { waystarPaymentEobConfig } from "./config";
 import { isEligibleWaystarControlRow, isUsableCheckNumber, normalizeAmount, normalizePaymentNumber, readWaystarControlLog, readWaystarPaymentCredentials } from "./input";
-import { buildWaystarSearchResults, buildWaystarZeroPayments } from "./output-builder";
-import type { WaystarControlLogRow, WaystarPaymentCredentials, WaystarPaymentRecord, WaystarSearchResult, WaystarZeroPaymentOutputRow } from "./types";
+import { buildWaystarBulkPayments, buildWaystarSearchResults, buildWaystarZeroPayments } from "./output-builder";
+import { resolveWaystarPaymentProcess } from "./process-registry";
+import type { WaystarBulkPaymentOutputRow, WaystarBulkPaymentType, WaystarControlLogRow, WaystarPaymentCredentials, WaystarPaymentRecord, WaystarSearchResult, WaystarZeroPaymentOutputRow } from "./types";
 
 function requireFile(formData: FormData, key: string, label: string): File {
   const value = formData.get(key);
   if (!(value instanceof File) || value.size === 0) throw new Error(`${label} is required.`);
   return value;
+}
+
+function optionalFile(formData: FormData, key: string): File | undefined {
+  const value = formData.get(key);
+  return value instanceof File && value.size > 0 ? value : undefined;
 }
 
 function datePart(): string {
@@ -738,7 +744,7 @@ function zeroPaymentSearchResult(row: WaystarZeroPaymentOutputRow): WaystarSearc
   };
 }
 
-async function runJob(credentials: WaystarPaymentCredentials, allRows: WaystarControlLogRow[], context: AutomationContext): Promise<void> {
+async function runCashLogAndZeroPaymentsJob(credentials: WaystarPaymentCredentials, allRows: WaystarControlLogRow[], context: AutomationContext): Promise<void> {
   const eligible = allRows.filter(isEligibleWaystarControlRow);
   const rootName = `WaystarPaymentEobDownloads_${datePart()}_${context.jobId}`;
   const root = path.join(getJobDataPath(context.jobId, "outputs"), rootName);
@@ -833,18 +839,143 @@ async function runJob(credentials: WaystarPaymentCredentials, allRows: WaystarCo
   await context.log({ level: "info", message: `Waystar output package ready: ${rootName}.zip.`, eventName: "waystar_payment_package_ready" });
 }
 
+async function selectOptionByText(page: Page, selector: string, wantedText: string): Promise<void> {
+  const select = page.locator(selector).first();
+  await select.waitFor({ state: "visible", timeout: 30000 });
+  const value = await select.locator("option").evaluateAll((options, wanted) => {
+    const normalizedWanted = String(wanted).trim().toLowerCase();
+    const match = options.find((option) => (option.textContent ?? "").trim().toLowerCase() === normalizedWanted) as HTMLOptionElement | undefined;
+    return match?.value ?? "";
+  }, wantedText);
+  if (!value) throw new Error(`Waystar filter ${selector} does not contain option "${wantedText}".`);
+  await select.selectOption(value);
+}
+
+async function setHighestPaymentPageSize(page: Page): Promise<void> {
+  const perPage = page.locator("#paymentsTableGrid #PagerDiv .pageSize select").first();
+  if (!await perPage.isVisible({ timeout: 3000 }).catch(() => false)) return;
+  const values = await perPage.locator("option").evaluateAll((options) => options
+    .map((option) => Number((option as HTMLOptionElement).value))
+    .filter(Number.isFinite));
+  const highest = Math.max(...values);
+  if (!Number.isFinite(highest)) return;
+  await perPage.selectOption(String(highest));
+  await waitForWaystarGridProgress(page);
+}
+
+async function applyBulkPaymentFilters(page: Page, paymentType: WaystarBulkPaymentType): Promise<void> {
+  await setLegacyFilterInput(page, "#SearchOptions_PaymentNum", "");
+  await setLegacyFilterInput(page, "#SearchOptions_Amount", "");
+  await selectOptionByText(page, "#SearchOptions_Type", paymentType);
+  await selectOptionByText(page, "#SearchOptions_ReceivedDate", "Last 90 Days");
+  await selectOptionByText(page, "#SearchOptions_ViewOptions", "Unarchived");
+  const includeZero = page.locator("#SearchOptions_IncludeZeroPayment").first();
+  if (await includeZero.isVisible().catch(() => false)) await includeZero.check();
+  await page.locator("#searchButton").first().click();
+  await waitForWaystarGridProgress(page);
+  await setHighestPaymentPageSize(page);
+}
+
+async function runBulkPaymentPhase(
+  page: Page,
+  credentials: WaystarPaymentCredentials,
+  paymentType: WaystarBulkPaymentType,
+  outputFolder: string,
+  context: AutomationContext,
+): Promise<WaystarBulkPaymentOutputRow[]> {
+  await context.log({ level: "info", message: `Starting Bulk EOB ${paymentType} phase with Last 90 Days and Unarchived filters.`, eventName: `waystar_bulk_${paymentType.toLowerCase()}_start` });
+  await applyBulkPaymentFilters(page, paymentType);
+  const records = (await readAllVisiblePaymentRecords(page)).filter((record) => record.type.trim().toUpperCase() === paymentType);
+  await context.log({ level: "info", message: `${paymentType} phase found ${records.length} payment(s).`, eventName: `waystar_bulk_${paymentType.toLowerCase()}_results` });
+  const rows: WaystarBulkPaymentOutputRow[] = [];
+
+  for (let index = 0; index < records.length; index += 1) {
+    const record = records[index];
+    const row: WaystarBulkPaymentOutputRow = {
+      clientName: credentials.clientName,
+      paymentType,
+      paymentNumber: record.paymentNumber,
+      paymentAmount: record.paymentAmount,
+      paymentDate: record.paymentDate,
+      payer: record.payer,
+      pdfFileName: "",
+      downloadStatus: "DOWNLOAD_FAILED",
+      archiveStatus: "NOT_ATTEMPTED",
+      error: "",
+    };
+    try {
+      row.pdfFileName = await downloadSelectedZeroPaymentEob(page, record, outputFolder);
+      row.downloadStatus = "DOWNLOAD_SUCCESS";
+      try {
+        await archiveSelectedZeroPayment(page, record, context);
+        row.archiveStatus = "ARCHIVED_SUCCESS";
+      } catch (error) {
+        row.archiveStatus = "ARCHIVE_FAILED";
+        row.error = `EOB downloaded, but Archive failed: ${error instanceof Error ? error.message : String(error)}`;
+      }
+    } catch (error) {
+      row.error = error instanceof Error ? error.message : String(error);
+    }
+    rows.push(row);
+    await context.log({
+      level: row.downloadStatus === "DOWNLOAD_SUCCESS" && row.archiveStatus === "ARCHIVED_SUCCESS" ? "info" : "warn",
+      message: `${paymentType} ${record.paymentNumber}: download ${row.downloadStatus}; archive ${row.archiveStatus}.`,
+      eventName: `waystar_bulk_${paymentType.toLowerCase()}_payment_complete`,
+    });
+    await context.emit({ type: "progress", completed: index + 1, total: records.length });
+  }
+  return rows;
+}
+
+async function runBulkEobDownloadJob(credentials: WaystarPaymentCredentials, context: AutomationContext): Promise<void> {
+  const rootName = `WaystarBulkEobDownload_${safePart(credentials.clientName)}_${datePart()}_${context.jobId}`;
+  const root = path.join(getJobDataPath(context.jobId, "outputs"), rootName);
+  const achFolder = path.join(root, "ACH EOB PDFs");
+  const nonFolder = path.join(root, "NON EOB PDFs");
+  await fs.mkdir(achFolder, { recursive: true });
+  await fs.mkdir(nonFolder, { recursive: true });
+  let browser: Awaited<ReturnType<typeof launchAutomationBrowser>> | null = null;
+  let achRows: WaystarBulkPaymentOutputRow[] = [];
+  let nonRows: WaystarBulkPaymentOutputRow[] = [];
+  try {
+    browser = await launchAutomationBrowser();
+    const page = browser.context.pages()[0] ?? await browser.context.newPage();
+    page.setDefaultTimeout(30000);
+    await context.log({ level: "info", message: "Opening Waystar and signing in for Bulk EOB Download.", eventName: "waystar_bulk_login_start" });
+    await loginToWaystarClaimStatus(page, credentials);
+    await selectAccount(page, credentials, context);
+    await navigateToPayments(page, context);
+    achRows = await runBulkPaymentPhase(page, credentials, "ACH", achFolder, context);
+    nonRows = await runBulkPaymentPhase(page, credentials, "NON", nonFolder, context);
+  } finally {
+    await browser?.browser?.close().catch(() => {});
+  }
+  await fs.writeFile(path.join(root, `ACH Payments_${datePart()}.xlsx`), await buildWaystarBulkPayments("ACH", achRows));
+  await fs.writeFile(path.join(root, `NON Payments_${datePart()}.xlsx`), await buildWaystarBulkPayments("NON", nonRows));
+  const zip = await createStoredZipFromFolder(root, rootName);
+  await context.emit({ type: "file_download", filename: `${rootName}.zip`, base64: zip.toString("base64"), mimeType: "application/zip" });
+  await context.log({ level: "info", message: `Waystar Bulk EOB output package ready: ${rootName}.zip.`, eventName: "waystar_bulk_package_ready" });
+}
+
 export function createWaystarPaymentEobRunner(): AutomationRunner<PaymentEobRunInput> {
   return { workflowId: "payment-eob-download", portalId: waystarPaymentEobConfig.id, name: waystarPaymentEobConfig.name,
     validateInput(input) {
       if (!(input instanceof FormData)) throw new Error("Payment EOB input must be multipart form data.");
-      return { credentialExcel: requireFile(input, "credentialExcel", "Credential Excel"), referenceExcel: requireFile(input, "referenceExcel", "Control Log Excel") };
+      return { credentialExcel: requireFile(input, "credentialExcel", "Credential Excel"), referenceExcel: optionalFile(input, "referenceExcel") };
     },
     async run(input, context) {
-      await context.log({ level: "info", message: "Reading Waystar credential workbook and Control Log.", eventName: "waystar_payment_input_start" });
+      await context.log({ level: "info", message: "Reading Waystar credential workbook and resolving the client process.", eventName: "waystar_payment_input_start" });
       const credentials = await readWaystarPaymentCredentials(input.credentialExcel);
-      const control = await readWaystarControlLog(input.referenceExcel!);
+      const processId = resolveWaystarPaymentProcess(credentials.clientName);
+      await context.log({ level: "info", message: `Client ${credentials.clientName} is configured for ${processId}.`, eventName: "waystar_payment_process_resolved" });
+      if (processId === "bulk-eob-download") {
+        await runBulkEobDownloadJob(credentials, context);
+        return;
+      }
+      if (!input.referenceExcel) throw new Error(`Control Log Excel is required for ${credentials.clientName} because it uses the Cash Log and Zero Payments process.`);
+      const control = await readWaystarControlLog(input.referenceExcel);
       const eligibleCount = control.rows.filter(isEligibleWaystarControlRow).length;
       await context.log({ level: "info", message: `Input validation completed. ${eligibleCount} row(s) with Source=Waystar and Entry Status=In-Process will be processed.`, eventName: "waystar_payment_input_complete" });
-      await runJob(credentials, control.rows, context);
+      await runCashLogAndZeroPaymentsJob(credentials, control.rows, context);
     } };
 }

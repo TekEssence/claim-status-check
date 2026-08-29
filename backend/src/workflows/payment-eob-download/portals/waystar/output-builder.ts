@@ -1,5 +1,5 @@
 import ExcelJS from "exceljs";
-import type { WaystarControlLogRow, WaystarSearchResult, WaystarZeroPaymentOutputRow } from "./types";
+import type { WaystarBulkPaymentOutputRow, WaystarControlLogRow, WaystarSearchResult, WaystarZeroPaymentOutputRow } from "./types";
 
 function normalized(value: string): string { return value.toLowerCase().replace(/[^a-z0-9]+/g, ""); }
 function setAlias(values: Record<string, unknown>, headers: string[], aliases: string[], value: string): void {
@@ -57,6 +57,27 @@ export async function buildWaystarZeroPayments(rows: WaystarZeroPaymentOutputRow
     { header: "Check Number", key: "checkNumber", width: 28 },
     { header: "Deposit Date / Payment Posting Date", key: "depositDatePaymentPostingDate", width: 38 },
     { header: "Batch Total Amount", key: "batchTotalAmount", width: 24 },
+    { header: "PDF File Name", key: "pdfFileName", width: 42 },
+    { header: "Download Status", key: "downloadStatus", width: 22 },
+    { header: "Archive Status", key: "archiveStatus", width: 22 },
+    { header: "Error", key: "error", width: 60 },
+  ];
+  sheet.getRow(1).font = { bold: true };
+  sheet.views = [{ state: "frozen", ySplit: 1 }];
+  rows.forEach((row) => sheet.addRow(row));
+  return Buffer.from(await workbook.xlsx.writeBuffer());
+}
+
+export async function buildWaystarBulkPayments(paymentType: "ACH" | "NON", rows: WaystarBulkPaymentOutputRow[]): Promise<Buffer> {
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet(`${paymentType} Payments`);
+  sheet.columns = [
+    { header: "Client Name", key: "clientName", width: 24 },
+    { header: "Payment Type", key: "paymentType", width: 16 },
+    { header: "Payment Number", key: "paymentNumber", width: 28 },
+    { header: "Payment Amount", key: "paymentAmount", width: 22 },
+    { header: "Payment Date", key: "paymentDate", width: 20 },
+    { header: "Payer", key: "payer", width: 42 },
     { header: "PDF File Name", key: "pdfFileName", width: 42 },
     { header: "Download Status", key: "downloadStatus", width: 22 },
     { header: "Archive Status", key: "archiveStatus", width: 22 },

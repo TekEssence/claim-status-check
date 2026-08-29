@@ -57,6 +57,7 @@ export function PaymentEobPage({ portalId: initialPortalId }: PaymentEobPageProp
   const [selectedPortalId, setSelectedPortalId] = useState<string | null>(initialPortalId ?? null);
   const portal = getPaymentEobPortal(selectedPortalId);
   const requiresReferenceExcel = portal?.requiresReferenceExcel ?? true;
+  const showReferenceExcel = requiresReferenceExcel || (portal && "acceptsReferenceExcel" in portal && portal.acceptsReferenceExcel);
   const [user, setUser] = useState<AuthUser | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [credentialFile, setCredentialFile] = useState<File | null>(null);
@@ -212,7 +213,7 @@ export function PaymentEobPage({ portalId: initialPortalId }: PaymentEobPageProp
       formData.append("workflowId", WORKFLOW_ID);
       formData.append("portalId", selectedPortalId);
       formData.append("credentialExcel", credentialFile);
-      if (requiresReferenceExcel && referenceFile) {
+      if (referenceFile) {
         formData.append("referenceExcel", referenceFile);
       }
       const nextJobId = await startAutomationJob(formData);
@@ -345,6 +346,7 @@ export function PaymentEobPage({ portalId: initialPortalId }: PaymentEobPageProp
                 credentialFileName={credentialFile?.name ?? ""}
                 referenceFileName={referenceFile?.name ?? ""}
                 requiresReferenceExcel={requiresReferenceExcel}
+                showReferenceExcel={Boolean(showReferenceExcel)}
                 isRunning={isRunning}
                 canStart={canStart}
                 onCredentialFileChange={setCredentialFile}

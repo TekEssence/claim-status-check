@@ -43,8 +43,8 @@ export async function readWaystarPaymentCredentials(file: File): Promise<Waystar
   const base = await readWaystarCredentials(file);
   const workbookRows = await rows(file);
   const matching = workbookRows.rows.find((row) => find(row, ["Username", "User Name", "Login Name"]) === base.username) ?? workbookRows.rows[0];
-  const account = matching ? find(matching, ["Account", "Account Name", "Customer", "Client Account"]) : "";
-  if (!account) throw new Error("Waystar credential Excel must contain an Account column.");
+  const clientName = matching ? find(matching, ["Client Name", "Client"]) : "";
+  if (!clientName) throw new Error("Waystar credential Excel must contain a Client Name column.");
   const rawLookbackDays = matching ? find(matching, ["Lookback Days", "Look Back Days", "Days Back", "Zero Payment Lookback Days"]) : "";
   const parsedLookbackDays = Number.parseInt(rawLookbackDays.replace(/[^\d]/g, ""), 10);
   const lookbackDays = Number.isFinite(parsedLookbackDays) && parsedLookbackDays > 0 ? parsedLookbackDays : 7;
@@ -58,7 +58,8 @@ export async function readWaystarPaymentCredentials(file: File): Promise<Waystar
     ...base,
     loginUrl: base.loginUrl.includes("waystar.com") && !base.loginUrl.includes("zirmed.com") ? DEFAULT_LOGIN_URL : base.loginUrl,
     verificationAnswers: paymentAnswers.length ? paymentAnswers : base.verificationAnswers,
-    account,
+    clientName,
+    account: clientName,
     lookbackDays,
   };
 }
