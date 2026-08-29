@@ -2,6 +2,7 @@ import ExcelJS from "exceljs";
 import type { PaymentEobCredentials } from "../../types";
 import { normalizeTotpSecret, readReferenceRows } from "../availity-remittance/input";
 import { zelisConfig } from "./config";
+import { resolveZelisProcess } from "./process-registry";
 
 function asText(value: unknown): string {
   if (value == null) return "";
@@ -81,6 +82,8 @@ export async function readZelisCredentials(file: File): Promise<PaymentEobCreden
       password,
       totpSecret,
       lookbackDays: 30,
+      project: resolveZelisProcess(findValue(row, ["Project", "Project Name", "Project Code", "Process"])),
+      clientName: findValue(row, ["Client", "Client Name", "Client Code"]),
     };
   }
 

@@ -2,19 +2,22 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import ExcelJS from "exceljs";
 import type { Locator, Page } from "playwright-core";
 import type { AutomationContext, AutomationRunner } from "../../../types";
 import { launchAutomationBrowser } from "@/backend/src/core/browser";
 import { getJobDataPath } from "@/backend/src/core/storage";
-import type { PaymentEobComparisonRow, PaymentEobCredentials, PaymentEobRunInput } from "../../types";
+import type { PaymentEobComparisonRow, PaymentEobCredentials, PaymentEobReferenceRow, PaymentEobRunInput } from "../../types";
 import { createPaymentEobResultWorkbookBuffer } from "../availity-remittance/output-builder";
 import { uploadPaymentEobOutputToSharePoint } from "../availity-remittance/sharepoint";
 import { createStoredZipFromFolder } from "../availity-remittance/zip";
 import { zelisConfig } from "./config";
-import { readZelisCredentials } from "./input";
+import { readReferenceRows, readZelisCredentials } from "./input";
+import { isMedRevenuePendingEftRow, resolveZelisProcess } from "./process-registry";
 
 type RunInput = {
   credentials: PaymentEobCredentials;
+  referenceRows?: PaymentEobReferenceRow[];
 };
 
 type ZelisPaymentRow = {
@@ -23,6 +26,33 @@ type ZelisPaymentRow = {
   paymentId: string;
   method: string;
   downloadedDate: string;
+  policyType: string;
+  amount: string;
+  fees: string;
+  claimsBills: string;
+  deposited: string;
+  status: string;
+  payer: string;
+};
+
+type ZelisMedRevenueResult = {
+  phase: "Phase 1" | "Phase 2";
+  sourceRow: number | "";
+  inputCheckNumber: string;
+  paymentDate: string;
+  method: string;
+  paymentId: string;
+  policyType: string;
+  amount: string;
+  fees: string;
+  claimsBills: string;
+  deposited: string;
+  status: string;
+  payer: string;
+  downloadedDate: string;
+  decision: string;
+  filename: string;
+  message: string;
 };
 
 function requireFile(formData: FormData, key: string, label: string): File {
@@ -95,10 +125,6 @@ async function waitForFreshTotpWindow(page: Page): Promise<void> {
   if (secondsRemaining < 8) {
     await page.waitForTimeout((secondsRemaining + 1) * 1000);
   }
-}
-
-async function clickExactText(page: Page, text: RegExp, timeout = 30000): Promise<void> {
-  await page.locator("a,button,label").filter({ hasText: text }).first().click({ timeout });
 }
 
 async function clickSubmit(page: Page): Promise<void> {
@@ -211,19 +237,6 @@ async function waitForPaymentGrid(page: Page): Promise<void> {
   ]);
 }
 
-async function selectNotDownloaded(page: Page, context: AutomationContext): Promise<void> {
-  const radio = page.locator('input[name="options"][value="NotDownloaded"], #option3').first();
-  if (await radio.count()) {
-    await radio.check({ force: true, timeout: 15000 }).catch(async () => {
-      await radio.locator("xpath=ancestor::label[1]").click({ timeout: 15000 });
-    });
-  } else {
-    await clickExactText(page, /^Not Downloaded$/i);
-  }
-  await waitForPaymentGrid(page);
-  await context.log({ level: "info", message: "Zelis Not Downloaded filter selected.", eventName: "payment_eob_zelis_not_downloaded" });
-}
-
 async function hasNoRecords(page: Page): Promise<boolean> {
   return await page.getByText(/There are no records to display|try adjusting your search/i).first().isVisible().catch(() => false);
 }
@@ -241,9 +254,96 @@ async function readPaymentRows(page: Page): Promise<ZelisPaymentRow[]> {
     const paymentDate = (await cells.nth(1).innerText().catch(() => "")).trim();
     const method = (await cells.nth(2).innerText().catch(() => "")).replace(/\s+/g, " ").trim();
     const downloadedDate = (await cells.nth(11).innerText().catch(() => "")).trim();
-    result.push({ row, paymentDate, paymentId, method, downloadedDate });
+    result.push({
+      row,
+      paymentDate,
+      paymentId,
+      method,
+      policyType: (await cells.nth(4).innerText().catch(() => "")).replace(/\s+/g, " ").trim(),
+      amount: (await cells.nth(5).innerText().catch(() => "")).replace(/\s+/g, " ").trim(),
+      fees: (await cells.nth(6).innerText().catch(() => "")).replace(/\s+/g, " ").trim(),
+      claimsBills: (await cells.nth(7).innerText().catch(() => "")).replace(/\s+/g, " ").trim(),
+      deposited: (await cells.nth(8).innerText().catch(() => "")).replace(/\s+/g, " ").trim(),
+      status: (await cells.nth(9).innerText().catch(() => "")).replace(/\s+/g, " ").trim(),
+      payer: (await cells.nth(10).innerText().catch(() => "")).replace(/\s+/g, " ").trim(),
+      downloadedDate,
+    });
   }
   return result;
+}
+
+async function clearPaymentSearch(page: Page): Promise<void> {
+  const clearButton = page
+    .locator("#btnClear, input[value='Clear All']")
+    .or(page.getByRole("button", { name: /^Clear All$/i }))
+    .first();
+  if (await clearButton.isVisible().catch(() => false)) {
+    await clearButton.click({ timeout: 15000 });
+    await page.waitForTimeout(300);
+  }
+  await page.locator("#paymentId").fill("").catch(() => {});
+  await page.locator("#paymentAmount").fill("").catch(() => {});
+}
+
+async function submitPaymentSearch(page: Page): Promise<void> {
+  await page.locator("#btnSearch, input[type='button'][value='Search']").first().click({ timeout: 30000 });
+  await waitForPaymentGrid(page);
+}
+
+async function createMedRevenueWorkbookBuffer(rows: ZelisMedRevenueResult[]): Promise<Buffer> {
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = "Zelis MedRevenue Payment EOB Download";
+  workbook.created = new Date();
+  const worksheet = workbook.addWorksheet("MedRevenue Results");
+  worksheet.columns = [
+    { header: "Phase", key: "phase", width: 12 },
+    { header: "Control Log Row", key: "sourceRow", width: 18 },
+    { header: "Input Check Number", key: "inputCheckNumber", width: 22 },
+    { header: "Payment Date", key: "paymentDate", width: 16 },
+    { header: "Method", key: "method", width: 18 },
+    { header: "Payment ID", key: "paymentId", width: 18 },
+    { header: "Policy Type", key: "policyType", width: 16 },
+    { header: "Amount", key: "amount", width: 16 },
+    { header: "Fees", key: "fees", width: 14 },
+    { header: "Claims/Bills", key: "claimsBills", width: 16 },
+    { header: "Deposited", key: "deposited", width: 16 },
+    { header: "Status", key: "status", width: 16 },
+    { header: "Payer", key: "payer", width: 30 },
+    { header: "Downloaded", key: "downloadedDate", width: 16 },
+    { header: "Decision", key: "decision", width: 18 },
+    { header: "Filename", key: "filename", width: 32 },
+    { header: "Message", key: "message", width: 60 },
+  ];
+  worksheet.getRow(1).font = { bold: true };
+  worksheet.views = [{ state: "frozen", ySplit: 1 }];
+  rows.forEach((row) => worksheet.addRow(row));
+  return Buffer.from(await workbook.xlsx.writeBuffer());
+}
+
+function medRevenueResult(
+  phase: "Phase 1" | "Phase 2",
+  payment: ZelisPaymentRow | undefined,
+  details: Partial<Pick<ZelisMedRevenueResult, "sourceRow" | "inputCheckNumber" | "decision" | "filename" | "message">>,
+): ZelisMedRevenueResult {
+  return {
+    phase,
+    sourceRow: details.sourceRow ?? "",
+    inputCheckNumber: details.inputCheckNumber ?? "",
+    paymentDate: payment?.paymentDate ?? "",
+    method: payment?.method ?? "",
+    paymentId: payment?.paymentId ?? "",
+    policyType: payment?.policyType ?? "",
+    amount: payment?.amount ?? "",
+    fees: payment?.fees ?? "",
+    claimsBills: payment?.claimsBills ?? "",
+    deposited: payment?.deposited ?? "",
+    status: payment?.status ?? "",
+    payer: payment?.payer ?? "",
+    downloadedDate: payment?.downloadedDate ?? "",
+    decision: details.decision ?? "",
+    filename: details.filename ?? "",
+    message: details.message ?? "",
+  };
 }
 
 function shouldCapturePaymentScreenshot(payment: ZelisPaymentRow): boolean {
@@ -330,6 +430,135 @@ async function uploadToSharePointIfEnabled(credentials: PaymentEobCredentials, o
   await uploadPaymentEobOutputToSharePoint(credentials, outputRoot, context);
 }
 
+async function runMedRevenuePhases(options: {
+  page: Page;
+  referenceRows: PaymentEobReferenceRow[];
+  outputPdfFolder: string;
+  outputRoot: string;
+  context: AutomationContext;
+}): Promise<number> {
+  const { page, referenceRows, outputPdfFolder, outputRoot, context } = options;
+  const eligibleRows = referenceRows.filter(isMedRevenuePendingEftRow);
+  const uniqueRows = [...new Map(eligibleRows.map((row) => [row.checkNumber.trim().replace(/\s+/g, ""), row])).values()];
+  if (!uniqueRows.length) {
+    throw new Error("Zelis MedRevenue Control Log has no rows with Entry Status Pending and Mode of payment EFT.");
+  }
+
+  await context.log({
+    level: "info",
+    message: `Zelis MedRevenue Phase 1 loaded ${uniqueRows.length} unique Pending EFT payment ID(s) from the Control Log.`,
+    eventName: "payment_eob_zelis_medrevenue_phase1_loaded",
+  });
+
+  const results: ZelisMedRevenueResult[] = [];
+  let generatedFileCount = 0;
+  let completed = 0;
+  let total = uniqueRows.length;
+
+  for (const reference of uniqueRows) {
+    if (context.isCancelled?.()) break;
+    const inputPaymentId = reference.checkNumber.trim().replace(/\s+/g, "");
+    await context.log({
+      level: "info",
+      message: `MedRevenue Phase 1 searching Payment ID ${inputPaymentId}.`,
+      eventName: "payment_eob_zelis_medrevenue_phase1_search",
+      rowIndex: reference.rowNumber,
+    });
+    try {
+      await clearPaymentSearch(page);
+      await fillAngularInput(page.locator("#paymentId").first(), inputPaymentId);
+      await submitPaymentSearch(page);
+      const rows = await readPaymentRows(page);
+      const payment = rows.find((row) => row.paymentId.trim().replace(/\s+/g, "") === inputPaymentId);
+      if (!payment) {
+        results.push(medRevenueResult("Phase 1", undefined, {
+          sourceRow: reference.rowNumber,
+          inputCheckNumber: inputPaymentId,
+          decision: "Not found",
+          message: "No exact Payment ID match was returned by Zelis.",
+        }));
+      } else {
+        const filename = await saveZelisDownload(page, payment, outputPdfFolder);
+        generatedFileCount += 1;
+        results.push(medRevenueResult("Phase 1", payment, {
+          sourceRow: reference.rowNumber,
+          inputCheckNumber: inputPaymentId,
+          decision: payment.downloadedDate ? "Redownloaded" : "Downloaded",
+          filename,
+          message: payment.downloadedDate
+            ? `Downloaded again as required; Zelis previously showed Downloaded ${payment.downloadedDate}.`
+            : "Downloaded matching Payment ID.",
+        }));
+      }
+    } catch (error) {
+      results.push(medRevenueResult("Phase 1", undefined, {
+        sourceRow: reference.rowNumber,
+        inputCheckNumber: inputPaymentId,
+        decision: "Error",
+        message: error instanceof Error ? error.message : String(error),
+      }));
+    }
+    completed += 1;
+    await context.emit({ type: "progress", completed, total });
+  }
+
+  if (!context.isCancelled?.()) {
+    await context.log({
+      level: "info",
+      message: "Starting Zelis MedRevenue Phase 2 search for Payment Amount 0.",
+      eventName: "payment_eob_zelis_medrevenue_phase2_start",
+    });
+    await clearPaymentSearch(page);
+    await fillAngularInput(page.locator("#paymentAmount").first(), "0");
+    await submitPaymentSearch(page);
+
+    let pageNumber = 1;
+    do {
+      const rows = await readPaymentRows(page);
+      total += rows.length;
+      await context.emit({ type: "progress", completed, total: Math.max(total, 1) });
+      for (const payment of rows) {
+        if (context.isCancelled?.()) break;
+        if (payment.downloadedDate) {
+          results.push(medRevenueResult("Phase 2", payment, {
+            decision: "Skipped",
+            message: `Already downloaded on ${payment.downloadedDate}; skipped.`,
+          }));
+        } else {
+          try {
+            const filename = await saveZelisDownload(page, payment, outputPdfFolder);
+            generatedFileCount += 1;
+            results.push(medRevenueResult("Phase 2", payment, {
+              decision: "Downloaded",
+              filename,
+              message: "Zero-payment record had no Downloaded date and was downloaded.",
+            }));
+          } catch (error) {
+            results.push(medRevenueResult("Phase 2", payment, {
+              decision: "Error",
+              message: error instanceof Error ? error.message : String(error),
+            }));
+          }
+        }
+        completed += 1;
+        await context.emit({ type: "progress", completed, total: Math.max(total, completed) });
+      }
+      pageNumber += 1;
+    } while (!context.isCancelled?.() && pageNumber <= 100 && await goToNextPage(page));
+  }
+
+  const workbookBuffer = await createMedRevenueWorkbookBuffer(results);
+  const summaryFilename = "zelis_medrevenue_processing_summary.xlsx";
+  await fs.writeFile(path.join(outputRoot, summaryFilename), workbookBuffer);
+  await context.emit(downloadableFileEvent(summaryFilename, workbookBuffer, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"));
+  await context.log({
+    level: "info",
+    message: `Zelis MedRevenue completed with ${results.length} result row(s) and ${generatedFileCount} downloaded file(s).`,
+    eventName: "payment_eob_zelis_medrevenue_complete",
+  });
+  return generatedFileCount;
+}
+
 export async function runZelisJob(input: RunInput, context: AutomationContext): Promise<void> {
   const outputRoot = path.join(getJobDataPath(context.jobId, "outputs"), `zelis-${context.jobId}`);
   const outputPdfFolder = path.join(outputRoot, "PDFs");
@@ -350,6 +579,32 @@ export async function runZelisJob(input: RunInput, context: AutomationContext): 
 
     await login(page, input.credentials, context);
     await openPaymentPage(page, context);
+    const processId = resolveZelisProcess(input.credentials.project || "");
+    await context.log({
+      level: "info",
+      message: `Zelis project resolved to ${processId === "charm" ? "CHARM" : "MedRevenue"}.`,
+      eventName: "payment_eob_zelis_project_resolved",
+    });
+
+    if (processId === "medrevenue") {
+      if (!input.referenceRows) throw new Error("Zelis MedRevenue requires a Control Log workbook.");
+      const generatedFileCount = await runMedRevenuePhases({ page, referenceRows: input.referenceRows, outputPdfFolder, outputRoot, context });
+      if (generatedFileCount > 0) {
+        await emitRunZip(outputRoot, context);
+        const downloadsRoot = getLocalDownloadsRoot(context.jobId);
+        await copyFolderContents(outputRoot, downloadsRoot);
+        await context.log({
+          level: "info",
+          message: `Copied Zelis MedRevenue output files to Downloads folder: ${downloadsRoot}`,
+          eventName: "payment_eob_zelis_downloads_copy_complete",
+        });
+      } else {
+        await context.log({ level: "info", message: "No Zelis MedRevenue PDFs were generated, so no ZIP file was created.", eventName: "payment_eob_zelis_zip_skipped" });
+      }
+      await context.log({ level: "info", message: `Zelis MedRevenue processing completed. Output folder: ${outputRoot}`, eventName: "payment_eob_zelis_completed" });
+      return;
+    }
+
     await context.log({
       level: "info",
       message: "Processing Zelis payments from the default All filter. Rows with a Downloaded date will be skipped.",
@@ -476,16 +731,26 @@ export function createZelisRunner(): AutomationRunner<PaymentEobRunInput> {
       }
       return {
         credentialExcel: requireFile(input, "credentialExcel", "Credential Excel"),
+        referenceExcel: input.get("referenceExcel") instanceof File && (input.get("referenceExcel") as File).size > 0
+          ? input.get("referenceExcel") as File
+          : undefined,
       };
     },
     async run(input, context) {
       const credentials = await readZelisCredentials(input.credentialExcel);
+      const processId = resolveZelisProcess(credentials.project || "");
+      if (processId === "medrevenue" && !input.referenceExcel) {
+        throw new Error("Zelis MedRevenue requires a Control Log workbook containing a Tracker or Payments worksheet.");
+      }
+      const referenceRows = processId === "medrevenue" && input.referenceExcel
+        ? await readReferenceRows(input.referenceExcel)
+        : undefined;
       await context.log({
         level: "info",
-        message: `Zelis Payment EOB input validation completed for ${input.credentialExcel.name || "credential workbook"}.`,
+        message: `Zelis Payment EOB input validation completed for ${input.credentialExcel.name || "credential workbook"}${input.referenceExcel ? ` and ${input.referenceExcel.name || "Control Log"}` : ""}.`,
         eventName: "payment_eob_zelis_validation_complete",
       });
-      await runZelisJob({ credentials }, context);
+      await runZelisJob({ credentials, referenceRows }, context);
     },
   };
 }
