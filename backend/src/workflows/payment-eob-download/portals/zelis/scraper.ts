@@ -222,23 +222,66 @@ async function login(page: Page, credentials: PaymentEobCredentials, context: Au
 
 async function openPaymentPage(page: Page, context: AutomationContext): Promise<void> {
   const paymentUrl = "https://provider.zelispayments.com/Payment";
-  await page.goto(paymentUrl, { waitUntil: "domcontentloaded", timeout: 60000 }).catch(() => {});
-  await page.waitForLoadState("networkidle", { timeout: 30000 }).catch(() => {});
+  const alreadyOnPaymentPage = (() => {
+    try {
+      return new URL(page.url()).pathname.replace(/\/+$/, "").toLowerCase() === "/payment";
+    } catch {
+      return false;
+    }
+  })();
+  if (!alreadyOnPaymentPage) {
+    await page.goto(paymentUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
+  }
   await page.locator("#PaymentView, #paymentsGrid, .payment-holder").first().waitFor({ state: "visible", timeout: 90000 });
+  await page.locator("#paymentId").first().waitFor({ state: "visible", timeout: 30000 });
+  await page.locator("#btnSearch, input[type='button'][value='Search']").first().waitFor({ state: "visible", timeout: 30000 });
   await waitForPaymentGrid(page);
-  await context.log({ level: "info", message: "Zelis Payment page opened.", eventName: "payment_eob_zelis_payment_opened" });
+  await context.log({
+    level: "info",
+    message: alreadyOnPaymentPage ? "Zelis Payment page was already open and is ready." : "Zelis Payment page opened.",
+    eventName: "payment_eob_zelis_payment_opened",
+  });
 }
 
-async function waitForPaymentGrid(page: Page): Promise<void> {
-  await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
-  await Promise.race([
-    page.locator("table tbody tr").first().waitFor({ state: "visible", timeout: 30000 }).catch(() => undefined),
-    page.getByText(/There are no records to display|try adjusting your search/i).first().waitFor({ state: "visible", timeout: 30000 }).catch(() => undefined),
-  ]);
+async function paymentGridSignature(page: Page): Promise<string> {
+  return page.locator("#PaymentsGrid tbody, #paymentsGrid tbody, table.payment-table tbody, table tbody").first().innerText().catch(() => "");
+}
+
+async function waitForPaymentGrid(page: Page, previousSignature?: string): Promise<void> {
+  const grid = page.locator("#PaymentsGrid, #paymentsGrid, table.payment-table").first();
+  await grid.waitFor({ state: "visible", timeout: 30000 });
+
+  const loadingIndicator = page.locator(
+    "#PaymentsGrid .k-loading-mask:visible, #paymentsGrid .k-loading-mask:visible, .k-loading-image:visible, .k-loading-color:visible",
+  );
+  await loadingIndicator.first().waitFor({ state: "hidden", timeout: 20000 }).catch(() => {});
+
+  await page.waitForFunction((before) => {
+    const gridElement = document.querySelector("#PaymentsGrid, #paymentsGrid, table.payment-table");
+    if (!gridElement) return false;
+    const isLoading = [...document.querySelectorAll(".k-loading-mask, .k-loading-image, .k-loading-color")]
+      .some((element) => {
+        const style = window.getComputedStyle(element);
+        return style.display !== "none" && style.visibility !== "hidden" && style.opacity !== "0";
+      });
+    if (isLoading) return false;
+    const rows = gridElement.querySelectorAll("tbody tr a.paymentDetail[data-paymentid]");
+    const emptyState = gridElement.querySelector(".k-grid-norecords, .k-no-data, .no-records, .k-grid-norecords-template");
+    const text = (gridElement.querySelector("tbody")?.textContent || "").replace(/\s+/g, " ").trim();
+    const hasNoRecordsText = /no records|no data|try adjusting your search/i.test(`${text} ${emptyState?.textContent || ""}`);
+    if (typeof before === "string" && before.length > 0) {
+      return text !== before || hasNoRecordsText;
+    }
+    return rows.length > 0 || hasNoRecordsText;
+  }, previousSignature, { timeout: 30000 });
 }
 
 async function hasNoRecords(page: Page): Promise<boolean> {
-  return await page.getByText(/There are no records to display|try adjusting your search/i).first().isVisible().catch(() => false);
+  const emptyState = page.locator(
+    "#PaymentsGrid .k-grid-norecords, #paymentsGrid .k-grid-norecords, .k-no-data, .no-records, .k-grid-norecords-template",
+  ).first();
+  if (await emptyState.isVisible().catch(() => false)) return true;
+  return await page.getByText(/There are no records to display|no records|no data|try adjusting your search/i).first().isVisible().catch(() => false);
 }
 
 async function readPaymentRows(page: Page): Promise<ZelisPaymentRow[]> {
@@ -250,22 +293,23 @@ async function readPaymentRows(page: Page): Promise<ZelisPaymentRow[]> {
     const paymentLink = row.locator("a.paymentDetail[data-paymentid]").first();
     const paymentId = (await paymentLink.getAttribute("data-paymentid").catch(() => "")) || (await paymentLink.innerText().catch(() => "")).trim();
     if (!paymentId) continue;
-    const cells = row.locator("td[role='gridcell'], td");
-    const paymentDate = (await cells.nth(1).innerText().catch(() => "")).trim();
-    const method = (await cells.nth(2).innerText().catch(() => "")).replace(/\s+/g, " ").trim();
-    const downloadedDate = (await cells.nth(11).innerText().catch(() => "")).trim();
+    const cellTexts = await row.locator("td[role='gridcell'], td").allInnerTexts();
+    const cellText = (index: number) => (cellTexts[index] || "").replace(/\s+/g, " ").trim();
+    const paymentDate = cellText(1);
+    const method = cellText(2);
+    const downloadedDate = cellText(11);
     result.push({
       row,
       paymentDate,
       paymentId,
       method,
-      policyType: (await cells.nth(4).innerText().catch(() => "")).replace(/\s+/g, " ").trim(),
-      amount: (await cells.nth(5).innerText().catch(() => "")).replace(/\s+/g, " ").trim(),
-      fees: (await cells.nth(6).innerText().catch(() => "")).replace(/\s+/g, " ").trim(),
-      claimsBills: (await cells.nth(7).innerText().catch(() => "")).replace(/\s+/g, " ").trim(),
-      deposited: (await cells.nth(8).innerText().catch(() => "")).replace(/\s+/g, " ").trim(),
-      status: (await cells.nth(9).innerText().catch(() => "")).replace(/\s+/g, " ").trim(),
-      payer: (await cells.nth(10).innerText().catch(() => "")).replace(/\s+/g, " ").trim(),
+      policyType: cellText(4),
+      amount: cellText(5),
+      fees: cellText(6),
+      claimsBills: cellText(7),
+      deposited: cellText(8),
+      status: cellText(9),
+      payer: cellText(10),
       downloadedDate,
     });
   }
@@ -279,15 +323,20 @@ async function clearPaymentSearch(page: Page): Promise<void> {
     .first();
   if (await clearButton.isVisible().catch(() => false)) {
     await clearButton.click({ timeout: 15000 });
-    await page.waitForTimeout(300);
+    await page.waitForFunction(() => {
+      const paymentId = document.querySelector<HTMLInputElement>("#paymentId");
+      const paymentAmount = document.querySelector<HTMLInputElement>("#paymentAmount");
+      return (!paymentId || !paymentId.value) && (!paymentAmount || !paymentAmount.value);
+    }, null, { timeout: 5000 }).catch(() => {});
   }
   await page.locator("#paymentId").fill("").catch(() => {});
   await page.locator("#paymentAmount").fill("").catch(() => {});
 }
 
 async function submitPaymentSearch(page: Page): Promise<void> {
+  const previousSignature = await paymentGridSignature(page);
   await page.locator("#btnSearch, input[type='button'][value='Search']").first().click({ timeout: 30000 });
-  await waitForPaymentGrid(page);
+  await waitForPaymentGrid(page, previousSignature);
 }
 
 async function createMedRevenueWorkbookBuffer(rows: ZelisMedRevenueResult[]): Promise<Buffer> {
@@ -391,8 +440,9 @@ async function goToNextPage(page: Page): Promise<boolean> {
   if (!(await next.isVisible().catch(() => false))) return false;
   const className = await next.getAttribute("class").catch(() => "");
   if (className?.includes("k-state-disabled")) return false;
+  const previousSignature = await paymentGridSignature(page);
   await next.click({ timeout: 15000 });
-  await waitForPaymentGrid(page);
+  await waitForPaymentGrid(page, previousSignature);
   return true;
 }
 
