@@ -158,6 +158,13 @@ test("payment EOB resolves Zelis runner", () => {
   assert.equal(runner.name, "Zelis Remittance EOB Download");
 });
 
+test("payment EOB resolves Jopari runner", () => {
+  const runner = getAutomationRunner("payment-eob-download", "jopari");
+  assert.equal(runner.workflowId, "payment-eob-download");
+  assert.equal(runner.portalId, "jopari");
+  assert.equal(runner.name, "Jopari Payment EOB Download");
+});
+
 test("claim status registry behavior remains unchanged", async () => {
   const scraper = await getClaimStatusScraper("iehp");
 
