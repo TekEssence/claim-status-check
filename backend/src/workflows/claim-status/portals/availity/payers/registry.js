@@ -3,6 +3,7 @@
 const aetnaWorkflow = require("./aetna/registry");
 const anthemCaWorkflow = require("./anthem-ca/registry");
 const blueCrossBlueShieldWorkflow = require("./blue-cross-blue-shield/registry");
+const carelonBehavioralHealthWorkflow = require("./carelon-behavioral-health/registry");
 const centralHealthMedicarePlanWorkflow = require("./central-health-medicare-plan/registry");
 const healthNetWorkflow = require("./health-net/registry");
 const humanaWorkflow = require("./humana/registry");
@@ -22,8 +23,27 @@ function getWorkflowForPayer({ inputPayerName, mappedPortalPayerName }) {
   const mapped = normalize(mappedPortalPayerName);
   const input = normalize(inputPayerName);
 
+  if (
+    mapped.includes("ANTHEM - CT") ||
+    mapped.includes("ANTHEM CT") ||
+    mapped.includes("ANTHEM - NH") ||
+    mapped.includes("ANTHEM NH") ||
+    mapped.includes("ANTHEM BCBS NY") ||
+    input.includes("ANTHEM - CT") ||
+    input.includes("ANTHEM CT") ||
+    input.includes("ANTHEM - NH") ||
+    input.includes("ANTHEM NH") ||
+    input.includes("ANTHEM BCBS NY")
+  ) {
+    return blueCrossBlueShieldWorkflow;
+  }
+
   if (mapped.includes("AETNA") || input.includes("AETNA")) {
     return aetnaWorkflow;
+  }
+
+  if (mapped.includes("CARELON") || input.includes("CARELON") || mapped.includes("BHOMD") || input.includes("BHOMD")) {
+    return carelonBehavioralHealthWorkflow;
   }
 
   if (mapped.includes("ANTHEM") || input.includes("ANTHEM")) {
@@ -86,8 +106,12 @@ function getWorkflowForPayer({ inputPayerName, mappedPortalPayerName }) {
     mapped.includes("BCBSTX") ||
     mapped.includes("BLUE CROSS") ||
     mapped.includes("BLUE SHIELD") ||
+    mapped.includes("REGENCE") ||
+    mapped.includes("CAREFIRST") ||
     input.includes("BLUE CROSS") ||
     input.includes("BLUE SHIELD") ||
+    input.includes("REGENCE") ||
+    input.includes("CAREFIRST") ||
     input.includes("BCBS")
   ) {
     return blueCrossBlueShieldWorkflow;

@@ -16,29 +16,80 @@ const {
 } = require("../pages/claim-detail.page");
 const { renderClaimSummary, renderFailedSummary } = require("../services/summary-renderer");
 
+function normalizeIdentifier(value) {
+  return String(value || "").replace(/[^a-z0-9]/gi, "").toUpperCase();
+}
+
+function normalizePatientName(value) {
+  return String(value || "")
+    .toUpperCase()
+    .match(/[A-Z0-9]+/g)
+    ?.sort()
+    .join("") || "";
+}
+
+function patientFirstLast(value) {
+  const raw = String(value || "").toUpperCase().replace(/[^A-Z0-9, ]/g, " ").replace(/\s+/g, " ").trim();
+  if (!raw) return { first: "", last: "" };
+  const [beforeComma, afterComma = ""] = raw.split(",", 2).map((part) => part.trim());
+  if (afterComma) {
+    return { first: afterComma.split(" ")[0] || "", last: beforeComma.split(" ")[0] || "" };
+  }
+  const parts = beforeComma.split(" ").filter(Boolean);
+  return { first: parts[0] || "", last: parts.length > 1 ? parts[parts.length - 1] : "" };
+}
+
 function buildReturnedRowsSummary(resultRows) {
   if (!resultRows.length) {
     return "No parsed result rows were available.";
   }
 
   return resultRows.slice(0, 5).map((result, index) => {
-    return `returned row ${index + 1}: service_date=${result.serviceDate || "blank"}, billed=${result.billedAmount || "blank"}, finalized_date=${result.finalizedDate || "blank"}, claim=${result.claimNumber || "blank"}, status=${result.status.display || "blank"}`;
+    return `returned row ${index + 1}: service_date=${result.serviceDate || "blank"}, billed=${result.billedAmount || "blank"}, patient_id=${result.patientId || "blank"}, patient_name=${result.patientName || "blank"}, finalized_date=${result.finalizedDate || "blank"}, claim=${result.claimNumber || "blank"}, status=${result.status.display || "blank"}`;
   }).join("; ");
+}
+
+function evaluatePatientIdentity(result, rowData) {
+  const inputPatientId = normalizeIdentifier(rowData["Patient ID"]);
+  const portalPatientId = normalizeIdentifier(result.patientId);
+  if (portalPatientId) {
+    if (!inputPatientId) return { matched: false, reason: "Input Patient ID is missing while Availity returned a Patient ID." };
+    if (portalPatientId !== inputPatientId) {
+      return { matched: false, reason: `Patient ID mismatch: input=${rowData["Patient ID"] || "blank"}, Availity=${result.patientId || "blank"}.` };
+    }
+    return { matched: true, method: "Patient ID", status: "Patient ID matched" };
+  }
+
+  const inputPatientName = normalizePatientName(rowData["Patient Name"]);
+  const portalPatientName = normalizePatientName(result.patientName);
+  if (!portalPatientName) return { matched: false, reason: "Availity returned neither Patient ID nor Patient Name." };
+  if (!inputPatientName) return { matched: false, reason: "Input Patient Name is missing and Availity did not return Patient ID." };
+  if (portalPatientName === inputPatientName) {
+    return { matched: true, method: "full Patient Name", status: "Full patient name matched" };
+  }
+  const inputFirstLast = patientFirstLast(rowData["Patient Name"]);
+  const portalFirstLast = patientFirstLast(result.patientName);
+  if (inputFirstLast.first && inputFirstLast.last
+    && inputFirstLast.first === portalFirstLast.first
+    && inputFirstLast.last === portalFirstLast.last) {
+    return { matched: true, method: "first + last Patient Name", status: "First and last name matched; middle name/initial ignored" };
+  }
+  return { matched: false, status: "Patient identity mismatch", reason: `Patient ID was not returned; Patient Name mismatch: input=${rowData["Patient Name"] || "blank"}, Availity=${result.patientName || "blank"}.` };
 }
 
 function selectLatestFinalizedMatchedRow(matchedRows, sourceTab) {
   if (matchedRows.length <= 1) {
     return {
-      selectedRow: matchedRows[0] || null,
+      selectedRows: matchedRows[0] ? [matchedRows[0]] : [],
       notes: ""
     };
   }
 
   const rowsWithFinalizedDate = matchedRows.filter((matchedRow) => matchedRow.finalizedDateValue);
   if (!rowsWithFinalizedDate.length) {
-    const message = `${matchedRows.length} ${sourceTab} rows matched Service Date + Charges, but none had Finalized Date. Claim status was not extracted.`;
+    const message = `${matchedRows.length} ${sourceTab} rows matched and none had Finalized Date. Extracting all matching claim rows.`;
     return {
-      selectedRow: null,
+      selectedRows: matchedRows,
       notes: message
     };
   }
@@ -46,7 +97,7 @@ function selectLatestFinalizedMatchedRow(matchedRows, sourceTab) {
   rowsWithFinalizedDate.sort((a, b) => b.finalizedDateValue.getTime() - a.finalizedDateValue.getTime());
   const selectedRow = rowsWithFinalizedDate[0];
   return {
-    selectedRow,
+    selectedRows: [selectedRow],
     notes: `${matchedRows.length} ${sourceTab} rows matched Service Date + Charges. Selected latest finalized date ${selectedRow.finalizedDate} for claim ${selectedRow.claimNumber || "blank"}.`
   };
 }
@@ -152,6 +203,8 @@ function attachSummaryContext(extracted, matchedRow, payerName) {
   return {
     ...extracted,
     payerName,
+    patientName: matchedRow.patientName || "",
+    patientIdentityMatchStatus: matchedRow.patientIdentityMatchStatus || "",
     serviceDate: matchedRow.serviceDate || "",
     finalizedDate: matchedRow.finalizedDate || "",
     claimNumber: extracted.claimNumber || matchedRow.claimNumber || "",
@@ -165,17 +218,34 @@ async function processParsedSearchResults(page, row, provider, resultSummary, so
   );
   const inputDate = normalizeDateText(row.data["Service Date"]);
   const inputCharge = normalizeMoney(row.data.Charges);
+  const matchingPolicy = options.matchingPolicy || {};
+  const requirePatientIdentity = Boolean(matchingPolicy.patientIdFallback);
 
   resultRows.forEach((result) => {
     logger.info(
-      `Parsed result row ${result.index + 1}: service_date="${result.serviceDate}", billed="${result.billedAmount}", normalized_billed="${normalizeMoney(result.billedAmount)}", finalized_date="${result.finalizedDate}", claim="${result.claimNumber}", status="${result.status.display}"`
+      `Parsed result row ${result.index + 1}: service_date="${result.serviceDate}", billed="${result.billedAmount}", normalized_billed="${normalizeMoney(result.billedAmount)}", patient_id="${result.patientId || ""}", patient_name="${result.patientName || ""}", finalized_date="${result.finalizedDate}", claim="${result.claimNumber}", status="${result.status.display}"`
     );
   });
 
-  const matchedRows = resultRows.filter((result) => {
+  const baseMatchedRows = resultRows.filter((result) => {
     return result.serviceDate === inputDate && normalizeMoney(result.billedAmount) === inputCharge;
   });
-  logger.info(`Matched ${matchedRows.length} ${sourceTab} result row(s) by Service Date + Charges`);
+  const identityFailures = [];
+  const identityCheckedRows = baseMatchedRows.map((result) => {
+    if (!requirePatientIdentity) return result;
+    const identity = evaluatePatientIdentity(result, row.data);
+    if (!identity.matched) {
+      identityFailures.push(`claim ${result.claimNumber || "blank"}: ${identity.reason}`);
+      logger.warn(`Patient identity did not match claim ${result.claimNumber || "blank"}: ${identity.reason}`);
+    } else {
+      logger.info(`Matched claim ${result.claimNumber || "blank"} using ${identity.method}.`);
+    }
+    return { ...result, patientIdentityMatched: identity.matched, patientIdentityMatchStatus: identity.status || identity.reason };
+  });
+  const matchedRows = sourceTab === "HIPAA Standard"
+    ? identityCheckedRows
+    : identityCheckedRows.filter((result) => !requirePatientIdentity || result.patientIdentityMatched);
+  logger.info(`Matched ${matchedRows.length} ${sourceTab} result row(s) by Service Date + Charges${requirePatientIdentity ? " + Patient ID/Patient Name" : ""}`);
   if (matchedRows.length === 0) {
     logger.warn(`No ${sourceTab} rows matched input after parsing. Check result-row parse logs above if values look different in portal.`);
   }
@@ -188,7 +258,14 @@ async function processParsedSearchResults(page, row, provider, resultSummary, so
   if (matchedRows.length === 0) {
     const returnedRowsSummary = buildReturnedRowsSummary(resultRows);
     const returnedCount = resultSummary.total ?? (resultRows.length || "unknown");
-    const mismatchReason = `Portal returned ${returnedCount} rows in ${sourceTab} for provider ${provider}, but none matched input Service Date ${row.data["Service Date"]} and Charges ${row.data.Charges}. ${returnedRowsSummary}`;
+    const primaryMismatch = baseMatchedRows.length
+      ? `${baseMatchedRows.length} row(s) matched mandatory Service Date ${row.data["Service Date"]} and Charges ${row.data.Charges}, but failed Patient ID/Patient Name comparison.`
+      : `Portal returned ${returnedCount} rows in ${sourceTab} for provider ${provider}, but none matched mandatory Service Date ${row.data["Service Date"]} and Charges ${row.data.Charges}.`;
+    const mismatchReason = [
+      `${primaryMismatch} ${returnedRowsSummary}`,
+      identityFailures.length ? `Patient comparison: ${identityFailures.join("; ")}` : "",
+      resultSummary.portalAlertMessage
+    ].filter(Boolean).join("\n");
     return {
       status: noMatchStatus,
       summaries: [renderFailedSummary(mismatchReason)],
@@ -201,14 +278,14 @@ async function processParsedSearchResults(page, row, provider, resultSummary, so
 
   const summaries = [];
   const details = [];
-  const notes = [];
+  const notes = resultSummary.portalAlertMessage ? [resultSummary.portalAlertMessage] : [];
   const latestSelection = selectLatestFinalizedMatchedRow(matchedRows, sourceTab);
   if (latestSelection.notes) {
     logger.info(latestSelection.notes);
     notes.push(latestSelection.notes);
   }
 
-  if (!latestSelection.selectedRow) {
+  if (!latestSelection.selectedRows.length) {
     return {
       status: "failed",
       summaries: [renderFailedSummary(latestSelection.notes)],
@@ -219,7 +296,7 @@ async function processParsedSearchResults(page, row, provider, resultSummary, so
     };
   }
 
-  for (const matchedRow of [latestSelection.selectedRow]) {
+  for (const matchedRow of latestSelection.selectedRows) {
     const extracted = attachSummaryContext(await extractMatchedRow(page, matchedRow, sourceTab, options), matchedRow, row.data["Payer Name"] || "");
     details.push(extracted);
     summaries.push(renderClaimSummary(extracted));
@@ -306,7 +383,7 @@ async function runHipaaProviderSearch(page, row, providerOrder = PROVIDERS, opti
 
   for (const provider of providerOrder) {
     await searchHipaaWithProvider(page, provider, row.data, {
-      allowCharmProviderFallback: options.projectId === "charm"
+      allowFuzzyProviderFallback: Boolean(options.matchingPolicy?.allowFuzzyProviderSelection)
     });
 
     logger.info(`Waiting up to 5 seconds for ${provider} HIPAA results to settle`);

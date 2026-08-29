@@ -7,7 +7,8 @@ import type { ScraperContext } from "../../types";
 import { launchAvailityBrowser } from "./browser";
 import { parseAvailityInput, readAvailityPayerMapping } from "./input";
 import { createAvailityOutputWorkbookBuffer } from "./output-writer";
-import { getMfaConfigForProject, getOrganizationForRow, getProviderOrderForRow, readAvailityProviderMapping } from "./project-config";
+import { getMatchingPolicy, getMfaConfigForProject, getProviderOrderForRow, getRequiredFieldsForProject, readAvailityProviderMapping, resolvePortalSelections } from "./project-config";
+import type { AvailityPortalSelections } from "./config/projects";
 import { applyProjectOutputStrategy } from "./project-output";
 import type { AvailityAuditRow, AvailityErrorRow, AvailityInputRow, AvailityOutputRow, AvailityProviderMapping } from "./types";
 
@@ -15,14 +16,13 @@ const require = createRequire(import.meta.url);
 const { submitLogin } = require("./pages/login.page.js");
 const { handleMfa } = require("./pages/mfa.page.js");
 const { acceptCookiesIfPresent, getClaimStatusFrame, logoutIfPresent, openClaimStatus } = require("./pages/navigation.page.js");
-const { selectPayer } = require("./pages/claim-status-member.page.js");
+const { normalizeStateKey, selectPayer, selectState } = require("./pages/claim-status-member.page.js");
 const { validateRow } = require("./services/row-validator.js");
 const { renderFailedSummary } = require("./services/summary-renderer.js");
 const { getWorkflowForPayer } = require("./payers/registry.js");
 const availityLogger = require("./utils/logger.js");
 
 const ROW_PROCESS_MAX_ATTEMPTS = 3;
-const MEDREVENU_REQUIRED_FIELDS = ["Payer Name", "Service Date", "Charges"];
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -182,7 +182,7 @@ async function selectAutocompleteValue(scope: any, inputLocator: any, value: str
   await inputLocator.click({ force: true });
   await inputLocator.press(process.platform === "darwin" ? "Meta+A" : "Control+A").catch(() => {});
   await inputLocator.press("Backspace").catch(() => {});
-  await inputLocator.fill(value);
+  await inputLocator.pressSequentially(value, { delay: 60 });
   await scope.page().waitForTimeout(600).catch(() => {});
 
   const option = scope.getByText(value, { exact: true }).last();
@@ -202,7 +202,7 @@ async function selectAutocompleteValue(scope: any, inputLocator: any, value: str
   } else if (await option.isVisible({ timeout: 5000 }).catch(() => false)) {
     await option.click();
   } else {
-    await inputLocator.press("Enter").catch(() => {});
+    throw new Error(`No exact Availity dropdown option was found for "${value}".`);
   }
 
   await scope.page().waitForTimeout(500).catch(() => {});
@@ -240,26 +240,9 @@ async function getOrganizationSelectedText(frame: any): Promise<string> {
   }).catch(() => ""));
 }
 
-async function clickExactOrganizationOption(frame: any, organization: string): Promise<boolean> {
-  return Boolean(await frame.evaluate((expected: string) => {
-    const normalize = (text: unknown) => String(text || "").replace(/\s+/g, " ").trim();
-    const expectedText = normalize(expected);
-    const candidates = Array.from(document.querySelectorAll(
-      "[role='option'], [id^='react-select-'][id*='-option-'], .organization-select__option"
-    ));
-    const match = candidates.find((element) => normalize(element.textContent) === expectedText);
-    if (!match) return false;
-
-    match.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
-    match.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
-    (match as HTMLElement).click();
-    return true;
-  }, organization).catch(() => false));
-}
-
 async function selectOrganization(page: Page, organization: string): Promise<void> {
   let frame = await getClaimStatusFrame(page);
-  let organizationContainer = await firstVisibleLocator([
+  const organizationContainer = await firstVisibleLocator([
     frame.locator("#orgSelect").first(),
     frame.locator(".organization-select__control").first(),
     frame.locator("label").filter({ hasText: /^Organization$/ }).first()
@@ -279,7 +262,6 @@ async function selectOrganization(page: Page, organization: string): Promise<voi
     return;
   }
 
-  await organizationContainer.click({ force: true }).catch(() => {});
   const organizationLabelInput = frame.locator("label").filter({ hasText: /^Organization$/ }).first()
     .locator("xpath=following::input[@role='combobox'][1]");
   const organizationInput = await firstVisibleLocator([
@@ -290,25 +272,37 @@ async function selectOrganization(page: Page, organization: string): Promise<voi
   ], 15000);
   await organizationInput.waitFor({ state: "visible", timeout: 30000 });
   await organizationInput.scrollIntoViewIfNeeded().catch(() => {});
-  await organizationInput.click({ force: true });
-  await organizationInput.press(process.platform === "darwin" ? "Meta+A" : "Control+A").catch(() => {});
-  await organizationInput.press("Backspace").catch(() => {});
-  await organizationInput.fill(organization);
-  await page.waitForTimeout(700).catch(() => {});
 
-  if (!(await clickExactOrganizationOption(frame, organization))) {
-    const option = frame.getByText(organization, { exact: true }).last();
-    if (await option.isVisible({ timeout: 5000 }).catch(() => false)) {
-      await option.click({ force: true });
-    } else {
-      await organizationInput.press("Enter").catch(() => {});
+  let lastSelectedValue = "";
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    await organizationInput.click({ force: true });
+    await organizationInput.press(process.platform === "darwin" ? "Meta+A" : "Control+A").catch(() => {});
+    await organizationInput.press("Backspace").catch(() => {});
+    await organizationInput.pressSequentially(organization, { delay: 90 });
+
+    const roleOption = frame.getByRole("option", { name: organization, exact: true }).last();
+    const classOption = frame.locator(".organization-select__option").filter({ hasText: organization }).last();
+    const textOption = frame.getByText(organization, { exact: true }).last();
+    const option = await firstVisibleLocator([roleOption, classOption, textOption], 10000).catch(() => null);
+    if (!option) {
+      if (attempt < 3) {
+        await page.waitForTimeout(1000);
+        continue;
+      }
+      throw new Error(`Availity organization dropdown has no exact option for "${organization}".`);
+    }
+
+    await option.scrollIntoViewIfNeeded().catch(() => {});
+    await option.click({ timeout: 5000 });
+    await page.waitForTimeout(1000);
+    lastSelectedValue = await getOrganizationSelectedText(frame);
+    if (lastSelectedValue === organization) {
+      return;
     }
   }
 
-  await page.waitForTimeout(700).catch(() => {});
-  const selectedValue = await getOrganizationSelectedText(frame);
-  if (selectedValue !== organization) {
-    throw new Error(`Availity organization "${organization}" was not selected. Current value: "${selectedValue || currentSelectedText || "(blank)"}".`);
+  if (lastSelectedValue !== organization) {
+    throw new Error(`Availity organization "${organization}" was not selected. Current value: "${lastSelectedValue || currentSelectedText || "(blank)"}".`);
   }
 }
 
@@ -333,42 +327,72 @@ async function initializeSession(input: Awaited<ReturnType<typeof parseAvailityI
   page.setDefaultNavigationTimeout(Number(process.env.PORTAL_AVAILITY_NAVIGATION_TIMEOUT_MS || 45000));
   await loginToAvaility(page, input, context, log);
   await acceptCookiesIfPresent(page, 10000);
-  await openClaimStatus(page);
-  await log("Availity Claim Status page opened.");
   return { ...session, page };
 }
 
 async function processValidRow(
   page: Page,
   row: AvailityInputRow,
-  mappedPayerName: string,
-  automationState: { selectedOrganization: string; selectedPayer: string },
+  selections: AvailityPortalSelections,
+  automationState: { selectedOrganization: string; selectedState: string; selectedPayer: string; claimStatusOpened: boolean },
   options: { projectId: string; providerMappings: AvailityProviderMapping[] },
 ) {
-  if (!mappedPayerName?.trim()) {
+  if (!selections.payer?.trim()) {
     throw new Error(`Payer mapping is blank for "${row.data["Payer Name"] || "unknown payer"}". Update backend/src/workflows/claim-status/portals/availity/config/Payer_mapping_ava.xlsx.`);
   }
 
-  const organization = getOrganizationForRow(options.projectId, row);
+  const portalState = selections.state;
+  const normalizedPortalState = normalizeStateKey(portalState);
+  if (portalState && automationState.selectedState !== normalizedPortalState) {
+    const stateChanged = await selectState(page, portalState);
+    automationState.selectedState = normalizedPortalState;
+    if (stateChanged) {
+      automationState.selectedOrganization = "";
+      automationState.selectedPayer = "";
+      automationState.claimStatusOpened = false;
+      await page.waitForLoadState("networkidle", { timeout: 30000 }).catch(() => {});
+    }
+  }
+
+  if (!automationState.claimStatusOpened) {
+    await openClaimStatus(page, { forceOpen: true });
+    automationState.claimStatusOpened = true;
+  }
+
+  const organization = selections.organization;
+  if (
+    organization &&
+    automationState.selectedOrganization &&
+    automationState.selectedOrganization !== organization
+  ) {
+    await page.reload({ waitUntil: "domcontentloaded", timeout: 45000 });
+    await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
+    await openClaimStatus(page, { forceOpen: true });
+    automationState.claimStatusOpened = true;
+    automationState.selectedOrganization = "";
+    automationState.selectedPayer = "";
+  }
+
   if (organization && automationState.selectedOrganization !== organization) {
     await selectOrganization(page, organization);
     automationState.selectedOrganization = organization;
     automationState.selectedPayer = "";
   }
 
-  if (automationState.selectedPayer !== mappedPayerName) {
-    await selectPayer(page, mappedPayerName);
-    automationState.selectedPayer = mappedPayerName;
+  if (automationState.selectedPayer !== selections.payer) {
+    await selectPayer(page, selections.payer);
+    automationState.selectedPayer = selections.payer;
   }
 
   const workflow = getWorkflowForPayer({
     inputPayerName: row.data["Payer Name"] || "",
-    mappedPortalPayerName: mappedPayerName,
+    mappedPortalPayerName: selections.payer,
   });
   const providerOrder = getProviderOrderForRow(options.projectId, row, options.providerMappings);
+  const matchingPolicy = getMatchingPolicy(options.projectId, selections.payer);
   return workflow.processClaim(page, row, {
-    projectId: options.projectId,
     providerOrder,
+    matchingPolicy,
   });
 }
 
@@ -379,7 +403,7 @@ export async function runAvailityClaimStatusJob(formData: FormData, context: Scr
   const outputRows: AvailityOutputRow[] = [];
   const errorRows: AvailityErrorRow[] = [];
   const auditRows: AvailityAuditRow[] = [];
-  const automationState = { selectedOrganization: "", selectedPayer: "" };
+  const automationState = { selectedOrganization: "", selectedState: "", selectedPayer: "", claimStatusOpened: false };
   const payerMapping = await readAvailityPayerMapping(input.projectId);
   const providerMappings = await readAvailityProviderMapping();
   let session: Awaited<ReturnType<typeof initializeSession>> | null = null;
@@ -393,7 +417,7 @@ export async function runAvailityClaimStatusJob(formData: FormData, context: Scr
       message: entry.line,
     });
   });
-  await log(`Availity input loaded: ${input.inputRows.length} row(s). Project: ${input.projectId}. Available payers: Aetna, Anthem-CA, Blue Cross Blue Shield, Wellpoint, Wellcare, Humana, Central Health Medicare Plan, Health Net, Molina, Providence Health Plan, Scan Health, TRIWEST-TRICARE, TRIWEST-VA CCN.`);
+  await log(`Availity input loaded: ${input.inputRows.length} row(s). Project: ${input.projectId}. Available payers: Aetna, Anthem-CA, Blue Cross Blue Shield, Regence, Carelon Behavioral Health, Wellpoint, Wellcare, Humana, Central Health Medicare Plan, Health Net, Molina, Providence Health Plan, Scan Health, TRIWEST-TRICARE, TRIWEST-VA CCN.`);
   await context.emit({ type: "progress", completed: 0, total: input.inputRows.length });
 
   const emitOutputWorkbook = async (partial: boolean): Promise<void> => {
@@ -444,7 +468,9 @@ export async function runAvailityClaimStatusJob(formData: FormData, context: Scr
         await session.browser.close().catch(() => {});
         session = await initializeSession(input, context, log);
         automationState.selectedOrganization = "";
+        automationState.selectedState = "";
         automationState.selectedPayer = "";
+        automationState.claimStatusOpened = false;
       }
 
       const row = input.inputRows[index];
@@ -453,11 +479,16 @@ export async function runAvailityClaimStatusJob(formData: FormData, context: Scr
       const outputRow = buildBaseOutput(row);
       await context.emit(rowProgressEvent(row, index + 1, input.inputRows.length, "started"));
       let validation: { isValid: boolean; validation_status: string; validation_message: string; mappedPayerName: string };
+      let portalSelections: AvailityPortalSelections = { payer: "" };
       try {
+        portalSelections = resolvePortalSelections(input.projectId, row, payerMapping);
         validation = validateRow(
           row,
           payerMapping,
-          input.projectId === "medrevenu" ? { requiredFields: MEDREVENU_REQUIRED_FIELDS } : undefined,
+          {
+            requiredFields: getRequiredFieldsForProject(input.projectId),
+            mappedPayerName: portalSelections.payer,
+          },
         );
       } catch (error) {
         const message = friendlyAvailityError(error);
@@ -472,6 +503,7 @@ export async function runAvailityClaimStatusJob(formData: FormData, context: Scr
       await log(`Availity row ${row.input_row_id}/${input.inputRows.length}: ${row.data["Payer Name"] || "Unknown payer"}.`);
 
       if (!validation.isValid) {
+        await log(`Availity row ${row.input_row_id} validation failed: ${validation.validation_message}`);
         markFailure(outputRow, validation.validation_message);
         outputRows.push(outputRow);
         addError(errorRows, runId, row, {
@@ -491,7 +523,7 @@ export async function runAvailityClaimStatusJob(formData: FormData, context: Scr
       for (let rowAttempt = 1; rowAttempt <= ROW_PROCESS_MAX_ATTEMPTS && !rowHandled; rowAttempt += 1) {
         try {
           await context.emit(rowProgressEvent(row, index + 1, input.inputRows.length, `attempt ${rowAttempt}`));
-          const result = await processValidRow(session.page, row, validation.mappedPayerName, automationState, {
+          const result = await processValidRow(session.page, row, portalSelections, automationState, {
             projectId: input.projectId,
             providerMappings,
           });
@@ -527,11 +559,15 @@ export async function runAvailityClaimStatusJob(formData: FormData, context: Scr
               await session.browser.close().catch(() => {});
               session = await initializeSession(input, context, log);
               automationState.selectedOrganization = "";
+              automationState.selectedState = "";
               automationState.selectedPayer = "";
+              automationState.claimStatusOpened = false;
             } else {
               await openClaimStatus(session.page, { forceOpen: true });
               automationState.selectedOrganization = "";
+              automationState.selectedState = "";
               automationState.selectedPayer = "";
+              automationState.claimStatusOpened = true;
             }
             addAudit(auditRows, runId, row, "row_recovery", "recovered", message, startedAt, rowAttempt);
             continue;

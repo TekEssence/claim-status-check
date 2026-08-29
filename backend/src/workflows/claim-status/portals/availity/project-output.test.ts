@@ -25,6 +25,27 @@ function createOutputRow(row: AvailityInputRow): AvailityOutputRow {
 }
 
 describe("applyProjectOutputStrategy", () => {
+  it("marks a successful Charm claim when the portal patient name differs", () => {
+    const row = createInputRow({ "Patient Name": "DOE, JANE", "Patient ID": "PAT15396" });
+    const [outputRow] = applyProjectOutputStrategy({
+      projectId: "charm",
+      row,
+      outputRow: createOutputRow(row),
+      timestamp: "2026-07-15T00:00:00.000Z",
+      result: {
+        status: "success",
+        summaries: ["claim extracted"],
+        sourceTab: "Service Dates",
+        matchCount: 1,
+        details: [{ patientName: "WRONG, NAME", matchMethod: "Service Date + Billed Amount" }],
+      },
+    });
+
+    assert.equal(outputRow["Patient ID"], "PAT15396");
+    assert.equal(outputRow["Patient Identity Match"], "Patient name not matched; Patient ID matched");
+    assert.equal(outputRow.bot_updated_claim_status, "claim extracted");
+  });
+
   it("keeps Minimax claim-level summary unchanged", () => {
     const row = createInputRow({ CPT: "99214" });
     const [outputRow] = applyProjectOutputStrategy({

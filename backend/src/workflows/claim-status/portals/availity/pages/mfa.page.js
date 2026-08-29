@@ -94,7 +94,11 @@ async function handleMfa(page, totpSecret, maxAttempts, totpTimeOffsetSeconds = 
     previousOtp = otpCode;
 
     logger.success(`MFA code generated (attempt ${attempt}/${maxAttempts}, offset=${totpTimeOffsetSeconds}s, valid_for_about=${secondsRemaining}s)`);
-    await page.fill(SELECTORS.codeInput, otpCode);
+    const codeInput = page.locator(SELECTORS.codeInput);
+    await codeInput.click();
+    await codeInput.press(process.platform === "darwin" ? "Meta+A" : "Control+A").catch(() => {});
+    await codeInput.press("Backspace").catch(() => {});
+    await codeInput.pressSequentially(otpCode, { delay: 80 });
     await humanDelay(500, 1200);
 
     const previousUrl = page.url();
@@ -151,7 +155,11 @@ async function handleManualMfa(page, requestOtp, maxAttempts = 2) {
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     const otpCode = await requestOtp(attempt, maxAttempts);
-    await page.fill(SELECTORS.codeInput, String(otpCode || "").trim());
+    const codeInput = page.locator(SELECTORS.codeInput);
+    await codeInput.click();
+    await codeInput.press(process.platform === "darwin" ? "Meta+A" : "Control+A").catch(() => {});
+    await codeInput.press("Backspace").catch(() => {});
+    await codeInput.pressSequentially(String(otpCode || "").trim(), { delay: 80 });
     await humanDelay(500, 1200);
 
     const previousUrl = page.url();

@@ -3,9 +3,13 @@ import { describe, it } from "node:test";
 import {
   applyProjectColumnMapping,
   applyProjectPreprocessing,
+  getMatchingPolicy,
   getOrganizationForRow,
+  getPortalStateForRow,
+  getProjectInputHeaders,
   getProviderOrderForRow,
   normalizeProjectId,
+  resolvePortalSelections,
 } from "./project-config";
 import type { AvailityInputRow } from "./types";
 
@@ -104,25 +108,103 @@ describe("Charm project config", () => {
   it("maps Charm input columns to Availity common fields", () => {
     const mapped = applyProjectColumnMapping("charm", {
       "Invoice #": "INV-100",
-      "Payer Name": "Payer [ 99726 ] - Tricare | West Region",
+      "Master Payer Name": "Tricare",
+      "Payer to choose in Availity": "TRIWEST - TRICARE",
+      "State to choose in Availity": "California",
       "Patient Name": "DOE [ PAT13778 ], JANE",
       "Date Of Birth": "01/02/1980",
       "Insured's ID": "SUB-123",
       "Date Of Service": "06/16/2026",
-      Charges: "$150.00",
+      "Claim Amount": "$150.00",
       "Provider Name": "TEST PROVIDER",
-      Group: "open mind",
+      Practice: "open mind",
     });
 
     assert.equal(mapped["Claim No"], "INV-100");
-    assert.equal(mapped["Payer Name"], "Payer [ 99726 ] - Tricare | West Region");
+    assert.equal(mapped["Payer Name"], "Tricare");
+    assert.equal(mapped["Portal Payer Name"], "TRIWEST - TRICARE");
+    assert.equal(mapped["Portal State"], "California");
     assert.equal(mapped["Patient Name"], "DOE, JANE");
+    assert.equal(mapped["Patient ID"], "PAT13778");
     assert.equal(mapped["Patient DOB"], "01/02/1980");
     assert.equal(mapped["Subscriber No"], "SUB-123");
     assert.equal(mapped["Service Date"], "06/16/2026");
     assert.equal(mapped.Charges, "$150.00");
     assert.equal(mapped["Provider Name"], "TEST PROVIDER");
     assert.equal(mapped.Group, "open mind");
+  });
+
+  it("uses the configured Charm state and canonical output headers", () => {
+    const row: AvailityInputRow = {
+      input_row_id: 1,
+      source_row_number: 2,
+      data: applyProjectColumnMapping("charm", {
+        "State to choose in Availity": "Texas",
+      }),
+    };
+
+    assert.equal(getPortalStateForRow("charm", row), "Texas");
+    assert.deepEqual(getProjectInputHeaders("charm", ["Practice", "Claim Amount", "Patient Name"]), [
+      "Group",
+      "Charges",
+      "Patient Name",
+      "Patient ID",
+      "Patient Identity Match",
+    ]);
+  });
+
+  it("resolves Charm portal selections without payer workbook lookup", () => {
+    const row: AvailityInputRow = {
+      input_row_id: 1,
+      source_row_number: 2,
+      data: applyProjectColumnMapping("charm", {
+        Practice: "Open Mind",
+        "Master Payer Name": "Tricare",
+        "Payer to choose in Availity": "TRIWEST - TRICARE",
+        "State to choose in Availity": "California",
+      }),
+    };
+
+    assert.deepEqual(resolvePortalSelections("charm", row, new Map()), {
+      organization: "Open Mind Health",
+      state: "California",
+      payer: "TRIWEST - TRICARE",
+    });
+  });
+
+  it("resolves the Charm ICM organization", () => {
+    const row: AvailityInputRow = {
+      input_row_id: 1,
+      source_row_number: 2,
+      data: applyProjectColumnMapping("charm", {
+        Practice: "ICM",
+        "Payer to choose in Availity": "Regence Blue Shield",
+        "State to choose in Availity": "Washington",
+      }),
+    };
+
+    assert.equal(resolvePortalSelections("charm", row, new Map()).organization, "Institute on Complementary Medicine");
+  });
+
+  it("resolves the correctly spelled Charm Feel Better organization", () => {
+    const row: AvailityInputRow = {
+      input_row_id: 1,
+      source_row_number: 2,
+      data: applyProjectColumnMapping("charm", { Practice: "Feel Better" }),
+    };
+
+    assert.equal(resolvePortalSelections("charm", row, new Map()).organization, "FEEL BETTER BEHAVIORAL HEALTH SERVICES LLC");
+  });
+
+  it("applies Charm TriWest matching override without changing its default policy", () => {
+    const defaultPolicy = getMatchingPolicy("charm", "AETNA");
+    const triwestPolicy = getMatchingPolicy("charm", "TRIWEST - TRICARE");
+
+    assert.equal(defaultPolicy.patientNameFallback, false);
+    assert.equal(defaultPolicy.patientIdFallback, true);
+    assert.equal(triwestPolicy.patientNameFallback, false);
+    assert.equal(triwestPolicy.fuzzyPatientNameFallback, false);
+    assert.equal(triwestPolicy.matchBilledAmount, true);
   });
 
   it("removes bracketed Charm patient ids from separate first and last name fields", () => {
@@ -173,6 +255,34 @@ describe("Charm project config", () => {
       group: "open mind",
       providerName: "MAPPED PROVIDER",
     }]), ["MAPPED PROVIDER", "INPUT PROVIDER"]);
+  });
+
+  it("normalizes named Charm DOB and service dates", () => {
+    const mapped = applyProjectColumnMapping("charm", {
+      "Date Of Birth": "Dec 27, 1997",
+      "Date Of Service": "August 5, 2026",
+    });
+
+    assert.equal(mapped["Patient DOB"], "12/27/1997");
+    assert.equal(mapped["Service Date"], "08/05/2026");
+  });
+
+  it("uses Charm row Provider NPI before the practice provider mapping", () => {
+    const row: AvailityInputRow = {
+      input_row_id: 1,
+      source_row_number: 2,
+      data: applyProjectColumnMapping("charm", {
+        Practice: "open mind",
+        "Provider NPI": "1234567890",
+      }),
+    };
+
+    assert.deepEqual(getProviderOrderForRow("charm", row, [{
+      active: true,
+      project: "charm",
+      group: "open mind",
+      providerName: "MAPPED PROVIDER",
+    }]), ["1234567890"]);
   });
 
   it("falls back to Charm input provider when provider mapping is missing", () => {

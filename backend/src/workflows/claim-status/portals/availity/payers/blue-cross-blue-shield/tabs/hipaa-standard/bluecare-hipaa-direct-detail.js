@@ -1,6 +1,7 @@
 "use strict";
 
 const logger = require("../../../../utils/logger");
+const { getPortalMessages, formatPortalMessages } = require("../../../../pages/results.page");
 const { humanDelay, withRetry } = require("../../../../utils/browser");
 const { getClaimStatusFrame } = require("../../../../pages/navigation.page");
 const { PROVIDERS } = require("../../../../pages/claim-status-member.page");
@@ -266,10 +267,7 @@ async function runBluecareHipaaDirectSearch(page, row, providerOrder = PROVIDERS
     await searchBluecareHipaaWithProvider(page, provider, row.data);
 
     const frame = await getClaimStatusFrame(page);
-    const portalAlertMessage = await frame.locator("[role='alert'], .MuiAlert-root").first()
-      .innerText({ timeout: 1000 })
-      .then((text) => clean(text))
-      .catch(() => "");
+    const portalAlertMessage = formatPortalMessages(await getPortalMessages(page));
 
     const detailVisible = await hasBluecareHipaaDetail(page);
     if (portalAlertMessage && !detailVisible) {

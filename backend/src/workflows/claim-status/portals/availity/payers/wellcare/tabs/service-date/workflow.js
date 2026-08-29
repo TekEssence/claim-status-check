@@ -7,6 +7,7 @@ const { PROVIDERS } = require("../../../../pages/claim-status-member.page");
 const { waitForSearchResultsToSettle, normalizeMoney, normalizeDateText } = require("../../../../pages/results.page");
 const { renderClaimSummary, renderFailedSummary } = require("../../../../services/summary-renderer");
 const { normalizeStatus } = require("../../../../services/status-normalizer");
+const { extractBracketedPatientId } = require("../../../../services/patient-identity");
 const {
   extractInProcess,
   extractWellcareDenied,
@@ -47,14 +48,19 @@ async function selectAutocompleteOption(scope, inputLocator, value) {
   await inputLocator.click({ force: true });
   await inputLocator.press(process.platform === "darwin" ? "Meta+A" : "Control+A").catch(() => {});
   await inputLocator.press("Backspace").catch(() => {});
-  await inputLocator.fill(String(value || ""));
+  await inputLocator.pressSequentially(String(value || ""), { delay: 60 });
   await humanDelay(500, 1000);
 
   const option = scope.getByText(value, { exact: true }).last();
   if (await option.isVisible({ timeout: 3000 }).catch(() => false)) {
     await option.click();
   } else {
-    await inputLocator.press("Enter");
+    const containingOption = scope.locator("[role='option'], [id*='-option-'], .provider-select__option").filter({ hasText: String(value || "") }).first();
+    if (await containingOption.isVisible({ timeout: 2000 }).catch(() => false)) {
+      await containingOption.click();
+    } else {
+      throw new Error(`No Availity dropdown option was found for "${value}".`);
+    }
   }
 }
 
@@ -194,8 +200,11 @@ async function submitServiceDateSearch(page) {
       const headingVisible = await frame.locator(SELECTORS.searchResultsHeading).first().isVisible({ timeout: 500 }).catch(() => false);
       const resultRowsVisible = await frame.locator(SELECTORS.tableRows).first().isVisible({ timeout: 500 }).catch(() => false);
       const noResultsVisible = await frame.locator(SELECTORS.noResultsMessage).first().isVisible({ timeout: 500 }).catch(() => false);
+      const portalResponseVisible = await frame.locator(
+        "#results [role='alert'], #results .MuiAlert-root, .MuiFormHelperText-root.Mui-error, .invalid-feedback"
+      ).first().isVisible({ timeout: 500 }).catch(() => false);
 
-      if (headingVisible || resultRowsVisible || noResultsVisible) {
+      if (headingVisible || resultRowsVisible || noResultsVisible || portalResponseVisible) {
         return true;
       }
 
@@ -292,6 +301,7 @@ async function getWellcareServiceDateRows(page) {
       claimNumber: cellByHeader(normalizedCells, headers, "claim number"),
       memberId: cellByAnyHeader(normalizedCells, headers, ["member id", "patient member id"]),
       patientName: cellByAnyHeader(normalizedCells, headers, ["patient name", "member name", "patient", "member"]),
+      patientId: cellByAnyHeader(normalizedCells, headers, ["patient account number", "patient id", "patient number"]),
       finalizedDate: normalizeDateText(finalizedDate),
       finalizedDateValue: parseDateValue(finalizedDate),
       status: normalizeStatus(statusText)
@@ -375,14 +385,20 @@ async function processWellcareServiceDateResults(page, row, provider, resultSumm
   const resultRows = await getWellcareServiceDateRows(page);
   const inputDate = normalizeDateText(row.data["Service Date"]);
   const inputCharge = normalizeMoney(row.data.Charges);
-  const shouldMatchBilledAmount = options.projectId !== "medrevenu";
+  const matchingPolicy = options.matchingPolicy || {};
+  const shouldMatchBilledAmount = matchingPolicy.matchBilledAmount !== false;
   const inputMemberId = hasUsableValue(row.data["Subscriber No"]) ? normalizeMemberId(row.data["Subscriber No"]) : "";
   const inputPatientName = hasUsableValue(row.data["Patient Name"]) ? normalizePatientName(row.data["Patient Name"]) : "";
+  const inputPatientId = normalizeMemberId(row.data["Patient ID"]) || extractBracketedPatientId(row.data["Patient Name"]);
   const inputPatientNameWithoutInitial = hasUsableValue(row.data["Patient Name"]) ? normalizePatientNameWithoutInitial(row.data["Patient Name"]) : "";
-  const shouldMatchMemberId = options.projectId !== "medrevenu" || Boolean(inputMemberId);
-  const shouldMatchPatientName = options.projectId === "medrevenu" && !inputMemberId && Boolean(inputPatientName);
+  const shouldMatchMemberId = matchingPolicy.memberIdMode !== "disabled"
+    && (matchingPolicy.memberIdMode !== "whenPresent" || Boolean(inputMemberId));
+  const shouldMatchPatientId = Boolean(matchingPolicy.patientIdFallback && inputPatientId);
+  const shouldMatchPatientName = Boolean(matchingPolicy.patientNameFallback && !inputMemberId && inputPatientName);
   let matchLabel = shouldMatchMemberId
     ? `${shouldMatchBilledAmount ? "Service Date + Billed Amount" : "Service Date"} + Member ID`
+    : shouldMatchPatientId
+      ? `${shouldMatchBilledAmount ? "Service Date + Billed Amount" : "Service Date"} + Patient ID`
     : shouldMatchPatientName
       ? `${shouldMatchBilledAmount ? "Service Date + Billed Amount" : "Service Date"} + Patient Name`
       : shouldMatchBilledAmount ? "Service Date + Billed Amount" : "Service Date";
@@ -397,11 +413,22 @@ async function processWellcareServiceDateResults(page, row, provider, resultSumm
     return result.serviceDate === inputDate
       && (!shouldMatchBilledAmount || normalizeMoney(result.billedAmount) === inputCharge)
       && (!shouldMatchMemberId || normalizeMemberId(result.memberId) === inputMemberId)
+      && (!shouldMatchPatientId || (normalizeMemberId(result.patientId) || extractBracketedPatientId(result.patientName)) === inputPatientId)
       && (!shouldMatchPatientName || normalizePatientName(result.patientName) === inputPatientName);
   });
 
-  if (matchedRows.length === 0 && options.projectId === "medrevenu" && inputMemberId && inputPatientName) {
-    logger.info("No Wellcare Service Dates rows matched Medrevenu Member ID. Falling back to Patient Name match.");
+  if (matchedRows.length === 0 && matchingPolicy.patientIdFallback && inputPatientId) {
+    logger.info("No Service Dates rows matched Member ID. Applying configured bracketed Patient ID fallback.");
+    matchedRows = resultRows.filter((result) => {
+      return result.serviceDate === inputDate
+        && (!shouldMatchBilledAmount || normalizeMoney(result.billedAmount) === inputCharge)
+        && (normalizeMemberId(result.patientId) || extractBracketedPatientId(result.patientName)) === inputPatientId;
+    });
+    matchLabel = `${shouldMatchBilledAmount ? "Service Date + Billed Amount" : "Service Date"} + Patient ID`;
+  }
+
+  if (matchedRows.length === 0 && matchingPolicy.patientNameFallback && inputMemberId && inputPatientName) {
+    logger.info("No Wellcare Service Dates rows matched Member ID. Applying configured Patient Name fallback.");
     matchedRows = resultRows.filter((result) => {
       return result.serviceDate === inputDate
         && (!shouldMatchBilledAmount || normalizeMoney(result.billedAmount) === inputCharge)
@@ -410,8 +437,8 @@ async function processWellcareServiceDateResults(page, row, provider, resultSumm
     matchLabel = `${shouldMatchBilledAmount ? "Service Date + Billed Amount" : "Service Date"} + Patient Name`;
   }
 
-  if (matchedRows.length === 0 && options.projectId === "medrevenu" && inputPatientNameWithoutInitial) {
-    logger.info("No Wellcare Service Dates rows matched exact Medrevenu Patient Name. Falling back to Patient Name without trailing initial.");
+  if (matchedRows.length === 0 && matchingPolicy.patientNameWithoutInitialFallback && inputPatientNameWithoutInitial) {
+    logger.info("No Wellcare Service Dates rows matched exact Patient Name. Applying configured trailing-initial fallback.");
     matchedRows = resultRows.filter((result) => {
       return result.serviceDate === inputDate
         && (!shouldMatchBilledAmount || normalizeMoney(result.billedAmount) === inputCharge)
@@ -432,14 +459,17 @@ async function processWellcareServiceDateResults(page, row, provider, resultSumm
       ? `Service Date mismatch for input ${row.data["Service Date"] || "blank"}.`
       : shouldMatchBilledAmount && !billedMatchedRows.length
         ? `Billed Amount mismatch for input Charges ${row.data.Charges || "blank"}.`
-        : options.projectId === "medrevenu" && inputMemberId && inputPatientName
+        : matchingPolicy.reportCombinedMemberPatientMismatch && inputMemberId && inputPatientName
           ? `Member ID and Patient Name mismatch for input Member ID ${row.data["Subscriber No"] || "blank"} and Patient Name ${row.data["Patient Name"] || "blank"}.`
           : matchLabel.includes("Member ID")
             ? `Member ID mismatch for input ${row.data["Subscriber No"] || "blank"}.`
             : matchLabel.includes("Patient Name")
               ? `Patient Name mismatch for input ${row.data["Patient Name"] || "blank"}.`
               : `No matching ${sourceTab} row found.`;
-    const mismatchReason = `Portal returned ${returnedCount} rows in ${sourceTab} for provider ${provider}. ${mismatchDetail}`;
+    const mismatchReason = [
+      `Portal returned ${returnedCount} rows in ${sourceTab} for provider ${provider}. ${mismatchDetail}`,
+      resultSummary.portalAlertMessage
+    ].filter(Boolean).join("\n");
     return {
       status: "failed",
       summaries: [renderFailedSummary(mismatchReason)],
@@ -474,6 +504,8 @@ async function processWellcareServiceDateResults(page, row, provider, resultSumm
     const summaryContext = {
       ...extracted,
       payerName: row.data["Payer Name"] || "",
+      patientName: matchedRow.patientName || "",
+      matchMethod: matchLabel,
       serviceDate: matchedRow.serviceDate || "",
       finalizedDate: matchedRow.finalizedDate || "",
       claimNumber: extracted.claimNumber || matchedRow.claimNumber || "",
@@ -494,7 +526,7 @@ async function processWellcareServiceDateResults(page, row, provider, resultSumm
     matchCount: matchedRows.length,
     provider,
     sourceTab,
-    notes: selection.notes || ""
+    notes: [resultSummary.portalAlertMessage, selection.notes].filter(Boolean).join("\n")
   };
 }
 

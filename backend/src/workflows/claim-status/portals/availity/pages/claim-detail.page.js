@@ -934,8 +934,12 @@ async function extractWellcareDenied(page, status) {
 async function extractHipaaLineRows(page, options = {}) {
   const preferExpandedReasonRemarkCode = options.preferExpandedReasonRemarkCode === true;
   const frame = await getClaimStatusFrame(page);
-  const lineTable = await waitForLineLevelRows(page, { hipaa: true, timeoutMs: 15000 }) || frame.locator(SELECTORS.hipaaLineLevelTable).first();
-  const tableScope = await lineTable.isVisible({ timeout: 3000 }).catch(() => false) ? lineTable : frame;
+  const lineTable = await waitForLineLevelRows(page, { hipaa: true, timeoutMs: 5000 }) || frame.locator(SELECTORS.hipaaLineLevelTable).first();
+  if (!await lineTable.isVisible({ timeout: 3000 }).catch(() => false)) {
+    logger.info("HIPAA claim detail has no line-level table; continuing with claim-level information only.");
+    return [];
+  }
+  const tableScope = lineTable;
   const headers = await readColumnHeaders(tableScope);
   const procedureCodes = tableScope.locator("p[id^='procedureCode-']");
   const count = await procedureCodes.count();

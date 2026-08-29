@@ -6,7 +6,41 @@ const { getClaimStatusFrame } = require("./navigation.page");
 
 const PROVIDERS = ["TRINITY PAIN MANAGEMENT", "DAO, THUAN DUC"];
 
+const STATE_ENTRIES = [
+  ["Alabama", "AL"], ["Alaska", "AK"], ["Arizona", "AZ"], ["Arkansas", "AR"],
+  ["California", "CA"], ["Colorado", "CO"], ["Connecticut", "CT"], ["Delaware", "DE"],
+  ["District of Columbia", "DC"], ["Florida", "FL"], ["Georgia", "GA"], ["Hawaii", "HI"],
+  ["Idaho", "ID"], ["Illinois", "IL"], ["Indiana", "IN"], ["Iowa", "IA"], ["Kansas", "KS"],
+  ["Kentucky", "KY"], ["Louisiana", "LA"], ["Maine", "ME"], ["Maryland", "MD"],
+  ["Massachusetts", "MA"], ["Michigan", "MI"], ["Minnesota", "MN"], ["Mississippi", "MS"],
+  ["Missouri", "MO"], ["Montana", "MT"], ["Nebraska", "NE"], ["Nevada", "NV"],
+  ["New Hampshire", "NH"], ["New Jersey", "NJ"], ["New Mexico", "NM"], ["New York", "NY"],
+  ["North Carolina", "NC"], ["North Dakota", "ND"], ["Ohio", "OH"], ["Oklahoma", "OK"],
+  ["Oregon", "OR"], ["Pennsylvania", "PA"], ["Rhode Island", "RI"], ["South Carolina", "SC"],
+  ["South Dakota", "SD"], ["Tennessee", "TN"], ["Texas", "TX"], ["Utah", "UT"],
+  ["Vermont", "VT"], ["Virginia", "VA"], ["Washington", "WA"], ["West Virginia", "WV"],
+  ["Wisconsin", "WI"], ["Wyoming", "WY"]
+];
+
+function compactState(value) {
+  return String(value || "").replace(/[^a-z0-9]/gi, "").toUpperCase();
+}
+
+function resolveState(value) {
+  const key = compactState(value);
+  const match = STATE_ENTRIES.find(([name, code]) => compactState(name) === key || code === key);
+  return match ? { name: match[0], code: match[1], key: match[1] } : {
+    name: String(value || "").replace(/\s+/g, " ").trim(), code: key.length === 2 ? key : "", key
+  };
+}
+
+function normalizeStateKey(value) {
+  return resolveState(value).key;
+}
+
 const SELECTORS = {
+  stateTrigger: "#region-select > button.NavDropdown__trigger",
+  stateFilterInput: "input#regions_filter",
   payerInput: "input#payer[role='combobox']",
   selectedPayerInput: "input#payerSelect[role='combobox']",
   memberTab: "button[role='tab']:has-text('Member')",
@@ -22,15 +56,86 @@ const SELECTORS = {
   portalAlert: "[role='alert'], .MuiAlert-root"
 };
 
+async function selectState(page, stateName) {
+  const resolvedState = resolveState(stateName);
+  const expectedState = resolvedState.name;
+  const expectedCodeFromInput = resolvedState.code;
+  if (!expectedState) return false;
+  let selectionAttempted = false;
+  return withRetry(
+    `Selecting state ${stateName}`,
+    async () => {
+      const stateTrigger = page.locator(SELECTORS.stateTrigger).first();
+      await stateTrigger.waitFor({ state: "visible", timeout: 30000 });
+      const currentState = String(await stateTrigger.getAttribute("aria-label") || await stateTrigger.innerText())
+        .replace(/\s+/g, " ")
+        .trim();
+      if (compactState(currentState) === compactState(expectedState) || (expectedCodeFromInput && compactState(currentState) === expectedCodeFromInput)) {
+        logger.info(`Availity state ${expectedState} is already selected.`);
+        return false;
+      }
+
+      await stateTrigger.click();
+      const filterInput = page.locator(SELECTORS.stateFilterInput).first();
+      const searchableDropdown = await filterInput.isVisible({ timeout: 3000 }).catch(() => false);
+      if (searchableDropdown) {
+        await filterInput.click();
+        await filterInput.press(process.platform === "darwin" ? "Meta+A" : "Control+A");
+        await filterInput.press("Backspace");
+        await filterInput.pressSequentially(expectedState, { delay: 80 });
+        await humanDelay(300, 600);
+      }
+
+      let option = page.locator(`#region-${expectedCodeFromInput || expectedState.toUpperCase()} > button.UserRegionsMenu__option--button`).first();
+      if (!(await option.isVisible({ timeout: 1000 }).catch(() => false))) {
+        option = page.locator("#region-select button.UserRegionsMenu__option--button").filter({ hasText: new RegExp(`^${expectedState.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i") }).first();
+      }
+      await option.waitFor({ state: "visible", timeout: 10000 });
+      const optionId = await option.locator("xpath=ancestor::li[starts-with(@id,'region-')][1]").getAttribute("id");
+      const expectedCode = String(optionId || "").replace(/^region-/i, "").trim();
+      if (currentState.toLowerCase() === expectedState.toLowerCase() || currentState.toUpperCase() === expectedCode.toUpperCase()) {
+        await page.keyboard.press("Escape").catch(() => {});
+        logger.info(`Availity state ${expectedState} (${expectedCode}) is already selected.`);
+        return selectionAttempted;
+      }
+
+      selectionAttempted = true;
+      await option.click();
+
+      const deadline = Date.now() + 30000;
+      while (Date.now() < deadline) {
+        await page.waitForLoadState("domcontentloaded", { timeout: 3000 }).catch(() => {});
+        const refreshedTrigger = page.locator(SELECTORS.stateTrigger).first();
+        const selectedState = await refreshedTrigger.getAttribute("aria-label", { timeout: 2000 }).catch(() => "");
+        const normalizedSelectedState = String(selectedState || "").trim();
+        if (normalizedSelectedState.toLowerCase() === expectedState.toLowerCase() || normalizedSelectedState.toUpperCase() === expectedCode.toUpperCase()) {
+          logger.info(`Availity state changed from ${currentState || "unknown"} to ${expectedState}.`);
+          return true;
+        }
+        await humanDelay(500, 900);
+      }
+      throw new Error(`Availity state did not change to ${expectedState} after the page refresh.`);
+    },
+    { retries: 2, retryDelayMs: 1200 }
+  );
+}
+
 async function selectAutocompleteOption(scope, inputLocator, value) {
   await inputLocator.click();
-  await inputLocator.fill(value);
+  await inputLocator.press(process.platform === "darwin" ? "Meta+A" : "Control+A").catch(() => {});
+  await inputLocator.press("Backspace").catch(() => {});
+  await inputLocator.pressSequentially(String(value || ""), { delay: 60 });
   await humanDelay(500, 1000);
   const option = scope.getByText(value, { exact: true }).last();
   if (await option.isVisible().catch(() => false)) {
     await option.click();
   } else {
-    await inputLocator.press("Enter");
+    const containingOption = scope.locator("[role='option'], [id*='-option-'], .provider-select__option").filter({ hasText: String(value || "") }).first();
+    if (await containingOption.isVisible({ timeout: 2000 }).catch(() => false)) {
+      await containingOption.click();
+    } else {
+      throw new Error(`No Availity dropdown option was found for "${value}".`);
+    }
   }
 }
 
@@ -73,8 +178,9 @@ async function clickExactPayerOption(frame, payerName) {
 
 async function selectPayerAutocompleteOption(frame, inputLocator, payerName) {
   await inputLocator.click({ force: true });
-  await inputLocator.fill("");
-  await inputLocator.fill(payerName);
+  await inputLocator.press(process.platform === "darwin" ? "Meta+A" : "Control+A").catch(() => {});
+  await inputLocator.press("Backspace").catch(() => {});
+  await inputLocator.pressSequentially(payerName, { delay: 60 });
   await humanDelay(800, 1200);
 
   const fallbackOption = frame.getByText(payerName, { exact: true }).last();
@@ -87,12 +193,6 @@ async function selectPayerAutocompleteOption(frame, inputLocator, payerName) {
   }
 
   await humanDelay(500, 900);
-
-  if (!(await isPayerSelectionCommitted(frame, payerName))) {
-    logger.warn(`Payer ${payerName} was clicked but not verified as selected. Pressing Enter once to commit exact typed value.`);
-    await inputLocator.press("Enter").catch(() => {});
-    await humanDelay(500, 900);
-  }
 
   if (!(await isPayerSelectionCommitted(frame, payerName))) {
     throw new Error(`Payer ${payerName} was not committed after dropdown selection.`);
@@ -178,8 +278,11 @@ async function selectProvider(page, providerName) {
 }
 
 async function fillTextField(scope, selector, value) {
-  await scope.locator(selector).fill("");
-  await scope.locator(selector).fill(String(value || ""));
+  const input = scope.locator(selector);
+  await input.click();
+  await input.press(process.platform === "darwin" ? "Meta+A" : "Control+A").catch(() => {});
+  await input.press("Backspace").catch(() => {});
+  await input.pressSequentially(String(value || ""), { delay: 40 });
 }
 
 function normalizeGroupNumber(value) {
@@ -287,8 +390,11 @@ async function submitMemberSearch(page) {
       const headingVisible = await frame.locator(SELECTORS.searchResultsHeading).first().isVisible({ timeout: 500 }).catch(() => false);
       const resultRowsVisible = await frame.locator(SELECTORS.tableRows).first().isVisible({ timeout: 500 }).catch(() => false);
       const noResultsVisible = await frame.locator(SELECTORS.noResultsMessage).first().isVisible({ timeout: 500 }).catch(() => false);
+      const portalResponseVisible = await frame.locator(
+        "#results [role='alert'], #results .MuiAlert-root, .MuiFormHelperText-root.Mui-error, .invalid-feedback"
+      ).first().isVisible({ timeout: 500 }).catch(() => false);
 
-      if (headingVisible || resultRowsVisible || noResultsVisible) {
+      if (headingVisible || resultRowsVisible || noResultsVisible || portalResponseVisible) {
         return true;
       }
 
@@ -344,5 +450,7 @@ module.exports = {
   SELECTORS,
   hasNoResults,
   searchMemberWithProvider,
+  selectState,
+  normalizeStateKey,
   selectPayer
 };

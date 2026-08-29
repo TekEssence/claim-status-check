@@ -107,14 +107,14 @@ async function selectProvider(page, providerName) {
       }
       await humanDelay(300, 600);
       await input.click({ force: true });
-      await input.fill("");
-      await input.fill(providerName);
+      await input.press(process.platform === "darwin" ? "Meta+A" : "Control+A").catch(() => {});
+      await input.press("Backspace").catch(() => {});
+      await input.pressSequentially(providerName, { delay: 60 });
 
       if (await waitAndClickExactProviderOption(frame, providerName, 3000)) {
         logger.info(`Clicked Bluecare provider dropdown option: ${providerName}`);
       } else {
-        logger.warn(`Bluecare provider option ${providerName} was not visible after 3 seconds. Pressing Enter to commit typed option.`);
-        await input.press("Enter");
+        throw new Error(`Bluecare provider dropdown has no exact option for "${providerName}".`);
       }
 
       await humanDelay(500, 900);
@@ -132,8 +132,10 @@ async function fillTextField(frame, selector, value) {
   const field = frame.locator(selector).first();
   await field.waitFor({ state: "visible", timeout: 10000 });
   await field.click({ force: true });
-  await field.fill("");
-  await field.fill(String(value || ""));
+  await field.click();
+  await field.press(process.platform === "darwin" ? "Meta+A" : "Control+A").catch(() => {});
+  await field.press("Backspace").catch(() => {});
+  await field.pressSequentially(String(value || ""), { delay: 40 });
 }
 
 async function fillDateField(frame, selector, value, label) {
@@ -145,7 +147,7 @@ async function fillDateField(frame, selector, value, label) {
     await field.click({ force: true });
     await field.press(process.platform === "darwin" ? "Meta+A" : "Control+A");
     await field.press("Backspace");
-    await field.fill(normalizedValue);
+    await field.pressSequentially(normalizedValue, { delay: 40 });
     await field.press("Tab");
     await humanDelay(200, 400);
 
@@ -176,8 +178,11 @@ async function resultIndicatorAppeared(page, timeoutMs) {
     const headingVisible = await frame.locator(SELECTORS.resultsHeading).first().isVisible({ timeout: 500 }).catch(() => false);
     const resultRowsVisible = await frame.locator(SELECTORS.tableRows).first().isVisible({ timeout: 500 }).catch(() => false);
     const noResultsVisible = await frame.locator(SELECTORS.noResultsMessage).first().isVisible({ timeout: 500 }).catch(() => false);
+    const portalResponseVisible = await frame.locator(
+      "#results [role='alert'], #results .MuiAlert-root, .MuiFormHelperText-root.Mui-error, .invalid-feedback"
+    ).first().isVisible({ timeout: 500 }).catch(() => false);
 
-    if (headingVisible || resultRowsVisible || noResultsVisible) {
+    if (headingVisible || resultRowsVisible || noResultsVisible || portalResponseVisible) {
       return true;
     }
 

@@ -25,7 +25,10 @@ function validateRow(row, payerMapping, options = {}) {
   }
 
   const payerName = asText(data["Payer Name"]);
-  const mappedPayerName = payerName ? payerMapping.get(payerName.toLowerCase()) : "";
+  const directPortalPayerName = asText(data["Portal Payer Name"]);
+  const mappedPayerName = asText(options.mappedPayerName)
+    || directPortalPayerName
+    || (payerName ? payerMapping.get(payerName.toLowerCase()) : "");
   if (payerName && !mappedPayerName) {
     errors.push(`Payer mapping not found for "${payerName}". Update backend/src/workflows/claim-status/portals/availity/config/Payer_mapping_ava.xlsx.`);
   }

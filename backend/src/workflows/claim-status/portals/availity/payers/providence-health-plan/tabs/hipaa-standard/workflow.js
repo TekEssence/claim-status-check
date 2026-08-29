@@ -26,7 +26,7 @@ async function processClaim(page, row, options = {}) {
   const providerOrder = Array.isArray(options.providerOrder) && options.providerOrder.length
     ? options.providerOrder
     : PROVIDENCE_HEALTH_PLAN_PROVIDER_ORDER;
-  return runHipaaProviderSearch(page, row, providerOrder);
+  return runHipaaProviderSearch(page, row, providerOrder, { matchingPolicy: options.matchingPolicy });
 }
 
 module.exports = {

@@ -2,11 +2,32 @@
 
 const logger = require("../../utils/logger");
 const { waitForSearchTabs } = require("../../pages/claim-status-hipaa.page");
+const { getClaimStatusFrame } = require("../../pages/navigation.page");
 const { PROVIDERS } = require("../../pages/claim-status-member.page");
 const { renderFailedSummary } = require("../../services/summary-renderer");
 const { runBluecareHipaaDirectSearch } = require("./tabs/hipaa-standard/bluecare-hipaa-direct-detail");
 const { runBluecareMemberProviderSearch } = require("./tabs/member/bluecare-member-results");
 const { runHipaaProviderSearch, runMemberProviderSearch } = require("../../workflows/shared-claim-workflow");
+const serviceDatesWorkflow = require("../anthem-ca/tabs/service-date/workflow");
+
+async function isSearchTabVisible(page, label) {
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    const frame = await getClaimStatusFrame(page, 5000).catch(() => null);
+    if (frame) {
+      const visible = await frame
+        .locator(`button[role='tab']:has-text('${label}'), a[role='button']:has-text('${label}')`)
+        .first()
+        .isVisible({ timeout: 1000 })
+        .catch(() => false);
+      if (visible) {
+        return true;
+      }
+    }
+    await page.waitForTimeout(500);
+  }
+  return false;
+}
 
 function normalize(value) {
   return String(value || "").replace(/\s+/g, " ").trim().toUpperCase();
@@ -21,10 +42,28 @@ function isRecoverableRowError(message) {
 }
 
 async function processClaim(page, row, options = {}) {
-  logger.info("Using BCBSTX workflow: Member search first, then HIPAA Standard fallback when applicable.");
+  logger.info("Using Blue Cross-family tab priority: HIPAA Standard, Service Dates, Member Search, then Claim Number.");
   const providerOrder = Array.isArray(options.providerOrder) && options.providerOrder.length
     ? options.providerOrder
     : PROVIDERS;
+
+  if (await isSearchTabVisible(page, "HIPAA Standard")) {
+    logger.info("HIPAA Standard tab is available; selecting it as the highest-priority search.");
+    if (isBluecarePayer(row)) {
+      return runBluecareHipaaDirectSearch(page, row, providerOrder);
+    }
+    return runHipaaProviderSearch(page, row, providerOrder, {
+      matchingPolicy: options.matchingPolicy
+    });
+  }
+
+  if (await isSearchTabVisible(page, "Service Dates")) {
+    logger.info("HIPAA Standard is unavailable; selecting the Service Dates tab.");
+    return serviceDatesWorkflow.processClaim(page, row, {
+      ...options,
+      providerOrder
+    });
+  }
 
   if (isBluecarePayer(row)) {
     logger.info("BCBSTX workflow detected Blue Cross Medicare Advantage Plan. Using Bluecare Member search path first.");
@@ -88,7 +127,7 @@ async function processClaim(page, row, options = {}) {
     let hipaaResult;
     try {
       hipaaResult = await runHipaaProviderSearch(page, row, providerOrder, {
-        projectId: options.projectId
+        matchingPolicy: options.matchingPolicy
       });
     } catch (error) {
       const message = error && error.message ? error.message : String(error);
@@ -132,7 +171,7 @@ async function processClaim(page, row, options = {}) {
   }
 
   return runHipaaProviderSearch(page, row, providerOrder, {
-    projectId: options.projectId
+    matchingPolicy: options.matchingPolicy
   });
 }
 

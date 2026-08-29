@@ -3,6 +3,7 @@
 const logger = require("../utils/logger");
 const { humanDelay, withRetry } = require("../utils/browser");
 const { getClaimStatusFrame } = require("./navigation.page");
+const { fillInputProviderIdentifiers, hasInputProviderIdentifiers } = require("./provider-identifiers.page");
 
 const HIPAA_SELECTORS = {
   hipaaTab: "button[role='tab']:has-text('HIPAA Standard')",
@@ -62,7 +63,7 @@ function providerWords(value) {
     .filter((word) => word.length >= 2);
 }
 
-function charmProviderNameParts(providerName) {
+function fuzzyProviderNameParts(providerName) {
   const cleaned = String(providerName || "")
     .replace(/\s*\[[^\]]*$/, "")
     .replace(/\s*\[[^\]]*]\s*/g, " ")
@@ -91,8 +92,8 @@ function charmProviderNameParts(providerName) {
   };
 }
 
-function charmProviderOptionMatches(optionText, providerName) {
-  const { firstWords, lastWords } = charmProviderNameParts(providerName);
+function fuzzyProviderOptionMatches(optionText, providerName) {
+  const { firstWords, lastWords } = fuzzyProviderNameParts(providerName);
   const optionWords = new Set(providerWords(optionText));
   if (firstWords.length && !lastWords.length) {
     return firstWords.some((word) => optionWords.has(word));
@@ -113,14 +114,19 @@ async function selectAutocompleteOption(scope, inputLocator, value) {
   await inputLocator.click({ force: true });
   await inputLocator.press(process.platform === "darwin" ? "Meta+A" : "Control+A").catch(() => {});
   await inputLocator.press("Backspace").catch(() => {});
-  await inputLocator.fill(String(value || ""));
+  await inputLocator.pressSequentially(String(value || ""), { delay: 60 });
   await humanDelay(500, 1000);
 
   const option = scope.getByText(value, { exact: true }).last();
   if (await option.isVisible({ timeout: 3000 }).catch(() => false)) {
     await option.click();
   } else {
-    await inputLocator.press("Enter");
+    const containingOption = scope.locator("[role='option'], [id*='-option-'], .provider-select__option").filter({ hasText: String(value || "") }).first();
+    if (await containingOption.isVisible({ timeout: 2000 }).catch(() => false)) {
+      await containingOption.click();
+    } else {
+      throw new Error(`No Availity dropdown option was found for "${value}".`);
+    }
   }
 }
 
@@ -189,7 +195,7 @@ async function waitForProviderSelection(frame, providerName, timeoutMs = 10000) 
   throw new Error(`HIPAA provider selection was not verified after ${timeoutMs} ms: ${stateText}`);
 }
 
-async function clickCharmFallbackProviderOption(frame, providerName) {
+async function clickFuzzyProviderOption(frame, providerName) {
   const clickedText = await frame.locator("[role='option'], [id^='react-select-'][id*='-option-'], .provider-select__option").evaluateAll(
     (elements, expectedProviderName) => {
       const normalizeProviderWord = (value) => String(value || "").replace(/[^a-z0-9]/gi, "").toUpperCase();
@@ -199,7 +205,7 @@ async function clickCharmFallbackProviderOption(frame, providerName) {
         .split(/[\s,]+/)
         .map(normalizeProviderWord)
         .filter((word) => word.length >= 2);
-      const charmProviderNameParts = (providerName) => {
+      const fuzzyProviderNameParts = (providerName) => {
         const cleaned = String(providerName || "")
           .replace(/\s*\[[^\]]*$/, "")
           .replace(/\s*\[[^\]]*]\s*/g, " ")
@@ -227,7 +233,7 @@ async function clickCharmFallbackProviderOption(frame, providerName) {
           lastWords: [words[words.length - 1]]
         };
       };
-      const { firstWords, lastWords } = charmProviderNameParts(expectedProviderName);
+      const { firstWords, lastWords } = fuzzyProviderNameParts(expectedProviderName);
       if (!firstWords.length) {
         return "";
       }
@@ -256,7 +262,7 @@ async function clickCharmFallbackProviderOption(frame, providerName) {
   ).catch(() => "");
 
   if (clickedText) {
-    logger.info(`Clicked Charm fuzzy HIPAA provider option "${clickedText}" for input provider "${providerName}".`);
+    logger.info(`Clicked fuzzy HIPAA provider option "${clickedText}" for input provider "${providerName}".`);
     await humanDelay(300, 600);
     return clickedText;
   }
@@ -264,7 +270,7 @@ async function clickCharmFallbackProviderOption(frame, providerName) {
   return "";
 }
 
-async function clickFirstVisibleCharmProviderOption(frame, providerName) {
+async function clickFirstVisibleFuzzyProviderOption(frame, providerName) {
   const optionSelectors = [
     "[role='option']",
     "[id^='react-select-'][id*='-option-']",
@@ -288,9 +294,9 @@ async function clickFirstVisibleCharmProviderOption(frame, providerName) {
         continue;
       }
 
-      if (charmProviderOptionMatches(optionText, providerName) || providerWords(providerName).some((word) => providerWords(optionText).includes(word))) {
+      if (fuzzyProviderOptionMatches(optionText, providerName) || providerWords(providerName).some((word) => providerWords(optionText).includes(word))) {
         await option.click({ force: true });
-        logger.info(`Clicked first visible Charm HIPAA provider option "${optionText}" for input provider "${providerName}".`);
+        logger.info(`Clicked first visible fuzzy HIPAA provider option "${optionText}" for input provider "${providerName}".`);
         await humanDelay(300, 600);
         return optionText;
       }
@@ -321,15 +327,15 @@ async function clickProviderOption(frame, providerName, options = {}) {
       }
     }
 
-    if (options.allowCharmProviderFallback) {
-      const clickedText = await clickCharmFallbackProviderOption(frame, providerName);
+    if (options.allowFuzzyProviderFallback) {
+      const clickedText = await clickFuzzyProviderOption(frame, providerName);
       if (clickedText) {
         return clickedText;
       }
     }
 
-    if (options.allowCharmProviderFallback) {
-      const clickedText = await clickFirstVisibleCharmProviderOption(frame, providerName);
+    if (options.allowFuzzyProviderFallback) {
+      const clickedText = await clickFirstVisibleFuzzyProviderOption(frame, providerName);
       if (clickedText) {
         return clickedText;
       }
@@ -484,7 +490,7 @@ async function selectProvider(page, providerName, options = {}) {
       const clickedProviderIdentifiers = extractProviderIdentifiers(clickedProviderOptionText);
 
       const selectedState = await waitForProviderSelection(frame, providerName, 10000).catch(async (error) => {
-        if (!options.allowCharmProviderFallback) {
+        if (!options.allowFuzzyProviderFallback) {
           throw error;
         }
 
@@ -495,24 +501,22 @@ async function selectProvider(page, providerName, options = {}) {
           && clickedProviderIdentifiers.some((identifier) => selectedIdentifiers.includes(identifier));
 
         if (clickedProviderIdentifiers.length > 0 && !matchedClickedIdentifier) {
-          await providerInput.press("Enter").catch(() => {});
-          await humanDelay(500, 900);
           const refreshedState = await getProviderFieldState(frame);
           const refreshedIdentifiers = [refreshedState.hiddenValue, refreshedState.providerNpi].filter(Boolean);
           if (clickedProviderIdentifiers.some((identifier) => refreshedIdentifiers.includes(identifier))) {
-            logger.info(`Charm fuzzy HIPAA provider selection verified by clicked option identifier: "${clickedProviderOptionText}".`);
+            logger.info(`Fuzzy HIPAA provider selection verified by clicked option identifier: "${clickedProviderOptionText}".`);
             return refreshedState;
           }
           throw error;
         }
 
-        if (!charmProviderOptionMatches(selectedProviderText, providerName)) {
+        if (!fuzzyProviderOptionMatches(selectedProviderText, providerName)) {
           throw error;
         }
         if (!/\d{10}/.test(state.providerNpi || "") && !state.hiddenValue) {
           throw error;
         }
-        logger.info(`Charm fuzzy HIPAA provider selection verified: "${selectedProviderText}" matched "${providerName}".`);
+        logger.info(`Fuzzy HIPAA provider selection verified: "${selectedProviderText}" matched "${providerName}".`);
         return state;
       });
       logger.info(
@@ -526,8 +530,10 @@ async function selectProvider(page, providerName, options = {}) {
 async function fillTextField(scope, selector, value) {
   const field = scope.locator(selector).first();
   await field.waitFor({ state: "visible", timeout: 15000 });
-  await field.fill("");
-  await field.fill(String(value || ""));
+  await field.click();
+  await field.press(process.platform === "darwin" ? "Meta+A" : "Control+A").catch(() => {});
+  await field.press("Backspace").catch(() => {});
+  await field.pressSequentially(String(value || ""), { delay: 40 });
 }
 
 async function getMuiDateBoxText(dateBox) {
@@ -546,18 +552,21 @@ async function fillMuiDateByLabel(scope, labelText, value) {
   const dateBox = container.locator("[contenteditable='false']").first();
   await dateBox.waitFor({ state: "visible", timeout: 15000 });
 
-  const segments = [
-    { label: "Month", value: month },
-    { label: "Day", value: day },
-    { label: "Year", value: year }
-  ];
-
   for (let attempt = 1; attempt <= 2; attempt += 1) {
-    for (const segment of segments) {
-      const segmentLocator = container.locator(`[contenteditable='true'][aria-label='${segment.label}']`).first();
-      await segmentLocator.waitFor({ state: "visible", timeout: 5000 });
-      await segmentLocator.fill(segment.value);
-      await humanDelay(100, 200);
+    for (const segment of [
+      { label: "Month", value: month },
+      { label: "Day", value: day },
+      { label: "Year", value: year }
+    ]) {
+      // MUI replaces the date-section DOM after every value change. Rebuild
+      // the full locator for each section instead of retaining a stale child.
+      const currentLabel = scope.locator("label").filter({ hasText: labelText }).first();
+      const currentContainer = currentLabel.locator("xpath=ancestor::*[contains(@class,'MuiFormControl-root')][1]");
+      const currentSegment = currentContainer.locator(`[role='spinbutton'][contenteditable='true'][aria-label='${segment.label}']`).first();
+      await currentSegment.waitFor({ state: "visible", timeout: 5000 });
+      await currentSegment.click({ force: true, clickCount: 3 });
+      await scope.page().keyboard.type(segment.value, { delay: 60 });
+      await humanDelay(150, 250);
     }
 
     await scope.page().keyboard.press("Tab");
@@ -580,8 +589,25 @@ async function fillMuiDateByLabel(scope, labelText, value) {
 async function fillHipaaPatientDob(scope, value) {
   const oldDobField = scope.locator(HIPAA_SELECTORS.patientDob).first();
   if (await oldDobField.isVisible({ timeout: 1500 }).catch(() => false)) {
-    await fillTextField(scope, HIPAA_SELECTORS.patientDob, value);
-    return;
+    const expectedValue = String(value || "").trim();
+    const expectedDigits = expectedValue.replace(/\D/g, "");
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      await oldDobField.click({ force: true });
+      await oldDobField.press(process.platform === "darwin" ? "Meta+A" : "Control+A").catch(() => {});
+      await oldDobField.press("Backspace").catch(() => {});
+      await oldDobField.pressSequentially(expectedDigits, { delay: 60 });
+      await oldDobField.press("Tab");
+      await humanDelay(250, 500);
+
+      const actualValue = await oldDobField.inputValue().catch(() => "");
+      if (actualValue.replace(/\D/g, "") === expectedDigits) {
+        return;
+      }
+      logger.warn(`HIPAA Patient Date of Birth mismatch after masked fill attempt ${attempt}: expected="${expectedValue}", actual="${actualValue}". Retrying.`);
+    }
+
+    const finalValue = await oldDobField.inputValue().catch(() => "");
+    throw new Error(`HIPAA Patient Date of Birth was not set correctly. Expected "${expectedValue}", found "${finalValue}".`);
   }
 
   await fillMuiDateByLabel(scope, "Patient Date of Birth", value);
@@ -601,7 +627,12 @@ async function fillAndVerifyDateField(scope, selector, value, fieldName) {
     await field.click({ force: true });
     await field.press(process.platform === "darwin" ? "Meta+A" : "Control+A");
     await field.press("Backspace");
-    await field.fill(expectedValue);
+    const [month, day, year] = expectedValue.split("/");
+    await field.pressSequentially(month, { delay: 60 });
+    await field.press("/");
+    await field.pressSequentially(day, { delay: 60 });
+    await field.press("/");
+    await field.pressSequentially(year, { delay: 60 });
     await field.press("Tab");
     await humanDelay(250, 500);
 
@@ -652,8 +683,11 @@ async function resultIndicatorAppeared(page, timeoutMs) {
     const headingVisible = await frame.locator(HIPAA_SELECTORS.resultsHeading).first().isVisible({ timeout: 500 }).catch(() => false);
     const resultRowsVisible = await frame.locator(HIPAA_SELECTORS.tableRows).first().isVisible({ timeout: 500 }).catch(() => false);
     const noResultsVisible = await frame.locator(HIPAA_SELECTORS.noResultsMessage).first().isVisible({ timeout: 500 }).catch(() => false);
+    const portalResponseVisible = await frame.locator(
+      "#results [role='alert'], #results .MuiAlert-root, .MuiFormHelperText-root.Mui-error, .invalid-feedback"
+    ).first().isVisible({ timeout: 500 }).catch(() => false);
 
-    if (headingVisible || resultRowsVisible || noResultsVisible) {
+    if (headingVisible || resultRowsVisible || noResultsVisible || portalResponseVisible) {
       return true;
     }
 
@@ -695,7 +729,13 @@ async function submitHipaaSearch(page) {
 async function searchHipaaWithProvider(page, providerName, rowData, options = {}) {
   logger.info(`HIPAA Standard search provider attempt: ${providerName}`);
   await selectHipaaTab(page);
-  await selectProvider(page, providerName, options);
+  try {
+    await selectProvider(page, providerName, options);
+  } catch (error) {
+    if (!hasInputProviderIdentifiers(rowData)) throw error;
+    logger.warn(`HIPAA provider "${providerName}" was not available. Continuing with input Provider NPI/Tax ID.`);
+  }
+  await fillInputProviderIdentifiers(page, rowData);
   await fillHipaaSearchForm(page, rowData);
   await submitHipaaSearch(page);
 }

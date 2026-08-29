@@ -16,9 +16,9 @@ async function verifyLoginPage(page) {
 async function submitLogin(page, username, password) {
   await verifyLoginPage(page);
   await humanDelay();
-  await page.fill(SELECTORS.usernameInput, username);
+  await page.locator(SELECTORS.usernameInput).pressSequentially(username, { delay: 50 });
   await humanDelay();
-  await page.fill(SELECTORS.passwordInput, password);
+  await page.locator(SELECTORS.passwordInput).pressSequentially(password, { delay: 50 });
   await humanDelay(600, 1300);
 
   await withRetry(

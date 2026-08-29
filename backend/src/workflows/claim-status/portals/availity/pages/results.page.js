@@ -13,6 +13,76 @@ const SELECTORS = {
   portalAlert: "[role='alert'], .MuiAlert-root"
 };
 
+function normalizeMessageText(value) {
+  return String(value || "")
+    .split(/\r?\n/)
+    .map((line) => line.replace(/\s+/g, " ").trim())
+    .filter(Boolean)
+    .join("\n");
+}
+
+function inferMessageSeverity(className) {
+  const classes = String(className || "").toLowerCase();
+  if (/danger|error/.test(classes)) return "ERROR";
+  if (/warning/.test(classes)) return "WARNING";
+  if (/info/.test(classes)) return "INFO";
+  if (/success/.test(classes)) return "SUCCESS";
+  return "MESSAGE";
+}
+
+function deduplicatePortalMessages(messages) {
+  const seen = new Set();
+  return messages.filter((message) => {
+    const key = `${message.severity}|${message.text}`.toLowerCase();
+    if (!message.text || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function formatPortalMessages(messages) {
+  if (!messages.length) return "";
+  return ["Portal Response:", ...messages.map((message) => `${message.severity}: ${message.text}`)].join("\n");
+}
+
+async function getPortalMessages(page) {
+  const frame = await getClaimStatusFrame(page);
+  const resultAlerts = await frame.locator("#results [role='alert'], #results .MuiAlert-root").evaluateAll((nodes) => nodes
+    .filter((node) => {
+      const style = window.getComputedStyle(node);
+      const rect = node.getBoundingClientRect();
+      return style.visibility !== "hidden" && style.display !== "none" && rect.width > 0 && rect.height > 0;
+    })
+    .map((node) => ({ text: node.innerText || node.textContent || "", className: node.className || "" })))
+    .catch(() => []);
+
+  const invalidFieldMessages = await frame.locator(
+    "[aria-invalid='true'][aria-describedby], .MuiFormHelperText-root.Mui-error, .invalid-feedback"
+  ).evaluateAll((nodes) => {
+    const messages = [];
+    for (const node of nodes) {
+      const style = window.getComputedStyle(node);
+      const rect = node.getBoundingClientRect();
+      if (style.visibility === "hidden" || style.display === "none" || rect.width === 0 || rect.height === 0) continue;
+      if (node.matches("[aria-invalid='true'][aria-describedby]")) {
+        const ids = (node.getAttribute("aria-describedby") || "").split(/\s+/).filter(Boolean);
+        for (const id of ids) {
+          const description = document.getElementById(id);
+          if (description) messages.push({ text: description.innerText || description.textContent || "", className: "error" });
+        }
+      } else {
+        messages.push({ text: node.innerText || node.textContent || "", className: `${node.className || ""} error` });
+      }
+    }
+    return messages;
+  }).catch(() => []);
+
+  return deduplicatePortalMessages([...resultAlerts, ...invalidFieldMessages].map((message) => ({
+    severity: inferMessageSeverity(message.className),
+    text: normalizeMessageText(message.text)
+  })));
+}
+
 function normalizeMoney(value) {
   const numeric = Number(String(value || "").replace(/[$,\s]/g, "").trim());
   return Number.isFinite(numeric) ? numeric.toFixed(2) : "";
@@ -90,8 +160,12 @@ async function getResultRows(page) {
     const statusText = await row.locator(".badge").first().innerText({ timeout: 1000 }).catch(() => inferStatus(cells));
     const headerServiceDate = cellByHeader(cells, headers, "service dates");
     const headerBilledAmount = cellByHeader(cells, headers, "billed amount");
-    const headerClaimNumber = cellByHeader(cells, headers, "claim number");
+    const headerClaimNumber = cellByHeader(cells, headers, "claim number") || cellByHeader(cells, headers, "claim #");
     const headerFinalizedDate = cellByHeader(cells, headers, "finalized date");
+    const headerPatientAccountNumber = cellByHeader(cells, headers, "patient account number")
+      || cellByHeader(cells, headers, "patient id");
+    const headerPatientName = cellByHeader(cells, headers, "patient name")
+      || cellByHeader(cells, headers, "member name");
     results.push({
       index,
       row,
@@ -101,6 +175,8 @@ async function getResultRows(page) {
       claimNumber: headerClaimNumber || inferClaimNumber(cells),
       finalizedDate: normalizeDateText(headerFinalizedDate),
       finalizedDateValue: parseDateValue(headerFinalizedDate),
+      patientId: headerPatientAccountNumber,
+      patientName: headerPatientName,
       status: normalizeStatus(statusText || inferStatus(cells))
     });
   }
@@ -130,10 +206,8 @@ async function getSearchResultSummary(page) {
   const resultRowCount = await frame.locator(SELECTORS.tableRows).evaluateAll((rows) => {
     return rows.filter((row) => row.querySelectorAll("td").length >= 2).length;
   }).catch(() => 0);
-  const portalAlertMessage = await frame.locator(SELECTORS.portalAlert).first()
-    .innerText({ timeout: 1000 })
-    .then((text) => text.replace(/\s+/g, " ").trim())
-    .catch(() => "");
+  const portalMessages = await getPortalMessages(page);
+  const portalAlertMessage = formatPortalMessages(portalMessages);
   let headingText = await frame.locator(SELECTORS.searchResultsHeading).first().innerText().catch(() => "");
   if (!headingText) {
     headingText = await frame.locator(SELECTORS.hipaaResultsHeading).first().innerText().catch(() => "");
@@ -150,7 +224,8 @@ async function getSearchResultSummary(page) {
     hasZeroResults: noResultsMessageVisible || total === 0,
     noResultsMessageVisible,
     hasPortalAlert: Boolean(portalAlertMessage),
-    portalAlertMessage
+    portalAlertMessage,
+    portalMessages
   };
 }
 
@@ -161,7 +236,7 @@ async function waitForSearchResultsToSettle(page, timeoutMs = 5000) {
   while (Date.now() < deadline) {
     latestSummary = await getSearchResultSummary(page);
 
-    if (latestSummary.hasResultRows || latestSummary.noResultsMessageVisible) {
+    if (latestSummary.hasResultRows || latestSummary.noResultsMessageVisible || latestSummary.hasPortalAlert) {
       return latestSummary;
     }
 
@@ -183,5 +258,7 @@ module.exports = {
   hasNoResults,
   waitForSearchResultsToSettle,
   normalizeMoney,
-  normalizeDateText
+  normalizeDateText,
+  getPortalMessages,
+  formatPortalMessages
 };

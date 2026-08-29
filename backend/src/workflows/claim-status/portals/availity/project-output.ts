@@ -1,4 +1,5 @@
 import type { AvailityInputRow, AvailityOutputRow } from "./types";
+import { getAvailityProjectConfig } from "./config/projects";
 
 type ClaimLineDetail = Record<string, unknown>;
 
@@ -10,6 +11,9 @@ type ClaimDetail = {
   receivedDate?: string;
   claimNumber?: string;
   claimStatus?: string;
+  patientName?: string;
+  patientIdentityMatchStatus?: string;
+  matchMethod?: string;
   checkNumber?: string;
   checkDate?: string;
   checkAmount?: string;
@@ -93,7 +97,7 @@ function lineStatus(line: ClaimLineDetail): string {
   return asText(line.status || line.lineStatus || "");
 }
 
-function renderMedrevenuCptSummary(detail: ClaimDetail, line: ClaimLineDetail, inputCpt: string): string {
+function renderCptLineSummary(detail: ClaimDetail, line: ClaimLineDetail, inputCpt: string): string {
   const serviceDate = valueOrBlank(detail.serviceDate);
   const receivedDate = valueOrBlank(detail.receivedDate);
   const finalizedDate = valueOrBlank(detail.finalizedDate);
@@ -128,6 +132,43 @@ function applyCommonBotFields(outputRow: AvailityOutputRow, result: WorkflowResu
   outputRow.bot_notes = result.notes || "";
 }
 
+function normalizePatientName(value: unknown): string {
+  return asText(value).replace(/\s*\[[^\]]*]\s*/g, " ").toLowerCase().match(/[a-z0-9]+/g)?.sort().join("") || "";
+}
+
+function applyPatientIdentityOutput(
+  projectId: string,
+  row: AvailityInputRow,
+  outputRow: AvailityOutputRow,
+  result: WorkflowResult,
+): void {
+  const identity = getAvailityProjectConfig(projectId).patientIdentityOutput;
+  if (!identity) return;
+
+  const patientId = asText(row.data[identity.patientIdField]);
+  outputRow[identity.patientIdField] = patientId;
+  if (result.status !== "success") return;
+
+  const inputName = normalizePatientName(row.data["Patient Name"]);
+  const reportedIdentityStatuses = (result.details || [])
+    .map((detail) => asText(detail.patientIdentityMatchStatus))
+    .filter(Boolean);
+  if (reportedIdentityStatuses.length) {
+    outputRow[identity.matchStatusField] = [...new Set(reportedIdentityStatuses)].join("; ");
+    return;
+  }
+  const portalNames = (result.details || []).map((detail) => asText(detail.patientName)).filter(Boolean);
+  if (!portalNames.length) {
+    outputRow[identity.matchStatusField] = "Patient name unavailable in Availity result";
+  } else if (portalNames.some((name) => normalizePatientName(name) === inputName)) {
+    outputRow[identity.matchStatusField] = "Patient name matched";
+  } else if (patientId) {
+    outputRow[identity.matchStatusField] = identity.mismatchStatus;
+  } else {
+    outputRow[identity.matchStatusField] = "Patient name not matched";
+  }
+}
+
 export function applyProjectOutputStrategy(options: {
   projectId: string;
   row: AvailityInputRow;
@@ -137,9 +178,26 @@ export function applyProjectOutputStrategy(options: {
 }): AvailityOutputRow[] {
   const { projectId, row, outputRow, result, timestamp } = options;
   applyCommonBotFields(outputRow, result);
+  applyPatientIdentityOutput(projectId, row, outputRow, result);
   outputRow.bot_updated_time = timestamp;
 
-  if (projectId !== "medrevenu" || result.status !== "success") {
+  const strategy = OUTPUT_STRATEGIES[getAvailityProjectConfig(projectId).outputStrategy];
+  return strategy({ row, outputRow, result });
+}
+
+type OutputStrategyInput = {
+  row: AvailityInputRow;
+  outputRow: AvailityOutputRow;
+  result: WorkflowResult;
+};
+
+function applyDefaultOutput({ outputRow, result }: OutputStrategyInput): AvailityOutputRow[] {
+  outputRow.bot_updated_claim_status = result.summaries?.filter(Boolean).join("\n\n") || "";
+  return [outputRow];
+}
+
+function applyCptLineDetailOutput({ row, outputRow, result }: OutputStrategyInput): AvailityOutputRow[] {
+  if (result.status !== "success") {
     outputRow.bot_updated_claim_status = result.summaries?.[0] || "";
     return [outputRow];
   }
@@ -150,7 +208,7 @@ export function applyProjectOutputStrategy(options: {
   if (!matches.length) {
     const reason = inputCpt
       ? `CPT ${inputCpt} was not found in extracted Availity line details.`
-      : "Input CPT column is blank or missing for Medrevenu CPT-level output.";
+      : "Input CPT column is blank or missing for CPT-level output.";
     outputRow.bot_updated_claim_status = result.summaries?.[0] || "";
     outputRow.bot_overall_result = "failed";
     outputRow.bot_notes = [result.notes, reason].filter(Boolean).join("; ");
@@ -158,7 +216,12 @@ export function applyProjectOutputStrategy(options: {
   }
 
   outputRow.bot_updated_claim_status = matches
-    .map((match) => renderMedrevenuCptSummary(match.detail, match.line, inputCpt))
+    .map((match) => renderCptLineSummary(match.detail, match.line, inputCpt))
     .join("\n\n");
   return [outputRow];
 }
+
+const OUTPUT_STRATEGIES: Record<"default" | "cptLineDetail", (input: OutputStrategyInput) => AvailityOutputRow[]> = {
+  default: applyDefaultOutput,
+  cptLineDetail: applyCptLineDetailOutput,
+};
