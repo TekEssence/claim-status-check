@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import ExcelJS from "exceljs";
-import { normalizeCheckNumber, normalizeTotpSecret, readAvailityRemittanceCredentials, readReferenceRows } from "./input";
+import { normalizeCheckNumber, normalizeCheckNumberForComparison, normalizeTotpSecret, readAvailityRemittanceCredentials, readReferenceRows } from "./input";
 
 const GOOGLE_AUTHENTICATOR_DATA_VALUE =
   "CnMKQMpxyRlBK7V3XEtbtGw2wbIXxBK%2Frq3qOdpQgOvynXsG1Xy4Y44HCE2TGNy2p8CMbe%2BCgnTvLKkADXvmTS3AetoSCnJjbWJyYW5kb24aCEF2YWlsaXR5IAEoATACQhNiYmM3NTQxNzgwMzIyNDkwMTI2EAIYASAA";
@@ -35,6 +35,28 @@ test("normalizes Check/EFT numbers without stripping leading zeros", () => {
   assert.equal(normalizeCheckNumber(" 0300191744 "), "0300191744");
   assert.equal(normalizeCheckNumber("1254526643.0"), "1254526643");
   assert.equal(normalizeCheckNumber("0900 562787"), "0900562787");
+});
+
+test("normalizes numeric Check/EFT comparison keys by removing leading zeros", () => {
+  assert.equal(normalizeCheckNumberForComparison("000321780536"), "321780536");
+  assert.equal(normalizeCheckNumberForComparison("09150603"), "9150603");
+  assert.equal(normalizeCheckNumberForComparison("000312308014"), "312308014");
+  assert.equal(normalizeCheckNumberForComparison("010009600834"), "10009600834");
+  assert.equal(normalizeCheckNumberForComparison("3420955202"), "3420955202");
+  assert.equal(normalizeCheckNumberForComparison("0000"), "0");
+});
+
+test("preserves alphanumeric Check/EFT zero structure while trimming and uppercasing", () => {
+  assert.equal(normalizeCheckNumberForComparison(" AN0009070320 "), "AN0009070320");
+  assert.equal(normalizeCheckNumberForComparison("5931435232wa6"), "5931435232WA6");
+  assert.equal(normalizeCheckNumberForComparison("ww0009048872"), "WW0009048872");
+});
+
+test("matches numeric leading-zero variants using normalized comparison keys", () => {
+  const trackerNumbers = new Set(["321780536", "09150603"].map(normalizeCheckNumberForComparison));
+  assert.equal(trackerNumbers.has(normalizeCheckNumberForComparison("000321780536")), true);
+  assert.equal(trackerNumbers.has(normalizeCheckNumberForComparison("9150603")), true);
+  assert.equal(trackerNumbers.has(normalizeCheckNumberForComparison("000999")), false);
 });
 
 test("keeps plain base32 Availity TOTP secrets compatible with existing MFA helper", () => {
@@ -74,6 +96,7 @@ test("reads Availity Remittance credentials from workbook aliases", async () => 
   assert.equal(credentials.totpSecret, "JBSWY3DPEHPK3PXP");
   assert.equal(credentials.organization, "BENTONVILLE PEDIATRICS, P.A.");
   assert.equal(credentials.lookbackDays, 20);
+  assert.equal(credentials.project, "charm");
   assert.match(credentials.loginUrl, /^https:\/\/essentials\.availity\.com/);
   assert.deepEqual(credentials.sharePoint, {
     tenantId: "tenant-from-excel",
@@ -155,7 +178,32 @@ test("reads reference workbook with exact Payment EOB column names", async () =>
   assert.equal(rows[0].checkDate, "07/15/2026");
 });
 
-test("requires reference workbook tracker sheet", async () => {
+test("reads MedRevenue routing and Pending EFT control-log fields", async () => {
+  const credentialsFile = await workbookFile("credentials.xlsx", [
+    ["User ID", "Password", "Secret Key", "Project", "Client Name"],
+    ["user", "password", "JBSWY3DPEHPK3PXP", "Med Revenue", "Client A"],
+  ]);
+  const controlLog = await workbookFileWithSheets("control-log.xlsx", [{
+    name: "tracker",
+    rows: [
+      ["Check/EFT #", "Entry Status", "Mode of Payment"],
+      ["EFT-100", "Pending", "EFT"],
+      ["EFT-200", "Complete", "EFT"],
+    ],
+  }]);
+
+  const credentials = await readAvailityRemittanceCredentials(credentialsFile);
+  const rows = await readReferenceRows(controlLog);
+
+  assert.equal(credentials.project, "medrevenue");
+  assert.equal(credentials.clientName, "Client A");
+  assert.deepEqual(rows.map((row) => ({ checkNumber: row.checkNumber, entryStatus: row.entryStatus, modeOfPayment: row.modeOfPayment })), [
+    { checkNumber: "EFT-100", entryStatus: "Pending", modeOfPayment: "EFT" },
+    { checkNumber: "EFT-200", entryStatus: "Complete", modeOfPayment: "EFT" },
+  ]);
+});
+
+test("requires a supported control-log worksheet", async () => {
   const file = await workbookFile("reference.xlsx", [
     ["Check/EFT #", "Check / EFT Date"],
     ["0900562787", "07/15/2026"],
@@ -163,6 +211,22 @@ test("requires reference workbook tracker sheet", async () => {
 
   await assert.rejects(
     () => readReferenceRows(file),
-    /must contain a "tracker" worksheet/,
+    /must contain a "tracker" or "Payments" worksheet/,
   );
+});
+
+test("accepts Payments as a control-log worksheet without removing tracker support", async () => {
+  const file = await workbookFileWithSheets("control-log.xlsx", [{
+    name: "Payments",
+    rows: [
+      ["Check/EFT #", "Entry Status", "Mode of Payment"],
+      ["EFT-300", "Pending", "EFT"],
+    ],
+  }]);
+
+  const rows = await readReferenceRows(file);
+
+  assert.equal(rows[0].checkNumber, "EFT-300");
+  assert.equal(rows[0].entryStatus, "Pending");
+  assert.equal(rows[0].modeOfPayment, "EFT");
 });

@@ -1,5 +1,6 @@
 import ExcelJS from "exceljs";
 import type { PaymentEobCredentials, PaymentEobReferenceRow } from "../../types";
+import { resolveAvailityRemittanceProcess } from "./process-registry";
 
 const DEFAULT_LOGIN_URL = "https://essentials.availity.com/static/public/onb/onboarding-ui-apps/availity-fr-ui/#/login";
 const BASE32_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
@@ -9,6 +10,12 @@ export function normalizeCheckNumber(value: unknown): string {
     .trim()
     .replace(/\.0$/, "")
     .replace(/\s+/g, "");
+}
+
+export function normalizeCheckNumberForComparison(value: unknown): string {
+  const normalizedCase = String(value ?? "").trim().toUpperCase();
+  if (!/^\d+$/.test(normalizedCase)) return normalizedCase;
+  return normalizedCase.replace(/^0+(?=\d)/, "");
 }
 
 function asText(value: unknown): string {
@@ -188,15 +195,18 @@ export function normalizeTotpSecret(value: string): string {
   return decodeGoogleAuthenticatorMigrationSecret(compact);
 }
 
-async function readWorkbookRows(file: File, sheetName?: string): Promise<Record<string, string>[]> {
+async function readWorkbookRows(file: File, sheetNames?: string | string[]): Promise<Record<string, string>[]> {
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(await file.arrayBuffer());
-  const worksheet = sheetName
-    ? workbook.worksheets.find((candidate) => normalizeAlias(candidate.name) === normalizeAlias(sheetName))
+  const acceptedSheetNames = typeof sheetNames === "string" ? [sheetNames] : sheetNames;
+  const worksheet = acceptedSheetNames?.length
+    ? acceptedSheetNames
+      .map((sheetName) => workbook.worksheets.find((candidate) => normalizeAlias(candidate.name) === normalizeAlias(sheetName)))
+      .find(Boolean)
     : workbook.worksheets[0];
   if (!worksheet) {
-    throw new Error(sheetName
-      ? `${file.name || "Workbook"} must contain a "${sheetName}" worksheet.`
+    throw new Error(acceptedSheetNames?.length
+      ? `${file.name || "Workbook"} must contain a ${acceptedSheetNames.map((name) => `"${name}"`).join(" or ")} worksheet.`
       : `${file.name || "Workbook"} does not contain any worksheets.`);
   }
 
@@ -250,6 +260,8 @@ export async function readAvailityRemittanceCredentials(file: File): Promise<Pay
       startDate: findValue(row, ["Start Date", "Check Start Date", "From Date"]),
       endDate: findValue(row, ["End Date", "Check End Date", "To Date"]),
       lookbackDays: parseLookbackDays(findValue(row, ["Lookback Days", "Last N Days", "Days Back", "Date Range Days", "Last Days"])),
+      project: resolveAvailityRemittanceProcess(findValue(row, ["Project", "Project Name", "Project Code"])),
+      clientName: findValue(row, ["Client", "Client Name", "Client Code"]),
     };
   }
 
@@ -257,7 +269,7 @@ export async function readAvailityRemittanceCredentials(file: File): Promise<Pay
 }
 
 export async function readReferenceRows(file: File): Promise<PaymentEobReferenceRow[]> {
-  const rows = await readWorkbookRows(file, "tracker");
+  const rows = await readWorkbookRows(file, ["tracker", "Payments"]);
   const referenceRows = rows
     .map((row, index) => {
       const checkNumber = normalizeCheckNumber(findValue(row, [
@@ -274,6 +286,8 @@ export async function readReferenceRows(file: File): Promise<PaymentEobReference
         rowNumber: index + 2,
         checkNumber,
         checkDate: findValue(row, ["Check / EFT Date", "Check/EFT Date", "Check Date", "EFT Date", "Payment Date", "Date"]),
+        entryStatus: findValue(row, ["Entry Status", "Status"]),
+        modeOfPayment: findValue(row, ["Mode of Payment", "Payment Mode", "Payment Method", "Mode"]),
         raw: row,
       };
     })

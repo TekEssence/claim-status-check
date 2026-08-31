@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { parseRemittanceCsv } from "./remittance";
+import { checkNumberSearchVariants, parseRemittanceCsv } from "./remittance";
+
+test("builds safe leading-zero search variants only for numeric Check/EFT numbers", () => {
+  assert.deepEqual(checkNumberSearchVariants("0900470853"), ["0900470853", "900470853"]);
+  assert.deepEqual(checkNumberSearchVariants("900470853"), ["900470853", "0900470853"]);
+  assert.deepEqual(checkNumberSearchVariants("ABC00123"), ["ABC00123"]);
+});
 
 test("parses portal CSV with exact Availity Remittance columns", () => {
   const records = parseRemittanceCsv([
@@ -26,4 +32,14 @@ test("parses portal CSV with exact Availity Remittance columns", () => {
       },
     },
   ]);
+});
+
+test("preserves the original Availity Check/EFT number for downstream output and filenames", () => {
+  const records = parseRemittanceCsv([
+    "Check/EFT #,Payer,Payee,Check/EFT Date,Received by Availity,Check/EFT Amount",
+    "000321780536,PAYER,PAYEE,08/19/2026,08/18/2026,$69.71",
+  ].join("\n"));
+
+  assert.equal(records[0].checkNumber, "000321780536");
+  assert.equal(records[0].raw["Check/EFT #"], "000321780536");
 });

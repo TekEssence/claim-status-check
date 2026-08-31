@@ -9,6 +9,7 @@ type PaymentEobInputFormProps = {
   credentialFileName?: string;
   referenceFileName?: string;
   requiresReferenceExcel?: boolean;
+  showReferenceExcel?: boolean;
   isRunning: boolean;
   canStart: boolean;
   onCredentialFileChange: (file: File | null) => void;
@@ -21,6 +22,7 @@ export function PaymentEobInputForm({
   credentialFileName,
   referenceFileName,
   requiresReferenceExcel = true,
+  showReferenceExcel = requiresReferenceExcel,
   isRunning,
   canStart,
   onCredentialFileChange,
@@ -29,7 +31,7 @@ export function PaymentEobInputForm({
 }: PaymentEobInputFormProps) {
   return (
     <form className="space-y-5" onSubmit={onSubmit}>
-      <div className={`grid gap-4 ${requiresReferenceExcel ? "md:grid-cols-2" : ""}`}>
+      <div className={`grid gap-4 ${showReferenceExcel ? "md:grid-cols-2" : ""}`}>
         <PortalUploadCard
           mode="file"
           accept=".xlsx,.xls,.csv"
@@ -42,18 +44,20 @@ export function PaymentEobInputForm({
           sizeHint="25 MB"
           title="Upload Credential Excel"
         />
-        {requiresReferenceExcel ? (
+        {showReferenceExcel ? (
           <PortalUploadCard
             mode="file"
             accept=".xlsx,.xls,.csv"
             acceptedFormats=".xlsx, .xls, .csv"
-            description="Upload the reference workbook containing Check, EFT, or FD numbers to compare."
+            description={requiresReferenceExcel
+              ? "Upload the reference workbook containing Check, EFT, or FD numbers to compare."
+              : "Optional. Required only for clients using the Cash Log and Zero Payments process."}
             fileName={referenceFileName}
             icon={FileSpreadsheet}
             inputId="paymentEobReferenceExcel"
             onFileSelect={onReferenceFileChange}
             sizeHint="25 MB"
-            title="Upload Reference Excel"
+            title={requiresReferenceExcel ? "Upload Reference Excel" : "Upload Control Log (if required)"}
           />
         ) : null}
       </div>

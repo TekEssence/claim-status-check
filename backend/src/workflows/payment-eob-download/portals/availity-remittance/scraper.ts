@@ -29,6 +29,9 @@ export function createAvailityRemittanceRunner(): AutomationRunner<PaymentEobRun
     async run(input, context) {
       const credentials = await readAvailityRemittanceCredentials(input.credentialExcel);
       const referenceRows = await readReferenceRows(input.referenceExcel!);
+      if (credentials.project === "medrevenue" && !credentials.clientName?.trim()) {
+        throw new Error("MedRevenue Availity credentials must contain a Client Name.");
+      }
       await context.log({
         level: "info",
         message: `Payment EOB input validation completed for ${input.credentialExcel.name || "credential workbook"} and ${input.referenceExcel!.name || "reference workbook"}. ${referenceRows.length} reference row(s) loaded.`,

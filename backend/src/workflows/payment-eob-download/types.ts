@@ -14,6 +14,8 @@ export type PaymentEobCredentials = {
   startDate?: string;
   endDate?: string;
   lookbackDays: number;
+  project?: "charm" | "medrevenue";
+  clientName?: string;
 };
 
 export type PaymentEobSharePointCredentials = {
@@ -28,6 +30,8 @@ export type PaymentEobReferenceRow = {
   rowNumber: number;
   checkNumber: string;
   checkDate?: string;
+  entryStatus?: string;
+  modeOfPayment?: string;
   raw: Record<string, string>;
 };
 
@@ -49,4 +53,14 @@ export type PaymentEobComparisonRow = {
   pdfStatus: "Skipped" | "Downloaded" | "Not downloaded" | "Error";
   filename: string;
   message: string;
+};
+
+export type PaymentTrackerRow = {
+  source: "Availity";
+  eraDownloadedDate: string;
+  payerName: string;
+  payeeName: string;
+  checkNumber: string;
+  checkDate: string;
+  checkAmount: string;
 };

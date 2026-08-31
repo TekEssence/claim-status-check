@@ -1,6 +1,7 @@
 export const zelisFrontendPortalConfig = {
   id: "zelis",
   name: "Zelis Remittance",
-  description: "Upload Zelis credentials to process payment rows without the green tick and capture Payment ID screenshots.",
+  description: "Upload Zelis credentials and, for MedRevenue, a Control Log to run project-specific payment EOB processing.",
   requiresReferenceExcel: false,
+  acceptsReferenceExcel: true,
 } as const;

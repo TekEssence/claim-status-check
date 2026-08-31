@@ -57,6 +57,7 @@ export function PaymentEobPage({ portalId: initialPortalId }: PaymentEobPageProp
   const [selectedPortalId, setSelectedPortalId] = useState<string | null>(initialPortalId ?? null);
   const portal = getPaymentEobPortal(selectedPortalId);
   const requiresReferenceExcel = portal?.requiresReferenceExcel ?? true;
+  const showReferenceExcel = requiresReferenceExcel || (portal && "acceptsReferenceExcel" in portal && portal.acceptsReferenceExcel);
   const [user, setUser] = useState<AuthUser | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [credentialFile, setCredentialFile] = useState<File | null>(null);
@@ -112,11 +113,11 @@ export function PaymentEobPage({ portalId: initialPortalId }: PaymentEobPageProp
     } else if (event.type === "input_request" && event.inputName) {
       setOtpRequest({
         inputName: event.inputName,
-        label: event.label || "InstaMed verification code",
-        message: event.message || "Enter the InstaMed verification code sent by text message.",
+        label: event.label || "Portal verification code",
+        message: event.message || "Enter the verification code sent by the portal.",
       });
       setOtpValue("");
-      setStatus(event.message || "Waiting for InstaMed verification code.");
+      setStatus(event.message || "Waiting for portal verification code.");
     } else if (event.type === "error") {
       const message = event.message || "Payment EOB workflow failed.";
       setErrors((current) => [...current, message]);
@@ -212,7 +213,7 @@ export function PaymentEobPage({ portalId: initialPortalId }: PaymentEobPageProp
       formData.append("workflowId", WORKFLOW_ID);
       formData.append("portalId", selectedPortalId);
       formData.append("credentialExcel", credentialFile);
-      if (requiresReferenceExcel && referenceFile) {
+      if (referenceFile) {
         formData.append("referenceExcel", referenceFile);
       }
       const nextJobId = await startAutomationJob(formData);
@@ -253,9 +254,9 @@ export function PaymentEobPage({ portalId: initialPortalId }: PaymentEobPageProp
       });
       setOtpRequest(null);
       setOtpValue("");
-      setStatus("InstaMed verification code submitted.");
+      setStatus("Portal verification code submitted.");
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Unable to submit InstaMed verification code.";
+      const message = error instanceof Error ? error.message : "Unable to submit portal verification code.";
       setErrors((current) => [...current, message]);
       setStatus(message);
     }
@@ -345,6 +346,7 @@ export function PaymentEobPage({ portalId: initialPortalId }: PaymentEobPageProp
                 credentialFileName={credentialFile?.name ?? ""}
                 referenceFileName={referenceFile?.name ?? ""}
                 requiresReferenceExcel={requiresReferenceExcel}
+                showReferenceExcel={Boolean(showReferenceExcel)}
                 isRunning={isRunning}
                 canStart={canStart}
                 onCredentialFileChange={setCredentialFile}
