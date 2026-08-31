@@ -62,6 +62,7 @@ export function PaymentEobPage({ portalId: initialPortalId }: PaymentEobPageProp
   const [authLoading, setAuthLoading] = useState(true);
   const [credentialFile, setCredentialFile] = useState<File | null>(null);
   const [referenceFile, setReferenceFile] = useState<File | null>(null);
+  const [availityProject, setAvailityProject] = useState<"charm" | "medrevenue" | "">("");
   const [jobId, setJobId] = useState("");
   const [status, setStatus] = useState("");
   const [progress, setProgress] = useState<JobProgressValue | null>(null);
@@ -74,12 +75,19 @@ export function PaymentEobPage({ portalId: initialPortalId }: PaymentEobPageProp
   const [otpValue, setOtpValue] = useState("");
   const streamController = useRef<AbortController | null>(null);
 
-  const canStart = Boolean(selectedPortalId && credentialFile && (!requiresReferenceExcel || referenceFile) && !isRunning);
+  const canStart = Boolean(
+    selectedPortalId
+    && credentialFile
+    && (!requiresReferenceExcel || referenceFile)
+    && (selectedPortalId !== "availity-remittance" || availityProject)
+    && !isRunning,
+  );
 
   function resetPortalRunState() {
     streamController.current?.abort();
     setCredentialFile(null);
     setReferenceFile(null);
+    setAvailityProject("");
     setJobId("");
     setStatus("");
     setProgress(null);
@@ -213,6 +221,9 @@ export function PaymentEobPage({ portalId: initialPortalId }: PaymentEobPageProp
       formData.append("workflowId", WORKFLOW_ID);
       formData.append("portalId", selectedPortalId);
       formData.append("credentialExcel", credentialFile);
+      if (selectedPortalId === "availity-remittance") {
+        formData.append("project", availityProject);
+      }
       if (referenceFile) {
         formData.append("referenceExcel", referenceFile);
       }
@@ -347,10 +358,13 @@ export function PaymentEobPage({ portalId: initialPortalId }: PaymentEobPageProp
                 referenceFileName={referenceFile?.name ?? ""}
                 requiresReferenceExcel={requiresReferenceExcel}
                 showReferenceExcel={Boolean(showReferenceExcel)}
+                showProjectSelection={selectedPortalId === "availity-remittance"}
+                selectedProject={availityProject}
                 isRunning={isRunning}
                 canStart={canStart}
                 onCredentialFileChange={setCredentialFile}
                 onReferenceFileChange={setReferenceFile}
+                onProjectChange={setAvailityProject}
                 onSubmit={start}
               />
             </div>

@@ -31,6 +31,16 @@ async function workbookFileWithSheets(name: string, sheets: Array<{ name: string
   });
 }
 
+async function credentialsWorkbookFile(
+  rows: Array<Array<string | number | Date>>,
+  mappings: Array<Array<string | number | Date>> = [["Client Name", "Organization"], ["KS", "KeiperSpine, PC"]],
+): Promise<File> {
+  return workbookFileWithSheets("credentials.xlsx", [
+    { name: "Credentials", rows },
+    { name: "Mapping", rows: mappings },
+  ]);
+}
+
 test("normalizes Check/EFT numbers without stripping leading zeros", () => {
   assert.equal(normalizeCheckNumber(" 0300191744 "), "0300191744");
   assert.equal(normalizeCheckNumber("1254526643.0"), "1254526643");
@@ -72,14 +82,14 @@ test("decodes Google Authenticator migration data into a base32 TOTP secret", ()
 });
 
 test("reads Availity Remittance credentials from workbook aliases", async () => {
-  const file = await workbookFile("credentials.xlsx", [
-    ["User ID", "Password", "Secret Key", "Login URL", "Organization", "Lookback Days", "Tenant ID", "Client ID", "Client Secret", "SharePoint Site URL", "SharePoint Folder"],
+  const file = await credentialsWorkbookFile([
+    ["User ID", "Password", "Secret Key", "Login URL", "Client Name", "Lookback Days", "Tenant ID", "Client ID", "Client Secret", "SharePoint Site URL", "SharePoint Folder"],
     [
       "rcmben",
       "secret-password",
       "JBSWY3DPEHPK3PXP",
       "",
-      "BENTONVILLE PEDIATRICS, P.A.",
+      "KS",
       "20",
       "tenant-from-excel",
       "client-from-excel",
@@ -94,9 +104,9 @@ test("reads Availity Remittance credentials from workbook aliases", async () => 
   assert.equal(credentials.username, "rcmben");
   assert.equal(credentials.password, "secret-password");
   assert.equal(credentials.totpSecret, "JBSWY3DPEHPK3PXP");
-  assert.equal(credentials.organization, "BENTONVILLE PEDIATRICS, P.A.");
+  assert.equal(credentials.organization, "KeiperSpine, PC");
   assert.equal(credentials.lookbackDays, 20);
-  assert.equal(credentials.project, "charm");
+  assert.equal(credentials.project, undefined);
   assert.match(credentials.loginUrl, /^https:\/\/essentials\.availity\.com/);
   assert.deepEqual(credentials.sharePoint, {
     tenantId: "tenant-from-excel",
@@ -108,9 +118,9 @@ test("reads Availity Remittance credentials from workbook aliases", async () => 
 });
 
 test("reads Availity Remittance credentials with Google Authenticator migration data", async () => {
-  const file = await workbookFile("credentials.xlsx", [
-    ["User ID", "Password", "Secret Key"],
-    ["rcmben", "secret-password", GOOGLE_AUTHENTICATOR_DATA_VALUE],
+  const file = await credentialsWorkbookFile([
+    ["User ID", "Password", "Secret Key", "Client Name"],
+    ["rcmben", "secret-password", GOOGLE_AUTHENTICATOR_DATA_VALUE, "KS"],
   ]);
 
   const credentials = await readAvailityRemittanceCredentials(file);
@@ -119,10 +129,46 @@ test("reads Availity Remittance credentials with Google Authenticator migration 
   assert.equal(credentials.lookbackDays, 10);
 });
 
+test("matches Client Name to Mapping without case or surrounding-space sensitivity", async () => {
+  const file = await credentialsWorkbookFile([
+    ["User ID", "Password", "Secret Key", "Client Name"],
+    ["user", "password", "JBSWY3DPEHPK3PXP", " ks "],
+  ]);
+
+  const credentials = await readAvailityRemittanceCredentials(file);
+
+  assert.equal(credentials.organization, "KeiperSpine, PC");
+});
+
+test("rejects an Availity credential client that has no organization mapping", async () => {
+  const file = await credentialsWorkbookFile([
+    ["User ID", "Password", "Secret Key", "Client Name"],
+    ["user", "password", "JBSWY3DPEHPK3PXP", "KWS"],
+  ]);
+
+  await assert.rejects(
+    () => readAvailityRemittanceCredentials(file),
+    /does not contain an Organization for Client Name "KWS"/,
+  );
+});
+
+test("requires Credentials and Mapping as the first two worksheets", async () => {
+  const file = await workbookFileWithSheets("credentials.xlsx", [
+    { name: "Notes", rows: [["Notes"], ["Example"]] },
+    { name: "Credentials", rows: [["User ID", "Password", "Secret Key", "Client Name"], ["user", "password", "JBSWY3DPEHPK3PXP", "KS"]] },
+    { name: "Mapping", rows: [["Client Name", "Organization"], ["KS", "KeiperSpine, PC"]] },
+  ]);
+
+  await assert.rejects(
+    () => readAvailityRemittanceCredentials(file),
+    /must use "Credentials" as the first worksheet/,
+  );
+});
+
 test("rejects invalid Payment EOB lookback day values", async () => {
-  const file = await workbookFile("credentials.xlsx", [
-    ["User ID", "Password", "Secret Key", "Lookback Days"],
-    ["rcmben", "secret-password", "JBSWY3DPEHPK3PXP", "zero"],
+  const file = await credentialsWorkbookFile([
+    ["User ID", "Password", "Secret Key", "Client Name", "Lookback Days"],
+    ["rcmben", "secret-password", "JBSWY3DPEHPK3PXP", "KS", "zero"],
   ]);
 
   await assert.rejects(
@@ -178,11 +224,11 @@ test("reads reference workbook with exact Payment EOB column names", async () =>
   assert.equal(rows[0].checkDate, "07/15/2026");
 });
 
-test("reads MedRevenue routing and Pending EFT control-log fields", async () => {
-  const credentialsFile = await workbookFile("credentials.xlsx", [
+test("reads Client Name and Pending EFT control-log fields without deriving the project from Excel", async () => {
+  const credentialsFile = await credentialsWorkbookFile([
     ["User ID", "Password", "Secret Key", "Project", "Client Name"],
     ["user", "password", "JBSWY3DPEHPK3PXP", "Med Revenue", "Client A"],
-  ]);
+  ], [["Client Name", "Organization"], ["Client A", "Client A Portal Org"]]);
   const controlLog = await workbookFileWithSheets("control-log.xlsx", [{
     name: "tracker",
     rows: [
@@ -195,8 +241,9 @@ test("reads MedRevenue routing and Pending EFT control-log fields", async () => 
   const credentials = await readAvailityRemittanceCredentials(credentialsFile);
   const rows = await readReferenceRows(controlLog);
 
-  assert.equal(credentials.project, "medrevenue");
+  assert.equal(credentials.project, undefined);
   assert.equal(credentials.clientName, "Client A");
+  assert.equal(credentials.organization, "Client A Portal Org");
   assert.deepEqual(rows.map((row) => ({ checkNumber: row.checkNumber, entryStatus: row.entryStatus, modeOfPayment: row.modeOfPayment })), [
     { checkNumber: "EFT-100", entryStatus: "Pending", modeOfPayment: "EFT" },
     { checkNumber: "EFT-200", entryStatus: "Complete", modeOfPayment: "EFT" },
