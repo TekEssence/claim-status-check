@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import {
   applyProjectColumnMapping,
   applyProjectPreprocessing,
+  getMfaConfigForProject,
   getOrganizationForRow,
   getProviderOrderForRow,
   normalizeProjectId,
@@ -18,6 +19,11 @@ function createRow(input_row_id: number, data: Record<string, string>): Availity
 }
 
 describe("applyProjectPreprocessing", () => {
+  it("uses Google Authenticator migration data only for Minimax MFA", () => {
+    assert.equal(getMfaConfigForProject("minimax").totpSecretFormat, "google-authenticator-migration");
+    assert.equal(getMfaConfigForProject("medrevenu").totpSecretFormat, "base32");
+  });
+
   it("maps Medrevenu DOB column to Patient DOB", () => {
     const row = createRow(1, {
       DOB: "01/15/1980",
