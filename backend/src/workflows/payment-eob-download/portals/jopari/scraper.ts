@@ -79,18 +79,90 @@ export function existsInControlLog(row: ExportRow, control: JopariControlReferen
 async function login(page: Page, credentials: PaymentEobCredentials, context: AutomationContext): Promise<void> {
   await context.log({ level: "info", message: "Opening Jopari Remittance Gateway.", eventName: "jopari_login_open" });
   await page.goto(credentials.loginUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
-  await page.locator("#login-id").fill(credentials.username);
-  await page.locator("#password").fill(credentials.password);
+  const loginId = page.locator("#login-id");
+  const password = page.locator("#password");
+  await loginId.waitFor({ state: "visible", timeout: 30000 });
+  await password.waitFor({ state: "visible", timeout: 30000 });
+  await loginId.fill(credentials.username);
+  await password.fill(credentials.password);
+
+  const populated = await page.evaluate(({ username, passwordValue }) => {
+    const visibleUsername = document.querySelector<HTMLInputElement>("#login-id");
+    const visiblePassword = document.querySelector<HTMLInputElement>("#password");
+    const hiddenUsername = document.querySelector<HTMLInputElement>("#h_username");
+    const hiddenPassword = document.querySelector<HTMLInputElement>("#h_password");
+    if (visibleUsername) visibleUsername.value = username;
+    if (visiblePassword) visiblePassword.value = passwordValue;
+    if (hiddenUsername) hiddenUsername.value = username;
+    if (hiddenPassword) hiddenPassword.value = passwordValue;
+    for (const input of [visibleUsername, visiblePassword, hiddenUsername, hiddenPassword]) {
+      input?.dispatchEvent(new Event("input", { bubbles: true }));
+      input?.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+    visibleUsername?.dispatchEvent(new Event("blur", { bubbles: true }));
+    visiblePassword?.dispatchEvent(new Event("blur", { bubbles: true }));
+    return {
+      visibleUsername: Boolean(visibleUsername?.value),
+      visiblePassword: Boolean(visiblePassword?.value),
+      hiddenUsername: Boolean(hiddenUsername?.value),
+      hiddenPassword: Boolean(hiddenPassword?.value),
+    };
+  }, { username: credentials.username, passwordValue: credentials.password });
+
+  const finalUsernameCharacter = Array.from(credentials.username).at(-1) ?? "?";
+  await context.log({
+    level: "info",
+    message: `Jopari credentials prepared: Login ID ending in ***${finalUsernameCharacter}; password populated: ${populated.visiblePassword ? "Yes" : "No"}; hidden fields synchronized: ${populated.hiddenUsername && populated.hiddenPassword ? "Yes" : "No"}.`,
+    eventName: "jopari_login_fields_prepared",
+  });
+  if (!populated.visibleUsername || !populated.visiblePassword || !populated.hiddenUsername || !populated.hiddenPassword) {
+    throw new Error("Jopari login fields could not be populated and synchronized safely.");
+  }
+
   await page.locator('input[type="submit"][value="login"], input[type="submit"][value="LOGIN"]').click();
-  await page.waitForLoadState("networkidle", { timeout: 30000 }).catch(() => {});
+  await page.waitForLoadState("domcontentloaded", { timeout: 30000 }).catch(() => {});
+  const loginOutcomeHandle = await page.waitForFunction(() => {
+    if (document.querySelector("#dashboard-tab-link, #era-tab-link")) return "dashboard";
+    if (document.querySelector("#mfa-section")) return "mfa";
+    const errorText = document.querySelector(".errorMessage")?.textContent?.replace(/\s+/g, " ").trim() ?? "";
+    const requiredFields = /Login ID is required|Password is required/i.test(`${errorText} ${document.body.innerText}`);
+    if (requiredFields) return "error:Jopari reported that the submitted Login ID or Password was empty.";
+    if (errorText || /Validation Error/i.test(document.body.innerText)) return "error:Jopari rejected the login submission. Verify the credential workbook and portal access.";
+    return "";
+  }, undefined, { timeout: 30000 });
+  const loginOutcome = await loginOutcomeHandle.jsonValue() as string;
+  await loginOutcomeHandle.dispose();
+  if (loginOutcome.startsWith("error:")) {
+    throw new Error(loginOutcome.slice("error:".length));
+  }
 
   const mfa = page.locator("#mfa-section");
-  if (await mfa.isVisible({ timeout: 15000 }).catch(() => false)) {
-    const emailLink = mfa.getByText("Use E-mail MFA instead", { exact: true });
-    if (await emailLink.isVisible().catch(() => false)) {
-      await emailLink.click();
-      await page.getByText(/one-time authentication code has been sent/i).waitFor({ timeout: 30000 });
+  if (loginOutcome === "mfa") {
+    const emailLink = mfa.locator("a").filter({ hasText: /Use E-?mail MFA instead/i }).first();
+    await emailLink.waitFor({ state: "visible", timeout: 30000 });
+    await context.log({ level: "info", message: "Jopari MFA page opened; switching to email verification.", eventName: "jopari_email_mfa_switch" });
+
+    let emailModeReady = false;
+    for (let attempt = 1; attempt <= 3 && !emailModeReady; attempt += 1) {
+      await emailLink.scrollIntoViewIfNeeded().catch(() => {});
+      if (attempt < 3) {
+        await emailLink.click({ timeout: 10000 }).catch(() => {});
+      } else {
+        await emailLink.evaluate((link: HTMLElement) => link.click()).catch(() => {});
+      }
+      emailModeReady = await page.locator("#step1-description")
+        .filter({ hasText: /one-time authentication code has been sent|code has been sent to the email/i })
+        .waitFor({ state: "visible", timeout: 10000 })
+        .then(() => true)
+        .catch(() => false);
+      if (!emailModeReady) {
+        await context.log({ level: "warn", message: `Jopari did not switch to email MFA on attempt ${attempt}/3; retrying.`, eventName: "jopari_email_mfa_retry" });
+      }
     }
+    if (!emailModeReady) {
+      throw new Error("Jopari did not switch from authenticator MFA to email MFA after three attempts.");
+    }
+    await context.log({ level: "info", message: "Jopari confirmed that the verification code was sent by email.", eventName: "jopari_email_mfa_ready" });
     const timeoutMs = Number(process.env.PORTAL_JOPARI_OTP_TIMEOUT_MS || 600000);
     await context.emit({ type: "input_request", inputName: "jopari_otp", label: "Jopari email verification code", message: "Enter the 6-digit code sent by Jopari email.", timeoutMs });
     const otp = await waitForScrapeJobInput(context.jobId, "jopari_otp", timeoutMs);
@@ -164,10 +236,26 @@ async function phaseOne(page: Page, outputRoot: string, context: AutomationConte
   await page.locator("#era-tab-link").click();
   const table = page.locator("#multiple-list");
   await table.waitFor({ state: "visible", timeout: 30000 });
+  // Jopari renders the table shell before its AJAX request populates tbody.
+  // A visible table is therefore not a completed ERA result. DataTables adds
+  // either a real result row or a visible empty-result row when loading ends.
+  await table.locator("tbody tr").first().waitFor({ state: "visible", timeout: 60000 });
+  await page.locator("#multiple-list_processing").waitFor({ state: "hidden", timeout: 30000 }).catch(() => {});
+  await page.waitForTimeout(250);
+
+  const loadedRows = table.locator("tbody tr:not(:has(td.dataTables_empty))");
+  const loadedCount = await loadedRows.count();
+  await context.log({ level: "info", message: `Jopari ERA table loaded: ${loadedCount} record(s).`, eventName: "jopari_era_table_loaded" });
   const readyRows = table.locator("tbody tr").filter({ hasText: /Ready/i });
   const count = await readyRows.count();
-  if (!count) { await context.log({ level: "info", message: "No new Jopari ERAs were ready.", eventName: "jopari_era_empty" }); return; }
-  for (let index = 0; index < count; index += 1) await readyRows.nth(index).locator('input[type="checkbox"]').check().catch(() => {});
+  await context.log({ level: "info", message: `Jopari Ready ERA rows found: ${count}.`, eventName: "jopari_era_ready_count" });
+  if (!count) { await context.log({ level: "info", message: "No new Jopari ERAs were ready after the ERA table finished loading.", eventName: "jopari_era_empty" }); return; }
+  for (let index = 0; index < count; index += 1) {
+    await readyRows.nth(index).locator('input[type="checkbox"]').check({ timeout: 15000 });
+  }
+  const selectedCount = await readyRows.locator('input[type="checkbox"]:checked').count();
+  if (selectedCount !== count) throw new Error(`Jopari selected ${selectedCount} of ${count} Ready ERA row(s).`);
+  await context.log({ level: "info", message: `Selected ${selectedCount} Jopari ERA row(s) for download.`, eventName: "jopari_era_selected" });
   await page.locator("#era_download").click();
   await context.log({ level: "info", message: `Requested a Jopari ERA ZIP for ${count} ready row(s); opening Mailbox.`, eventName: "jopari_era_requested" });
   await openMailbox(page);
@@ -190,8 +278,30 @@ async function exportPayments(page: Page, outputRoot: string, lookbackDays: numb
   await page.locator("#search-eft-btn").click();
   await page.locator("#searcheft-list_processing").waitFor({ state: "hidden", timeout: 60000 }).catch(() => {});
   const exportLink = page.locator("#export");
-  const exportName = await saveDownload(page, () => exportLink.click(), outputRoot, "excelExport.xlsx");
-  const buffer = await fs.readFile(path.join(outputRoot, exportName));
+  await exportLink.waitFor({ state: "visible", timeout: 30000 });
+  await page.waitForFunction(() => {
+    const href = document.querySelector<HTMLAnchorElement>("#export")?.getAttribute("href") ?? "";
+    return href !== "#" && href.includes("f_fetchCheckJXls");
+  }, undefined, { timeout: 30000 });
+
+  const href = await exportLink.getAttribute("href");
+  if (!href) throw new Error("Jopari Export link did not contain a workbook URL after search completed.");
+  const exportUrl = new URL(href, page.url()).toString();
+  await context.log({ level: "info", message: "Downloading the Jopari payment export through the authenticated session.", eventName: "jopari_export_request" });
+  const response = await page.context().request.get(exportUrl, { timeout: 90000 });
+  if (!response.ok()) throw new Error(`Jopari Excel export returned HTTP ${response.status()}.`);
+
+  const headers = response.headers();
+  const contentType = headers["content-type"]?.toLowerCase() ?? "";
+  if (!contentType.includes("application/xls") && !contentType.includes("excel") && !contentType.includes("octet-stream")) {
+    throw new Error(`Jopari Excel export returned unexpected content type "${contentType || "unknown"}".`);
+  }
+  const buffer = Buffer.from(await response.body());
+  if (!buffer.length) throw new Error("Jopari Excel export returned an empty file.");
+  const disposition = headers["content-disposition"] ?? "";
+  const dispositionName = disposition.match(/filename\s*=\s*"?([^";]+)"?/i)?.[1]?.trim();
+  const exportName = safe(dispositionName || "excelExport.xls");
+  await fs.writeFile(path.join(outputRoot, exportName), buffer);
   const rows = await parseJopariExport(buffer);
   await context.log({ level: "info", message: `Exported ${rows.length} Jopari ACH/NON payment row(s).`, eventName: "jopari_export_downloaded" });
   return { rows, exportName };

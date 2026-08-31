@@ -232,10 +232,9 @@ async function openPaymentPage(page: Page, context: AutomationContext): Promise<
   if (!alreadyOnPaymentPage) {
     await page.goto(paymentUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
   }
-  await page.locator("#PaymentView, #paymentsGrid, .payment-holder").first().waitFor({ state: "visible", timeout: 90000 });
+  await page.locator("#PaymentView, #PaymentsGrid, #paymentsGrid, .payment-holder").first().waitFor({ state: "visible", timeout: 90000 });
   await page.locator("#paymentId").first().waitFor({ state: "visible", timeout: 30000 });
   await page.locator("#btnSearch, input[type='button'][value='Search']").first().waitFor({ state: "visible", timeout: 30000 });
-  await waitForPaymentGrid(page);
   await context.log({
     level: "info",
     message: alreadyOnPaymentPage ? "Zelis Payment page was already open and is ready." : "Zelis Payment page opened.",
@@ -655,6 +654,7 @@ export async function runZelisJob(input: RunInput, context: AutomationContext): 
       return;
     }
 
+    await waitForPaymentGrid(page);
     await context.log({
       level: "info",
       message: "Processing Zelis payments from the default All filter. Rows with a Downloaded date will be skipped.",
