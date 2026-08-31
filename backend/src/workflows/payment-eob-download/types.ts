@@ -1,6 +1,7 @@
 export type PaymentEobRunInput = {
   credentialExcel: File;
   referenceExcel?: File;
+  project?: "charm" | "medrevenue";
 };
 
 export type PaymentEobCredentials = {

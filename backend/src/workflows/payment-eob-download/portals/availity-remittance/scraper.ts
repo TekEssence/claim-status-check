@@ -12,6 +12,14 @@ function requireFile(formData: FormData, key: string, label: string): File {
   return value;
 }
 
+function requireProject(formData: FormData): "charm" | "medrevenue" {
+  const project = String(formData.get("project") ?? "").trim().toLowerCase();
+  if (project !== "charm" && project !== "medrevenue") {
+    throw new Error("Availity Project is required. Select Charm or MedRevenue.");
+  }
+  return project;
+}
+
 export function createAvailityRemittanceRunner(): AutomationRunner<PaymentEobRunInput> {
   return {
     workflowId: "payment-eob-download",
@@ -24,10 +32,12 @@ export function createAvailityRemittanceRunner(): AutomationRunner<PaymentEobRun
       return {
         credentialExcel: requireFile(input, "credentialExcel", "Credential Excel"),
         referenceExcel: requireFile(input, "referenceExcel", "Reference Excel"),
+        project: requireProject(input),
       };
     },
     async run(input, context) {
       const credentials = await readAvailityRemittanceCredentials(input.credentialExcel);
+      credentials.project = input.project;
       const referenceRows = await readReferenceRows(input.referenceExcel!);
       if (credentials.project === "medrevenue" && !credentials.clientName?.trim()) {
         throw new Error("MedRevenue Availity credentials must contain a Client Name.");

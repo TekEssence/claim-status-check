@@ -199,11 +199,25 @@ test("payment EOB validation accepts required workbook uploads", () => {
   const formData = new FormData();
   formData.append("credentialExcel", new File(["credential"], "credential.xlsx"));
   formData.append("referenceExcel", new File(["reference"], "reference.xlsx"));
+  formData.append("project", "medrevenue");
 
   const input = runner.validateInput(formData) as PaymentEobRunInput;
 
   assert.equal(input.credentialExcel.name, "credential.xlsx");
   assert.equal(input.referenceExcel?.name, "reference.xlsx");
+  assert.equal(input.project, "medrevenue");
+});
+
+test("Availity payment EOB validation requires a project selection", () => {
+  const runner = getAutomationRunner("payment-eob-download", "availity-remittance");
+  const formData = new FormData();
+  formData.append("credentialExcel", new File(["credential"], "credential.xlsx"));
+  formData.append("referenceExcel", new File(["reference"], "reference.xlsx"));
+
+  assert.throws(
+    () => runner.validateInput(formData),
+    /Availity Project is required/,
+  );
 });
 
 test("Zelis payment EOB validation only requires credentialExcel", () => {

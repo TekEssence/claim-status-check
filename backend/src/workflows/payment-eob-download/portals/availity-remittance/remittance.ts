@@ -382,7 +382,7 @@ async function selectOrganizationIfProvided(
   return { applied: stuck, selectedText };
 }
 
-async function waitForResultsRefresh(surface: RemittanceSurface): Promise<void> {
+async function waitForResultsRefresh(surface: RemittanceSurface): Promise<boolean> {
   // The results table is already visible from the default "last 7 days / All"
   // view, so waiting for it to become visible again is a no-op — it never
   // actually confirms the filtered data has loaded. Instead, wait for the
@@ -391,7 +391,10 @@ async function waitForResultsRefresh(surface: RemittanceSurface): Promise<void> 
   await busyRegion.waitFor({ state: "attached", timeout: 5000 }).catch(() => {});
   await busyRegion.waitFor({ state: "detached", timeout: 30000 }).catch(() => {});
   await surface.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
-  await surface.locator('[role="table"][aria-label="Remits"]').waitFor({ state: "visible", timeout: 30000 });
+  const table = surface.locator('[role="table"][aria-label="Remits"]');
+  const noResults = surface.getByText(/We did not find remittance data matching your search criteria/i);
+  await table.or(noResults).first().waitFor({ state: "visible", timeout: 30000 });
+  return table.isVisible().catch(() => false);
 }
 
 async function setZeroAmountFilter(surface: RemittanceSurface): Promise<void> {
@@ -416,10 +419,14 @@ async function setZeroAmountFilter(surface: RemittanceSurface): Promise<void> {
   throw new Error("MedRevenue zero-payments process could not find the Availity Amount filter.");
 }
 
-async function downloadPortalCsv(surface: RemittanceSurface, page: Page, context: AutomationContext, outputFolder: string, credentials: PaymentEobCredentials, options: { zeroAmount?: boolean } = {}): Promise<PaymentEobPortalRecord[]> {
-  const startDate = credentials.startDate || daysAgoMmDdYyyy(credentials.lookbackDays);
-  const endDate = credentials.endDate || todayMmDdYyyy();
-
+async function applyOrganizationFilter(
+  surface: RemittanceSurface,
+  page: Page,
+  context: AutomationContext,
+  outputFolder: string,
+  credentials: PaymentEobCredentials,
+  options: { zeroAmount?: boolean; checkDatesBeforeFilter?: boolean } = {},
+): Promise<boolean> {
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     await context.log({ level: "info", message: "Selecting Availity organization filter.", eventName: "payment_eob_org_select" });
     await selectOrganizationIfProvided(surface, page, credentials.organization, context, outputFolder);
@@ -452,6 +459,17 @@ async function downloadPortalCsv(surface: RemittanceSurface, page: Page, context
     }
     await context.log({ level: "info", message: "Amount filter set to 0 for MedRevenue zero payments.", eventName: "payment_eob_zero_amount_set" });
   }
+  if (options.checkDatesBeforeFilter) {
+    const startDate = credentials.startDate || daysAgoMmDdYyyy(credentials.lookbackDays);
+    const endDate = credentials.endDate || todayMmDdYyyy();
+    await context.log({
+      level: "info",
+      message: `Setting Check Dates search range ${startDate} - ${endDate} before clicking Filter.`,
+      eventName: "payment_eob_check_date_range",
+    });
+    await fillDate(surface.locator("#checkcheckDates-start"), startDate);
+    await fillDate(surface.locator("#checkcheckDates-end"), endDate);
+  }
   await context.log({ level: "info", message: "Clicking organization Filter.", eventName: "payment_eob_filter_click" });
   try {
     await filterButton.click();
@@ -462,20 +480,39 @@ async function downloadPortalCsv(surface: RemittanceSurface, page: Page, context
     await page.keyboard.press("Escape");
     await filterButton.click();
   }
-  await waitForResultsRefresh(surface);
-  await context.log({ level: "info", message: "Organization-filtered results loaded.", eventName: "payment_eob_filter_loaded" });
-
+  const hasResults = await waitForResultsRefresh(surface);
   await context.log({
-    level: "info",
-    message: `Setting Check Dates search range ${startDate} - ${endDate}.`,
-    eventName: "payment_eob_check_date_range",
+    level: hasResults ? "info" : "warn",
+    message: hasResults ? "Organization-filtered results loaded." : "Availity returned no remittance data for the applied filters.",
+    eventName: hasResults ? "payment_eob_filter_loaded" : "payment_eob_filter_empty",
   });
-  await fillDate(surface.locator("#checkcheckDates-start"), startDate);
-  await fillDate(surface.locator("#checkcheckDates-end"), endDate);
-  await context.log({ level: "info", message: "Clicking Search for Check Dates.", eventName: "payment_eob_check_date_search" });
-  await surface.locator("#checkSearchButton").click();
-  await waitForResultsRefresh(surface);
-  await context.log({ level: "info", message: "Check Date results loaded.", eventName: "payment_eob_check_date_loaded" });
+  return hasResults;
+}
+
+async function downloadPortalCsv(surface: RemittanceSurface, page: Page, context: AutomationContext, outputFolder: string, credentials: PaymentEobCredentials, options: { zeroAmount?: boolean } = {}): Promise<PaymentEobPortalRecord[]> {
+  const startDate = credentials.startDate || daysAgoMmDdYyyy(credentials.lookbackDays);
+  const endDate = credentials.endDate || todayMmDdYyyy();
+
+  const hasFilteredResults = await applyOrganizationFilter(surface, page, context, outputFolder, credentials, {
+    ...options,
+    checkDatesBeforeFilter: options.zeroAmount,
+  });
+
+  if (!options.zeroAmount) {
+    await context.log({
+      level: "info",
+      message: `Setting Check Dates search range ${startDate} - ${endDate}.`,
+      eventName: "payment_eob_check_date_range",
+    });
+    await fillDate(surface.locator("#checkcheckDates-start"), startDate);
+    await fillDate(surface.locator("#checkcheckDates-end"), endDate);
+    await context.log({ level: "info", message: "Clicking Search for Check Dates.", eventName: "payment_eob_check_date_search" });
+    await surface.locator("#checkSearchButton").click();
+    await waitForResultsRefresh(surface);
+    await context.log({ level: "info", message: "Check Date results loaded.", eventName: "payment_eob_check_date_loaded" });
+  }
+
+  if (options.zeroAmount && !hasFilteredResults) return [];
 
   const csvDownloadPromise = page.waitForEvent("download");
   await surface.getByRole("button", { name: /Download CSV/i }).click();
@@ -984,6 +1021,8 @@ export async function runAvailityRemittanceJob(input: RunInput, context: Automat
 
     if (processId === "medrevenue") {
       if (!input.credentials.clientName?.trim()) throw new Error("MedRevenue Availity credentials must contain a Client Name.");
+      await context.log({ level: "info", message: "Applying Availity organization filter before MedRevenue Phase 1 searches.", eventName: "payment_eob_medrevenue_phase1_org_filter" });
+      await applyOrganizationFilter(remittanceSurface, page, context, outputRoot, input.credentials, { checkDatesBeforeFilter: true });
       const pendingRows = input.referenceRows.filter(isMedRevenuePendingEftRow);
       const seenPending = new Set<string>();
       const uniquePendingRows = pendingRows.filter((row) => {

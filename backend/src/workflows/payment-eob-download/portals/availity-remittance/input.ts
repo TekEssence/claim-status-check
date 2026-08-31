@@ -1,6 +1,5 @@
 import ExcelJS from "exceljs";
 import type { PaymentEobCredentials, PaymentEobReferenceRow } from "../../types";
-import { resolveAvailityRemittanceProcess } from "./process-registry";
 
 const DEFAULT_LOGIN_URL = "https://essentials.availity.com/static/public/onb/onboarding-ui-apps/availity-fr-ui/#/login";
 const BASE32_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
@@ -195,7 +194,7 @@ export function normalizeTotpSecret(value: string): string {
   return decodeGoogleAuthenticatorMigrationSecret(compact);
 }
 
-async function readWorkbookRows(file: File, sheetNames?: string | string[]): Promise<Record<string, string>[]> {
+async function readWorkbookRows(file: File, sheetNames?: string | string[], expectedSheetIndex?: number): Promise<Record<string, string>[]> {
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(await file.arrayBuffer());
   const acceptedSheetNames = typeof sheetNames === "string" ? [sheetNames] : sheetNames;
@@ -208,6 +207,11 @@ async function readWorkbookRows(file: File, sheetNames?: string | string[]): Pro
     throw new Error(acceptedSheetNames?.length
       ? `${file.name || "Workbook"} must contain a ${acceptedSheetNames.map((name) => `"${name}"`).join(" or ")} worksheet.`
       : `${file.name || "Workbook"} does not contain any worksheets.`);
+  }
+
+  if (expectedSheetIndex !== undefined && workbook.worksheets[expectedSheetIndex] !== worksheet) {
+    const position = expectedSheetIndex === 0 ? "first" : expectedSheetIndex === 1 ? "second" : `#${expectedSheetIndex + 1}`;
+    throw new Error(`${file.name || "Workbook"} must use "${worksheet.name}" as the ${position} worksheet.`);
   }
 
   const headers: string[] = [];
@@ -229,7 +233,25 @@ async function readWorkbookRows(file: File, sheetNames?: string | string[]): Pro
 }
 
 export async function readAvailityRemittanceCredentials(file: File): Promise<PaymentEobCredentials> {
-  const rows = await readWorkbookRows(file);
+  const rows = await readWorkbookRows(file, "Credentials", 0);
+  const mappingRows = await readWorkbookRows(file, "Mapping", 1);
+  const organizationByClient = new Map<string, string>();
+
+  for (const mappingRow of mappingRows) {
+    const clientName = findValue(mappingRow, ["Client Name", "Client", "Client Code"]);
+    const organization = findValue(mappingRow, ["Organization", "Org", "Provider Organization", "Practice", "Payee"]);
+    if (!clientName && !organization) continue;
+    if (!clientName || !organization) {
+      throw new Error("Each Mapping worksheet row must contain both Client Name and Organization.");
+    }
+
+    const clientKey = normalizeAlias(clientName);
+    if (organizationByClient.has(clientKey)) {
+      throw new Error(`Mapping worksheet contains more than one Organization for Client Name "${clientName}".`);
+    }
+    organizationByClient.set(clientKey, organization);
+  }
+
   for (const row of rows) {
     const username = findValue(row, ["Username", "User Name", "User ID", "USERNAME_AVA1"]);
     const password = findValue(row, ["Password", "PASSWORD_AVA1"]);
@@ -243,6 +265,14 @@ export async function readAvailityRemittanceCredentials(file: File): Promise<Pay
       "Migration Data",
     ]));
     if (!username || !password || !totpSecret) continue;
+    const clientName = findValue(row, ["Client", "Client Name", "Client Code"]);
+    if (!clientName) {
+      throw new Error("Credentials worksheet must contain a Client Name for Availity organization mapping.");
+    }
+    const organization = organizationByClient.get(normalizeAlias(clientName));
+    if (!organization) {
+      throw new Error(`Mapping worksheet does not contain an Organization for Client Name "${clientName}".`);
+    }
 
     return {
       loginUrl: normalizeLoginUrl(findValue(row, ["Link", "URL", "Login URL", "Portal Link", "LOGIN_URL_AVA"])),
@@ -256,16 +286,15 @@ export async function readAvailityRemittanceCredentials(file: File): Promise<Pay
         siteUrl: findValue(row, ["SharePoint Site URL", "Site URL", "SharePoint URL"]),
         folderPath: findValue(row, ["SharePoint Folder", "SharePoint Folder Path", "SharePoint Path", "Output Folder"]),
       },
-      organization: findValue(row, ["Organization", "Org", "Provider Organization", "Practice", "Payee"]),
+      organization,
       startDate: findValue(row, ["Start Date", "Check Start Date", "From Date"]),
       endDate: findValue(row, ["End Date", "Check End Date", "To Date"]),
       lookbackDays: parseLookbackDays(findValue(row, ["Lookback Days", "Last N Days", "Days Back", "Date Range Days", "Last Days"])),
-      project: resolveAvailityRemittanceProcess(findValue(row, ["Project", "Project Name", "Project Code"])),
-      clientName: findValue(row, ["Client", "Client Name", "Client Code"]),
+      clientName,
     };
   }
 
-  throw new Error("Missing Availity Remittance credentials. Credential Excel must contain Username, Password, and Secret Key.");
+  throw new Error("Missing Availity Remittance credentials. The Credentials worksheet must contain User ID, Password, and Secret Key.");
 }
 
 export async function readReferenceRows(file: File): Promise<PaymentEobReferenceRow[]> {
