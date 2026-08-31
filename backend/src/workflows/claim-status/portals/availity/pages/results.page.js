@@ -231,19 +231,39 @@ async function getSearchResultSummary(page) {
 
 async function waitForSearchResultsToSettle(page, timeoutMs = 5000) {
   let latestSummary = null;
-  const deadline = Date.now() + timeoutMs;
+  const initialDeadline = Date.now() + timeoutMs;
+  let deadline = initialDeadline;
+  let responseDetectedAt = 0;
+  let previousSignature = "";
+  let stableSamples = 0;
 
   while (Date.now() < deadline) {
     latestSummary = await getSearchResultSummary(page);
 
     if (latestSummary.hasResultRows || latestSummary.noResultsMessageVisible || latestSummary.hasPortalAlert) {
-      return latestSummary;
+      if (!responseDetectedAt) {
+        responseDetectedAt = Date.now();
+        deadline = Math.max(initialDeadline, responseDetectedAt + 6000);
+      }
+      const signature = JSON.stringify({
+        rows: latestSummary.resultRowCount,
+        heading: latestSummary.headingText,
+        messages: latestSummary.portalMessages
+      });
+      stableSamples = signature === previousSignature ? stableSamples + 1 : 0;
+      previousSignature = signature;
+
+      // Availity often renders the generic warning before its detailed INFO alert.
+      // Keep sampling briefly so every visible response message reaches the output.
+      if (Date.now() - responseDetectedAt >= 5000 && stableSamples >= 1) {
+        return latestSummary;
+      }
     }
 
-    await humanDelay(1000, 1500);
+    await humanDelay(500, 750);
   }
 
-  return latestSummary || getSearchResultSummary(page);
+  return getSearchResultSummary(page).catch(() => latestSummary);
 }
 
 async function hasNoResults(page) {

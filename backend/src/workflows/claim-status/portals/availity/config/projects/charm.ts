@@ -45,6 +45,8 @@ export const charmAvailityConfig: AvailityProjectConfig = {
         "Grey Matters": "William Nields, PLLC",
         Dumont: "Dumont medical PLLC",
         Premier: "Premier Health",
+        Bentoville: "BENTONVILLE PEDIATRICS, P.A.",
+        Bentonville: "BENTONVILLE PEDIATRICS, P.A.",
       },
       skipValues: ["Sharon"],
       required: true,
