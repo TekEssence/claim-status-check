@@ -975,7 +975,7 @@ export function createWaystarPaymentEobRunner(): AutomationRunner<PaymentEobRunI
       if (!input.referenceExcel) throw new Error(`Control Log Excel is required for ${credentials.clientName} because it uses the Cash Log and Zero Payments process.`);
       const control = await readWaystarControlLog(input.referenceExcel);
       const eligibleCount = control.rows.filter(isEligibleWaystarControlRow).length;
-      await context.log({ level: "info", message: `Input validation completed. ${eligibleCount} row(s) with Source=Waystar and Entry Status=In-Process will be processed.`, eventName: "waystar_payment_input_complete" });
+      await context.log({ level: "info", message: `Input validation completed. ${eligibleCount} row(s) with Source=Waystar and Entry Status=Pending will be processed.`, eventName: "waystar_payment_input_complete" });
       await runCashLogAndZeroPaymentsJob(credentials, control.rows, context);
     } };
 }

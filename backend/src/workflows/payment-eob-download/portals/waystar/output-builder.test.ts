@@ -25,7 +25,7 @@ test("Waystar search results use the required column order", async () => {
 test("Waystar control output preserves rows and updates only successful payments", async () => {
   const headers = ["Client Name", "File Name", "Source", "Mode of payment", "Check number", "Posting Date", "Batch Total Amount", "Keep Me"];
   const row: WaystarControlLogRow = { rowNumber: 2, clientName: "Clinic A", checkNumber: "00123", batchTotalAmount: "$10.00",
-    entryStatus: "In Progress", source: "Waystar", values: Object.fromEntries(headers.map((header) => [header, header === "Keep Me" ? "original" : "old"])) };
+    entryStatus: "Pending", source: "Waystar", values: Object.fromEntries(headers.map((header) => [header, header === "Keep Me" ? "original" : "old"])) };
   const workbook = new ExcelJS.Workbook();
   const output = await buildWaystarControlLog(headers, [row], new Map([[2, result]]));
   await workbook.xlsx.load(output.buffer.slice(output.byteOffset, output.byteOffset + output.byteLength) as ArrayBuffer);

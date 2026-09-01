@@ -89,7 +89,7 @@ export async function readWaystarControlLog(file: File): Promise<{ headers: stri
   }));
   if (!controlRows.length) throw new Error("Control Log does not contain any data rows.");
   if (!controlRows.some((row) => isEligibleWaystarControlRow(row))) {
-    throw new Error("Control Log has no rows where Entry Status is In Progress/In-Process and Source is Waystar.");
+    throw new Error("Control Log has no rows where Entry Status is Pending and Source is Waystar.");
   }
   return { headers: parsed.headers, rows: controlRows };
 }
@@ -100,9 +100,8 @@ export function isUsableCheckNumber(value: unknown): boolean {
   return Boolean(normalized && !["NA", "NONE", "NULL", "NIL"].includes(normalized));
 }
 
-export function isInProgressStatus(value: unknown): boolean {
-  const normalized = key(text(value));
-  return normalized === "inprogress" || normalized === "inprocess";
+export function isPendingStatus(value: unknown): boolean {
+  return key(text(value)) === "pending";
 }
 
 export function isWaystarSource(value: unknown): boolean {
@@ -110,7 +109,7 @@ export function isWaystarSource(value: unknown): boolean {
 }
 
 export function isEligibleWaystarControlRow(row: Pick<WaystarControlLogRow, "entryStatus" | "source">): boolean {
-  return isInProgressStatus(row.entryStatus) && isWaystarSource(row.source);
+  return isPendingStatus(row.entryStatus) && isWaystarSource(row.source);
 }
 
 export function normalizeAmount(value: unknown): number | null {
