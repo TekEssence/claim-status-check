@@ -5,7 +5,7 @@ import { launchAutomationBrowser } from "@/backend/src/core/browser";
 import { getJobDataPath } from "@/backend/src/core/storage";
 import type { AutomationContext, AutomationRunner } from "../../../types";
 import type { PaymentEobRunInput } from "../../types";
-import { loginToWaystarClaimStatus } from "../../../claim-status/portals/waystar/portal";
+import { loginToWaystar } from "../../../eligibility-verification/portals/waystar/portal";
 import { createStoredZipFromFolder } from "../availity-remittance/zip";
 import { waystarPaymentEobConfig } from "./config";
 import { isEligibleWaystarControlRow, isUsableCheckNumber, normalizeAmount, normalizePaymentNumber, readWaystarControlLog, readWaystarPaymentCredentials } from "./input";
@@ -761,7 +761,7 @@ async function runCashLogAndZeroPaymentsJob(credentials: WaystarPaymentCredentia
     const page = browser.context.pages()[0] ?? await browser.context.newPage();
     page.setDefaultTimeout(30000);
     await context.log({ level: "info", message: "Opening Waystar and signing in.", eventName: "waystar_payment_login_start" });
-    await loginToWaystarClaimStatus(page, credentials);
+    await loginToWaystar(page, credentials, { robustAdditionalAuthentication: true });
     await context.log({ level: "info", message: "Waystar authentication completed, including any security verification.", eventName: "waystar_payment_login_complete" });
     await selectAccount(page, credentials, context);
     await navigateToPayments(page, context);
@@ -942,7 +942,7 @@ async function runBulkEobDownloadJob(credentials: WaystarPaymentCredentials, con
     const page = browser.context.pages()[0] ?? await browser.context.newPage();
     page.setDefaultTimeout(30000);
     await context.log({ level: "info", message: "Opening Waystar and signing in for Bulk EOB Download.", eventName: "waystar_bulk_login_start" });
-    await loginToWaystarClaimStatus(page, credentials);
+    await loginToWaystar(page, credentials, { robustAdditionalAuthentication: true });
     await selectAccount(page, credentials, context);
     await navigateToPayments(page, context);
     achRows = await runBulkPaymentPhase(page, credentials, "ACH", achFolder, context);

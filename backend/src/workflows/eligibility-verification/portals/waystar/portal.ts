@@ -72,7 +72,11 @@ const WAYSTAR_PAYER_SUGGESTION_SELECTOR = [
 const authenticatedWaystarContexts = new WeakSet<BrowserContext>();
 const cardSwipeAutoClosePages = new WeakSet<Page>();
 
-export async function loginToWaystar(page: Page, credentials: WaystarCredentials): Promise<void> {
+export type WaystarLoginOptions = {
+  robustAdditionalAuthentication?: boolean;
+};
+
+export async function loginToWaystar(page: Page, credentials: WaystarCredentials, options: WaystarLoginOptions = {}): Promise<void> {
   try {
     await page.goto(credentials.loginUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
   } catch (error) {
@@ -94,7 +98,7 @@ export async function loginToWaystar(page: Page, credentials: WaystarCredentials
   ]);
 
   await handleOptionalProfileUpdate(page);
-  await handleAdditionalAuthentication(page, credentials.verificationAnswers);
+  await handleAdditionalAuthentication(page, credentials.verificationAnswers, options);
 
   await page.locator(WAYSTAR_SELECTORS.navigation.eligibility).first().waitFor({
     state: "visible",
@@ -720,6 +724,7 @@ export function findWaystarServiceTypeOption(
 async function handleAdditionalAuthentication(
   page: Page,
   verificationAnswers: WaystarSecurityQuestion[],
+  options: WaystarLoginOptions,
 ): Promise<void> {
   const authenticationOutcome = await Promise.race([
     page.waitForURL(/AdditionalAuthentication/i, { timeout: 30000 })
@@ -755,6 +760,10 @@ async function handleAdditionalAuthentication(
   await fillVerifiedText(page, WAYSTAR_SELECTORS.additionalAuth.answer, answer, "Verification Answer");
   const verify = page.locator(WAYSTAR_SELECTORS.additionalAuth.verify).first();
   await verify.waitFor({ state: "visible", timeout: 30000 });
+  if (options.robustAdditionalAuthentication) {
+    await submitPaymentEobAdditionalAuthentication(page, verify, questionText);
+    return;
+  }
   await Promise.all([
     Promise.race([
       page.waitForURL((url) => !/AdditionalAuthentication/i.test(url.toString()), { timeout: 30000 }),
@@ -768,6 +777,45 @@ async function handleAdditionalAuthentication(
   if (await page.locator(WAYSTAR_SELECTORS.additionalAuth.answer).first().isVisible().catch(() => false)) {
     throw new Error("Waystar verification answer was entered, but the Verify action did not complete authentication.");
   }
+}
+
+async function submitPaymentEobAdditionalAuthentication(page: Page, verify: Locator, questionText: string): Promise<void> {
+  const answerInput = page.locator(WAYSTAR_SELECTORS.additionalAuth.answer).first();
+  await waitForEnabled(verify, "Waystar Verify action");
+  const errorSelector = ".validation-summary-errors:visible, .field-validation-error:visible, .alert-danger:visible, .error:visible, [role='alert']:visible";
+
+  const waitForOutcome = async (timeout: number): Promise<"completed" | "rejected" | "no-response"> => {
+    const deadline = Date.now() + timeout;
+    while (Date.now() < deadline) {
+      if (!await answerInput.isVisible().catch(() => false)) return "completed";
+      if (await page.locator(errorSelector).first().isVisible().catch(() => false)) return "rejected";
+      await page.waitForTimeout(250);
+    }
+    return "no-response";
+  };
+
+  await verify.click().catch(() => {});
+  let outcome = await waitForOutcome(5000);
+  if (outcome === "no-response") {
+    await answerInput.press("Enter").catch(() => {});
+    outcome = await waitForOutcome(5000);
+  }
+  if (outcome === "no-response") {
+    await verify.evaluate((element) => {
+      const form = element.closest("form") as HTMLFormElement | null;
+      if (form?.requestSubmit) form.requestSubmit(element instanceof HTMLButtonElement ? element : undefined);
+      else (element as HTMLElement).click();
+    }).catch(() => {});
+    outcome = await waitForOutcome(30000);
+  }
+  if (outcome === "completed") return;
+
+  const visibleError = await page.locator(errorSelector).allTextContents().catch(() => []);
+  const errorText = visibleError.map((value) => value.replace(/\s+/g, " ").trim()).filter(Boolean).join(" ");
+  if (errorText) {
+    throw new Error(`Waystar rejected the configured verification answer for "${questionText || "unknown question"}": ${errorText}`);
+  }
+  throw new Error(`Waystar Verify action did not submit the additional authentication form for "${questionText || "unknown question"}".`);
 }
 
 async function readAdditionalAuthQuestion(page: Page): Promise<string> {
