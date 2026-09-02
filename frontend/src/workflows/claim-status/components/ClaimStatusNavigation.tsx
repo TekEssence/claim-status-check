@@ -13,7 +13,6 @@ export function ClaimStatusTopNav(p: {
   const resetPortalSelection = p.onResetPortal;
   const authUser = { email: p.userLabel, username: p.userLabel };
   const effectivePortalId = p.hasSelectedPortal ? "selected" : null;
-  const router = { push: (_path: string) => p.onBack() };
   return (
 <nav className="relative z-30 border-b border-sky-100/80 bg-white/80 px-4 py-4 shadow-[0_10px_35px_rgba(148,163,184,0.12)] backdrop-blur-xl">
         <div className="mx-auto flex max-w-6xl items-center justify-between gap-4">
@@ -42,7 +41,7 @@ export function ClaimStatusTopNav(p: {
               if (effectivePortalId) {
                 resetPortalSelection();
               } else {
-                router.push("/portal");
+                p.onBack();
               }
             }}
             className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
@@ -65,12 +64,8 @@ export function ClaimStatusSidebar(p: {
   const effectivePortalId = p.hasSelectedPortal ? "selected" : null;
   const authUser = { mustResetPassword: p.mustResetPassword } as AuthUser;
   const blockPortalFormForProcessing = p.processingBlocked;
-  const setActiveView = (_view: ActiveView) => p.onDashboard();
-  const router = { push: (_path: string) => p.onDashboard() };
-  const refreshWorkflowRuns = p.onOutputs;
   const resetPortalSelection = p.onChangePortal;
   const openResetPassword = p.onResetPassword;
-  const hasFullWorkflowAccess = (_user: AuthUser) => p.hasFullAccess;
   const openManageUsers = p.onManageUsers;
   const logout = p.onLogout;
   return (
@@ -89,8 +84,7 @@ export function ClaimStatusSidebar(p: {
               <button
                 type="button"
                 onClick={() => {
-                  setActiveView("portal-selection");
-                  router.push("/portal");
+                  p.onDashboard();
                 }}
                 className={`flex w-full items-center gap-3 rounded-[1rem] px-3 py-2.5 text-left text-sm font-medium transition ${
                   activeView === "portal-selection"
@@ -104,8 +98,7 @@ export function ClaimStatusSidebar(p: {
               <button
                 type="button"
                 onClick={() => {
-                  setActiveView("outputs");
-                  void refreshWorkflowRuns();
+                  p.onOutputs();
                 }}
                 className={`flex w-full items-center gap-3 rounded-[1rem] px-3 py-2.5 text-left text-sm font-medium transition ${
                   activeView === "outputs"
@@ -135,7 +128,7 @@ export function ClaimStatusSidebar(p: {
                 <ShieldEllipsis className="h-4 w-4" strokeWidth={2} />
                 Reset Password
               </button>
-              {hasFullWorkflowAccess(authUser) && (
+              {p.hasFullAccess && (
                 <button
                   type="button"
                   onClick={openManageUsers}
@@ -159,4 +152,3 @@ export function ClaimStatusSidebar(p: {
           </aside>
   );
 }
-
