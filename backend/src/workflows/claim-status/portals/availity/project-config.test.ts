@@ -245,13 +245,15 @@ describe("Charm project config", () => {
     assert.equal(getOrganizationForRow("medrevenu", row), undefined);
   });
 
-  it("uses Charm provider mapping first and input provider as fallback", () => {
+  it("uses Charm Provider NPI then Provider Tax ID only", () => {
     const row: AvailityInputRow = {
       input_row_id: 1,
       source_row_number: 2,
       data: applyProjectColumnMapping("charm", {
         Group: "open mind",
         "Provider Name": "INPUT PROVIDER",
+        "Provider NPI": "1234567890",
+        "Provider Tax ID": "987654321",
       }),
     };
 
@@ -260,7 +262,7 @@ describe("Charm project config", () => {
       project: "charm",
       group: "open mind",
       providerName: "MAPPED PROVIDER",
-    }]), ["MAPPED PROVIDER", "INPUT PROVIDER"]);
+    }]), ["1234567890", "987654321"]);
   });
 
   it("normalizes named Charm DOB and service dates", () => {
@@ -273,13 +275,13 @@ describe("Charm project config", () => {
     assert.equal(mapped["Service Date"], "08/05/2026");
   });
 
-  it("uses Charm row Provider NPI before the practice provider mapping", () => {
+  it("uses Charm Provider Tax ID when Provider NPI is blank", () => {
     const row: AvailityInputRow = {
       input_row_id: 1,
       source_row_number: 2,
       data: applyProjectColumnMapping("charm", {
         Practice: "open mind",
-        "Provider NPI": "1234567890",
+        "Provider Tax ID": "987654321",
       }),
     };
 
@@ -288,10 +290,10 @@ describe("Charm project config", () => {
       project: "charm",
       group: "open mind",
       providerName: "MAPPED PROVIDER",
-    }]), ["1234567890"]);
+    }]), ["987654321"]);
   });
 
-  it("falls back to Charm input provider when provider mapping is missing", () => {
+  it("does not use Charm input provider name as provider fallback", () => {
     const row: AvailityInputRow = {
       input_row_id: 1,
       source_row_number: 2,
@@ -301,10 +303,13 @@ describe("Charm project config", () => {
       }),
     };
 
-    assert.deepEqual(getProviderOrderForRow("charm", row, []), ["INPUT PROVIDER"]);
+    assert.throws(
+      () => getProviderOrderForRow("charm", row, []),
+      /Provider NPI.*Provider Tax ID/,
+    );
   });
 
-  it("cleans bracketed Charm input provider before using provider fallback", () => {
+  it("does not use bracketed Charm input provider name as provider fallback", () => {
     const row: AvailityInputRow = {
       input_row_id: 1,
       source_row_number: 2,
@@ -314,6 +319,9 @@ describe("Charm project config", () => {
       }),
     };
 
-    assert.deepEqual(getProviderOrderForRow("charm", row, []), ["Jane Charlene"]);
+    assert.throws(
+      () => getProviderOrderForRow("charm", row, []),
+      /Provider NPI.*Provider Tax ID/,
+    );
   });
 });

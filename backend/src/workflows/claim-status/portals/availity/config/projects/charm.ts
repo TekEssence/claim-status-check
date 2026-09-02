@@ -56,12 +56,6 @@ export const charmAvailityConfig: AvailityProjectConfig = {
   },
   provider: {
     groupField: "Group",
-    values: {
-      "Open Mind": "OPEN MIND MENTAL HEALTH PHYSICIANS, INC.",
-      ICM: "Institute of Complementary Medicine",
-      "Feel Better": "FEEL BETTER BEHAVIORAL HEALTH SERVICES LLC",
-      Columbia: "Columbia River Natural Medicine, LLC",
-    },
     inputNameField: "Provider Name",
     inputNpiField: "Provider NPI",
     inputTaxIdField: "Provider Tax ID",

@@ -389,7 +389,10 @@ async function processValidRow(
     mappedPortalPayerName: selections.payer,
   });
   const providerOrder = getProviderOrderForRow(options.projectId, row, options.providerMappings);
-  const matchingPolicy = getMatchingPolicy(options.projectId, selections.payer);
+  const matchingPolicy = {
+    ...getMatchingPolicy(options.projectId, selections.payer),
+    fallbackProviderOnlyOnSelectionFailure: options.projectId === "charm",
+  };
   return workflow.processClaim(page, row, {
     providerOrder,
     matchingPolicy,

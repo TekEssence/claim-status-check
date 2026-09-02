@@ -329,6 +329,11 @@ export function getProviderOrderForRow(projectId: string, row: AvailityInputRow,
   const inputProviderTaxId = providerConfig.inputTaxIdField
     ? findRowValue(row, [providerConfig.inputTaxIdField])
     : "";
+  if (projectId === "charm") {
+    const identifierOrder = Array.from(new Set([inputProviderNpi, inputProviderTaxId].filter(Boolean)));
+    if (identifierOrder.length) return identifierOrder;
+    throw new Error(`${projectId} Availity rows require ${providerConfig.inputNpiField || "Provider NPI"} or ${providerConfig.inputTaxIdField || "Provider Tax ID"} to select the provider.`);
+  }
   if (inputProviderNpi) {
     return [inputProviderNpi];
   }
