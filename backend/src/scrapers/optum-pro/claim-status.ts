@@ -701,6 +701,8 @@ function emptyClaimResult(input: OptumProInputRow, fields: Partial<OptumProSearc
 }
 
 async function claimResultRows(page: Page) {
+  const currentRows = page.locator("tbody[data-cy='table-body'] tr[data-cy^='table-row-']:visible");
+  if ((await currentRows.count().catch(() => 0)) > 0) return currentRows;
   const primary = page.locator("tr[data-name='Claims-View-Details']:visible");
   if ((await primary.count().catch(() => 0)) > 0) return primary;
   const dataNameRows = page.locator("tbody tr:visible").filter({ has: page.locator("[data-name='Claims-View-Details']") });
@@ -797,7 +799,7 @@ async function claimDetailsOpenState(page: Page, timeout = 100): Promise<{
   detailsOpened: boolean;
 }> {
   const urlAfterClick = page.url();
-  const detailUrlMatched = urlAfterClick.includes("/claims-details");
+  const detailUrlMatched = urlAfterClick.includes("/claim-details");
   const detailSelectorMatched = await hasClaimDetailsPageSignals(page, timeout);
   const claimSearchResultsActive = await hasClaimSearchResultTable(page, timeout);
   return {
@@ -891,10 +893,13 @@ async function openClaimResultRowByIndex(
   const rows = await claimResultRows(page);
   const row = rows.nth(index);
   const text = (await row.innerText({ timeout: 1000 }).catch(() => "")).replace(/\s+/g, " ").trim();
-  const openTarget = row.locator("a, button, [role='button'], [data-name='Claims-View-Details']").filter({ hasNot: page.locator("input[type='checkbox']") }).first();
+  const claimNumberCell = row.locator("td").nth(1);
+  const legacyOpenTarget = row.locator("a, [data-name='Claims-View-Details']").first();
   await stageLog("info", "claim-search", `Clicked claim result row ${index + 1}: ${text || "(no row text)"}.`);
-  if (await openTarget.isVisible({ timeout: 1000 }).catch(() => false)) {
-    await openTarget.click();
+  if (await claimNumberCell.isVisible({ timeout: 1000 }).catch(() => false)) {
+    await claimNumberCell.click();
+  } else if (await legacyOpenTarget.isVisible({ timeout: 1000 }).catch(() => false)) {
+    await legacyOpenTarget.click();
   } else {
     await row.click();
   }
@@ -944,6 +949,11 @@ async function returnToClaimResults(page: Page): Promise<void> {
   const backButton = page.locator("button:has-text('Back')").first();
   if (await backButton.isVisible({ timeout: 3000 }).catch(() => false)) {
     await backButton.click();
+  } else {
+    const claimsBreadcrumb = page.getByText("Claims", { exact: true }).first();
+    if (await claimsBreadcrumb.isVisible({ timeout: 3000 }).catch(() => false)) {
+      await claimsBreadcrumb.click();
+    }
   }
   await page.locator("text=/Summary|Results? Found/i").first().waitFor({ state: "visible", timeout: 45000 }).catch(() => {});
   await claimResultRows(page).then((rows) => rows.first().waitFor({ state: "visible", timeout: 45000 })).catch(() => {});
@@ -1174,8 +1184,21 @@ async function saveOptumProPartialWorkbook(
   };
 }
 
+async function expandClaimDetailSections(page: Page): Promise<void> {
+  const sectionNames = ["Payment information", "Billing information", "Claim information", "Line level details"];
+  for (const sectionName of sectionNames) {
+    const trigger = page.locator("button.accordion-trigger").filter({ hasText: sectionName }).first();
+    if (!(await trigger.isVisible({ timeout: 5000 }).catch(() => false))) continue;
+    if ((await trigger.getAttribute("aria-expanded").catch(() => null)) !== "true") {
+      await trigger.click();
+      await waitForCondition(5000, 100, async () => (await trigger.getAttribute("aria-expanded").catch(() => null)) === "true");
+    }
+  }
+}
+
 async function extractClaimDetails(page: Page, row: OptumProInputRow): Promise<Partial<OptumProSearchResult>> {
   await acknowledgeFinancialInfoBanner(page);
+  await expandClaimDetailSections(page);
   const lineDetails = await extractMatchedLineDetails(page, row.cpt);
   const payeeId = await textAfterLabel(page, "Payee ID");
   const payeeName = await textAfterLabel(page, "Payee name");
