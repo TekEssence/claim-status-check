@@ -62,6 +62,13 @@ test("eligibility resolves Waystar without requiring a payer selection", () => {
   assert.equal(runner.name, "Waystar Eligibility Verification");
 });
 
+test("eligibility resolves MedRevenue Noridian independently", () => {
+  const runner = getAutomationRunner("eligibility-verification", "noridian");
+  assert.equal(runner.workflowId, "eligibility-verification");
+  assert.equal(runner.portalId, "noridian");
+  assert.equal(runner.name, "Noridian Eligibility Verification");
+});
+
 test("eligibility resolves Availity independently from claim status", () => {
   const runner = getAutomationRunner("eligibility-verification", "availity");
 

@@ -1,4 +1,5 @@
 import ExcelJS from "exceljs";
+import { credentialProjectMatches, type EligibilityProjectId } from "../../projects";
 
 export type UhcEligibilityCredentials = {
   loginUrl: string;
@@ -31,6 +32,7 @@ function findValue(row: Record<string, string>, aliases: string[]): string {
 
 export async function readUhcEligibilityCredentials(
   credentialFile: File,
+  projectId: EligibilityProjectId = "minimax",
 ): Promise<UhcEligibilityCredentials> {
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(await credentialFile.arrayBuffer());
@@ -49,7 +51,7 @@ export async function readUhcEligibilityCredentials(
       if (header) row[header] = asText(worksheetRow.getCell(column).value);
     });
 
-    if (normalize(findValue(row, ["Project"])) !== "tpm") continue;
+    if (!credentialProjectMatches(projectId, findValue(row, ["Project"]))) continue;
     if (normalize(findValue(row, ["Portal"])) !== "uhc") continue;
 
     const rawLoginUrl = findValue(row, ["Link", "URL", "Login URL", "Portal Link"]);
@@ -59,7 +61,7 @@ export async function readUhcEligibilityCredentials(
 
     if (!rawLoginUrl || !username || !password || !totpSecret) {
       throw new Error(
-        `The TPM UHC credential row ${rowNumber} must include Link, Username, Password, and Secret Key.`,
+        `The selected-project UHC credential row ${rowNumber} must include Link, Username, Password, and Secret Key.`,
       );
     }
 
@@ -72,6 +74,6 @@ export async function readUhcEligibilityCredentials(
   }
 
   throw new Error(
-    "Missing TPM UHC login details. The credential workbook must contain a row with Project TPM, Portal UHC, Link, Username, Password, and Secret Key.",
+    `Missing ${projectId === "minimax" ? "Minimax/TPM" : "MedRevenue"} UHC login details. The credential workbook Project column must match the selected project.`,
   );
 }

@@ -1,4 +1,5 @@
 import * as XLSX from "xlsx";
+import { credentialProjectMatches, type EligibilityProjectId } from "../../projects";
 
 export type WaystarSecurityQuestion = {
   username?: string;
@@ -73,8 +74,14 @@ export async function readWaystarCredentialProfiles(file: File): Promise<Waystar
 export function findWaystarCredentialsForPayer(
   credentials: WaystarCredentials[],
   payer: { id: string; name: string; portalPayerName: string; insuranceNameAliases: string[]; credentialProject?: string },
+  projectId: EligibilityProjectId = "minimax",
 ): WaystarCredentials | null {
-  const portalMatches = credentials.filter((entry) => (!entry.portal || normalizeHeader(entry.portal).includes("waystar")) && (!payer.credentialProject || normalizeHeader(entry.project ?? "") === normalizeHeader(payer.credentialProject)));
+  const projectCredentials = projectId === "minimax"
+    // Preserve every legacy Minimax project/group credential (including FL2
+    // and blank values) while explicitly excluding the new project boundary.
+    ? credentials.filter((entry) => !credentialProjectMatches("medrevenue", entry.project))
+    : credentials.filter((entry) => credentialProjectMatches(projectId, entry.project));
+  const portalMatches = projectCredentials.filter((entry) => (!entry.portal || normalizeHeader(entry.portal).includes("waystar")) && (projectId !== "minimax" || !payer.credentialProject || normalizeHeader(entry.project ?? "") === normalizeHeader(payer.credentialProject)));
   const exact = portalMatches.find((entry) => {
     const credentialPayer = normalizeHeader(entry.payer ?? "");
     if (!credentialPayer) return false;
@@ -86,7 +93,7 @@ export function findWaystarCredentialsForPayer(
   if (payer.credentialProject && portalMatches.length > 0) return portalMatches[0];
 
   const unscoped = portalMatches.filter((entry) => !entry.payer);
-  return credentials.length === 1 && unscoped.length === 1 ? unscoped[0] : null;
+  return projectCredentials.length === 1 && unscoped.length === 1 ? unscoped[0] : null;
 }
 
 function readVerificationSheet(workbook: XLSX.WorkBook): WaystarSecurityQuestion[] {

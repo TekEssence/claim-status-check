@@ -14,4 +14,5 @@ export const uhcEligibilityFrontendPortalConfig = {
     "United Healthcare Community Plan TX",
     "United Healthcare",
   ],
+  projects: ["minimax"] as const,
 } as const;

@@ -25,6 +25,7 @@ export type AutomationContext = {
   workflowId: WorkflowId;
   portalId: string;
   payerId?: string;
+  projectId?: string;
   log: (event: LogEvent) => Promise<void>;
   emit: (event: JobEvent) => Promise<void>;
   isCancelled?: () => boolean;

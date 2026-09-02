@@ -65,6 +65,7 @@ export type EligibilityResult = {
 export type EligibilityRunInput = {
   inputFile: File;
   credentialFile: File;
+  projectId: import("./projects").EligibilityProjectId;
 };
 
 export type EligibilityPayerBatch = {

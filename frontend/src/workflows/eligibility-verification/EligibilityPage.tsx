@@ -19,11 +19,12 @@ import {
   cancelAutomationJob,
   getCurrentAutomationJob,
   startAutomationJob,
+  submitAutomationJobInput,
   subscribeToAutomationJob,
 } from "../../api/automation-jobs-api";
 import {
-  eligibilityPortals,
   getEligibilityPortal,
+  getEligibilityPortalsForProject,
 } from "./registry";
 import type { ErrorScreenshot, JobProgressValue, ScrapeJobEvent } from "../../types/job";
 import { WaystarInputForm } from "./portals/waystar/WaystarInputForm";
@@ -33,6 +34,7 @@ import { UhcInputForm } from "./portals/uhc/UhcInputForm";
 import { getCognitoAccessToken, isCognitoMode, redirectToCognitoLogin, redirectToCognitoLogout, storeCognitoTokenFromHash } from "../../api/cognito-auth";
 import { ActiveWorkflowRunsPanel } from "../../components/workflow-runs/ActiveWorkflowRunsPanel";
 import { WorkflowOutputsPanel } from "../../components/workflow-runs/WorkflowOutputsPanel";
+import { NoridianInputForm } from "./portals/noridian/NoridianInputForm";
 
 type AuthUser = {
   username: string;
@@ -45,6 +47,21 @@ type DownloadArtifact = {
   base64: string;
   mimeType: string;
 };
+
+const eligibilityProjects = [
+  {
+    id: "minimax",
+    name: "Minimax",
+    description: "Uses all existing group mappings, credentials, and eligibility logic.",
+    configured: true,
+  },
+  {
+    id: "medrevenue",
+    name: "MedRevenue",
+    description: "Runs Medicare eligibility verification through the isolated Noridian workflow.",
+    configured: true,
+  },
+] as const;
 
 function downloadBase64File(filename: string, base64: string, mimeType: string): void {
   const binary = window.atob(base64);
@@ -66,6 +83,7 @@ export function EligibilityPage() {
   const [authLoading, setAuthLoading] = useState(true);
   const [inputFile, setInputFile] = useState<File | null>(null);
   const [credentialFile, setCredentialFile] = useState<File | null>(null);
+  const [projectId, setProjectId] = useState<"minimax" | "medrevenue">("minimax");
   const [jobId, setJobId] = useState("");
   const [status, setStatus] = useState("");
   const [logs, setLogs] = useState<string[]>([]);
@@ -76,13 +94,30 @@ export function EligibilityPage() {
   const [hasCompleted, setHasCompleted] = useState(false);
   const [isRunning, setIsRunning] = useState(false);
   const [showOutputs, setShowOutputs] = useState(false);
+  const [otpRequest, setOtpRequest] = useState<{ inputName: string; label: string; message: string } | null>(null);
+  const [otpValue, setOtpValue] = useState("");
   const streamController = useRef<AbortController | null>(null);
   const jobFailed = useRef(false);
 
   const heading = portal?.name ?? "Eligibility Verification";
-  const canStart = Boolean(portal && inputFile && credentialFile && !isRunning);
+  const canStart = Boolean(portal && projectId && inputFile && credentialFile && !isRunning);
+
+  function changeProject(nextProjectId: "minimax" | "medrevenue") {
+    if (nextProjectId === projectId || isRunning) return;
+    setProjectId(nextProjectId);
+    setInputFile(null);
+    setCredentialFile(null);
+    setStatus("");
+    setLogs([]);
+    setDownloads([]);
+    setResultRows([]);
+  }
 
   useEffect(() => {
+    const requestedProject = new URLSearchParams(window.location.search).get("project");
+    if (requestedProject === "minimax" || requestedProject === "medrevenue") {
+      window.queueMicrotask(() => setProjectId(requestedProject));
+    }
     if (isCognitoMode()) {
       const hasToken = storeCognitoTokenFromHash() || Boolean(getCognitoAccessToken());
       if (!hasToken) {
@@ -131,7 +166,11 @@ export function EligibilityPage() {
     if (event.type === "error_screenshot" && typeof event.image === "string" && event.image) {
       setErrorScreenshots((current) => [...current, { index: typeof event.index === "number" ? event.index : -1, image: event.image! }]);
     }
-    if ((event.type === "eligibility_availity_result" || event.type === "eligibility_uhc_result" || event.type === "eligibility_waystar_result") && event.update) {
+    if (event.type === "otp_request" && event.inputName) {
+      setOtpRequest({ inputName: event.inputName, label: event.label || "Verification code", message: event.message || "Enter the verification code." });
+      setStatus(event.message || "Enter the verification code.");
+    }
+    if ((event.type === "eligibility_availity_result" || event.type === "eligibility_uhc_result" || event.type === "eligibility_waystar_result" || event.type === "eligibility_noridian_result") && event.update) {
       const result = Object.fromEntries(
         Object.entries(event.update).map(([key, value]) => [key, value == null ? "" : String(value)]),
       );
@@ -170,6 +209,7 @@ export function EligibilityPage() {
     if (event.type === "done") {
       streamController.current?.abort();
       setIsRunning(false);
+      setOtpRequest(null);
       if (!jobFailed.current) {
         setHasCompleted(true);
         setStatus("Eligibility verification completed.");
@@ -193,6 +233,10 @@ export function EligibilityPage() {
     if (!user || !portal) return;
     void getCurrentAutomationJob({ workflowId: "eligibility-verification", portalId: portal.id }).then((job) => {
       if (!job) return;
+      const activeProjectId = job.metadata?.projectId;
+      if (activeProjectId === "minimax" || activeProjectId === "medrevenue") {
+        setProjectId(activeProjectId);
+      }
       setJobId(job.jobId);
       setLogs(job.logs.map((log) => log.message));
       setProgress({ completed: job.currentCompleted, total: job.totalItems });
@@ -219,6 +263,7 @@ export function EligibilityPage() {
       const formData = new FormData();
       formData.append("workflowId", "eligibility-verification");
       formData.append("portalId", portal.id);
+      formData.append("projectId", projectId);
       if (portal.id === "uhc") formData.append("payerId", "uhc-wellmed");
       formData.append("inputFile", inputFile);
       formData.append("credentialFile", credentialFile);
@@ -241,6 +286,18 @@ export function EligibilityPage() {
     }
   }
 
+  async function submitOtp() {
+    if (!jobId || !otpRequest || !otpValue.trim()) return;
+    try {
+      await submitAutomationJobInput({ jobId, inputName: otpRequest.inputName, value: otpValue.trim() });
+      setOtpRequest(null);
+      setOtpValue("");
+      setStatus("Noridian verification code submitted.");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Unable to submit the verification code.");
+    }
+  }
+
   async function logout() {
     if (isCognitoMode()) {
       redirectToCognitoLogout();
@@ -254,14 +311,14 @@ export function EligibilityPage() {
     return <main className="flex min-h-screen items-center justify-center bg-[radial-gradient(circle_at_top_left,_rgba(255,255,255,0.98)_0%,_rgba(240,246,255,0.98)_44%,_rgba(227,238,255,0.95)_100%)]"><LoaderCircle className="h-7 w-7 animate-spin text-blue-600" /></main>;
   }
 
-  const workflowStepIndex = hasCompleted ? 4 : isRunning ? 3 : inputFile && credentialFile ? 2 : credentialFile ? 1 : 0;
-  const workflowSteps = ["Upload Login File", "Upload Eligibility File", "Validate Files", "Processing", "Completed"];
+  const workflowStepIndex = hasCompleted ? 5 : isRunning ? 4 : inputFile && credentialFile ? 3 : credentialFile ? 2 : 1;
+  const workflowSteps = ["Select Project", "Upload Login File", "Upload Eligibility File", "Validate Files", "Processing", "Completed"];
 
   return (
     <main className="min-h-screen bg-[radial-gradient(circle_at_top_left,_rgba(255,255,255,0.98)_0%,_rgba(240,246,255,0.98)_44%,_rgba(227,238,255,0.95)_100%)] text-slate-900">
       <nav className="relative z-30 border-b border-sky-100/80 bg-white/80 px-4 py-4 shadow-[0_10px_35px_rgba(148,163,184,0.12)] backdrop-blur-xl">
         <div className="mx-auto flex max-w-6xl items-center justify-between gap-4">
-          <button type="button" onClick={() => router.push("/eligibility")} className="flex items-center gap-3 text-left">
+          <button type="button" onClick={() => router.push(`/eligibility?project=${projectId}`)} className="flex items-center gap-3 text-left">
             <span className="relative flex h-14 w-14 items-center justify-center overflow-hidden rounded-[1.15rem] border border-sky-200 bg-white shadow-[0_18px_36px_rgba(37,99,235,0.2)]">
               <Image src="/opus-logo-2.jpg" alt="OPUS logo" fill className="object-contain p-1" />
             </span>
@@ -272,7 +329,7 @@ export function EligibilityPage() {
           </button>
           <button
             type="button"
-            onClick={() => router.push(portal ? "/eligibility" : "/portal")}
+            onClick={() => router.push(portal ? `/eligibility?project=${projectId}` : "/portal")}
             className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
           >
             <ArrowLeft className="h-4 w-4" />
@@ -301,7 +358,7 @@ export function EligibilityPage() {
                 <FileSpreadsheet className="h-4 w-4" /> Outputs
               </button>
               {portal && (
-                <button type="button" disabled={isRunning} onClick={() => router.push("/eligibility")} className="flex w-full items-center gap-3 rounded-[1rem] px-3 py-2.5 text-left text-sm font-medium text-slate-600 transition hover:bg-sky-50 hover:text-slate-900 disabled:cursor-not-allowed disabled:text-slate-400">
+                <button type="button" disabled={isRunning} onClick={() => router.push(`/eligibility?project=${projectId}`)} className="flex w-full items-center gap-3 rounded-[1rem] px-3 py-2.5 text-left text-sm font-medium text-slate-600 transition hover:bg-sky-50 hover:text-slate-900 disabled:cursor-not-allowed disabled:text-slate-400">
                   <Activity className="h-4 w-4" /> Change Portal
                 </button>
               )}
@@ -315,12 +372,38 @@ export function EligibilityPage() {
             {showOutputs ? <WorkflowOutputsPanel workflowId="eligibility-verification" title="Eligibility Verification outputs" /> : !portal ? (
               <>
                 <div className="rounded-[1.7rem] border border-sky-100 bg-white/88 p-6 shadow-[0_16px_38px_rgba(148,163,184,0.12)]">
-                  <p className="text-[0.7rem] font-semibold uppercase tracking-[0.22em] text-sky-600">Portal Selection</p>
+                  <p className="text-[0.7rem] font-semibold uppercase tracking-[0.22em] text-sky-600">Project Selection</p>
                   <h1 className="mt-3 text-[1.9rem] font-semibold tracking-[-0.05em] text-slate-950">Eligibility Verification</h1>
-                  <p className="mt-2 text-sm text-slate-600">Choose a portal to begin member eligibility verification.</p>
+                  <p className="mt-2 text-sm text-slate-600">Choose a project, then open one of the portals available under that project.</p>
+                  <div className="mt-6 rounded-[1.2rem] border border-sky-100 bg-white/90 p-4">
+                    <p className="text-sm font-semibold text-slate-900">Select Project</p>
+                    <div className="mt-3 grid gap-3 md:grid-cols-2">
+                      {eligibilityProjects.map((project) => {
+                        const selected = projectId === project.id;
+                        return (
+                          <button
+                            key={project.id}
+                            type="button"
+                            onClick={() => changeProject(project.id)}
+                            className={`rounded-[1rem] border px-4 py-3 text-left transition ${selected ? "border-blue-400 bg-blue-50 text-blue-950 shadow-[0_12px_24px_rgba(37,99,235,0.12)]" : "border-sky-100 bg-slate-50/70 text-slate-700 hover:border-blue-200 hover:bg-blue-50/60"}`}
+                          >
+                            <span className="block text-sm font-semibold">{project.name}</span>
+                            <span className="mt-1 block text-xs leading-5 text-slate-500">{project.description}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                  <div className="mt-6 flex items-end justify-between gap-4">
+                    <div>
+                      <p className="text-[0.7rem] font-semibold uppercase tracking-[0.22em] text-sky-600">Portal Selection</p>
+                      <h2 className="mt-2 text-xl font-semibold text-slate-950">{projectId === "minimax" ? "Minimax" : "MedRevenue"} portals</h2>
+                    </div>
+                    <span className="rounded-full bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700">Project: {projectId === "minimax" ? "Minimax" : "MedRevenue"}</span>
+                  </div>
                   <div className="mt-6 grid gap-4 md:grid-cols-2">
-                    {eligibilityPortals.map((item) => (
-                      <button key={item.id} onClick={() => router.push(`/eligibility/${item.id}`)} className="rounded-[1.4rem] border border-sky-100 bg-white p-5 text-left shadow-[0_14px_30px_rgba(148,163,184,0.1)] transition hover:-translate-y-0.5 hover:border-blue-300">
+                    {getEligibilityPortalsForProject(projectId).map((item) => (
+                      <button key={item.id} onClick={() => router.push(`/eligibility/${item.id}?project=${projectId}`)} className="rounded-[1.4rem] border border-sky-100 bg-white p-5 text-left shadow-[0_14px_30px_rgba(148,163,184,0.1)] transition hover:-translate-y-0.5 hover:border-blue-300">
                         <div className="flex items-center justify-between">
                           <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-blue-50 text-blue-700"><Building2 className="h-5 w-5" /></span>
                           <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-1 text-[0.65rem] font-semibold text-emerald-600"><span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />Ready</span>
@@ -369,8 +452,29 @@ export function EligibilityPage() {
 
                 <div className="mt-5 rounded-[1.7rem] border border-sky-100 bg-white/92 p-5 shadow-[0_16px_38px_rgba(148,163,184,0.12)]">
                   <p className="mb-5 text-[0.7rem] font-semibold uppercase tracking-[0.22em] text-sky-600">Portal Workflow</p>
-                  {portal.id === "uhc" ? <UhcInputForm inputFile={inputFile} credentialFile={credentialFile} isRunning={isRunning} canStart={canStart} onInputFileChange={setInputFile} onCredentialFileChange={setCredentialFile} onSubmit={start} onCancel={cancel} /> : portal.id === "availity" ? <AvailityInputForm inputFile={inputFile} credentialFile={credentialFile} isRunning={isRunning} canStart={canStart} onInputFileChange={setInputFile} onCredentialFileChange={setCredentialFile} onSubmit={start} onCancel={cancel} /> : <WaystarInputForm inputFile={inputFile} credentialFile={credentialFile} isRunning={isRunning} canStart={canStart} onInputFileChange={setInputFile} onCredentialFileChange={setCredentialFile} onSubmit={start} onCancel={cancel} />}
+                  <div className="mb-5 rounded-[1.2rem] border border-sky-100 bg-white/90 p-4">
+                    <p className="text-sm font-semibold text-slate-900">Select Project</p>
+                    <div className="mt-3 grid gap-3 md:grid-cols-2">
+                      {eligibilityProjects.map((project) => {
+                        const selected = projectId === project.id;
+                        return (
+                          <button
+                            key={project.id}
+                            type="button"
+                            disabled={isRunning || !project.configured}
+                            onClick={() => changeProject(project.id)}
+                            className={`rounded-[1rem] border px-4 py-3 text-left transition ${selected ? "border-blue-400 bg-blue-50 text-blue-950 shadow-[0_12px_24px_rgba(37,99,235,0.12)]" : "border-sky-100 bg-slate-50/70 text-slate-700 hover:border-blue-200 hover:bg-blue-50/60"} disabled:cursor-not-allowed disabled:opacity-70`}
+                          >
+                            <span className="block text-sm font-semibold">{project.name}</span>
+                            <span className="mt-1 block text-xs leading-5 text-slate-500">{project.description}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                  {portal.id === "noridian" ? <NoridianInputForm inputFile={inputFile} credentialFile={credentialFile} isRunning={isRunning} canStart={canStart && projectId === "medrevenue"} onInputFileChange={setInputFile} onCredentialFileChange={setCredentialFile} onSubmit={start} onCancel={cancel} /> : portal.id === "uhc" ? <UhcInputForm inputFile={inputFile} credentialFile={credentialFile} isRunning={isRunning} canStart={canStart && projectId === "minimax"} onInputFileChange={setInputFile} onCredentialFileChange={setCredentialFile} onSubmit={start} onCancel={cancel} /> : portal.id === "availity" ? <AvailityInputForm inputFile={inputFile} credentialFile={credentialFile} isRunning={isRunning} canStart={canStart && projectId === "minimax"} onInputFileChange={setInputFile} onCredentialFileChange={setCredentialFile} onSubmit={start} onCancel={cancel} /> : <WaystarInputForm inputFile={inputFile} credentialFile={credentialFile} isRunning={isRunning} canStart={canStart && projectId === "minimax"} onInputFileChange={setInputFile} onCredentialFileChange={setCredentialFile} onSubmit={start} onCancel={cancel} />}
                 </div>
+                {otpRequest ? <div className="mt-5 rounded-[1.4rem] border border-amber-200 bg-amber-50 p-5"><p className="font-semibold text-slate-950">{otpRequest.label}</p><p className="mt-1 text-sm text-slate-600">{otpRequest.message}</p><div className="mt-3 flex gap-3"><input value={otpValue} onChange={(event) => setOtpValue(event.target.value)} className="min-w-0 flex-1 rounded-xl border border-amber-300 bg-white px-3 py-2 text-sm" placeholder="Enter code" /><button type="button" onClick={submitOtp} disabled={!otpValue.trim()} className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">Submit code</button></div></div> : null}
                 <div className="mt-5"><WaystarResultView status={status} logs={logs} errorScreenshots={errorScreenshots} progress={progress} downloads={downloads} resultRows={resultRows} onDownload={downloadBase64File} /></div>
               </>
             )}

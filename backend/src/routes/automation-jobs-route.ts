@@ -53,6 +53,7 @@ export async function POST(req: Request) {
     const workflowId = getRequiredString(formData, "workflowId");
     const portalId = getRequiredString(formData, "portalId");
     const payerId = getOptionalString(formData, "payerId");
+    const projectId = getOptionalString(formData, "projectId");
     if (!isAutomationWorkflowId(workflowId)) {
       return Response.json(
         { error: "Unsupported automation workflow." },
@@ -72,6 +73,7 @@ export async function POST(req: Request) {
       workflowId: automationWorkflowId,
       portalId,
       payerId,
+      metadata: projectId ? { projectId } : undefined,
       totalItems: getNumber(formData, "totalItems"),
       primaryInputFileName: inputFile?.name ?? "",
       credentialFileName: credentialFile?.name ?? "",
@@ -88,6 +90,7 @@ export async function POST(req: Request) {
       workflowId: automationWorkflowId,
       portalId,
       payerId,
+      projectId: projectId || undefined,
       emit: async (event) => emitScrapeJobEvent(job.id, event),
       log: async (event) => emitScrapeJobEvent(job.id, { type: "log", ...event }),
       isCancelled: () => {
@@ -117,7 +120,7 @@ export async function POST(req: Request) {
       scheduleTaskShutdownAfterWorkflow("eligibility-verification:failed");
     });
 
-    return Response.json({ jobId: job.id, workflowId: automationWorkflowId, portalId, payerId });
+    return Response.json({ jobId: job.id, workflowId: automationWorkflowId, portalId, payerId, projectId });
   } catch (error) {
     console.error("Start automation job failed", error);
     if (isAuthDbConnectionError(error)) {

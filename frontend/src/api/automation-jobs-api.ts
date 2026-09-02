@@ -23,6 +23,7 @@ export type AutomationJobSummary = {
   updatedAt: string;
   finishedAt: string | null;
   artifactCount: number;
+  metadata?: Record<string, unknown>;
 };
 
 type AutomationJobScope = Pick<AutomationJobSummary, "workflowId" | "portalId">;
@@ -79,6 +80,7 @@ export async function getCurrentAutomationJob(options: {
         createdAt: string;
         contentBase64?: string;
       }>;
+      metadata?: Record<string, unknown>;
     } | null;
     error?: string;
   };
