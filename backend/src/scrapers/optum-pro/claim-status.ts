@@ -831,7 +831,7 @@ async function closeClaimDetailsUnavailablePopup(page: Page): Promise<string> {
     return "";
   }
 
-  const popup = page.locator("text=/Claim details unavailable|claim details.*wasn.t found|claim details.*not.*found|details.*not.*available/i").first();
+  const popup = page.locator("[role='dialog']:has-text('Claim details unavailable'), [role='dialog']:has-text('Claim details not found')").first();
   if (!(await popup.isVisible({ timeout: 1500 }).catch(() => false))) return "";
   const message = (await popup.innerText({ timeout: 1000 }).catch(() => "")).replace(/\s+/g, " ").trim();
   const closeButton = page.locator(
@@ -843,7 +843,8 @@ async function closeClaimDetailsUnavailablePopup(page: Page): Promise<string> {
 }
 
 async function claimDetailsUnavailablePopupMessage(page: Page, timeout = 100): Promise<string> {
-  const popup = page.locator("text=/Claim details unavailable|claim details.*wasn.t found|claim details.*not.*found|details.*not.*available/i").first();
+  if (await hasConfirmedClaimDetailsPage(page, timeout)) return "";
+  const popup = page.locator("[role='dialog']:has-text('Claim details unavailable'), [role='dialog']:has-text('Claim details not found')").first();
   if (!(await popup.isVisible({ timeout }).catch(() => false))) return "";
   return (await popup.innerText({ timeout: 1000 }).catch(() => "")).replace(/\s+/g, " ").trim()
     || "Claim details unavailable popup was shown.";
@@ -1187,11 +1188,17 @@ async function saveOptumProPartialWorkbook(
 async function expandClaimDetailSections(page: Page): Promise<void> {
   const sectionNames = ["Payment information", "Billing information", "Claim information", "Line level details"];
   for (const sectionName of sectionNames) {
-    const trigger = page.locator("button.accordion-trigger").filter({ hasText: sectionName }).first();
-    if (!(await trigger.isVisible({ timeout: 5000 }).catch(() => false))) continue;
+    const trigger = page.getByRole("button", { name: sectionName, exact: true }).first();
+    await trigger.waitFor({ state: "visible", timeout: 10000 });
+    for (let attempt = 0; attempt < 3; attempt++) {
+      if ((await trigger.getAttribute("aria-expanded").catch(() => null)) === "true") break;
+      await trigger.scrollIntoViewIfNeeded().catch(() => {});
+      await trigger.click({ force: true });
+      const opened = await waitForCondition(2000, 100, async () => (await trigger.getAttribute("aria-expanded").catch(() => null)) === "true");
+      if (opened) break;
+    }
     if ((await trigger.getAttribute("aria-expanded").catch(() => null)) !== "true") {
-      await trigger.click();
-      await waitForCondition(5000, 100, async () => (await trigger.getAttribute("aria-expanded").catch(() => null)) === "true");
+      throw new Error(`Could not expand Claim Details section: ${sectionName}.`);
     }
   }
 }
@@ -1366,11 +1373,8 @@ async function extractMatchedLineDetails(page: Page, cpt: string): Promise<Parti
 }
 
 async function returnToClaimSearch(page: Page, stageLog: StageLog): Promise<Page> {
+  if (await fastClaimSearchReady(page, 500)) return page;
   const currentUrl = page.url();
-  if (currentUrl.includes("/claims-panel")) {
-    return page;
-  }
-
   if (currentUrl.includes("/dashboard")) {
     return openClaimsSearch(page, stageLog);
   }
@@ -1379,9 +1383,12 @@ async function returnToClaimSearch(page: Page, stageLog: StageLog): Promise<Page
     const backButton = page.locator("button:has-text('Back')").first();
     if (await backButton.isVisible({ timeout: 3000 }).catch(() => false)) {
       await backButton.click();
-      if (await fastClaimSearchReady(page, CLAIM_SEARCH_READY_TIMEOUT_MS)) {
-        return page;
-      }
+    } else {
+      const claimsBreadcrumb = page.getByText("Claims", { exact: true }).first();
+      if (await claimsBreadcrumb.isVisible({ timeout: 3000 }).catch(() => false)) await claimsBreadcrumb.click();
+    }
+    if (await fastClaimSearchReady(page, CLAIM_SEARCH_READY_TIMEOUT_MS)) {
+      return page;
     }
   }
 
@@ -1390,7 +1397,8 @@ async function returnToClaimSearch(page: Page, stageLog: StageLog): Promise<Page
 
 async function fastClaimSearchReady(page: Page, timeout = FAST_CLAIM_SEARCH_READY_TIMEOUT_MS, checkCancellation?: CancellationCheck): Promise<boolean> {
   return waitForCondition(timeout, 150, async () => {
-    if (!page.url().includes("/claims-panel")) return false;
+    if (page.url().includes("/claim-details")) return false;
+    if (await page.getByText("Select your CDO", { exact: true }).first().isVisible({ timeout: 100 }).catch(() => false)) return false;
     const claimSearchVisible = await page.locator("text=Claim Search").first().isVisible({ timeout: 100 }).catch(() => false);
     if (!claimSearchVisible) return false;
     const patientVisible = await page.locator(CLAIM_SEARCH_PATIENT_SELECTOR).first().isVisible({ timeout: 100 }).catch(() => false);
@@ -1749,12 +1757,19 @@ async function openClaimsSearchInFrame(rootPage: Page, stageLog: StageLog): Prom
   // it. Poll for both signals over a longer budget instead of taking one snapshot.
   let cdoModalVisible = false;
   let patientFieldAlreadyVisible = false;
+  let patientFieldFirstSeenAt: number | null = null;
   const detectionStartedAt = Date.now();
   while (Date.now() - detectionStartedAt < 45000) {
     cdoModalVisible = await cdoModal.isVisible({ timeout: 300 }).catch(() => false);
     if (cdoModalVisible) break;
     patientFieldAlreadyVisible = await patientFieldLocator.isVisible({ timeout: 300 }).catch(() => false);
-    if (patientFieldAlreadyVisible) break;
+    if (patientFieldAlreadyVisible) {
+      patientFieldFirstSeenAt ??= Date.now();
+      // The form renders before Optum's delayed CDO postMessage opens the modal.
+      // Give that modal a short grace period instead of treating the background
+      // patient input as proof that CDO selection has already completed.
+      if (Date.now() - patientFieldFirstSeenAt >= 5000) break;
+    }
     await scope.waitForTimeout(300);
   }
   if (!cdoModalVisible && !patientFieldAlreadyVisible) {
