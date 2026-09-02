@@ -617,20 +617,29 @@ async function setServiceDate(page: Page, dos: string, stageLog?: StageLog): Pro
     for (let index = 0; index < 2; index++) {
       const input = dateInputs.nth(index);
       await retryAfterBlockingPopup(page, stageLog, async () => {
-        await input.click();
-        await page.keyboard.press("Control+A");
-        await page.keyboard.press("Backspace");
-        await input.pressSequentially(normalizedDos, { delay: 45 });
+        await input.waitFor({ state: "visible", timeout: 30000 });
+        await input.fill("");
+        await input.fill(normalizedDos);
+        const enteredDate = await input.inputValue();
+        if (normalizeDate(enteredDate) !== normalizedDos) {
+          await input.selectText();
+          await input.pressSequentially(normalizedDos, { delay: 45 });
+        }
+        await input.press("Tab");
       });
     }
   } else {
     const dateRangeInput = dateInputs.first();
     await retryAfterBlockingPopup(page, stageLog, async () => {
       await dateRangeInput.waitFor({ state: "visible", timeout: 30000 });
-      await dateRangeInput.click();
-      await page.keyboard.press("Control+A");
-      await page.keyboard.press("Backspace");
-      await dateRangeInput.pressSequentially(`${normalizedDos} - ${normalizedDos}`, { delay: 45 });
+      const dateRange = `${normalizedDos} - ${normalizedDos}`;
+      await dateRangeInput.fill("");
+      await dateRangeInput.fill(dateRange);
+      if (!(await dateRangeInput.inputValue()).includes(normalizedDos)) {
+        await dateRangeInput.selectText();
+        await dateRangeInput.pressSequentially(dateRange, { delay: 45 });
+      }
+      await dateRangeInput.press("Tab");
     });
   }
   await page.waitForTimeout(250);
