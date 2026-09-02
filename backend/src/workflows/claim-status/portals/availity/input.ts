@@ -1,9 +1,17 @@
 import path from "node:path";
 import ExcelJS from "exceljs";
 import { applyProjectColumnMapping, applyProjectPreprocessing, getProjectInputHeaders, normalizeProjectId } from "./project-config";
-import type { AvailityCredentials, AvailityInput, AvailityInputRow } from "./types";
+import type { AvailityCredentials, AvailityInput } from "./types";
 
 const SUPPORTED_PAYER_PATTERN = /\b(aetna|anthem|blue\s*cross|blue\s*shield|bcbs|bcbstx|regence|carefirst|carelon|bhomd|wellpoint|wellcare|humana|central\s*health|health\s*net|healthnet|molina|providence|scan|triwest|tricare)\b/i;
+
+export function isRunnableAvailityPayerName(payerName: string): boolean {
+  return SUPPORTED_PAYER_PATTERN.test(asText(payerName));
+}
+
+export function unsupportedAvailityPayerMessage(payerName: string): string {
+  return `Payer "${payerName || "Unknown payer"}" is not supported now. This row was skipped.`;
+}
 
 function asText(value: unknown): string {
   if (value == null) return "";
@@ -102,17 +110,6 @@ function parseCredentials(rows: Record<string, string>[], projectId: string): Av
   );
 }
 
-function assertSupportedPayers(rows: AvailityInputRow[]): void {
-  const unsupported = rows
-    .map((row) => row.data["Payer Name"] || "")
-    .filter((payerName) => payerName && !SUPPORTED_PAYER_PATTERN.test(payerName));
-
-  if (unsupported.length) {
-    const unique = Array.from(new Set(unsupported)).slice(0, 5);
-    throw new Error(`Availity supports only Aetna, Anthem-CA, Blue Cross Blue Shield, Regence, Carelon Behavioral Health, Wellpoint, Wellcare, Humana, Central Health Medicare Plan, Health Net, Molina, Providence Health Plan, Scan Health, TRIWEST-TRICARE, and TRIWEST-VA CCN. Unsupported payer(s): ${unique.join(", ")}`);
-  }
-}
-
 export async function parseAvailityInput(formData: FormData): Promise<AvailityInput> {
   const credentialExcel = formData.get("credentialExcel");
   const inputExcel = formData.get("inputExcel");
@@ -137,8 +134,6 @@ export async function parseAvailityInput(formData: FormData): Promise<AvailityIn
   if (!inputRows.length) {
     throw new Error("Availity claim Excel file contains no rows.");
   }
-
-  assertSupportedPayers(inputRows);
 
   return {
     credentials: parseCredentials(credentialRows.rows, projectId),
