@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { Page } from "playwright-core";
+import type { Frame, Page } from "playwright-core";
 import * as XLSX from "xlsx";
 import { getJobDataPath } from "@/backend/src/core/storage";
 import type { ScraperContext } from "../../workflows/claim-status/types";
@@ -87,10 +87,10 @@ class OptumProStopRequestedError extends Error {
   }
 }
 
-const CLAIM_SEARCH_PATIENT_SELECTOR = "input[placeholder*='Subscriber ID'], input[placeholder*='Patient Name'], input[placeholder*='Date of Birth']";
-const CLAIM_SEARCH_MEDICAL_GROUP_SELECTOR = "input[placeholder*='Medical group'], input[placeholder*='Medical Group']";
+const CLAIM_SEARCH_PATIENT_SELECTOR = "input#patient-details, input[placeholder*='subscriber ID' i], input[placeholder*='patient name' i], input[placeholder*='DOB' i], input[placeholder*='Date of Birth' i]";
+const CLAIM_SEARCH_MEDICAL_GROUP_SELECTOR = "input[cmdk-input], input[placeholder*='medical group' i]";
 const CLAIM_SEARCH_DATE_SELECTOR = "input[placeholder*='MM/DD/YYYY']:visible";
-const CLAIM_SEARCH_ACTION_SELECTOR = "button:has-text('Search'):visible, button:has-text('Clear all'):visible";
+const CLAIM_SEARCH_ACTION_SELECTOR = "button:has-text('Search'):visible, button:has-text('Clear search'):visible";
 const CLAIM_SEARCH_READY_TIMEOUT_MS = 45000;
 const FAST_CLAIM_SEARCH_READY_TIMEOUT_MS = 1500;
 const CLEAR_FORM_CLICK_TIMEOUT_MS = 2000;
@@ -162,6 +162,88 @@ function downloadableWorkbookEvent(filename: string, content: Buffer): Record<st
 function isTimeoutError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return /timeout|timed out/i.test(message);
+}
+
+function isFrameDetachedError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /frame was detached/i.test(message);
+}
+
+/**
+ * Optum recently moved the entire Claims experience (the "Select your CDO"
+ * modal, Claim Search form, results table, and claim details) into a child
+ * iframe (src contains "claims-ui") that talks to the OCNP shell via
+ * postMessage. Playwright's `page.locator()` / `page.evaluate()` only search
+ * the top-level frame by default, so every locator in this file would
+ * silently find nothing once that iframe is in play — which is exactly why
+ * automation was hanging on the Subscriber ID field despite the CDO modal
+ * being visible on screen.
+ *
+ * Rather than threading a `Frame` type through every function in this file
+ * (~60 call sites), `createClaimsScope` builds a Proxy that looks like a
+ * `Page` to the rest of the code: locator/getByText/evaluate/waitForFunction/
+ * waitForTimeout/url all delegate to the resolved claims-ui `Frame` (so they
+ * search the right DOM), while `keyboard`/`mouse` delegate to the real
+ * top-level `Page` (since those dispatch OS-level input events that work
+ * regardless of which frame currently has focus). Everything downstream
+ * keeps using `page.locator(...)` etc. exactly as before and just works.
+ */
+const CLAIMS_SCOPE_ROOT_PAGE = Symbol("optumProClaimsScopeRootPage");
+
+/**
+ * Optum's OCNP shell doesn't just mount the `claims-ui` iframe once and leave
+ * it alone: after the CDO navigation context is posted into it
+ * (`SET_NAVIGATION_CONTEXT`), the shell frequently tears the iframe down and
+ * re-navigates it to the same URL, which aborts every in-flight chunk request
+ * for the old document ("net::ERR_ABORTED") and detaches the `Frame` object
+ * Playwright had already handed back. Grabbing the *first* frame whose URL
+ * matches "claims-ui" and immediately returning it is therefore a race: the
+ * frame can be replaced a few hundred ms later, and every locator built on
+ * top of the stale `Frame` then fails with "Frame was detached".
+ *
+ * To avoid handing back a frame that's mid-teardown, this waits for the
+ * frame to be attached AND to have reached "load" (not just
+ * "domcontentloaded", which can fire right before the abort/remount). If the
+ * frame detaches while we're waiting on it, we don't throw — we just loop
+ * around and pick up whatever frame replaces it.
+ */
+async function resolveClaimsFrame(rootPage: Page, stageLog?: StageLog, timeout = 30000): Promise<Frame> {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeout) {
+    const claimsFrame = rootPage.frames().find((candidate) => /claims-ui/i.test(candidate.url()) && !candidate.isDetached());
+    if (claimsFrame) {
+      const settled = await claimsFrame
+        .waitForLoadState("load", { timeout: 5000 })
+        .then(() => !claimsFrame.isDetached())
+        .catch(() => false);
+      if (settled) {
+        await stageLog?.("info", "claim-navigation", `Optum Pro claims-ui iframe settled at ${claimsFrame.url()}.`);
+        return claimsFrame;
+      }
+      await stageLog?.("info", "claim-navigation", "Optum Pro claims-ui iframe was replaced while settling; re-resolving.");
+    }
+    await rootPage.waitForTimeout(300);
+  }
+  throw new Error("Timed out waiting for the Optum Pro claims-ui iframe to appear.");
+}
+
+function createClaimsScope(rootPage: Page, frame: Frame): Page {
+  const handler: ProxyHandler<Record<PropertyKey, unknown>> = {
+    get(_target, prop) {
+      if (prop === CLAIMS_SCOPE_ROOT_PAGE) return rootPage;
+      if (prop === "keyboard" || prop === "mouse" || prop === "touchscreen") {
+        return (rootPage as unknown as Record<PropertyKey, unknown>)[prop as string];
+      }
+      const value = (frame as unknown as Record<PropertyKey, unknown>)[prop as string];
+      return typeof value === "function" ? value.bind(frame) : value;
+    },
+  };
+  return new Proxy({}, handler) as unknown as Page;
+}
+
+function rootPageOf(page: Page): Page {
+  const maybeRoot = (page as unknown as Record<PropertyKey, unknown>)[CLAIMS_SCOPE_ROOT_PAGE];
+  return (maybeRoot as Page | undefined) ?? page;
 }
 
 async function dismissOptumBlockingPopups(page: Page, stageLog?: StageLog): Promise<boolean> {
@@ -286,13 +368,20 @@ function patientNameMatches(candidate: string, wanted: string): boolean {
   return Boolean(candidateName && wantedName && (candidateName === wantedName || candidateName.includes(wantedName) || wantedName.includes(candidateName)));
 }
 
+function patientDropdownRowLocator(page: Page) {
+  const dropdown = page
+    .locator("div.absolute.left-0.right-0.top-full:visible")
+    .filter({ has: page.getByText("Subscriber ID", { exact: true }) });
+  return dropdown.locator("div.max-h-60.overflow-y-auto > div.grid.grid-cols-3");
+}
+
 async function patientDropdownRows(page: Page): Promise<PatientDropdownRow[]> {
-  const rows = page.locator("tbody tr:visible");
+  const rows = patientDropdownRowLocator(page);
   const count = await rows.count().catch(() => 0);
   const values: PatientDropdownRow[] = [];
   for (let index = 0; index < count; index++) {
     const row = rows.nth(index);
-    const cells = await row.locator("td").allInnerTexts().catch(() => []);
+    const cells = await row.locator(":scope > div").allInnerTexts().catch(() => []);
     const text = (await row.innerText({ timeout: 1000 }).catch(() => "")).replace(/\s+/g, " ").trim();
     const subscriberId = (cells[0] || "").replace(/\s+/g, " ").trim();
     const patientName = (cells[1] || "").replace(/\s+/g, " ").trim();
@@ -326,7 +415,7 @@ async function selectPatient(page: Page, row: OptumProInputRow, mode: PatientSel
     const blankSubscriberMatch = samePatientRows.find((candidate) => !candidate.subscriberId);
     const duplicateSamePatientRows = samePatientRows.length >= 2;
 
-    const visibleDropdownRows = await visibleRows(page);
+    const visibleDropdownRows = parsedRows.map(({ index, text }) => ({ index, text }));
     const looseMatch = bestPatientRow(visibleDropdownRows, row.patient)
       ?? visibleDropdownRows.find((candidate) => normalize(candidate.text).includes(normalize(memberId)));
 
@@ -339,7 +428,7 @@ async function selectPatient(page: Page, row: OptumProInputRow, mode: PatientSel
           : exactSubscriberMatch ?? blankSubscriberMatch;
 
     if (match) {
-      await clickWithBlockingPopupRetry(page, stageLog, () => page.locator("tbody tr:visible").nth(match.index).click());
+      await clickWithBlockingPopupRetry(page, stageLog, () => patientDropdownRowLocator(page).nth(match.index).click());
       await page.waitForTimeout(300);
       return {
         text: match.text,
@@ -396,7 +485,14 @@ function medicalGroupFallbackSearches(medicalGroupName: string): string[] {
 }
 
 function medicalGroupOptions(page: Page) {
-  return page.locator("mat-option:visible, [role='option']:visible, li:visible, .dropdown-option:visible");
+  // Medical group is a cmdk combobox, structurally identical to the date-type
+  // field (`selectDateTypeOption`): options are rendered as
+  // `<div cmdk-item="" role="option" data-value="NAME EIN">NAME EIN</div>`
+  // inside a portal-rendered `[role="dialog"]` > `[cmdk-list]`. The dropdown
+  // closes on blur/outside interaction like any Radix Popover, so callers
+  // must not do anything that moves focus away between filling the input and
+  // reading/clicking these options.
+  return page.locator("[role='option'][cmdk-item]:visible");
 }
 
 async function waitForStableMedicalGroupOptions(page: Page): Promise<void> {
@@ -467,16 +563,53 @@ function medicalGroupOptionScore(optionText: string, targetWords: string[]): num
   return score;
 }
 
+/**
+ * Optum's "Date type" field used to be a native <select>, which
+ * `setServiceDate` handled via `selectOption({ label })`. It's now a
+ * Radix/cmdk combobox: clicking `button#date-type` opens a portal-rendered
+ * `[role="dialog"]` containing a `cmdk-list` of `[role="option"][cmdk-item]`
+ * divs ("Service date" / "Processed date"). There's no native <select>
+ * anywhere on the page anymore, so the old logic silently found nothing and
+ * no-opped — this is the replacement.
+ *
+ * The field is disabled until Patient details or Medical group name has a
+ * value, so this is a no-op (with a log line) if the button is still
+ * disabled when called; callers are expected to have already filled one of
+ * those fields first.
+ */
+async function selectDateTypeOption(page: Page, optionLabel: string, stageLog?: StageLog): Promise<void> {
+  const dateTypeButton = page.locator("#date-type");
+  if (!(await dateTypeButton.isVisible({ timeout: 5000 }).catch(() => false))) {
+    await stageLog?.("warn", "claim-search", "Date type button not visible; skipping date type selection.");
+    return;
+  }
+
+  const isDisabled = await dateTypeButton.getAttribute("disabled").then((value) => value !== null).catch(() => false);
+  if (isDisabled) {
+    await stageLog?.("warn", "claim-search", "Date type button is disabled (patient/medical group not yet filled); skipping date type selection.");
+    return;
+  }
+
+  await retryAfterBlockingPopup(page, stageLog, async () => {
+    await dateTypeButton.click();
+  });
+
+  const option = page.locator("[role='option'][cmdk-item]").filter({ hasText: optionLabel }).first();
+  const optionAppeared = await option.waitFor({ state: "visible", timeout: 5000 }).then(() => true).catch(() => false);
+  if (!optionAppeared) {
+    await stageLog?.("warn", "claim-search", `Date type option "${optionLabel}" did not appear; closing dropdown without selecting.`);
+    await page.keyboard.press("Escape").catch(() => {});
+    return;
+  }
+
+  await clickWithBlockingPopupRetry(page, stageLog, () => option.click());
+  // cmdk closes its own popover on select; this is just a safety net in case it doesn't.
+  await page.keyboard.press("Escape").catch(() => {});
+}
+
 async function setServiceDate(page: Page, dos: string, stageLog?: StageLog): Promise<void> {
   const normalizedDos = normalizeDate(dos);
-  const dateType = page.locator("select").first();
-  if (await dateType.isVisible({ timeout: 1000 }).catch(() => false)) {
-    const options = await dateType.locator("option").allTextContents().catch(() => []);
-    const serviceDateLabel = options.find((option) => /service date/i.test(option));
-    if (serviceDateLabel) {
-      await dateType.selectOption({ label: serviceDateLabel }).catch(() => {});
-    }
-  }
+  await selectDateTypeOption(page, "Service date", stageLog);
 
   const dateInputs = page.locator("input[placeholder*='MM/DD/YYYY']:visible");
   const dateInputCount = await dateInputs.count().catch(() => 0);
@@ -1200,15 +1333,14 @@ async function extractMatchedLineDetails(page: Page, cpt: string): Promise<Parti
   }, cpt).catch(() => ({}));
 }
 
-async function returnToClaimSearch(page: Page, stageLog: StageLog): Promise<void> {
+async function returnToClaimSearch(page: Page, stageLog: StageLog): Promise<Page> {
   const currentUrl = page.url();
   if (currentUrl.includes("/claims-panel")) {
-    return;
+    return page;
   }
 
   if (currentUrl.includes("/dashboard")) {
-    await openClaimsSearch(page, stageLog);
-    return;
+    return openClaimsSearch(page, stageLog);
   }
 
   if (await hasClaimDetailsPageSignals(page, 300)) {
@@ -1216,12 +1348,12 @@ async function returnToClaimSearch(page: Page, stageLog: StageLog): Promise<void
     if (await backButton.isVisible({ timeout: 3000 }).catch(() => false)) {
       await backButton.click();
       if (await fastClaimSearchReady(page, CLAIM_SEARCH_READY_TIMEOUT_MS)) {
-        return;
+        return page;
       }
     }
   }
 
-  await openClaimsSearch(page, stageLog);
+  return openClaimsSearch(page, stageLog);
 }
 
 async function fastClaimSearchReady(page: Page, timeout = FAST_CLAIM_SEARCH_READY_TIMEOUT_MS, checkCancellation?: CancellationCheck): Promise<boolean> {
@@ -1251,7 +1383,7 @@ async function dismissClaimSearchOverlays(page: Page): Promise<void> {
 }
 
 async function clearClaimSearchFormIfVisible(page: Page): Promise<boolean> {
-  const clearButton = page.locator("button:has-text('Clear all')").first();
+  const clearButton = page.locator("button:has-text('Clear search')").first();
   if (!(await clearButton.isVisible({ timeout: 500 }).catch(() => false))) return false;
   const clicked = await clearButton.click({ timeout: CLEAR_FORM_CLICK_TIMEOUT_MS })
     .then(() => true)
@@ -1270,27 +1402,29 @@ async function resetClaimSearchPage(
   reason: string,
   timingLog?: RowTimingLog,
   timingLabelPrefix = "",
-): Promise<void> {
+): Promise<Page> {
   const ensureStartedAt = Date.now();
   await dismissClaimSearchOverlays(page);
 
-  if (!(await fastClaimSearchReady(page))) {
+  let currentPage = page;
+  if (!(await fastClaimSearchReady(currentPage))) {
     await stageLog("info", "claim-search", `Resetting Optum Pro Claim Search page ${reason}.`);
-    await returnToClaimSearch(page, stageLog).catch(async (returnError) => {
+    currentPage = await returnToClaimSearch(currentPage, stageLog).catch(async (returnError) => {
       await stageLog("warn", "claim-search", `Could not return to Claim Search with state-driven navigation: ${returnError instanceof Error ? returnError.message : String(returnError)}`);
-      await openClaimsSearch(page, stageLog);
+      return openClaimsSearch(currentPage, stageLog);
     });
   }
 
-  if (!(await fastClaimSearchReady(page))) {
-    await openClaimsSearch(page, stageLog);
+  if (!(await fastClaimSearchReady(currentPage))) {
+    currentPage = await openClaimsSearch(currentPage, stageLog);
   }
   await timingLog?.(`${timingLabelPrefix}ensureClaimSearchReady`, ensureStartedAt);
 
   const formReadyStartedAt = Date.now();
-  await clearClaimSearchFormIfVisible(page).catch(() => {});
-  await waitForClaimSearchFormControls(page);
+  await clearClaimSearchFormIfVisible(currentPage).catch(() => {});
+  await waitForClaimSearchFormControls(currentPage);
   await timingLog?.(`${timingLabelPrefix}claimSearchFormReady`, formReadyStartedAt);
+  return currentPage;
 }
 
 async function cleanupClaimSearchAfterRow(
@@ -1298,17 +1432,16 @@ async function cleanupClaimSearchAfterRow(
   stageLog: StageLog,
   reason: string,
   timingLog?: RowTimingLog,
-): Promise<boolean> {
+): Promise<Page> {
   await dismissClaimSearchOverlays(page);
   await clearClaimSearchFormIfVisible(page).catch(() => {});
   if (await fastClaimSearchReady(page)) {
     await stageLog("info", "claim-search", `Fast cleanup passed ${reason}.`);
-    return true;
+    return page;
   }
 
   await stageLog("info", "claim-search", `Heavy Claim Search reset used ${reason}.`);
-  await resetClaimSearchPage(page, stageLog, reason, timingLog, "cleanup.");
-  return fastClaimSearchReady(page);
+  return resetClaimSearchPage(page, stageLog, reason, timingLog, "cleanup.");
 }
 
 async function searchWithSelectedPatient(
@@ -1437,28 +1570,201 @@ async function searchClaimRow(page: Page, row: OptumProInputRow, stageLog: Stage
   return searchWithSelectedPatient(page, row, blankSubscriberPatient.text, stageLog, timingLog, checkCancellation);
 }
 
-async function openClaimsSearch(page: Page, stageLog: StageLog): Promise<void> {
-  await stageLog("info", "claim-navigation", "Opening Optum Pro Claims menu.");
-  await page.locator("text=/Optum Pro portal|Hello,/i").first().waitFor({ state: "visible", timeout: 60000 }).catch(() => {});
-  await clickWithBlockingPopupRetry(page, stageLog, () => page.locator("button:has-text('Claims'), a:has-text('Claims'), [role='button']:has-text('Claims')").first().click());
+/**
+ * Finds an element whose own (direct) text content exactly matches `label`,
+ * then walks up its ancestor chain looking for the nearest element that
+ * actually behaves like a clickable card (pointer cursor, button role,
+ * onclick handler, or an icon/arrow rendered inside it) and clicks it.
+ *
+ * This is deliberately structure-agnostic: Optum has changed the CDO
+ * selection modal's markup more than once (mat-dialog + ecp-ucl-card,
+ * then a plain "Select your CDO" modal with div-based cards), and a
+ * hard-coded selector breaks every time the markup shifts. Walking up
+ * from the text node to the nearest clickable ancestor survives those
+ * markup changes.
+ */
+async function clickCardByExactText(page: Page, label: string): Promise<boolean> {
+  return page
+    .evaluate((targetLabel) => {
+      const clean = (value: string | null | undefined) => (value || "").replace(/\s+/g, " ").trim();
+      const isVisible = (element: Element) => {
+        const style = window.getComputedStyle(element);
+        const rect = element.getBoundingClientRect();
+        return style.visibility !== "hidden" && style.display !== "none" && rect.width > 0 && rect.height > 0;
+      };
 
-  const nammOption = page.locator("text=NAMM").first();
-  const nammCard = page.locator("mat-dialog-container ecp-ucl-card:has-text('NAMM'), mat-dialog-container [class*='card']:has-text('NAMM')").first();
-  if (await nammCard.isVisible({ timeout: 10000 }).catch(() => false)) {
-    await stageLog("info", "claim-navigation", "Selecting NAMM CDO card.");
-    await clickWithBlockingPopupRetry(page, stageLog, () => nammCard.click());
-  } else if (await nammOption.isVisible({ timeout: 10000 }).catch(() => false)) {
-    await stageLog("info", "claim-navigation", "Selecting NAMM CDO.");
-    await clickWithBlockingPopupRetry(page, stageLog, () => nammOption.click());
+      const allElements = Array.from(document.querySelectorAll<HTMLElement>("body *"));
+      const candidates = allElements.filter((element) => {
+        if (!isVisible(element)) return false;
+        const ownText = Array.from(element.childNodes)
+          .filter((node) => node.nodeType === Node.TEXT_NODE)
+          .map((node) => clean(node.textContent))
+          .join(" ");
+        return ownText === targetLabel;
+      });
+
+      const isNativeInteractive = (node: HTMLElement): boolean =>
+        node.tagName === "BUTTON" ||
+        node.tagName === "A" ||
+        node.getAttribute("role") === "button" ||
+        node.hasAttribute("onclick");
+
+      // shadcn/ui's default Card renders "rounded-lg ... border ... shadow-sm"; the CDO
+      // option cards on this modal follow that pattern, so matching both class fragments
+      // reliably identifies the card wrapper without depending on any specific hash suffix.
+      const looksLikeCardContainer = (node: HTMLElement): boolean => {
+        const className = typeof node.className === "string" ? node.className : "";
+        return /rounded(-[a-z0-9]+)?/i.test(className) && /border/i.test(className);
+      };
+
+      const hasIconChild = (node: HTMLElement): boolean =>
+        Boolean(node.querySelector("svg, [class*='arrow'], [class*='icon']"));
+
+      for (const candidate of candidates) {
+        // Pass 1: a genuinely interactive ancestor (button/link/role=button/onclick attr).
+        // This is checked first because it's the only unambiguous signal.
+        let node: HTMLElement | null = candidate;
+        for (let depth = 0; depth < 8 && node; depth++) {
+          if (isNativeInteractive(node)) {
+            node.click();
+            return true;
+          }
+          node = node.parentElement;
+        }
+
+        // Pass 2: a card-shaped container (rounded + bordered) that also holds an icon —
+        // matches the "Select your CDO" option cards. `node !== candidate` skips the text
+        // element itself; without that guard, `cursor: pointer` inherited down from some
+        // far-off ancestor makes a bare <p>/<span> falsely look clickable (the original bug).
+        node = candidate;
+        for (let depth = 0; depth < 8 && node; depth++) {
+          if (node !== candidate && looksLikeCardContainer(node) && hasIconChild(node)) {
+            node.click();
+            return true;
+          }
+          node = node.parentElement;
+        }
+
+        // Pass 3: fall back to the nearest ancestor with an icon/arrow child at all,
+        // still skipping the text node itself.
+        node = candidate;
+        for (let depth = 0; depth < 8 && node; depth++) {
+          if (node !== candidate && hasIconChild(node)) {
+            node.click();
+            return true;
+          }
+          node = node.parentElement;
+        }
+      }
+
+      if (candidates[0]) {
+        candidates[0].click();
+        return true;
+      }
+      return false;
+    }, label)
+    .catch(() => false);
+}
+
+/**
+ * Optum can remount the `claims-ui` iframe at any point during this
+ * sequence — not just before `resolveClaimsFrame` returns, but also mid-CDO
+ * click or while waiting for the Claim Search form to appear (see the
+ * `resolveClaimsFrame` doc comment above). Rather than defensively wrapping
+ * every intermediate `waitFor` inside `openClaimsSearchInFrame`, this outer
+ * function catches a "Frame was detached" error from anywhere in that
+ * sequence and simply re-runs the whole "resolve frame → CDO → wait for
+ * form" flow once, which naturally re-resolves against whatever frame
+ * Optum has settled on by then.
+ */
+async function openClaimsSearch(pageOrScope: Page, stageLog: StageLog): Promise<Page> {
+  const rootPage = rootPageOf(pageOrScope);
+  await stageLog("info", "claim-navigation", "Opening Optum Pro Claims menu.");
+  await rootPage.locator("text=/Optum Pro portal|Hello,/i").first().waitFor({ state: "visible", timeout: 60000 }).catch(() => {});
+  await clickWithBlockingPopupRetry(rootPage, stageLog, () => rootPage.locator("button:has-text('Claims'), a:has-text('Claims'), [role='button']:has-text('Claims')").first().click());
+
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      return await openClaimsSearchInFrame(rootPage, stageLog);
+    } catch (error) {
+      if (attempt === 2 || !isFrameDetachedError(error)) throw error;
+      await stageLog("warn", "claim-navigation", "Optum Pro claims-ui iframe was replaced mid-navigation; re-resolving and retrying.");
+    }
+  }
+  throw new Error("Unreachable: openClaimsSearch retry loop exited without returning or throwing.");
+}
+
+async function openClaimsSearchInFrame(rootPage: Page, stageLog: StageLog): Promise<Page> {
+  const claimsFrame = await resolveClaimsFrame(rootPage, stageLog).catch(async (error) => {
+    await stageLog("warn", "claim-navigation", `Could not detect the Optum Pro claims-ui iframe; falling back to top-level page. (${error instanceof Error ? error.message : String(error)})`);
+    return null;
+  });
+  const scope = claimsFrame ? createClaimsScope(rootPage, claimsFrame) : rootPage;
+  if (claimsFrame) {
+    await stageLog("info", "claim-navigation", `Detected Optum Pro claims-ui iframe at ${claimsFrame.url()}.`);
   }
 
-  await page.locator("text=Claim Search").first().waitFor({ state: "visible", timeout: 60000 });
-  await page.locator(CLAIM_SEARCH_PATIENT_SELECTOR).first().waitFor({ state: "visible", timeout: 60000 });
-  if (!INITIAL_FEEDBACK_DISMISS_CHECKED.has(page)) {
-    INITIAL_FEEDBACK_DISMISS_CHECKED.add(page);
-    await dismissOptumBlockingPopups(page, stageLog);
+  const cdoModal = scope.locator("text=/Select your CDO/i").first();
+  const patientFieldLocator = scope.locator(CLAIM_SEARCH_PATIENT_SELECTOR).first();
+
+  // A single point-in-time `isVisible({ timeout: 15000 })` check races against the
+  // claims-ui app's post-remount startup sequence (SET_NAVIGATION_CONTEXT ->
+  // CLAIMS_OPEN_CLICK -> "Auto-opening CDO modal" postMessage round-trip), which can
+  // easily take longer than 15s right after the iframe was torn down and re-resolved.
+  // If that check loses the race, `cdoModalVisible` comes back false, the NAMM-click
+  // block below is skipped entirely, and the code falls straight through to a 60s wait
+  // on the patient field — which never appears because the CDO modal is still covering
+  // it. Poll for both signals over a longer budget instead of taking one snapshot.
+  let cdoModalVisible = false;
+  let patientFieldAlreadyVisible = false;
+  const detectionStartedAt = Date.now();
+  while (Date.now() - detectionStartedAt < 45000) {
+    cdoModalVisible = await cdoModal.isVisible({ timeout: 300 }).catch(() => false);
+    if (cdoModalVisible) break;
+    patientFieldAlreadyVisible = await patientFieldLocator.isVisible({ timeout: 300 }).catch(() => false);
+    if (patientFieldAlreadyVisible) break;
+    await scope.waitForTimeout(300);
+  }
+  if (!cdoModalVisible && !patientFieldAlreadyVisible) {
+    await stageLog("warn", "claim-navigation", "Neither the CDO modal nor the Claim Search patient field appeared within 45s after the claims-ui iframe settled; proceeding to the final wait as a last resort.");
+  }
+
+  if (cdoModalVisible) {
+    await stageLog("info", "claim-navigation", "CDO selection modal detected; selecting NAMM.");
+
+    let nammClicked = false;
+    for (let attempt = 1; attempt <= 3 && !nammClicked; attempt++) {
+      nammClicked = await clickCardByExactText(scope, "NAMM");
+      if (!nammClicked) {
+        await scope.waitForTimeout(1000);
+      }
+    }
+
+    if (!nammClicked) {
+      await stageLog("warn", "claim-navigation", "Generic NAMM card click failed; trying direct locator fallback.");
+      const nammOption = scope.getByText("NAMM", { exact: true }).first();
+      if (await nammOption.isVisible({ timeout: 5000 }).catch(() => false)) {
+        await clickWithBlockingPopupRetry(scope, stageLog, () => nammOption.click({ force: true }));
+        nammClicked = true;
+      }
+    }
+
+    if (!nammClicked) {
+      await stageLog("error", "claim-navigation", "Could not click NAMM in the 'Select your CDO' modal.");
+    } else {
+      await cdoModal.waitFor({ state: "hidden", timeout: 30000 }).catch(async () => {
+        await stageLog("warn", "claim-navigation", "'Select your CDO' modal did not close within 30s after clicking NAMM.");
+      });
+    }
+  }
+
+  await scope.locator(CLAIM_SEARCH_PATIENT_SELECTOR).first().waitFor({ state: "visible", timeout: 60000 });
+  if (!INITIAL_FEEDBACK_DISMISS_CHECKED.has(rootPage)) {
+    INITIAL_FEEDBACK_DISMISS_CHECKED.add(rootPage);
+    await dismissOptumBlockingPopups(scope, stageLog);
   }
   await stageLog("info", "claim-navigation", "Optum Pro Claim Search page is ready.");
+  return scope;
 }
 
 export async function runOptumProClaimSearch(
@@ -1467,7 +1773,7 @@ export async function runOptumProClaimSearch(
   context: ScraperContext,
   stageLog: StageLog,
 ): Promise<void> {
-  await openClaimsSearch(page, stageLog);
+  let scope = await openClaimsSearch(page, stageLog);
   const results: Array<OptumProSearchResult | null> = rows.map(() => null);
   await context.emit({ type: "progress", completed: 0, total: rows.length });
   let previousRowEndedAt: number | null = null;
@@ -1508,11 +1814,11 @@ export async function runOptumProClaimSearch(
       };
 
       try {
-        if (!(await fastClaimSearchReady(page, FAST_CLAIM_SEARCH_READY_TIMEOUT_MS, checkCancellation))) {
-          await resetClaimSearchPage(page, stageLog, `before row ${row.rowNumber}`, timingLog);
+        if (!(await fastClaimSearchReady(scope, FAST_CLAIM_SEARCH_READY_TIMEOUT_MS, checkCancellation))) {
+          scope = await resetClaimSearchPage(scope, stageLog, `before row ${row.rowNumber}`, timingLog);
         }
         checkCancellation();
-        results[index] = await searchClaimRow(page, row, stageLog, checkCancellation);
+        results[index] = await searchClaimRow(scope, row, stageLog, checkCancellation);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         if (isStopRequestedError(error)) {
@@ -1525,8 +1831,9 @@ export async function runOptumProClaimSearch(
         }
       } finally {
         const cleanupStartedAt = Date.now();
-        await cleanupClaimSearchAfterRow(page, stageLog, `after row ${row.rowNumber}`, timingLog).catch((error) => {
+        scope = await cleanupClaimSearchAfterRow(scope, stageLog, `after row ${row.rowNumber}`, timingLog).catch((error) => {
           void stageLog("warn", "claim-search", `Could not reset Claim Search after row ${row.rowNumber}: ${error instanceof Error ? error.message : String(error)}`);
+          return scope;
         });
         await timingLog("cleanup", cleanupStartedAt);
         await timingLog("total", rowStartedAt);
