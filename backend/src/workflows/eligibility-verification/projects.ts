@@ -29,6 +29,7 @@ export function credentialProjectMatches(projectId: EligibilityProjectId, value:
 export async function scopeEligibilityInputFile(
   file: File,
   projectId: EligibilityProjectId,
+  options: { requireProjectColumn?: boolean } = {},
 ): Promise<File> {
   const workbook = XLSX.read(await file.arrayBuffer(), { type: "array" });
   const firstSheetName = workbook.SheetNames[0];
@@ -40,6 +41,7 @@ export async function scopeEligibilityInputFile(
 
   if (!projectHeader) {
     if (projectId === "minimax") return file;
+    if (options.requireProjectColumn === false) return file;
     throw new Error("MedRevenue eligibility input must contain a Project column so its rows remain isolated from Minimax.");
   }
 

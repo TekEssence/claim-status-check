@@ -75,12 +75,16 @@ export function findWaystarCredentialsForPayer(
   credentials: WaystarCredentials[],
   payer: { id: string; name: string; portalPayerName: string; insuranceNameAliases: string[]; credentialProject?: string },
   projectId: EligibilityProjectId = "minimax",
+  options: { allowUnscopedCredentials?: boolean } = {},
 ): WaystarCredentials | null {
-  const projectCredentials = projectId === "minimax"
+  let projectCredentials = projectId === "minimax"
     // Preserve every legacy Minimax project/group credential (including FL2
     // and blank values) while explicitly excluding the new project boundary.
     ? credentials.filter((entry) => !credentialProjectMatches("medrevenue", entry.project))
     : credentials.filter((entry) => credentialProjectMatches(projectId, entry.project));
+  if (projectId !== "minimax" && projectCredentials.length === 0 && options.allowUnscopedCredentials) {
+    projectCredentials = credentials.filter((entry) => !entry.project?.trim());
+  }
   const portalMatches = projectCredentials.filter((entry) => (!entry.portal || normalizeHeader(entry.portal).includes("waystar")) && (projectId !== "minimax" || !payer.credentialProject || normalizeHeader(entry.project ?? "") === normalizeHeader(payer.credentialProject)));
   const exact = portalMatches.find((entry) => {
     const credentialPayer = normalizeHeader(entry.payer ?? "");

@@ -110,3 +110,24 @@ test("does not silently use another payer credential row", async () => {
 
   assert.equal(selected, null);
 });
+
+test("uses an unscoped credential for MedRevenue only when project config permits it", async () => {
+  const profiles = await readWaystarCredentialProfiles(workbookFile({
+    credentialsRows: [
+      { URL: "https://waystar.example.com", "User Name": "shared-user", Password: "shared-pass", Portal: "Waystar", Payer: "Medicare" },
+      { URL: "https://waystar.example.com", "User Name": "minimax-user", Password: "minimax-pass", Portal: "Waystar", Payer: "Medicare", Project: "Minimax" },
+    ],
+  }));
+  const payer = {
+    id: "medicare",
+    name: "Medicare",
+    portalPayerName: "Medicare A & B Eligibility (All States) (Z1073)",
+    insuranceNameAliases: ["medicare"],
+  };
+
+  assert.equal(findWaystarCredentialsForPayer(profiles, payer, "medrevenue"), null);
+  assert.equal(
+    findWaystarCredentialsForPayer(profiles, payer, "medrevenue", { allowUnscopedCredentials: true })?.username,
+    "shared-user",
+  );
+});

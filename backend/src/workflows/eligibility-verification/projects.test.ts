@@ -46,4 +46,8 @@ test("preserves legacy Minimax input without a Project column", async () => {
     () => scopeEligibilityInputFile(file, "medrevenue"),
     /must contain a Project column/,
   );
+  assert.strictEqual(
+    await scopeEligibilityInputFile(file, "medrevenue", { requireProjectColumn: false }),
+    file,
+  );
 });
