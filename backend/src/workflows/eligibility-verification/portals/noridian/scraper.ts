@@ -24,8 +24,7 @@ const outputValue = (value: string) => value.trim() || "-";
 
 function styleNoridianOutputColumns(sheet: ExcelJS.Worksheet, outputColumns: Map<string, number>) {
   const headerRow = sheet.getRow(1);
-  for (const [header, column] of outputColumns) {
-    const cell = headerRow.getCell(column);
+  headerRow.eachCell({ includeEmpty: false }, (cell) => {
     cell.font = { bold: true, color: { argb: "FFFFFFFF" } };
     cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1F4E78" } };
     cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
@@ -35,6 +34,8 @@ function styleNoridianOutputColumns(sheet: ExcelJS.Worksheet, outputColumns: Map
       bottom: { style: "thin", color: { argb: "FFB4C6E7" } },
       right: { style: "thin", color: { argb: "FFB4C6E7" } },
     };
+  });
+  for (const [header, column] of outputColumns) {
     sheet.getColumn(column).width = Math.max(14, Math.min(32, header.length + 2));
   }
   headerRow.height = Math.max(headerRow.height || 15, 30);
@@ -48,6 +49,33 @@ function styleNoridianOutputCell(cell: ExcelJS.Cell) {
     bottom: { style: "thin", color: { argb: "FFD9E2F3" } },
     right: { style: "thin", color: { argb: "FFD9E2F3" } },
   };
+}
+
+function copyWorksheetValues(source: ExcelJS.Worksheet, target: ExcelJS.Worksheet) {
+  source.eachRow({ includeEmpty: true }, (sourceRow, rowNumber) => {
+    const targetRow = target.getRow(rowNumber);
+    sourceRow.eachCell({ includeEmpty: true }, (sourceCell, columnNumber) => {
+      targetRow.getCell(columnNumber).value = sourceCell.value;
+    });
+    targetRow.height = sourceRow.height;
+  });
+  for (let column = 1; column <= source.columnCount; column += 1) {
+    target.getColumn(column).width = source.getColumn(column).width;
+  }
+}
+
+function styleLogSheet(sheet: ExcelJS.Worksheet) {
+  const header = sheet.getRow(1);
+  header.eachCell((cell) => {
+    cell.font = { bold: true, color: { argb: "FFFFFFFF" } };
+    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF5B9BD5" } };
+    cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
+  });
+  header.height = 26;
+  sheet.columns.forEach((column) => { column.width = 24; });
+  sheet.eachRow((row, rowNumber) => {
+    if (rowNumber > 1) row.eachCell((cell) => { cell.alignment = { vertical: "top", wrapText: true }; });
+  });
 }
 
 export function parseNoridianPatientName(patientName: string): { lastName: string; firstName: string } {
@@ -371,18 +399,38 @@ async function panelLabeledValues(page: Page, href: string): Promise<Record<stri
   const panel = page.locator(href).first();
   return panel.locator("strong").evaluateAll((labels) => {
     const values: Record<string, string> = {};
-    for (const label of labels) {
+    for (const [index, label] of labels.entries()) {
       const key = (label.textContent ?? "").replace(/\s+/g, " ").replace(/:\s*$/, "").trim();
       if (!key) continue;
-      const container = label.closest(".my-2") ?? label.parentElement;
-      if (!container) continue;
-      const clone = container.cloneNode(true) as HTMLElement;
-      const clonedLabel = clone.querySelector("strong");
-      clonedLabel?.remove();
-      values[key] = (clone.innerText || clone.textContent || "").replace(/\s+/g, " ").trim();
+      const range = document.createRange();
+      range.setStartAfter(label);
+      const nextLabel = labels[index + 1];
+      if (nextLabel) range.setEndBefore(nextLabel);
+      else {
+        const container = label.closest(".my-2") ?? label.parentElement;
+        if (!container) continue;
+        const clone = container.cloneNode(true) as HTMLElement;
+        clone.querySelector("strong")?.remove();
+        values[key] = (clone.textContent ?? "").replace(/\s+/g, " ").trim();
+        continue;
+      }
+      values[key] = (range.cloneContents().textContent ?? "").replace(/\s+/g, " ").trim();
     }
     return values;
   }).catch(() => ({}));
+}
+
+async function panelBenefitResult(page: Page, href: string): Promise<string> {
+  const tab = page.locator(`a[href="${href}"]`).first();
+  if (await tab.isVisible({ timeout: 1000 }).catch(() => false)) await tab.click().catch(() => {});
+  const panel = page.locator(href).first();
+  const noBenefits = panel.locator("strong").filter({
+    hasText: /no benefits available for the requested date span/i,
+  }).first();
+  if (await noBenefits.isVisible({ timeout: 1500 }).catch(() => false)) {
+    return (await noBenefits.innerText()).replace(/\s+/g, " ").trim();
+  }
+  return (await panel.innerText({ timeout: 3000 }).catch(() => "")).replace(/\s+/g, " ").trim();
 }
 
 function labeledValue(values: Record<string, string>, label: string, emptyValue = ""): string {
@@ -413,8 +461,8 @@ export async function extractNoridianResult(page: Page): Promise<Result> {
     "HMO/MA Address": labeledValue(hmoValues, "Address", "N/A"),
     "HMO/MA Phone Number": labeledValue(hmoValues, "Phone Number", "N/A"),
     "HMO/MA Contract Web Site": labeledValue(hmoValues, "Contract Web Site", "N/A"),
-    "MSP": await panelText(page, "#msp"),
-    "Hospice": await panelText(page, "#hospice"),
+    "MSP": await panelBenefitResult(page, "#msp"),
+    "Hospice": await panelBenefitResult(page, "#hospice"),
     "Error": "",
   };
 }
@@ -444,8 +492,15 @@ export function createNoridianEligibilityRunner(): AutomationRunner<EligibilityR
       const credentials = await readNoridianCredentials(input.credentialFile);
       const workbook = new ExcelJS.Workbook();
       await workbook.xlsx.load(await inputFile.arrayBuffer());
-      const sheet = workbook.worksheets[0];
-      if (!sheet) throw new Error("Noridian eligibility workbook does not contain a worksheet.");
+      const inputSheet = workbook.worksheets[0];
+      if (!inputSheet) throw new Error("Noridian eligibility workbook does not contain a worksheet.");
+      inputSheet.name = "Input";
+      const sheet = workbook.addWorksheet("Output");
+      copyWorksheetValues(inputSheet, sheet);
+      const auditSheet = workbook.addWorksheet("Audit Log");
+      auditSheet.addRow(["Timestamp", "Row", "Patient Name", "Primary Insurance ID#", "Status", "Message"]);
+      const errorSheet = workbook.addWorksheet("Error Log");
+      errorSheet.addRow(["Timestamp", "Row", "Patient Name", "Primary Insurance ID#", "Error"]);
       const patientNameColumn = findColumn(sheet, ["Patient Name"]);
       const medicareNumberColumn = findColumn(sheet, ["Primary Insurance ID#", "Primary Insurance ID"]);
       if (!patientNameColumn || !medicareNumberColumn) throw new Error('Noridian input requires "Patient Name" and "Primary Insurance ID#" columns.');
@@ -492,6 +547,13 @@ export function createNoridianEligibilityRunner(): AutomationRunner<EligibilityR
             cell.value = outputValue(result[header]);
             styleNoridianOutputCell(cell);
           }
+          const processedAt = new Date().toISOString();
+          const status = result.Error ? "Failed" : "Completed";
+          const message = result.Error || "Noridian eligibility verification completed.";
+          auditSheet.addRow([processedAt, rowNumber, patientName || "N/A", medicareNumber || "N/A", status, message]);
+          if (result.Error) {
+            errorSheet.addRow([processedAt, rowNumber, patientName || "N/A", medicareNumber || "N/A", result.Error]);
+          }
           await context.emit({ type: "eligibility_noridian_result", rowIndex: rowNumber, update: { __rowKey: String(rowNumber), ...result } });
           completed += 1;
           await context.emit({ type: "progress", completed, total: rowNumbers.length, currentRow: rowNumber });
@@ -499,6 +561,8 @@ export function createNoridianEligibilityRunner(): AutomationRunner<EligibilityR
           const newLookup = page.getByText("Eligibility or MBI Lookup", { exact: false }).first();
           if (await newLookup.isVisible({ timeout: 1000 }).catch(() => false)) await openLookup(page);
         }
+        styleLogSheet(auditSheet);
+        styleLogSheet(errorSheet);
         const output = await workbook.xlsx.writeBuffer();
         await context.emit({ type: "file_download", filename: "medrevenue-noridian-eligibility-output.xlsx", mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", base64: Buffer.from(output).toString("base64") });
         await context.log({ level: "info", message: "MedRevenue Noridian eligibility processing completed and the output workbook was created.", eventName: "eligibility_noridian_complete" });
