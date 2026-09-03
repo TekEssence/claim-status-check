@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import ExcelJS from "exceljs";
 import type { Frame, Page } from "playwright-core";
-import * as XLSX from "xlsx";
 import { getJobDataPath } from "@/backend/src/core/storage";
 import type { ScraperContext } from "../../workflows/claim-status/types";
 import type { OptumProInputRow } from "./input";
@@ -20,7 +20,10 @@ type OptumProSearchResult = {
   memberId: string;
   matchedPatient: string;
   matchedGroup: string;
+  searchClaimNumber: string;
   claimNumber: string;
+  accountNumber: string;
+  subscriberId: string;
   claimReceivedDate: string;
   processedDate: string;
   serviceDate: string;
@@ -40,6 +43,16 @@ type OptumProSearchResult = {
   deniedAmount: string;
   paidAmount: string;
   netPaidAmount: string;
+  billingBilledAmount: string;
+  billingAdjustmentAmount: string;
+  billingPlanAllowedAmount: string;
+  billingPatientResponsibility: string;
+  billingWithholdAmount: string;
+  billingDeniedAmount: string;
+  billingPaidAmount: string;
+  billingInterestAmount: string;
+  billingOverpayment: string;
+  billingCob: string;
   lineStatus: string;
   explanationCode: string;
   explanationDescription: string;
@@ -657,7 +670,10 @@ function emptyClaimResult(input: OptumProInputRow, fields: Partial<OptumProSearc
     memberId: input.memberId,
     matchedPatient: "",
     matchedGroup: "",
+    searchClaimNumber: "",
     claimNumber: "",
+    accountNumber: "",
+    subscriberId: "",
     claimReceivedDate: "",
     processedDate: "",
     serviceDate: "",
@@ -677,6 +693,16 @@ function emptyClaimResult(input: OptumProInputRow, fields: Partial<OptumProSearc
     deniedAmount: "",
     paidAmount: "",
     netPaidAmount: "",
+    billingBilledAmount: "",
+    billingAdjustmentAmount: "",
+    billingPlanAllowedAmount: "",
+    billingPatientResponsibility: "",
+    billingWithholdAmount: "",
+    billingDeniedAmount: "",
+    billingPaidAmount: "",
+    billingInterestAmount: "",
+    billingOverpayment: "",
+    billingCob: "",
     lineStatus: "",
     explanationCode: "",
     explanationDescription: "",
@@ -1006,7 +1032,7 @@ async function findMatchingClaimDetails(
     const serviceCode = typeof details.serviceCode === "string" ? details.serviceCode : "";
     if (normalize(serviceCode) === normalize(row.cpt)) {
       await stageLog("info", "claim-search", `Final claim result status reason: claim details opened and service code ${serviceCode || "-"} matched CPT ${row.cpt}.`);
-      return { clickedRowText: opened.text, details, status: "Completed" };
+      return { clickedRowText: opened.text, details: { searchClaimNumber: candidate.claimNumber, ...details }, status: "Completed" };
     }
 
     await stageLog("info", "claim-search", `Skipping claim result row ${candidate.index + 1}: service code ${serviceCode || "-"} did not match CPT ${row.cpt}.`);
@@ -1102,7 +1128,10 @@ function emptyResultForRow(row: OptumProInputRow, status: string, notes: string)
     memberId: outputMemberId(row.memberId),
     matchedPatient: "",
     matchedGroup: "",
+    searchClaimNumber: "",
     claimNumber: "",
+    accountNumber: "",
+    subscriberId: "",
     claimReceivedDate: "",
     processedDate: "",
     serviceDate: "",
@@ -1122,6 +1151,16 @@ function emptyResultForRow(row: OptumProInputRow, status: string, notes: string)
     deniedAmount: "",
     paidAmount: "",
     netPaidAmount: "",
+    billingBilledAmount: "",
+    billingAdjustmentAmount: "",
+    billingPlanAllowedAmount: "",
+    billingPatientResponsibility: "",
+    billingWithholdAmount: "",
+    billingDeniedAmount: "",
+    billingPaidAmount: "",
+    billingInterestAmount: "",
+    billingOverpayment: "",
+    billingCob: "",
     lineStatus: "",
     explanationCode: "",
     explanationDescription: "",
@@ -1183,7 +1222,7 @@ async function saveOptumProPartialWorkbook(
   stopped: boolean,
 ): Promise<{ path: string; buffer: Buffer; metadata: OptumProPartialJobMetadata }> {
   const workbookRows = completeResultsForWorkbook(rows, results, stopped);
-  const buffer = createOptumProOutputWorkbookBuffer(workbookRows);
+  const buffer = await createOptumProOutputWorkbookBuffer(workbookRows);
   const outputPath = optumProOutputPath(context.jobId);
   await writeAtomicFile(outputPath, buffer);
   return {
@@ -1229,50 +1268,44 @@ async function sectionValue(page: Page, sectionName: string, label: string): Pro
   }, { sectionName, label }).catch(() => "");
 }
 
-async function bulkPaymentAmount(page: Page, claimNumber: string): Promise<string> {
-  return page.evaluate((wantedClaim) => {
-    const clean = (value: string | null | undefined) => (value || "").replace(/\s+/g, " ").trim();
-    const normalize = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, "");
-    const trigger = Array.from(document.querySelectorAll<HTMLButtonElement>("button[aria-controls]"))
-      .find((button) => clean(button.textContent).toLowerCase() === "payment information");
-    const region = trigger?.getAttribute("aria-controls") ? document.getElementById(trigger.getAttribute("aria-controls")!) : null;
-    if (!region) return "";
-    for (const table of Array.from(region.querySelectorAll("table"))) {
-      const headers = Array.from(table.querySelectorAll("thead th")).map((header) => normalize(clean((header as HTMLElement).innerText)));
-      const claimIndex = headers.findIndex((header) => header === "claimnumber");
-      const amountIndex = headers.findIndex((header) => header.includes("netpaymentamount"));
-      if (claimIndex < 0 || amountIndex < 0) continue;
-      for (const row of Array.from(table.querySelectorAll("tbody tr"))) {
-        const cells = Array.from(row.querySelectorAll("td")).map((cell) => clean((cell as HTMLElement).innerText));
-        if (normalize(cells[claimIndex] || "") === normalize(wantedClaim)) return cells[amountIndex] || "";
-      }
-    }
-    return "";
-  }, claimNumber).catch(() => "");
-}
-
 async function extractClaimDetails(page: Page, row: OptumProInputRow): Promise<Partial<OptumProSearchResult>> {
   await acknowledgeFinancialInfoBanner(page);
   await expandClaimDetailSections(page);
-  const lineDetails = await extractMatchedLineDetails(page, row.cpt);
+  const lineDetails = await extractMatchedLineDetails(page, row.cpt, row.dos);
   const payeeId = await sectionValue(page, "Payment information", "Payee ID");
   const payeeName = await sectionValue(page, "Payment information", "Payee name");
   const claimNumber = await sectionValue(page, "Claim information", "Claim number");
+  const diagnosisText = await sectionValue(page, "Claim information", "Diagnosis codes");
+  const diagnosisCodes = diagnosisText.match(/\b[A-Z][0-9][A-Z0-9]*(?:\.[A-Z0-9]+)?\b/gi)?.join(" | ") || diagnosisText;
   return {
     claimNumber,
+    accountNumber: await textAfterLabel(page, "Account number"),
+    subscriberId: await textAfterLabel(page, "Subscriber ID"),
     claimReceivedDate: await sectionValue(page, "Claim information", "Claim received date"),
     processedDate: await sectionValue(page, "Claim information", "Processed date"),
     serviceDate: await sectionValue(page, "Claim information", "Service date"),
     claimStatus: await sectionValue(page, "Claim information", "Status"),
-    diagnosisCodes: await sectionValue(page, "Claim information", "Diagnosis codes"),
+    diagnosisCodes,
     healthPlan: await textAfterLabel(page, "Health plan"),
     ...lineDetails,
-    adjustmentAmount: lineDetails.adjustmentAmount || await sectionValue(page, "Billing information", "Adjustment amount"),
+    explanationCode: await sectionValue(page, "Claim information", "Explanation code and description"),
+    explanationDescription: await sectionValue(page, "Claim information", "Explanation code and description"),
+    adjustmentAmount: lineDetails.adjustmentAmount,
     netPaidAmount: await sectionValue(page, "Billing information", "Net paid amount"),
+    billingBilledAmount: await sectionValue(page, "Billing information", "Billed amount"),
+    billingAdjustmentAmount: await sectionValue(page, "Billing information", "Adjustment amount"),
+    billingPlanAllowedAmount: await sectionValue(page, "Billing information", "Plan allowed amount"),
+    billingPatientResponsibility: await sectionValue(page, "Billing information", "Patient responsibility"),
+    billingWithholdAmount: await sectionValue(page, "Billing information", "Withhold amount"),
+    billingDeniedAmount: await sectionValue(page, "Billing information", "Denied amount"),
+    billingPaidAmount: await sectionValue(page, "Billing information", "Paid amount"),
+    billingInterestAmount: await sectionValue(page, "Billing information", "Interest amount"),
+    billingOverpayment: await sectionValue(page, "Billing information", "Overpayment"),
+    billingCob: await sectionValue(page, "Billing information", "COB"),
     paymentMode: await sectionValue(page, "Payment information", "Payment mode"),
     paymentType: await sectionValue(page, "Payment information", "Payment type"),
     eftNumber: fallbackDash(await sectionValue(page, "Payment information", "Payment reference ID")),
-    eftAmount: await bulkPaymentAmount(page, claimNumber),
+    eftAmount: await sectionValue(page, "Payment information", "EFT amount"),
     paymentDate: await sectionValue(page, "Payment information", "Payment date"),
     paymentId: payeeId,
     paymentName: payeeName,
@@ -1284,11 +1317,12 @@ async function acknowledgeFinancialInfoBanner(page: Page): Promise<void> {
   await page.locator("text=/Some financial information is not available/i").first().isVisible({ timeout: 500 }).catch(() => false);
 }
 
-async function extractMatchedLineDetails(page: Page, cpt: string): Promise<Partial<OptumProSearchResult>> {
-  return page.evaluate((targetCpt) => {
+async function extractMatchedLineDetails(page: Page, cpt: string, dos: string): Promise<Partial<OptumProSearchResult>> {
+  return page.evaluate(({ targetCpt, targetDos }) => {
     const clean = (value: string | null | undefined) => (value || "").replace(/\s+/g, " ").trim();
     const normalizeCode = (value: string) => value.replace(/[^A-Za-z0-9]+/g, "").toLowerCase();
     const normalizeHeader = (value: string) => value.replace(/[^A-Za-z0-9]+/g, "").toLowerCase();
+    const normalizeDateValue = (value: string) => value.replace(/[^0-9]+/g, "");
     const isVisible = (element: Element) => {
       const style = window.getComputedStyle(element);
       const rect = element.getBoundingClientRect();
@@ -1302,7 +1336,11 @@ async function extractMatchedLineDetails(page: Page, cpt: string): Promise<Parti
     const rows = Array.from(document.querySelectorAll("tr"))
       .filter((candidate) => isVisible(candidate) && !candidate.className.includes("detail"));
 
-    const matchedRow = rows.find((candidate) => normalizeCode(cellText(candidate, "procedureCode")) === normalizeCode(targetCpt));
+    const cptMatchedRows = rows.filter((candidate) => normalizeCode(cellText(candidate, "procedureCode")) === normalizeCode(targetCpt));
+    const matchedRow = cptMatchedRows.find((candidate) => {
+      const serviceDate = cellText(candidate, "dateOfService") || cellText(candidate, "serviceDate");
+      return serviceDate && normalizeDateValue(serviceDate).includes(normalizeDateValue(targetDos));
+    }) ?? cptMatchedRows[0];
     if (!matchedRow) {
       const empty = {
         serviceCode: "",
@@ -1353,10 +1391,15 @@ async function extractMatchedLineDetails(page: Page, cpt: string): Promise<Parti
 
         const tableRows = Array.from(table.querySelectorAll("tbody tr"))
           .filter((candidate) => isVisible(candidate) && !candidate.className.includes("detail"));
-        const fallbackRow = tableRows.find((candidate) => {
+        const matchingRows = tableRows.filter((candidate) => {
           const cells = Array.from(candidate.querySelectorAll("td"));
           return normalizeCode(clean((cells[serviceIndex] as HTMLElement | undefined)?.innerText)) === normalizeCode(targetCpt);
         });
+        const fallbackRow = matchingRows.find((candidate) => {
+          if (indexes.serviceDate < 0) return false;
+          const cells = Array.from(candidate.querySelectorAll("td"));
+          return normalizeDateValue(clean((cells[indexes.serviceDate] as HTMLElement | undefined)?.innerText)).includes(normalizeDateValue(targetDos));
+        }) ?? matchingRows[0];
         if (!fallbackRow) continue;
 
         const cells = Array.from(fallbackRow.querySelectorAll("td")).map((cell) => clean((cell as HTMLElement).innerText));
@@ -1439,7 +1482,7 @@ async function extractMatchedLineDetails(page: Page, cpt: string): Promise<Parti
       coinsuranceAmount: patientResponsibilityValues[1] || "",
       deductibleAmount: patientResponsibilityValues[2] || "",
     };
-  }, cpt).catch(() => ({}));
+  }, { targetCpt: cpt, targetDos: normalizeDate(dos) }).catch(() => ({}));
 }
 
 async function returnToClaimSearch(page: Page, stageLog: StageLog): Promise<Page> {
@@ -1997,23 +2040,19 @@ export async function runOptumProClaimSearch(
   await context.emit(downloadableWorkbookEvent(completedAllRows ? "optum_pro_output.xlsx" : "optum_pro_output_partial.xlsx", finalWorkbook.buffer));
 }
 
-function createOptumProOutputWorkbookBuffer(results: OptumProSearchResult[]): Buffer {
-  const workbook = XLSX.utils.book_new();
+async function createOptumProOutputWorkbookBuffer(results: OptumProSearchResult[]): Promise<Buffer> {
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = "Claim Status Check";
   const inputHeaders = Array.from(new Set(results.flatMap((result) => Object.keys(result.input.raw))));
   const botHeaders = [
     "inputRowId", "memberId", "dos", "dosTo", "cptCode", "validationStatus", "validationMessage",
-    "Input Row", "Bot Status", "Bot Message", "Member ID", "DOS From", "DOS To", "CPT",
-    "Provider Claim ID", "Input Authorization #", "Claim #", "Received Date", "Service Date", "Auth #",
-    "Payee", "Billed Amount", "Contract Amount", "Net Amount", "Company", "Outcome", "Paid Date",
-    "Check #", "Service Line Date", "ServiceCode", "Modifier(s)", "Diag. Code", "Financial Resp.",
-    "Adjust Descr.", "Qty", "Billed", "Contract", "CoPay", "Coinsurance", "Deductible", "Adjust", "Net",
-    "Admin. Fee/Withhold", "Status", "Check Total Amount", "Final Status",
+    "Bot Status", "Bot Message", "Search Result Claim Number", "Account Number", "Subscriber ID",
+    "Payment Mode", "Payment Type", "EFT Amount", "Payee Name", "Payment Reference ID", "Payment Date",
+    "Claim Number", "Claim Received Date", "Processed Date", "Claim Status", "Diagnosis Codes",
+    "Explanation Code and Description", "Date of Service", "Service Code", "Modifiers", "Units",
+    "Billed Amount", "Plan Allowed Amount", "Adjustment Amount", "Patient Responsibility",
+    "Withhold Amount", "Denied Amount", "Paid Amount", "Final Status", "Final Notes",
   ];
-  const rawValue = (raw: Record<string, unknown>, aliases: string[]) => {
-    const wanted = aliases.map(normalizeHeader);
-    const entry = Object.entries(raw).find(([key]) => wanted.includes(normalizeHeader(key)));
-    return entry?.[1] == null ? "" : String(entry[1]).trim();
-  };
   const outputDate = (value: string) => outputValue(value).replace(/\//g, "-");
   const botRows = results.map((result) => {
     const success = result.status === "Completed";
@@ -2029,45 +2068,36 @@ function createOptumProOutputWorkbookBuffer(results: OptumProSearchResult[]): Bu
       cptCode: result.input.cpt,
       validationStatus: "valid",
       validationMessage: "",
-      "Input Row": result.rowNumber,
       "Bot Status": success ? "Success" : result.status,
       "Bot Message": success ? "Claim found." : (result.notes || result.status),
-      "Member ID": outputMemberId(result.memberId),
-      "DOS From": outputDate(result.input.dos),
-      "DOS To": outputDate(result.input.dos),
-      CPT: result.input.cpt,
-      "Provider Claim ID": rawValue(result.input.raw, ["Provider Claim ID"]),
-      "Input Authorization #": rawValue(result.input.raw, ["Input Authorization #", "Authorization #", "Auth #"]),
-      "Claim #": outputValue(result.claimNumber),
-      "Received Date": outputDate(result.claimReceivedDate),
-      "Service Date": outputDate(result.serviceDate || result.input.dos),
-      "Auth #": "-",
-      Payee: outputValue(result.payeeName),
+      "Search Result Claim Number": outputValue(result.searchClaimNumber || result.claimNumber),
+      "Account Number": outputValue(result.accountNumber),
+      "Subscriber ID": outputValue(result.subscriberId),
+      "Payment Mode": outputValue(result.paymentMode),
+      "Payment Type": outputValue(result.paymentType),
+      "EFT Amount": outputValue(result.eftAmount),
+      "Payee Name": outputValue(result.payeeName),
+      "Payment Reference ID": outputValue(result.eftNumber),
+      "Payment Date": outputDate(result.paymentDate),
+      "Claim Number": outputValue(result.claimNumber),
+      "Claim Received Date": outputDate(result.claimReceivedDate),
+      "Processed Date": outputDate(result.processedDate),
+      "Claim Status": outputValue(result.claimStatus),
+      "Diagnosis Codes": outputValue(result.diagnosisCodes),
+      "Explanation Code and Description": outputValue(result.explanationDescription || result.explanationCode),
+      "Date of Service": outputValue(result.serviceLineDate),
+      "Service Code": outputValue(result.serviceCode),
+      Modifiers: outputValue(result.modifiers),
+      Units: outputValue(result.units),
       "Billed Amount": outputValue(result.billedAmount),
-      "Contract Amount": outputValue(result.planAllowedAmount),
-      "Net Amount": outputValue(netAmount),
-      Company: outputValue(result.healthPlan),
-      Outcome: outputValue(result.claimStatus || result.lineStatus),
-      "Paid Date": outputDate(result.paymentDate),
-      "Check #": outputValue(result.eftNumber),
-      "Service Line Date": outputValue(result.serviceLineDate),
-      ServiceCode: outputValue(result.serviceCode),
-      "Modifier(s)": outputValue(result.modifiers),
-      "Diag. Code": outputValue(result.diagnosisCodes),
-      "Financial Resp.": outputValue(result.patientResponsibility),
-      "Adjust Descr.": outputValue(result.explanationDescription),
-      Qty: outputValue(result.units),
-      Billed: outputValue(result.billedAmount),
-      Contract: outputValue(result.planAllowedAmount),
-      CoPay: outputValue(result.copayAmount),
-      Coinsurance: outputValue(result.coinsuranceAmount),
-      Deductible: outputValue(result.deductibleAmount),
-      Adjust: outputValue(result.adjustmentAmount),
-      Net: outputValue(netAmount),
-      "Admin. Fee/Withhold": outputValue(result.withholdAmount),
-      Status: outputValue(result.lineStatus || result.claimStatus),
-      "Check Total Amount": outputValue(result.eftAmount),
-      "Final Status": finalStatus,
+      "Plan Allowed Amount": outputValue(result.planAllowedAmount),
+      "Adjustment Amount": outputValue(result.adjustmentAmount),
+      "Patient Responsibility": outputValue(result.patientResponsibility),
+      "Withhold Amount": outputValue(result.withholdAmount),
+      "Denied Amount": outputValue(result.deniedAmount),
+      "Paid Amount": outputValue(result.paidAmount),
+      "Final Status": outputValue(result.lineStatus),
+      "Final Notes": finalStatus,
     };
   });
   const worksheetRows = [
@@ -2077,6 +2107,20 @@ function createOptumProOutputWorkbookBuffer(results: OptumProSearchResult[]): Bu
       ...botHeaders.map((header) => botRows[index][header as keyof (typeof botRows)[number]] ?? ""),
     ]),
   ];
-  XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(worksheetRows), "Output");
-  return XLSX.write(workbook, { type: "buffer", bookType: "xlsx" }) as Buffer;
+  const worksheet = workbook.addWorksheet("Output");
+  worksheet.addRows(worksheetRows);
+  worksheet.views = [{ state: "frozen", ySplit: 1 }];
+  const headerRow = worksheet.getRow(1);
+  headerRow.height = 28;
+  headerRow.eachCell((cell) => {
+    cell.font = { bold: true, color: { argb: "FFFFFFFF" }, size: 11 };
+    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE97100" } };
+    cell.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
+  });
+  worksheet.columns.forEach((column, index) => {
+    const header = worksheetRows[0][index];
+    column.width = Math.max(12, Math.min(String(header || "").length + 4, 32));
+  });
+  const buffer = await workbook.xlsx.writeBuffer();
+  return Buffer.from(buffer);
 }
