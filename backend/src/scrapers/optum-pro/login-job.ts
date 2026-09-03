@@ -42,7 +42,7 @@ function envBoolean(names: string[], fallback: boolean): boolean {
 }
 
 function optumRuntimeDiagnosticsEnabled(): boolean {
-  return envBoolean(["OPTUM_PRO_ENABLE_RUNTIME_DIAGNOSTICS", "ENABLE_RUNTIME_DIAGNOSTICS"], true);
+  return envBoolean(["OPTUM_PRO_ENABLE_RUNTIME_DIAGNOSTICS", "ENABLE_RUNTIME_DIAGNOSTICS"], false);
 }
 
 function optumNetworkLoggingEnabled(): boolean {
@@ -448,7 +448,7 @@ function attachOptumProBrowserDiagnostics(
     if (!runtimeDiagnosticsEnabled && !["error", "warning"].includes(type)) return;
     const diagnostic = `${type}: ${message.text()}`;
     addCappedDiagnosticValue(diagnostics.consoleMessages, diagnostic);
-    if (["error", "warning"].includes(type)) {
+    if (runtimeDiagnosticsEnabled && ["error", "warning"].includes(type)) {
       void logDiagnostic?.(type === "error" ? "error" : "warn", `Optum console ${diagnostic}`);
     }
   });
@@ -477,7 +477,7 @@ function attachOptumProBrowserDiagnostics(
     const diagnostic = `${request.method()} ${sanitizeDiagnosticUrl(request.url())} | ${failure?.errorText || "request failed"}`;
     addCappedDiagnosticValue(diagnostics.failedRequests, diagnostic);
     if (/timeout/i.test(failure?.errorText || "")) addCappedDiagnosticValue(diagnostics.timeoutMessages ||= [], diagnostic);
-    void logDiagnostic?.("warn", `Optum failed request: ${diagnostic}`);
+    if (runtimeDiagnosticsEnabled) void logDiagnostic?.("warn", `Optum failed request: ${diagnostic}`);
   });
 
   page.on("response", (response) => {
@@ -504,7 +504,7 @@ function attachOptumProBrowserDiagnostics(
     if (status < 400) return;
     const diagnostic = `${status} ${request.method()} ${sanitizeDiagnosticUrl(response.url())}`;
     addCappedDiagnosticValue(diagnostics.httpErrors, diagnostic);
-    void logDiagnostic?.("warn", `Optum HTTP error response: ${diagnostic}`);
+    if (runtimeDiagnosticsEnabled) void logDiagnostic?.("warn", `Optum HTTP error response: ${diagnostic}`);
   });
 }
 

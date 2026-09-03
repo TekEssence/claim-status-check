@@ -380,11 +380,22 @@ async function runMemberProviderSearch(page, row, providerOrder = PROVIDERS, sea
 
 async function runHipaaProviderSearch(page, row, providerOrder = PROVIDERS, options = {}) {
   let lastProviderFailure = "";
+  const fallbackProviderOnlyOnSelectionFailure = Boolean(options.matchingPolicy?.fallbackProviderOnlyOnSelectionFailure);
 
   for (const provider of providerOrder) {
-    await searchHipaaWithProvider(page, provider, row.data, {
-      allowFuzzyProviderFallback: Boolean(options.matchingPolicy?.allowFuzzyProviderSelection)
-    });
+    try {
+      await searchHipaaWithProvider(page, provider, row.data, {
+        allowFuzzyProviderFallback: Boolean(options.matchingPolicy?.allowFuzzyProviderSelection),
+        requireDropdownProviderSelection: fallbackProviderOnlyOnSelectionFailure
+      });
+    } catch (error) {
+      if (fallbackProviderOnlyOnSelectionFailure && error?.providerSelectionFailed) {
+        lastProviderFailure = `Provider ${provider}: ${error.message}`;
+        logger.warn(`HIPAA provider ${provider} could not be selected. Trying next provider identifier if available.`);
+        continue;
+      }
+      throw error;
+    }
 
     logger.info(`Waiting up to 5 seconds for ${provider} HIPAA results to settle`);
     const resultSummary = await waitForSearchResultsToSettle(page, 5000);
@@ -397,6 +408,7 @@ async function runHipaaProviderSearch(page, row, providerOrder = PROVIDERS, opti
     if (resultSummary.hasPortalAlert && resultRows.length === 0) {
       logger.warn(`HIPAA provider ${provider} returned portal alert without claim rows: ${resultSummary.portalAlertMessage}`);
       lastProviderFailure = `Provider ${provider}: ${resultSummary.portalAlertMessage}`;
+      if (fallbackProviderOnlyOnSelectionFailure) break;
       continue;
     }
 
@@ -405,8 +417,13 @@ async function runHipaaProviderSearch(page, row, providerOrder = PROVIDERS, opti
     }
 
     if (resultRows.length === 0) {
-      logger.warn(`HIPAA provider ${provider} returned no claim rows. Trying next provider if available.`);
+      logger.warn(
+        fallbackProviderOnlyOnSelectionFailure
+          ? `HIPAA provider ${provider} returned no claim rows after successful provider selection. Not trying another provider identifier.`
+          : `HIPAA provider ${provider} returned no claim rows. Trying next provider if available.`
+      );
       lastProviderFailure = `Provider ${provider}: no claim rows returned.`;
+      if (fallbackProviderOnlyOnSelectionFailure) break;
       continue;
     }
 

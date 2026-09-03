@@ -5,7 +5,7 @@ import path from "node:path";
 import type { Page } from "playwright-core";
 import type { ScraperContext } from "../../types";
 import { launchAvailityBrowser } from "./browser";
-import { parseAvailityInput, readAvailityPayerMapping } from "./input";
+import { isRunnableAvailityPayerName, parseAvailityInput, readAvailityPayerMapping, unsupportedAvailityPayerMessage } from "./input";
 import { createAvailityOutputWorkbookBuffer } from "./output-writer";
 import { getMatchingPolicy, getMfaConfigForProject, getProviderOrderForRow, getRequiredFieldsForProject, readAvailityProviderMapping, resolvePortalSelections } from "./project-config";
 import type { AvailityPortalSelections } from "./config/projects";
@@ -129,6 +129,32 @@ function isClosedPageError(message: string): boolean {
 
 function isSubmitNoResponseError(message: string): boolean {
   return /submit did not produce results, no-results message, or validation response/i.test(message);
+}
+
+function isLocatorTimeoutError(message: string): boolean {
+  return /Timeout \d+ms exceeded/i.test(message)
+    && /locator\(|locator\.waitFor|waiting for locator/i.test(message);
+}
+
+function locatorTimeoutAction(message: string): string {
+  const retryStep = message.match(/^(.+?) failed after \d+ attempts\./i);
+  if (retryStep?.[1]) return retryStep[1].trim();
+
+  if (/iframe#newBodyFrame/i.test(message)) {
+    return "Waiting for Availity Claim Status iframe";
+  }
+  if (/Claim Status controls were not ready/i.test(message)) {
+    return "Waiting for Claim Status controls";
+  }
+
+  const locator = message.match(/waiting for\s+locator\('([^']+)'/i);
+  if (locator?.[1]) return `Waiting for locator ${locator[1]}`;
+
+  return "Availity locator wait";
+}
+
+function locatorTimeoutActionKey(action: string): string {
+  return action.replace(/\s+/g, " ").trim().toLowerCase();
 }
 
 function isRecoverableRowError(message: string): boolean {
@@ -389,7 +415,10 @@ async function processValidRow(
     mappedPortalPayerName: selections.payer,
   });
   const providerOrder = getProviderOrderForRow(options.projectId, row, options.providerMappings);
-  const matchingPolicy = getMatchingPolicy(options.projectId, selections.payer);
+  const matchingPolicy = {
+    ...getMatchingPolicy(options.projectId, selections.payer),
+    fallbackProviderOnlyOnSelectionFailure: options.projectId === "charm",
+  };
   return workflow.processClaim(page, row, {
     providerOrder,
     matchingPolicy,
@@ -406,6 +435,9 @@ export async function runAvailityClaimStatusJob(formData: FormData, context: Scr
   const automationState = { selectedOrganization: "", selectedState: "", selectedPayer: "", claimStatusOpened: false };
   const payerMapping = await readAvailityPayerMapping(input.projectId);
   const providerMappings = await readAvailityProviderMapping();
+  const runnableTotal = input.inputRows.filter((row) => isRunnableAvailityPayerName(row.data["Payer Name"] || "")).length;
+  const locatorTimeoutFailuresByAction = new Map<string, number>();
+  let completedRunnableRows = 0;
   let session: Awaited<ReturnType<typeof initializeSession>> | null = null;
   let activeRow: AvailityInputRow | null = null;
   let outputWorkbookEmitted = false;
@@ -417,8 +449,8 @@ export async function runAvailityClaimStatusJob(formData: FormData, context: Scr
       message: entry.line,
     });
   });
-  await log(`Availity input loaded: ${input.inputRows.length} row(s). Project: ${input.projectId}. Available payers: Aetna, Anthem-CA, Blue Cross Blue Shield, Regence, Carelon Behavioral Health, Wellpoint, Wellcare, Humana, Central Health Medicare Plan, Health Net, Molina, Providence Health Plan, Scan Health, TRIWEST-TRICARE, TRIWEST-VA CCN.`);
-  await context.emit({ type: "progress", completed: 0, total: input.inputRows.length });
+  await log(`Availity input loaded: ${input.inputRows.length} row(s). Project: ${input.projectId}. Runnable supported payer rows: ${runnableTotal}. Available payers: Aetna, Anthem-CA, Blue Cross Blue Shield, Regence, Carelon Behavioral Health, Wellpoint, Wellcare, Humana, Central Health Medicare Plan, Health Net, Molina, Providence Health Plan, Scan Health, TRIWEST-TRICARE, TRIWEST-VA CCN.`);
+  await context.emit({ type: "progress", completed: 0, total: runnableTotal });
 
   const emitOutputWorkbook = async (partial: boolean): Promise<void> => {
     const workbookBuffer = await createAvailityOutputWorkbookBuffer({
@@ -444,12 +476,12 @@ export async function runAvailityClaimStatusJob(formData: FormData, context: Scr
     fs.mkdirSync(snapshotDir, { recursive: true });
     const snapshotPath = path.join(snapshotDir, "availity_output_snapshot.xlsx");
     fs.writeFileSync(snapshotPath, workbookBuffer);
-    const shouldSendWorkbookToBrowser = completed % 10 === 0 || completed === input.inputRows.length;
+    const shouldSendWorkbookToBrowser = (completed > 0 && completed % 10 === 0) || completed === runnableTotal;
     await context.emit(outputSnapshotEvent(
       "availity_output_snapshot.xlsx",
       shouldSendWorkbookToBrowser ? { buffer: workbookBuffer, path: snapshotPath } : { path: snapshotPath },
       completed,
-      input.inputRows.length,
+      runnableTotal,
       "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     ));
   };
@@ -477,7 +509,32 @@ export async function runAvailityClaimStatusJob(formData: FormData, context: Scr
       activeRow = row;
       const startedAt = Date.now();
       const outputRow = buildBaseOutput(row);
-      await context.emit(rowProgressEvent(row, index + 1, input.inputRows.length, "started"));
+      const payerName = row.data["Payer Name"] || "";
+      const isRunnablePayer = isRunnableAvailityPayerName(payerName);
+      if (!isRunnablePayer) {
+        const message = unsupportedAvailityPayerMessage(payerName);
+        const validation = {
+          validation_status: "invalid",
+          validation_message: message,
+        };
+        inputSheetRows.push(buildInputAuditRow(row, validation));
+        await log(`Availity row ${row.input_row_id}/${input.inputRows.length} skipped: ${message}`);
+        markFailure(outputRow, message, "failed");
+        outputRows.push(outputRow);
+        addError(errorRows, runId, row, {
+          failure_stage: "unsupported_payer",
+          failure_reason: message,
+          current_url: safePageUrl(session.page),
+        });
+        addAudit(auditRows, runId, row, "unsupported_payer", "skipped", message, startedAt);
+        await context.emit({ type: "progress", completed: completedRunnableRows, total: runnableTotal });
+        await emitOutputSnapshot(completedRunnableRows);
+        activeRow = null;
+        continue;
+      }
+
+      const currentRunnableRow = completedRunnableRows + 1;
+      await context.emit(rowProgressEvent(row, currentRunnableRow, runnableTotal, "started"));
       let validation: { isValid: boolean; validation_status: string; validation_message: string; mappedPayerName: string };
       let portalSelections: AvailityPortalSelections = { payer: "" };
       try {
@@ -512,21 +569,26 @@ export async function runAvailityClaimStatusJob(formData: FormData, context: Scr
           current_url: safePageUrl(session.page),
         });
         addAudit(auditRows, runId, row, "validation", "failed", validation.validation_message, startedAt);
-        await context.emit({ type: "progress", completed: index + 1, total: input.inputRows.length });
-        await emitOutputSnapshot(index + 1);
+        completedRunnableRows += 1;
+        await context.emit({ type: "progress", completed: completedRunnableRows, total: runnableTotal });
+        await emitOutputSnapshot(completedRunnableRows);
         activeRow = null;
         continue;
       }
 
       let rowHandled = false;
       let lastRowErrorMessage = "";
+      const rowRecoveryNotes: string[] = [];
       for (let rowAttempt = 1; rowAttempt <= ROW_PROCESS_MAX_ATTEMPTS && !rowHandled; rowAttempt += 1) {
         try {
-          await context.emit(rowProgressEvent(row, index + 1, input.inputRows.length, `attempt ${rowAttempt}`));
+          await context.emit(rowProgressEvent(row, currentRunnableRow, runnableTotal, `attempt ${rowAttempt}`));
           const result = await processValidRow(session.page, row, portalSelections, automationState, {
             projectId: input.projectId,
             providerMappings,
           });
+          if (rowRecoveryNotes.length) {
+            result.notes = [result.notes, ...rowRecoveryNotes].filter(Boolean).join("; ");
+          }
           const projectOutputRows = applyProjectOutputStrategy({
             projectId: input.projectId,
             row,
@@ -552,6 +614,42 @@ export async function runAvailityClaimStatusJob(formData: FormData, context: Scr
           const message = friendlyAvailityError(error);
           lastRowErrorMessage = message;
           await context.log({ level: "warn", message: `Availity row ${row.input_row_id} attempt ${rowAttempt} failed: ${message}` });
+
+          if (isLocatorTimeoutError(message)) {
+            const action = locatorTimeoutAction(message);
+            const actionKey = locatorTimeoutActionKey(action);
+            const previousFailures = locatorTimeoutFailuresByAction.get(actionKey) || 0;
+            const failureCount = previousFailures + 1;
+            locatorTimeoutFailuresByAction.set(actionKey, failureCount);
+
+            if (failureCount === 1 && rowAttempt < ROW_PROCESS_MAX_ATTEMPTS) {
+              const recoveryMessage = `Locator timeout at "${action}" on row ${row.input_row_id}. Logging out, starting a fresh Availity session, and retrying the same row once.`;
+              rowRecoveryNotes.push(`Locator timeout at "${action}"; logged in again and retry succeeded if this row completes.`);
+              await context.log({ level: "warn", message: recoveryMessage });
+              addAudit(auditRows, runId, row, action, "relogin_retry", recoveryMessage, startedAt, rowAttempt);
+              await logoutIfPresent(session.page).catch(() => {});
+              await session.browser.close().catch(() => {});
+              session = await initializeSession(input, context, log);
+              automationState.selectedOrganization = "";
+              automationState.selectedState = "";
+              automationState.selectedPayer = "";
+              automationState.claimStatusOpened = false;
+              continue;
+            }
+
+            const stopMessage = `Repeated locator timeout at "${action}" after fresh login/retry. Stopping Availity job instead of continuing remaining rows. Last error: ${message}`;
+            await context.log({ level: "error", message: stopMessage });
+            markFailure(outputRow, stopMessage);
+            outputRows.push(outputRow);
+            addError(errorRows, runId, row, {
+              search_source_tab: "Member/HIPAA",
+              failure_stage: action,
+              failure_reason: stopMessage,
+              current_url: safePageUrl(session.page),
+            });
+            addAudit(auditRows, runId, row, action, "fatal_repeated_locator_timeout", stopMessage, startedAt, rowAttempt);
+            throw new Error(stopMessage);
+          }
 
           if (rowAttempt < ROW_PROCESS_MAX_ATTEMPTS && isRecoverableRowError(message)) {
             automationState.selectedPayer = "";
@@ -591,8 +689,9 @@ export async function runAvailityClaimStatusJob(formData: FormData, context: Scr
         outputRows.push(outputRow);
       }
 
-      await context.emit({ type: "progress", completed: index + 1, total: input.inputRows.length });
-      await emitOutputSnapshot(index + 1);
+      completedRunnableRows += 1;
+      await context.emit({ type: "progress", completed: completedRunnableRows, total: runnableTotal });
+      await emitOutputSnapshot(completedRunnableRows);
       activeRow = null;
     }
 

@@ -45,6 +45,27 @@ export async function readWaystarPaymentCredentials(file: File): Promise<Waystar
   const matching = workbookRows.rows.find((row) => find(row, ["Username", "User Name", "Login Name"]) === base.username) ?? workbookRows.rows[0];
   const clientName = matching ? find(matching, ["Client Name", "Client"]) : "";
   if (!clientName) throw new Error("Waystar credential Excel must contain a Client Name column.");
+  const mappingRows = await rows(file, ["Mapping"]).catch(() => {
+    throw new Error('Waystar credential Excel must contain a "Mapping" worksheet with Client Name and Account columns.');
+  });
+  const accountByClient = new Map<string, string>();
+  for (const mappingRow of mappingRows.rows) {
+    const mappedClientName = find(mappingRow, ["Client Name", "Client", "Client Code"]);
+    const account = find(mappingRow, ["Account", "Account Name", "Waystar Account"]);
+    if (!mappedClientName && !account) continue;
+    if (!mappedClientName || !account) {
+      throw new Error("Each Waystar Mapping worksheet row must contain both Client Name and Account.");
+    }
+    const clientKey = key(mappedClientName);
+    if (accountByClient.has(clientKey)) {
+      throw new Error(`Waystar Mapping worksheet contains more than one Account for Client Name "${mappedClientName}".`);
+    }
+    accountByClient.set(clientKey, account);
+  }
+  const account = accountByClient.get(key(clientName));
+  if (!account) {
+    throw new Error(`Waystar Mapping worksheet does not contain an Account for Client Name "${clientName}".`);
+  }
   const rawLookbackDays = matching ? find(matching, ["Lookback Days", "Look Back Days", "Days Back", "Zero Payment Lookback Days"]) : "";
   const parsedLookbackDays = Number.parseInt(rawLookbackDays.replace(/[^\d]/g, ""), 10);
   const lookbackDays = Number.isFinite(parsedLookbackDays) && parsedLookbackDays > 0 ? parsedLookbackDays : 7;
@@ -59,7 +80,7 @@ export async function readWaystarPaymentCredentials(file: File): Promise<Waystar
     loginUrl: base.loginUrl.includes("waystar.com") && !base.loginUrl.includes("zirmed.com") ? DEFAULT_LOGIN_URL : base.loginUrl,
     verificationAnswers: paymentAnswers.length ? paymentAnswers : base.verificationAnswers,
     clientName,
-    account: clientName,
+    account,
     lookbackDays,
   };
 }

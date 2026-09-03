@@ -72,12 +72,14 @@ const WAYSTAR_PAYER_SUGGESTION_SELECTOR = [
 
 const authenticatedWaystarContexts = new WeakSet<BrowserContext>();
 const cardSwipeAutoClosePages = new WeakSet<Page>();
+const reminderAutoDismissPages = new WeakSet<Page>();
 
 export type WaystarLoginOptions = {
   robustAdditionalAuthentication?: boolean;
 };
 
 export async function loginToWaystar(page: Page, credentials: WaystarCredentials, options: WaystarLoginOptions = {}): Promise<void> {
+  await enableReminderAutoDismiss(page);
   try {
     await page.goto(credentials.loginUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
   } catch (error) {
@@ -106,6 +108,96 @@ export async function loginToWaystar(page: Page, credentials: WaystarCredentials
     timeout: 30000,
   });
   authenticatedWaystarContexts.add(page.context());
+}
+
+async function enableReminderAutoDismiss(page: Page): Promise<void> {
+  await installBrowserEvalHelpers(page);
+  const installAutoDismiss = () => {
+    const state = window as typeof window & { __waystarReminderObserver?: MutationObserver };
+    const dismiss = () => {
+      const normalize = (value: string) => value.replace(/\s+/g, " ").trim().toLowerCase();
+      // Pendo sometimes renders the label in a nested div/span instead of on
+      // the clickable element itself, so inspect every element for the exact
+      // label and then walk up to its actionable container.
+      const directControls = Array.from(document.querySelectorAll<HTMLElement>(
+        "button, a, input, [role='button'], [onclick], [class*='pendo-button']",
+      ));
+      const reminderControl = directControls.find((element) => {
+        const inputValue = element instanceof HTMLInputElement ? element.value : "";
+        return normalize(inputValue || element.innerText || element.textContent || "")
+          .includes("remind me later");
+      });
+      const candidates = Array.from(document.querySelectorAll<HTMLElement>("*"));
+      const reminderLabel = reminderControl ?? candidates.find((element) => {
+        const inputValue = element instanceof HTMLInputElement ? element.value : "";
+        const label = normalize(inputValue || element.innerText || element.textContent || "");
+        const style = window.getComputedStyle(element);
+        return label === "remind me later" &&
+          style.display !== "none" &&
+          style.visibility !== "hidden";
+      });
+      const reminder = reminderLabel?.closest<HTMLElement>(
+        "button, a, input, [role='button'], [onclick], [class*='pendo-button']",
+      ) ?? reminderLabel;
+      reminder?.scrollIntoView({ block: "center", inline: "center" });
+      reminder?.click();
+    };
+
+    if (!state.__waystarReminderObserver) {
+      state.__waystarReminderObserver = new MutationObserver(dismiss);
+      state.__waystarReminderObserver.observe(document.documentElement, {
+        childList: true,
+        subtree: true,
+        characterData: true,
+        attributes: true,
+      });
+    }
+    dismiss();
+  };
+
+  if (!reminderAutoDismissPages.has(page)) {
+    reminderAutoDismissPages.add(page);
+    // Install before login navigation so the handler is present in the main
+    // document and in any same- or cross-origin child frame created by Waystar.
+    await page.addInitScript({ content: buildWaystarPageExpression(installAutoDismiss, undefined) });
+  }
+
+  // Also cover a prompt that is already visible when this is enabled.
+  await Promise.all(page.frames().map((frame) => (
+    frame.evaluate(buildWaystarPageExpression(installAutoDismiss, undefined)).catch(() => {})
+  )));
+}
+
+async function dismissWaystarReminder(page: Page): Promise<boolean> {
+  const backdrop = page.locator("#pendo-base:visible, ._pendo-backdrop:visible").first();
+  if (!await backdrop.isVisible().catch(() => false)) return false;
+
+  const deadline = Date.now() + 10000;
+  while (Date.now() < deadline) {
+    for (const frame of page.frames()) {
+      const reminder = frame.locator(
+        "button._pendo-button, button[id^='pendo-button-']",
+      ).filter({ hasText: /^\s*Remind Me Later\s*$/i }).first();
+      if (!await reminder.count().catch(() => 0)) continue;
+
+      // The action is below Pendo's internal scroll viewport. Scrolling the
+      // button into view scrolls that nearest container, not the Waystar page.
+      await reminder.evaluate((element: HTMLButtonElement) => {
+        element.scrollIntoView({ block: "center", inline: "nearest" });
+      }).catch(() => {});
+      await page.waitForTimeout(250);
+      await reminder.click({ timeout: 3000 }).catch(async () => {
+        // DOM activation is a fallback for animation/stability checks only;
+        // the element has already been scrolled to the visible button.
+        await reminder.evaluate((element: HTMLButtonElement) => element.click());
+      });
+
+      await backdrop.waitFor({ state: "hidden", timeout: 5000 }).catch(() => {});
+      if (!await backdrop.isVisible().catch(() => false)) return true;
+    }
+    await page.waitForTimeout(250);
+  }
+  return false;
 }
 
 async function handleOptionalProfileUpdate(page: Page): Promise<void> {
@@ -164,6 +256,16 @@ export function isWaystarAbortedNavigationError(error: unknown): boolean {
 }
 
 export async function openEligibilityInquiry(page: Page): Promise<Page> {
+  // Pendo can inject its promotion after login has completed. Re-run the
+  // immediate dismissal immediately before clicking the control it obscures.
+  await enableReminderAutoDismiss(page);
+  await dismissWaystarReminder(page);
+  const pendoBackdrop = page.locator("#pendo-base:visible, ._pendo-backdrop:visible").first();
+  if (await pendoBackdrop.isVisible().catch(() => false)) {
+    await pendoBackdrop.waitFor({ state: "hidden", timeout: 5000 }).catch(() => {});
+  }
+  const pendoStillBlocking = await pendoBackdrop.isVisible().catch(() => false);
+
   const existingInquiryPage = page.context().pages().find((candidate) =>
     candidate !== page && !candidate.isClosed() && candidate.url().includes("eligibility.zirmed.com/DDE"),
   );
@@ -204,7 +306,14 @@ export async function openEligibilityInquiry(page: Page): Promise<Page> {
   let lastError: unknown;
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     const popupPromise = page.context().waitForEvent("page", { timeout: 15000 }).catch(() => null);
-    await page.locator(WAYSTAR_SELECTORS.navigation.eligibility).first().click();
+    const eligibilityButton = page.locator(WAYSTAR_SELECTORS.navigation.eligibility).first();
+    if (pendoStillBlocking) {
+      // A forced pointer click still lands on Pendo's backdrop. Activating the
+      // real input through the DOM invokes Waystar's onclick handler directly.
+      await eligibilityButton.evaluate((element: HTMLInputElement) => element.click());
+    } else {
+      await eligibilityButton.click();
+    }
     const popup = await popupPromise;
     if (!popup) {
       lastError = new Error(`Waystar did not open the DDE inquiry window on attempt ${attempt}.`);

@@ -106,10 +106,12 @@ function getWorkflowForPayer({ inputPayerName, mappedPortalPayerName }) {
     mapped.includes("BCBSTX") ||
     mapped.includes("BLUE CROSS") ||
     mapped.includes("BLUE SHIELD") ||
+    mapped.includes("FLORIDA BLUE") ||
     mapped.includes("REGENCE") ||
     mapped.includes("CAREFIRST") ||
     input.includes("BLUE CROSS") ||
     input.includes("BLUE SHIELD") ||
+    input.includes("FLORIDA BLUE") ||
     input.includes("REGENCE") ||
     input.includes("CAREFIRST") ||
     input.includes("BCBS")

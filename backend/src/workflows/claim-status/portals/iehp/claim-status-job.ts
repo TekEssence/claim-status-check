@@ -34,6 +34,9 @@ import { getClaimCptValue, getClaimModifierValues, serializeRaRecords, type RaDe
 
 type StreamEvent = Record<string, unknown>;
 
+const IEHP_CHUNK_MAX_EXECUTION_TIME_MS = 4 * 60 * 1000;
+const IEHP_CHUNK_BATCH_SIZE = 10;
+
 export async function runIehpClaimStatusJob(jobId: string, formData: FormData, context?: ScraperContext): Promise<void> {
   const sendEvent = async (data: StreamEvent) => {
     if (context?.emit) {
@@ -50,7 +53,7 @@ export async function runIehpClaimStatusJob(jobId: string, formData: FormData, c
     await sendEvent({ type: "log", message });
   };
 
-      try {
+  try {
         const {
           loginUrl,
           claimStatusUrl: finalClaimStatusUrl,
@@ -72,12 +75,18 @@ export async function runIehpClaimStatusJob(jobId: string, formData: FormData, c
         }
         await sendEvent({ type: "progress", completed: startIndex, total: claimRows.length });
 
-        log("Launching browser environment...");
-        let browser;
-        let browserContext: BrowserContext | undefined;
-        let page: Page | undefined;
+        let nextStartIndex = startIndex;
+        let cancelled = false;
+        let chunkNumber = 0;
 
-        try {
+        while (nextStartIndex < claimRows.length) {
+          chunkNumber++;
+          await log(chunkNumber === 1 ? "Launching browser environment..." : `Restarting IEHP browser for next chunk from row ${nextStartIndex + 1}...`);
+          let browser;
+          let browserContext: BrowserContext | undefined;
+          let page: Page | undefined;
+
+          try {
           const browserSession = await launchIehpBrowser(log);
           browser = browserSession.browser;
           browserContext = browserSession.context;
@@ -125,24 +134,23 @@ export async function runIehpClaimStatusJob(jobId: string, formData: FormData, c
             await log("Login verification successful (signed-in indicator found).");
           }
 
-          const processStartTime = Date.now();
-          const MAX_EXECUTION_TIME_MS = 4 * 60 * 1000; // 4 minutes
-          const BATCH_SIZE = 10;
+          const chunkStartTime = Date.now();
           let processedInThisBatch = 0;
 
-          for (let i = startIndex; i < claimRows.length; i++) {
+          for (let i = nextStartIndex; i < claimRows.length; i++) {
             if (context?.isCancelled?.()) {
               await log("Processing stopped because the active scrape job was cancelled.");
+              cancelled = true;
               break;
             }
-            // Check for timeout or batch limit
-            if (Date.now() - processStartTime > MAX_EXECUTION_TIME_MS || processedInThisBatch >= BATCH_SIZE) {
-              await log(`Batch complete. Pausing at Row ${i + 1} to gracefully auto-resume the next chunk...`);
-              break; // Break the loop, the finally block will emit 'done' and the frontend will re-trigger
+            if (Date.now() - chunkStartTime > IEHP_CHUNK_MAX_EXECUTION_TIME_MS || processedInThisBatch >= IEHP_CHUNK_BATCH_SIZE) {
+              await log(`IEHP browser chunk ${chunkNumber} complete after ${processedInThisBatch} row(s). Closing Chrome before continuing at row ${i + 1}.`);
+              break;
             }
 
             const row = claimRows[i];
-            const rowIndex = typeof (row as any).__original_index === "number" ? (row as any).__original_index : i;
+            const originalIndex = (row as { __original_index?: unknown }).__original_index;
+            const rowIndex = typeof originalIndex === "number" ? originalIndex : i;
             const memberPolicyId = asText(row["Member Policy ID"] ?? row["member policy id"] ?? row["Member ID"] ?? row["member id"]);
             const dosValue = row["Date Of Service"] ?? row["DOS"] ?? row["date of service"] ?? row["dos"];
             const claimCpt = getClaimCptValue(row);
@@ -153,25 +161,29 @@ export async function runIehpClaimStatusJob(jobId: string, formData: FormData, c
             if (!memberPolicyId || !dosValue || memberPolicyId === "NaN" || dosValue === "NaN") {
               const msg = "Skipped: Missing or Invalid Member ID / Date of Service.";
               await log(`Row ${i + 1}: ${msg}`);
-              sendEvent({
+              await sendEvent({
                 type: "row_update",
                 index: rowIndex,
                 update: { BotClaimStatusCheck: "Skipped", BotClaimStatusCheckError: msg }
               });
-              sendEvent({ type: "progress", completed: i + 1, total: claimRows.length });
+              await sendEvent({ type: "progress", completed: i + 1, total: claimRows.length });
+              processedInThisBatch++;
+              nextStartIndex = i + 1;
               continue;
             }
 
             const dosDate = parseDateInput(dosValue);
             if (!dosDate) {
               const msg = `Skipped: Invalid Date of Service format: ${dosValue}`;
-              log(`Row ${i + 1}: ${msg}`);
-              sendEvent({
+              await log(`Row ${i + 1}: ${msg}`);
+              await sendEvent({
                 type: "row_update",
                 index: rowIndex,
                 update: { BotClaimStatusCheck: "Skipped", BotClaimStatusCheckError: msg }
               });
-              sendEvent({ type: "progress", completed: i + 1, total: claimRows.length });
+              await sendEvent({ type: "progress", completed: i + 1, total: claimRows.length });
+              processedInThisBatch++;
+              nextStartIndex = i + 1;
               continue;
             }
 
@@ -179,7 +191,7 @@ export async function runIehpClaimStatusJob(jobId: string, formData: FormData, c
             let claimDetailsText = "";
             let referRaPayload = "";
 
-            log(`Processing Row ${i + 1}: Member ${memberPolicyId}, DOS ${formatMmDdYyyy(dosDate)}`);
+            await log(`Processing Row ${i + 1}: Member ${memberPolicyId}, DOS ${formatMmDdYyyy(dosDate)}`);
 
             try {
               /*
@@ -345,7 +357,7 @@ export async function runIehpClaimStatusJob(jobId: string, formData: FormData, c
                     }
 
                     details.push(`Summary: [${summaryText}] | Details: [${headerText.replace(/\s+/g, " ")}] | Status Info: [${statusInfoText}]`);
-                  } catch (innerError) {
+                  } catch {
                     await log(`Row ${i + 1}: Warning: Could not process remaining matching rows on this page (likely due to DOM reset after navigating back). Skipping remaining matches on page.`);
                     break;
                   }
@@ -432,7 +444,7 @@ export async function runIehpClaimStatusJob(jobId: string, formData: FormData, c
                     );
                     await log(`Row ${i + 1}: DOS matched in expanded claim line details on page ${pageNum}.`);
                     break;
-                  } catch (detailInspectionError) {
+                  } catch {
                     await log(`Row ${i + 1}: Warning: Could not inspect expanded claim details for a nearby DOS on page ${pageNum}.`);
                     continue;
                   }
@@ -497,7 +509,7 @@ export async function runIehpClaimStatusJob(jobId: string, formData: FormData, c
                 const msg = nearestDosCandidates.length > 0
                   ? `No matching claim rows on website (searched ${pageNum} page(s)). Nearest DOS in expanded claim details: ${formattedNearestDosText}.`
                   : `No matching claim rows on website (searched ${pageNum} page(s)).`;
-                log(`Row ${i + 1}: Failed. ${msg}`);
+                await log(`Row ${i + 1}: Failed. ${msg}`);
                 await captureRowDiagnostics({
                   jobId,
                   page,
@@ -608,15 +620,22 @@ export async function runIehpClaimStatusJob(jobId: string, formData: FormData, c
             }
 
             processedInThisBatch++;
+            nextStartIndex = i + 1;
           }
-        } finally {
-          await closeAutomationResources({ browser, context: browserContext, page, log });
+          } finally {
+            await closeAutomationResources({ browser, context: browserContext, page, log });
+          }
+
+          if (cancelled) break;
+          if (nextStartIndex < claimRows.length) {
+            await log(`Chrome closed cleanly; starting the next IEHP browser chunk from row ${nextStartIndex + 1} in the same job.`);
+          }
         }
-      } catch (globalError) {
-        const msg = globalError instanceof Error ? globalError.message : "Unexpected automation error.";
-        await log(`Global automation error: ${msg}`);
-        await sendEvent({ type: "error", message: msg });
-      } finally {
-        await sendEvent({ type: "done" });
-      }
+  } catch (globalError) {
+    const msg = globalError instanceof Error ? globalError.message : "Unexpected automation error.";
+    await log(`Global automation error: ${msg}`);
+    await sendEvent({ type: "error", message: msg });
+  } finally {
+    await sendEvent({ type: "done" });
+  }
 }

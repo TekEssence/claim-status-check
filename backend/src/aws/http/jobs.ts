@@ -343,9 +343,9 @@ export async function downloadJob(event: ApiEvent) {
       ? artifacts.find((item) => item.artifactType === "file_download" && isZipArtifact(item.filename, item.mimeType))
       : undefined;
     const artifact = paymentEobZip
-      ?? artifacts.find((item) => item.artifactType === "output_snapshot")
       ?? artifacts.find((item) => item.artifactType === "file_download" && isPreferredOutputArtifact(item.filename, item.mimeType))
-      ?? artifacts.find((item) => item.artifactType === "file_download" && isDownloadableNonDiagnosticArtifact(item.filename, item.mimeType));
+      ?? artifacts.find((item) => item.artifactType === "file_download" && isDownloadableNonDiagnosticArtifact(item.filename, item.mimeType))
+      ?? artifacts.find((item) => item.artifactType === "output_snapshot");
     if (!artifact) return jsonResponse(404, { error: "No output is available yet." });
     if (!artifact.bucket) return jsonResponse(500, { error: "Output artifact is missing its S3 bucket." });
     const downloadUrl = await createDownloadUrl({

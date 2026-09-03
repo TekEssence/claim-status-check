@@ -17,7 +17,6 @@ import {
   Users,
 } from "lucide-react";
 import dashboardWelcomeImage from "../../Assets/ChatGPT Image Jul 1, 2026, 10_55_01 AM.png";
-import { applyClaimRowUpdateToWorksheet, postProcessWorksheet } from "./portals/iehp/workbook";
 import { applyUhcRowUpdateToWorksheet, postProcessUhcWorksheet } from "./portals/uhc/workbook";
 import {
   cancelScrapeJob as cancelScrapeJobRequest,
@@ -101,8 +100,8 @@ import {
 } from "./shared/artifacts";
 import {
   getMissingLocalExcelMessage, loadIehpWorkbookBundle,
-  isFileAccessPermissionError, loadUhcWorkbookBundle, selectExcelFileHandle, writeIehpPostProcessedCheckpoint,
-  writeWorkbookToClaimFile, type UhcWorkbookBundle,
+  isFileAccessPermissionError, loadUhcWorkbookBundle, selectExcelFileHandle,
+  type UhcWorkbookBundle,
 } from "./shared/workbook-files";
 export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: PortalId | null }) {
   const router = useRouter();
@@ -1586,7 +1585,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
       requestPermission: options.allowPermissionPrompt ?? true,
       fileNameForErrors: options.claimFileHandle ? claimFileName : "",
     });
-    const { claimRows, totalRows, excelWb, worksheet } = workbookBundle;
+    const { claimRows, totalRows } = workbookBundle;
 
     setClaimFileHandle(options.claimFileHandle);
     const liveClaimFile = await options.claimFileHandle.getFile();
@@ -1615,79 +1614,41 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     ): Promise<void> => {
       let currentCompleted = startIndex;
       let chunkHasError = false;
-      let writeQueue = Promise.resolve();
-      let writeFailure: Error | null = null;
-      let writeFailureAlertShown = false;
       let subscribedJobId = logicalJobId;
-      let cancellationRequested = false;
       const streamAbortController = new AbortController();
 
-      const handleWriteFailure = (error: unknown): never => {
-        const message = getErrorMessage(error);
-        const userMessage = `Excel update failed. The workbook may be open, locked, moved, or browser file permission may have been lost. Please close Excel, verify file access, and run again. Some recent updates may not have been saved. Details: ${message}`;
-        const failure = new Error(userMessage);
-        writeFailure = failure;
-        chunkHasError = true;
-        setStatus(`Error: ${userMessage}`);
-        streamAbortController.abort();
-        if (!cancellationRequested && subscribedJobId) {
-          cancellationRequested = true;
-          void cancelScrapeJobRequest(subscribedJobId).catch((cancelError) => {
-            console.error("Failed to cancel scrape job after Excel write failure", cancelError);
-          });
-        }
-        if (!writeFailureAlertShown) {
-          writeFailureAlertShown = true;
-          window.alert(userMessage);
-        }
-        throw failure;
-      };
-
-        const handleJobEvent = async (eventData: ScrapeJobEvent) => {
-          if (eventData.type === "log" && eventData.message) {
-            setLogs((prev) => [...prev, eventData.message ?? ""]);
-          } else if (eventData.type === "progress" && typeof eventData.completed === "number" && typeof eventData.total === "number") {
-            currentCompleted = eventData.completed;
-            setProgress({ completed: eventData.completed, total: eventData.total, currentRow: eventData.currentRow });
-          } else if (eventData.type === "row_update") {
-          applyClaimRowUpdateToWorksheet(worksheet, {
-            index: eventData.index ?? 0,
-            update: eventData.update ?? {},
-          });
-
-          writeQueue = writeQueue.then(async () => {
-            try {
-              await writeWorkbookToClaimFile(options.claimFileHandle, excelWb);
-            } catch (writeErr) {
-              console.error("Failed to write to file:", writeErr);
-              handleWriteFailure(writeErr);
-            }
-          });
-          } else if (eventData.type === "error_screenshot" && eventData.image) {
-            setErrorScreenshots((prev) => [...prev, { index: getEventRowIndex(eventData), image: eventData.image ?? "" }]);
-          } else if (eventData.type === "debug_html" && eventData.html) {
-            const artifactKey = buildDownloadArtifactKey(eventData);
-            if (!hasDownloadedArtifact(subscribedJobId, artifactKey)) {
-              const rowIndex = getEventRowIndex(eventData);
-              downloadTextFile(eventData.filename || `debug_dom_line_${rowIndex >= 0 ? rowIndex + 1 : "unknown"}.html`, eventData.html, "text/html");
-              rememberDownloadedArtifact(subscribedJobId, artifactKey);
-            }
-          } else if (eventData.type === "pdf_download" && eventData.filename && eventData.base64) {
-            const artifactKey = buildDownloadArtifactKey(eventData);
-            if (!hasDownloadedArtifact(subscribedJobId, artifactKey)) {
-              downloadBase64File(eventData.filename, eventData.base64, "application/pdf");
-              rememberDownloadedArtifact(subscribedJobId, artifactKey);
-            }
-          } else if (eventData.type === "error" && eventData.message) {
-            setStatus(`Error: ${eventData.message}`);
-            chunkHasError = true;
-          } else if (eventData.type === "cancelled") {
-            cancellationRequested = true;
-            chunkHasError = true;
-            setStatus(eventData.message || "Processing cancelled.");
-            setLogs((prev) => [...prev, eventData.message || "Processing cancelled."]);
+      const handleJobEvent = async (eventData: ScrapeJobEvent) => {
+        if (eventData.type === "log" && eventData.message) {
+          setLogs((prev) => [...prev, eventData.message ?? ""]);
+        } else if (eventData.type === "progress" && typeof eventData.completed === "number" && typeof eventData.total === "number") {
+          currentCompleted = eventData.completed;
+          setProgress({ completed: eventData.completed, total: eventData.total, currentRow: eventData.currentRow });
+        } else if (eventData.type === "row_update") {
+          // IEHP output is now generated by the worker and stored as a separate S3 artifact.
+        } else if (eventData.type === "error_screenshot" && eventData.image) {
+          setErrorScreenshots((prev) => [...prev, { index: getEventRowIndex(eventData), image: eventData.image ?? "" }]);
+        } else if (eventData.type === "debug_html" && eventData.html) {
+          const artifactKey = buildDownloadArtifactKey(eventData);
+          if (!hasDownloadedArtifact(subscribedJobId, artifactKey)) {
+            const rowIndex = getEventRowIndex(eventData);
+            downloadTextFile(eventData.filename || `debug_dom_line_${rowIndex >= 0 ? rowIndex + 1 : "unknown"}.html`, eventData.html, "text/html");
+            rememberDownloadedArtifact(subscribedJobId, artifactKey);
           }
-        };
+        } else if (eventData.type === "pdf_download" && eventData.filename && eventData.base64) {
+          const artifactKey = buildDownloadArtifactKey(eventData);
+          if (!hasDownloadedArtifact(subscribedJobId, artifactKey)) {
+            downloadBase64File(eventData.filename, eventData.base64, "application/pdf");
+            rememberDownloadedArtifact(subscribedJobId, artifactKey);
+          }
+        } else if (eventData.type === "error" && eventData.message) {
+          setStatus(`Error: ${eventData.message}`);
+          chunkHasError = true;
+        } else if (eventData.type === "cancelled") {
+          chunkHasError = true;
+          setStatus(eventData.message || "Processing cancelled.");
+          setLogs((prev) => [...prev, eventData.message || "Processing cancelled."]);
+        }
+      };
 
       try {
         if (mode === "start") {
@@ -1695,6 +1656,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
           formData.append("portalId", "iehp");
           formData.append("loginExcel", options.loginFile);
           formData.append("loginFileName", options.loginFile.name);
+          formData.append("claimExcel", liveClaimFile);
           formData.append("claimFileName", liveClaimFile.name);
           formData.append("claimRows", JSON.stringify(claimRows));
           formData.append("startIndex", startIndex.toString());
@@ -1719,24 +1681,9 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
             chunkHasError = true;
           },
         });
-
-        await writeQueue;
-        if (!chunkHasError) {
-          try {
-            setStatus(`Saving IEHP checkpoint after row ${currentCompleted}...`);
-            await writeIehpPostProcessedCheckpoint(options.claimFileHandle, excelWb);
-          } catch (checkpointError) {
-            console.error("Failed to write IEHP checkpoint:", checkpointError);
-            handleWriteFailure(checkpointError);
-          }
-        }
       } catch (error) {
-        if (writeFailure) {
-          console.error("Processing stopped because Excel write failed", writeFailure);
-        } else {
-          console.error("fetchEventSource failed", error);
-          chunkHasError = true;
-        }
+        console.error("fetchEventSource failed", error);
+        chunkHasError = true;
       }
 
       const effectiveJobId = subscribedJobId || logicalJobId || options.existingJobId || "";
@@ -1748,14 +1695,12 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
         await processChunk(currentCompleted, effectiveJobId, "start");
       } else {
         try {
-          setStatus("Running post-processing (generating summary columns & duplicating rows)...");
-          postProcessWorksheet(worksheet);
-          await writeWorkbookToClaimFile(options.claimFileHandle, excelWb);
-          setStatus("IEHP processing completed.");
+          const filename = await downloadStoredJobOutputOnce(effectiveJobId);
+          setStatus(filename ? `IEHP processing completed. Download started for ${filename}.` : "IEHP processing completed.");
           await clearStoredRunContext().catch(() => {});
         } catch (postError) {
-          console.error("Post-processing failed", postError);
-          setStatus(`Processing succeeded but post-processing failed: ${getErrorMessage(postError)}`);
+          console.error("IEHP output download failed", postError);
+          setStatus(`IEHP processing completed, but automatic output download failed: ${getErrorMessage(postError)}`);
         } finally {
           setIsProcessing(false);
           setActiveJobId("");

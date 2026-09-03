@@ -46,7 +46,10 @@ async function fillInputProviderIdentifiers(page, rowData) {
     if (!/^\d{9}$/.test(taxId)) {
       throw new Error(`Provider Tax ID must contain exactly 9 digits. Received "${taxId}".`);
     }
-    await typeAndVerify(frame.locator("input#providerTaxId[name='providerTaxId'], input#providerTaxId").first(), taxId, "Provider Tax ID");
+    const taxIdInput = frame.locator("input#providerTaxId[name='providerTaxId'], input#providerTaxId").first();
+    if (await taxIdInput.isVisible({ timeout: 1500 }).catch(() => false)) {
+      await typeAndVerify(taxIdInput, taxId, "Provider Tax ID");
+    }
   }
 }
 

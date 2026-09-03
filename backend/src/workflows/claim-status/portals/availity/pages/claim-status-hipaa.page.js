@@ -7,7 +7,7 @@ const { fillInputProviderIdentifiers, hasInputProviderIdentifiers } = require(".
 
 const HIPAA_SELECTORS = {
   hipaaTab: "button[role='tab']:has-text('HIPAA Standard')",
-  hipaaAnchorTab: "a[id='HIPAA Standard'][role='button'], a[role='button']:has-text('HIPAA Standard')",
+  hipaaAnchorTab: "a[role='button']:has-text('HIPAA Standard')",
   memberTab: "button[role='tab']:has-text('Member')",
   memberAnchorTab: "a#Member[role='button'], a[role='button']:has-text('Member')",
   providerInput: "input#providerExpressEntry[role='combobox']",
@@ -27,6 +27,13 @@ const HIPAA_SELECTORS = {
   noResultsMessage: "li:has-text('The payer could not find any results based on your search')",
   portalAlert: "[role='alert'], .MuiAlert-root"
 };
+
+async function isHipaaFormVisible(frame, timeout = 700) {
+  const submitVisible = await frame.locator(HIPAA_SELECTORS.submitButton).first().isVisible({ timeout }).catch(() => false);
+  const providerVisible = await frame.locator(HIPAA_SELECTORS.providerInput).first().isVisible({ timeout }).catch(() => false);
+  const memberVisible = await frame.locator(HIPAA_SELECTORS.memberId).first().isVisible({ timeout }).catch(() => false);
+  return submitVisible || (providerVisible && memberVisible);
+}
 
 function splitPatientName(patientName) {
   const raw = String(patientName || "").replace(/\s+/g, " ").trim();
@@ -400,7 +407,7 @@ async function isHipaaTabAvailable(page) {
   const frame = await getClaimStatusFrame(page);
   const muiTabVisible = await frame.locator(HIPAA_SELECTORS.hipaaTab).first().isVisible({ timeout: 1500 }).catch(() => false);
   const anchorTabVisible = await frame.locator(HIPAA_SELECTORS.hipaaAnchorTab).first().isVisible({ timeout: 1500 }).catch(() => false);
-  return muiTabVisible || anchorTabVisible;
+  return muiTabVisible || anchorTabVisible || await isHipaaFormVisible(frame, 1500);
 }
 
 async function waitForSearchTabs(page, timeoutMs = 5000, options = {}) {
@@ -413,7 +420,8 @@ async function waitForSearchTabs(page, timeoutMs = 5000, options = {}) {
   while (Date.now() < deadline) {
     const frame = await getClaimStatusFrame(page);
     const memberAvailable = await frame.locator(`${HIPAA_SELECTORS.memberTab}, ${HIPAA_SELECTORS.memberAnchorTab}`).first().isVisible({ timeout: 700 }).catch(() => false);
-    const hipaaAvailable = await frame.locator(`${HIPAA_SELECTORS.hipaaTab}, ${HIPAA_SELECTORS.hipaaAnchorTab}`).first().isVisible({ timeout: 700 }).catch(() => false);
+    const hipaaTabAvailable = await frame.locator(`${HIPAA_SELECTORS.hipaaTab}, ${HIPAA_SELECTORS.hipaaAnchorTab}`).first().isVisible({ timeout: 700 }).catch(() => false);
+    const hipaaAvailable = hipaaTabAvailable || await isHipaaFormVisible(frame);
 
     lastAvailability = {
       memberAvailable,
@@ -443,6 +451,10 @@ async function selectHipaaTab(page) {
     "Selecting HIPAA Standard tab",
     async () => {
       const frame = await getClaimStatusFrame(page);
+      if (await isHipaaFormVisible(frame, 1500)) {
+        logger.info("HIPAA Standard form is already active.");
+        return;
+      }
       const muiTab = frame.locator(HIPAA_SELECTORS.hipaaTab).first();
       const anchorTab = frame.locator(HIPAA_SELECTORS.hipaaAnchorTab).first();
       const tab = await muiTab.isVisible({ timeout: 3000 }).catch(() => false) ? muiTab : anchorTab;
@@ -732,6 +744,10 @@ async function searchHipaaWithProvider(page, providerName, rowData, options = {}
   try {
     await selectProvider(page, providerName, options);
   } catch (error) {
+    if (options.requireDropdownProviderSelection) {
+      error.providerSelectionFailed = true;
+      throw error;
+    }
     if (!hasInputProviderIdentifiers(rowData)) throw error;
     logger.warn(`HIPAA provider "${providerName}" was not available. Continuing with input Provider NPI/Tax ID.`);
   }
