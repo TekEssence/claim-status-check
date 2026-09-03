@@ -10,6 +10,7 @@ import { readWaystarEligibilityWorkbook } from "./input";
 import { getWaystarPayer } from "./payer-registry";
 import { loginToWaystar, submitWaystarInquiry } from "./portal";
 import { buildWaystarOutputWorkbook } from "./output";
+import { parseEligibilityProjectId, scopeEligibilityInputFile } from "../../projects";
 
 function requireFile(formData: FormData, key: string, label: string): File {
   const value = formData.get(key);
@@ -28,14 +29,19 @@ export function createWaystarRunner(): AutomationRunner<EligibilityRunInput> {
       if (!(input instanceof FormData)) {
         throw new Error("Waystar eligibility input must be multipart form data.");
       }
+      const projectId = parseEligibilityProjectId(input.get("projectId"));
+      if (projectId !== "minimax") throw new Error("Waystar eligibility is currently configured only for Minimax.");
       return {
         inputFile: requireFile(input, "inputFile", "Eligibility input file"),
         credentialFile: requireFile(input, "credentialFile", "Credential file"),
+        projectId,
       };
     },
     async run(input, context) {
-      const routing = await readWaystarEligibilityWorkbook(input.inputFile, input.credentialFile);
+      const scopedInputFile = await scopeEligibilityInputFile(input.inputFile, input.projectId);
+      const routing = await readWaystarEligibilityWorkbook(scopedInputFile, input.credentialFile);
       const credentialProfiles = await readWaystarCredentialProfiles(input.credentialFile);
+      await context.log({ level: "info", message: `Eligibility project selected: ${input.projectId === "minimax" ? "Minimax" : "MedRevenue"}.`, eventName: "eligibility_project_selected", meta: { projectId: input.projectId } });
       await context.emit({
         type: "progress",
         completed: 0,
@@ -110,7 +116,7 @@ export function createWaystarRunner(): AutomationRunner<EligibilityRunInput> {
       try {
         payerBatches: for (const batch of routing.batches) {
           const payer = getWaystarPayer(batch.payerId);
-          const credentials = findWaystarCredentialsForPayer(credentialProfiles, payer);
+          const credentials = findWaystarCredentialsForPayer(credentialProfiles, payer, input.projectId);
           if (!credentials) {
             failureCount += batch.rows.length;
             completed = Math.min(completed + batch.rows.length, routing.totalRows);
@@ -375,7 +381,7 @@ export function createWaystarRunner(): AutomationRunner<EligibilityRunInput> {
         }
         const cancelled = context.isCancelled?.() === true;
         const output = await buildWaystarOutputWorkbook({
-          inputFile: input.inputFile,
+          inputFile: scopedInputFile,
           rows: inputRows,
           results,
           errors: rowErrors,

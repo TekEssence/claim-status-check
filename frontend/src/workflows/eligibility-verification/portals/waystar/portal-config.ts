@@ -3,4 +3,5 @@ export const waystarFrontendPortalConfig = {
   name: "Waystar",
   description: "Eligibility verification through the Waystar portal.",
   supportedPayers: ["Medicare", "BCBS PPO", "Cigna Open Access Plus", "AETNA", "UMR", "HUMANA MEDICARE PPO", "AV Med"],
+  projects: ["minimax"] as const,
 } as const;

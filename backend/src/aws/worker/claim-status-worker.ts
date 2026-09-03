@@ -684,6 +684,7 @@ async function runAutomationWorkflow(params: {
     workflowId: params.workflowId,
     portalId: params.portalId,
     payerId: stringField(params.formData, "payerId") || undefined,
+    projectId: stringField(params.formData, "projectId") || undefined,
     isCancelled: cancellation.isCancelled,
     emit: async (event) => {
       emitScrapeJobEvent(job.id, event);

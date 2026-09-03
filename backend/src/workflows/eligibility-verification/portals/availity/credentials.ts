@@ -1,4 +1,5 @@
 import ExcelJS from "exceljs";
+import { credentialProjectMatches, type EligibilityProjectId } from "../../projects";
 
 export type AvailityEligibilityCredentials = {
   payer?: string;
@@ -9,7 +10,6 @@ export type AvailityEligibilityCredentials = {
   successUrlFragment: string;
 };
 
-const AVAILITY_ELIGIBILITY_PROJECT = "tpm";
 const AVAILITY_ELIGIBILITY_PORTAL = "availity";
 
 function asText(value: unknown): string {
@@ -34,6 +34,7 @@ function findValue(row: Record<string, string>, aliases: string[]): string {
 
 export async function readAvailityEligibilityCredentialProfiles(
   credentialFile: File,
+  projectId: EligibilityProjectId = "minimax",
 ): Promise<AvailityEligibilityCredentials[]> {
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(await credentialFile.arrayBuffer());
@@ -56,7 +57,7 @@ export async function readAvailityEligibilityCredentialProfiles(
     const project = findValue(row, ["Project"]);
     const portal = findValue(row, ["Portal"]);
     if (
-      project.toLowerCase() !== AVAILITY_ELIGIBILITY_PROJECT
+      !credentialProjectMatches(projectId, project)
       || portal.toLowerCase() !== AVAILITY_ELIGIBILITY_PORTAL
     ) continue;
 
@@ -81,7 +82,7 @@ export async function readAvailityEligibilityCredentialProfiles(
 
   if (profiles.length) return profiles;
   throw new Error(
-    "Missing TPM Availity login details. The credential workbook must contain a row with Project TPM, Portal Availity, Link, Username, Password, and Secret Key.",
+    `Missing ${projectId === "minimax" ? "Minimax/TPM" : "MedRevenue"} Availity login details. The credential workbook Project column must match the selected project.`,
   );
 }
 
@@ -106,6 +107,7 @@ export function findAvailityEligibilityCredentialsForPayer(
 
 export async function readAvailityEligibilityCredentials(
   credentialFile: File,
+  projectId: EligibilityProjectId = "minimax",
 ): Promise<AvailityEligibilityCredentials> {
-  return (await readAvailityEligibilityCredentialProfiles(credentialFile))[0];
+  return (await readAvailityEligibilityCredentialProfiles(credentialFile, projectId))[0];
 }

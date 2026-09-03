@@ -14,6 +14,7 @@ import {
   readAvailityEligibilityInputPayers,
 } from "./input-routing";
 import { getAvailityEligibilityPayer } from "./payers/registry";
+import { parseEligibilityProjectId, scopeEligibilityInputFile } from "../../projects";
 
 function requireFile(formData: FormData, key: string, label: string): File {
   const value = formData.get(key);
@@ -91,14 +92,18 @@ export function createAvailityEligibilityRunner(): AutomationRunner<EligibilityR
     name: "Availity Eligibility Verification",
     validateInput(input) {
       if (!(input instanceof FormData)) throw new Error("Availity eligibility input must be multipart form data.");
+      const projectId = parseEligibilityProjectId(input.get("projectId"));
+      if (projectId !== "minimax") throw new Error("Availity eligibility is currently configured only for Minimax.");
       return {
         inputFile: requireFile(input, "inputFile", "Eligibility input file"),
         credentialFile: requireFile(input, "credentialFile", "Availity login file"),
+        projectId,
       };
     },
     async run(input, context) {
-      const batches = await readAvailityEligibilityInputPayers(input.inputFile);
-      const credentialProfiles = await readAvailityEligibilityCredentialProfiles(input.credentialFile);
+      const scopedInputFile = await scopeEligibilityInputFile(input.inputFile, input.projectId);
+      const batches = await readAvailityEligibilityInputPayers(scopedInputFile);
+      const credentialProfiles = await readAvailityEligibilityCredentialProfiles(input.credentialFile, input.projectId);
       const log = async (message: string) => context.log({
         level: "info",
         message,
@@ -110,7 +115,7 @@ export function createAvailityEligibilityRunner(): AutomationRunner<EligibilityR
       let activePayerName = "Not started";
       let stage = "input routing";
       const totalRows = batches.reduce((sum, batch) => sum + batch.rowCount, 0);
-      const originalRows = await readOriginalRows(input.inputFile);
+      const originalRows = await readOriginalRows(scopedInputFile);
       const mergedOutputRows: Record<string, unknown>[] = [];
       const rowUpdates = new Map<number, Record<string, unknown>>();
       let completedRows = 0;
@@ -164,6 +169,12 @@ export function createAvailityEligibilityRunner(): AutomationRunner<EligibilityR
         persistBackupOutput();
         await context.log({
           level: "info",
+          message: `Eligibility project selected: ${input.projectId === "minimax" ? "Minimax" : "MedRevenue"}.`,
+          eventName: "eligibility_project_selected",
+          meta: { projectId: input.projectId },
+        });
+        await context.log({
+          level: "info",
           message: `Detected ${batches.length} payer batch(es) across ${totalRows} row(s).`,
           eventName: "eligibility_availity_batches_detected",
         });
@@ -200,7 +211,7 @@ export function createAvailityEligibilityRunner(): AutomationRunner<EligibilityR
               level: "info",
               message: `Availity login completed for ${batch.payerId}.`,
               eventName: "eligibility_availity_login_complete",
-              meta: { payerId: batch.payerId, username: credentials.username },
+          meta: { payerId: batch.payerId, username: credentials.username, projectId: input.projectId },
             });
           } else {
             await context.log({
