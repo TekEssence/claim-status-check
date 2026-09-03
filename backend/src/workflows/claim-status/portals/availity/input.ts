@@ -3,7 +3,7 @@ import ExcelJS from "exceljs";
 import { applyProjectColumnMapping, applyProjectPreprocessing, getProjectInputHeaders, normalizeProjectId } from "./project-config";
 import type { AvailityCredentials, AvailityInput } from "./types";
 
-const SUPPORTED_PAYER_PATTERN = /\b(aetna|anthem|blue\s*cross|blue\s*shield|bcbs|bcbstx|regence|carefirst|carelon|bhomd|wellpoint|wellcare|humana|central\s*health|health\s*net|healthnet|molina|providence|scan|triwest|tricare)\b/i;
+const SUPPORTED_PAYER_PATTERN = /\b(aetna|anthem|blue\s*cross|blue\s*shield|florida\s*blue|bcbs|bcbstx|regence|carefirst|carelon|bhomd|wellpoint|wellcare|humana|central\s*health|health\s*net|healthnet|molina|providence|scan|triwest|tricare)\b/i;
 
 export function isRunnableAvailityPayerName(payerName: string): boolean {
   return SUPPORTED_PAYER_PATTERN.test(asText(payerName));

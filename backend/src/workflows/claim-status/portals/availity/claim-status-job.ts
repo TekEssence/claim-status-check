@@ -131,6 +131,32 @@ function isSubmitNoResponseError(message: string): boolean {
   return /submit did not produce results, no-results message, or validation response/i.test(message);
 }
 
+function isLocatorTimeoutError(message: string): boolean {
+  return /Timeout \d+ms exceeded/i.test(message)
+    && /locator\(|locator\.waitFor|waiting for locator/i.test(message);
+}
+
+function locatorTimeoutAction(message: string): string {
+  const retryStep = message.match(/^(.+?) failed after \d+ attempts\./i);
+  if (retryStep?.[1]) return retryStep[1].trim();
+
+  if (/iframe#newBodyFrame/i.test(message)) {
+    return "Waiting for Availity Claim Status iframe";
+  }
+  if (/Claim Status controls were not ready/i.test(message)) {
+    return "Waiting for Claim Status controls";
+  }
+
+  const locator = message.match(/waiting for\s+locator\('([^']+)'/i);
+  if (locator?.[1]) return `Waiting for locator ${locator[1]}`;
+
+  return "Availity locator wait";
+}
+
+function locatorTimeoutActionKey(action: string): string {
+  return action.replace(/\s+/g, " ").trim().toLowerCase();
+}
+
 function isRecoverableRowError(message: string): boolean {
   return isClosedPageError(message) || isSubmitNoResponseError(message);
 }
@@ -410,6 +436,7 @@ export async function runAvailityClaimStatusJob(formData: FormData, context: Scr
   const payerMapping = await readAvailityPayerMapping(input.projectId);
   const providerMappings = await readAvailityProviderMapping();
   const runnableTotal = input.inputRows.filter((row) => isRunnableAvailityPayerName(row.data["Payer Name"] || "")).length;
+  const locatorTimeoutFailuresByAction = new Map<string, number>();
   let completedRunnableRows = 0;
   let session: Awaited<ReturnType<typeof initializeSession>> | null = null;
   let activeRow: AvailityInputRow | null = null;
@@ -551,6 +578,7 @@ export async function runAvailityClaimStatusJob(formData: FormData, context: Scr
 
       let rowHandled = false;
       let lastRowErrorMessage = "";
+      const rowRecoveryNotes: string[] = [];
       for (let rowAttempt = 1; rowAttempt <= ROW_PROCESS_MAX_ATTEMPTS && !rowHandled; rowAttempt += 1) {
         try {
           await context.emit(rowProgressEvent(row, currentRunnableRow, runnableTotal, `attempt ${rowAttempt}`));
@@ -558,6 +586,9 @@ export async function runAvailityClaimStatusJob(formData: FormData, context: Scr
             projectId: input.projectId,
             providerMappings,
           });
+          if (rowRecoveryNotes.length) {
+            result.notes = [result.notes, ...rowRecoveryNotes].filter(Boolean).join("; ");
+          }
           const projectOutputRows = applyProjectOutputStrategy({
             projectId: input.projectId,
             row,
@@ -583,6 +614,42 @@ export async function runAvailityClaimStatusJob(formData: FormData, context: Scr
           const message = friendlyAvailityError(error);
           lastRowErrorMessage = message;
           await context.log({ level: "warn", message: `Availity row ${row.input_row_id} attempt ${rowAttempt} failed: ${message}` });
+
+          if (isLocatorTimeoutError(message)) {
+            const action = locatorTimeoutAction(message);
+            const actionKey = locatorTimeoutActionKey(action);
+            const previousFailures = locatorTimeoutFailuresByAction.get(actionKey) || 0;
+            const failureCount = previousFailures + 1;
+            locatorTimeoutFailuresByAction.set(actionKey, failureCount);
+
+            if (failureCount === 1 && rowAttempt < ROW_PROCESS_MAX_ATTEMPTS) {
+              const recoveryMessage = `Locator timeout at "${action}" on row ${row.input_row_id}. Logging out, starting a fresh Availity session, and retrying the same row once.`;
+              rowRecoveryNotes.push(`Locator timeout at "${action}"; logged in again and retry succeeded if this row completes.`);
+              await context.log({ level: "warn", message: recoveryMessage });
+              addAudit(auditRows, runId, row, action, "relogin_retry", recoveryMessage, startedAt, rowAttempt);
+              await logoutIfPresent(session.page).catch(() => {});
+              await session.browser.close().catch(() => {});
+              session = await initializeSession(input, context, log);
+              automationState.selectedOrganization = "";
+              automationState.selectedState = "";
+              automationState.selectedPayer = "";
+              automationState.claimStatusOpened = false;
+              continue;
+            }
+
+            const stopMessage = `Repeated locator timeout at "${action}" after fresh login/retry. Stopping Availity job instead of continuing remaining rows. Last error: ${message}`;
+            await context.log({ level: "error", message: stopMessage });
+            markFailure(outputRow, stopMessage);
+            outputRows.push(outputRow);
+            addError(errorRows, runId, row, {
+              search_source_tab: "Member/HIPAA",
+              failure_stage: action,
+              failure_reason: stopMessage,
+              current_url: safePageUrl(session.page),
+            });
+            addAudit(auditRows, runId, row, action, "fatal_repeated_locator_timeout", stopMessage, startedAt, rowAttempt);
+            throw new Error(stopMessage);
+          }
 
           if (rowAttempt < ROW_PROCESS_MAX_ATTEMPTS && isRecoverableRowError(message)) {
             automationState.selectedPayer = "";

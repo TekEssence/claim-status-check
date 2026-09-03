@@ -253,9 +253,10 @@ async function waitForSearchResultsToSettle(page, timeoutMs = 5000) {
       stableSamples = signature === previousSignature ? stableSamples + 1 : 0;
       previousSignature = signature;
 
-      // Availity often renders the generic warning before its detailed INFO alert.
-      // Keep sampling briefly so every visible response message reaches the output.
-      if (Date.now() - responseDetectedAt >= 5000 && stableSamples >= 1) {
+      // Rows are enough to continue quickly; alerts/no-results get a shorter
+      // settling window so the detailed portal message can finish rendering.
+      const settleMs = latestSummary.hasResultRows ? 1200 : 2500;
+      if (Date.now() - responseDetectedAt >= settleMs && stableSamples >= 1) {
         return latestSummary;
       }
     }
