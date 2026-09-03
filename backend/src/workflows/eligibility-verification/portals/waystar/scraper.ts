@@ -395,6 +395,7 @@ export function createWaystarRunner(): AutomationRunner<EligibilityRunInput> {
           rows: inputRows,
           results,
           errors: rowErrors,
+          projectId: input.projectId,
         });
         await context.emit({
           type: "file_download",

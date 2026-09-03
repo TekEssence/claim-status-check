@@ -5,5 +5,19 @@ export const medRevenueWaystarConfig: WaystarProjectConfig = {
   id: "medrevenue",
   requireInputProjectColumn: false,
   allowUnscopedCredentials: true,
-  payers: { medicare: {} },
+  inputColumnMappings: {
+    dateOfService: ["Date of Service (DOS)", "Plan Date", "Plan Date(s)"],
+  },
+  payers: {
+    medicare: {
+      skipProviderHandling: true,
+      useDateOfServiceForPlanDates: true,
+      serviceTypeDirectValue: "30",
+      extractFullPayerResponse: true,
+      selectorFallbacks: {
+        planDateFrom: "#txtPlanFrom",
+        planDateTo: "#txtPlanTo",
+      },
+    },
+  },
 };

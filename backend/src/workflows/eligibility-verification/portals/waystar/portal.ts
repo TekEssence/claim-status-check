@@ -62,6 +62,13 @@ export type WaystarInquiryPayload = {
     benefitSections?: WaystarBenefitSection[];
   };
   professionalOffice?: WaystarBenefitSection[];
+  fullPayerResponse?: {
+    subscriberInformation?: unknown;
+    subscriberCoverageInformation?: unknown;
+    otherCoverageInformation?: unknown;
+    generalInformation?: unknown;
+    sections?: unknown;
+  };
 };
 
 const WAYSTAR_PAYER_SUGGESTION_SELECTOR = [
@@ -411,32 +418,48 @@ export async function submitWaystarInquiry(options: {
   const expectedLastName = row.patientLastName || "";
   const expectedFirstName = row.patientFirstName || "";
   const expectedDateOfBirth = normalizeWaystarDate(row.dateOfBirth || "");
+  const useMedRevenueMedicareFlow = Boolean(
+    options.projectConfig?.skipProviderHandling && options.projectConfig.useDateOfServiceForPlanDates,
+  );
 
   await selectInquiryPatientType(inquiryPage, row.relationshipToSubscriber);
   await humanPause(inquiryPage);
-  await selectPayer(inquiryPage, payerName, options.projectConfig?.portalPayerNameFallbacks);
+  await selectPayer(inquiryPage, payerName, options.projectConfig);
   await humanPause(inquiryPage);
-  await selectProviderWithProjectFallback(inquiryPage, credentials, options.projectConfig);
-  await humanPause(inquiryPage);
-  const patientLookup = inquiryPage.locator(WAYSTAR_SELECTORS.inquiry.patientLookup).first();
-  if (await patientLookup.isVisible().catch(() => false)) {
-    const hasLookupOption = await patientLookup.locator('option[value="10"]').count() > 0;
-    if (hasLookupOption) await patientLookup.selectOption("10");
+  if (!useMedRevenueMedicareFlow) {
+    await selectProviderWithProjectFallback(inquiryPage, credentials, options.projectConfig);
+    await humanPause(inquiryPage);
+  }
+  if (options.projectConfig?.useDateOfServiceForPlanDates) {
+    await fillPlanDatesFromDateOfService(inquiryPage, row.dateOfService || "", options.projectConfig);
+    await humanPause(inquiryPage);
+  }
+  let expectedPatientLookupCode = options.patientLookupCode;
+  if (!useMedRevenueMedicareFlow) {
+    const patientLookup = inquiryPage.locator(WAYSTAR_SELECTORS.inquiry.patientLookup).first();
+    if (await patientLookup.isVisible().catch(() => false)) {
+      const hasLookupOption = await patientLookup.locator('option[value="10"]').count() > 0;
+      if (hasLookupOption) await patientLookup.selectOption("10");
+    }
+    if (expectedPatientLookupCode) {
+      await selectPatientLookupOption(inquiryPage, expectedPatientLookupCode).catch(async (error) => {
+        const fallback = options.projectConfig?.patientLookupCodeFallback;
+        if (!fallback || fallback === expectedPatientLookupCode) throw error;
+        await selectPatientLookupOption(inquiryPage, fallback);
+        expectedPatientLookupCode = fallback;
+      });
+    }
   }
   await humanPause(inquiryPage);
-  await selectServiceType(inquiryPage, expectedServiceType).catch(async (error) => {
-    const fallback = options.projectConfig?.serviceTypeCodeFallback;
-    if (!fallback || fallback === expectedServiceType) throw error;
-    await selectServiceType(inquiryPage, fallback);
-    expectedServiceType = fallback;
-  });
-  let expectedPatientLookupCode = options.patientLookupCode;
-  if (expectedPatientLookupCode) {
-    await selectPatientLookupOption(inquiryPage, expectedPatientLookupCode).catch(async (error) => {
-      const fallback = options.projectConfig?.patientLookupCodeFallback;
-      if (!fallback || fallback === expectedPatientLookupCode) throw error;
-      await selectPatientLookupOption(inquiryPage, fallback);
-      expectedPatientLookupCode = fallback;
+  if (options.projectConfig?.serviceTypeDirectValue) {
+    expectedServiceType = options.projectConfig.serviceTypeDirectValue;
+    await selectServiceTypeByValue(inquiryPage, expectedServiceType);
+  } else {
+    await selectServiceType(inquiryPage, expectedServiceType).catch(async (error) => {
+      const fallback = options.projectConfig?.serviceTypeCodeFallback;
+      if (!fallback || fallback === expectedServiceType) throw error;
+      await selectServiceType(inquiryPage, fallback);
+      expectedServiceType = fallback;
     });
   }
   await waitForBlockingOverlaysToClear(inquiryPage, 30000);
@@ -444,17 +467,35 @@ export async function submitWaystarInquiry(options: {
   await fillVerifiedText(inquiryPage, WAYSTAR_SELECTORS.inquiry.memberId, expectedMemberId, "Member ID");
   await fillVerifiedText(inquiryPage, WAYSTAR_SELECTORS.inquiry.lastName, expectedLastName, "Last Name");
   await fillVerifiedText(inquiryPage, WAYSTAR_SELECTORS.inquiry.firstName, expectedFirstName, "First Name");
-  await fillVerifiedText(inquiryPage, WAYSTAR_SELECTORS.inquiry.dateOfBirth, expectedDateOfBirth, "Date of Birth", true);
+  if (!options.projectConfig?.useDateOfServiceForPlanDates) {
+    await fillVerifiedText(inquiryPage, WAYSTAR_SELECTORS.inquiry.dateOfBirth, expectedDateOfBirth, "Date of Birth", true);
+  }
   await dismissWaystarDatePicker(inquiryPage);
-  await verifyInquiryFieldsBeforeSubmit(inquiryPage, {
-    serviceTypeCode: expectedServiceType,
-    patientLookupCode: expectedPatientLookupCode,
-    memberId: expectedMemberId,
-    lastName: expectedLastName,
-    firstName: expectedFirstName,
-    dateOfBirth: expectedDateOfBirth,
-  });
+  if (useMedRevenueMedicareFlow) {
+    await verifyMedRevenueMedicarePatientFields(inquiryPage, {
+      memberId: expectedMemberId,
+      lastName: expectedLastName,
+      firstName: expectedFirstName,
+    });
+    await ensureSelectedServiceType(inquiryPage, expectedServiceType);
+  } else {
+    await verifyInquiryFieldsBeforeSubmit(inquiryPage, {
+      serviceTypeCode: expectedServiceType,
+      patientLookupCode: expectedPatientLookupCode,
+      memberId: expectedMemberId,
+      lastName: expectedLastName,
+      firstName: expectedFirstName,
+      dateOfBirth: expectedDateOfBirth,
+    });
+  }
   await humanPause(inquiryPage, 1800, 3000);
+
+  // Waystar can rebuild the service-type dropdown after patient fields change.
+  // Re-apply the MedRevenue fixed value at the last possible moment so the
+  // selection cannot be lost during the final pause before submission.
+  if (useMedRevenueMedicareFlow) {
+    await ensureSelectedServiceType(inquiryPage, expectedServiceType);
+  }
 
   await Promise.all([
     inquiryPage.waitForLoadState("networkidle").catch(() => {}),
@@ -586,20 +627,101 @@ const dataId = header.getAttribute("data-id");
     function readHalfColumn(headingText: string) {
       const halfColumns = Array.from(document.querySelectorAll(".HalfColumn"));
       const matches = halfColumns.filter((hc) =>
-        textOf(hc.querySelector(":scope > h4")).toLowerCase() === headingText.toLowerCase(),
+        Array.from(hc.querySelectorAll("h1, h2, h3, h4, h5, h6, .Title, .Header"))
+          .some((heading) => normalizeFieldLabel(textOf(heading)) === normalizeFieldLabel(headingText)),
       );
       const target = matches[matches.length - 1];
       if (!target) return null;
 
       const fields: Record<string, string> = {};
-      for (const row of Array.from(target.querySelectorAll(":scope > .Row.clearfix"))) {
-        const label = textOf(row.querySelector(".Label"));
-        const value = textOf(row.querySelector(".Text"));
-        if (label) fields[label] = value;
+      for (const entry of readOrderedRows(target)) {
+        if (entry.label) fields[entry.label] = entry.value;
       }
       const name = textOf(target.querySelector(":scope > .Text:not(.Address)")) || undefined;
       const address = textOf(target.querySelector(":scope > .Text.Address")) || undefined;
       return { fields, name, address };
+    }
+
+    function readOrderedRows(container: Element | null) {
+      if (!container) return [];
+      const entries: Array<{ label: string; value: string }> = [];
+      const labels = Array.from(container.querySelectorAll(".Label, label, dt, th"));
+      for (const labelElement of labels) {
+        const label = textOf(labelElement).replace(/:\s*$/, "").trim();
+        if (!label) continue;
+        const row = labelElement.closest(".Row, tr, dl, .clearfix") || labelElement.parentElement;
+        if (!row) continue;
+        const explicitValue = row.querySelector(".Text, .Value, dd, td:not(.Label), input, select");
+        let value = explicitValue instanceof HTMLInputElement || explicitValue instanceof HTMLSelectElement
+          ? explicitValue.value
+          : textOf(explicitValue);
+        if (!value) {
+          const rowText = textOf(row);
+          value = rowText.startsWith(label) ? rowText.slice(label.length).replace(/^\s*:?\s*/, "").trim() : "";
+        }
+        if (value && normalizeFieldLabel(value) !== normalizeFieldLabel(label)) entries.push({ label, value });
+      }
+      return entries;
+    }
+
+    function findHeadingElements(headingText: string) {
+      const wanted = normalizeFieldLabel(headingText);
+      return Array.from(document.querySelectorAll("body *")).filter((element) => {
+        if (normalizeFieldLabel(textOf(element)) !== wanted) return false;
+        return Array.from(element.children).every((child) => normalizeFieldLabel(textOf(child)) !== wanted);
+      });
+    }
+
+    function resolveHeadingContainer(heading: Element): Element {
+      let candidate: Element = heading.parentElement || heading;
+      let best = candidate;
+      for (let depth = 0; depth < 6 && candidate.parentElement && candidate.parentElement !== document.body; depth += 1) {
+        const labelCount = candidate.querySelectorAll(".Label, label, dt, th").length;
+        if (labelCount > 0) best = candidate;
+        if (labelCount >= 2 || candidate.matches(".HalfColumn, .SectionContents, .SubSection, section")) break;
+        candidate = candidate.parentElement;
+      }
+      return best;
+    }
+
+    function readFullSections() {
+      return Array.from(document.querySelectorAll(".SectionHeader")).map((header) => {
+        const title = textOf(header.querySelector(".SectionTitle"));
+        const status = textOf(header.querySelector(".SectionStatus"));
+        const dataId = header.getAttribute("data-id");
+        const contents = (dataId
+          ? Array.from(document.querySelectorAll(".SectionContents"))
+            .find((candidate) => candidate.getAttribute("data-id") === dataId)
+          : undefined) || (header.nextElementSibling?.classList.contains("SectionContents")
+          ? header.nextElementSibling
+          : header.parentElement?.querySelector(".SectionContents")) || null;
+        const groups = contents
+          ? Array.from(contents.querySelectorAll(".SubSection")).map((group) => ({
+              title: textOf(group.querySelector("h3, h4, .SubSectionTitle, .InsuranceType, .CoverageLevel")),
+              rows: readOrderedRows(group),
+            })).filter((group) => group.title || group.rows.length)
+          : [];
+        return { title, status, rows: readOrderedRows(contents), groups };
+      }).filter((section) => section.title || section.status || section.rows.length || section.groups.length);
+    }
+
+    function readBlocksByHeading(headingText: string) {
+      return findHeadingElements(headingText)
+        .map((heading) => {
+          const container = resolveHeadingContainer(heading);
+          return {
+            title: textOf(heading),
+            rows: readOrderedRows(container),
+            text: textOf(container),
+            groups: Array.from(container.querySelectorAll("h3, h4, h5, .SubSectionTitle, .InsuranceType"))
+              .filter((groupHeading) => groupHeading !== heading)
+              .map((groupHeading) => ({
+                title: textOf(groupHeading),
+                rows: readOrderedRows(resolveHeadingContainer(groupHeading)),
+              }))
+              .filter((group) => group.title || group.rows.length),
+          };
+        });
     }
 
     function normalizeFieldLabel(value: string): string {
@@ -618,6 +740,12 @@ const dataId = header.getAttribute("data-id");
       return undefined;
     }
 
+    function valueFromBlocks(blocks: Array<{ rows: Array<{ label: string; value: string }> }>, label: string): string | undefined {
+      const wanted = normalizeFieldLabel(label);
+      return blocks.flatMap((block) => block.rows)
+        .find((entry) => normalizeFieldLabel(entry.label) === wanted)?.value;
+    }
+
     // ---- overall status + fallback section list (unchanged) ----
     const statusElementText = textOf(document.querySelector(selectors.inquiry.activeCoverageDom));
     const visibleCoverageBanner = document.body?.innerText.match(/\b(?:INACTIVE|ACTIVE)\s+COVERAGE\b/i)?.[0];
@@ -629,12 +757,17 @@ const dataId = header.getAttribute("data-id");
 
     // ---- subscriber information ----
     const subscriberBlock = readHalfColumn("Subscriber Information");
+    const fullSubscriberBlocks = selectors.extractFullPayerResponse ? readBlocksByHeading("Subscriber Information") : [];
     const subscriberInformation = subscriberBlock ? {
       patientName: subscriberBlock.name,
       address: subscriberBlock.address,
       memberId: subscriberBlock.fields["Member ID"],
       dateOfBirth: subscriberBlock.fields["Date of Birth"],
       sex: subscriberBlock.fields["Sex"],
+    } : fullSubscriberBlocks.length ? {
+      memberId: valueFromBlocks(fullSubscriberBlocks, "Member ID"),
+      dateOfBirth: valueFromBlocks(fullSubscriberBlocks, "Date of Birth"),
+      sex: valueFromBlocks(fullSubscriberBlocks, "Sex"),
     } : undefined;
 
     const patientBlock = readHalfColumn("Patient Information");
@@ -648,22 +781,42 @@ const dataId = header.getAttribute("data-id");
 
     const coverageBlock = readHalfColumn("Subscriber Coverage Information") ??
       readHalfColumn("Patient Coverage Information");
+    const fullCoverageBlocks = selectors.extractFullPayerResponse
+      ? [...readBlocksByHeading("Subscriber Coverage Information"), ...readBlocksByHeading("Patient Coverage Information")]
+      : [];
     const otherInsuranceBlock = readHalfColumn("Other Insurance Information") ?? readHalfColumn("Other Insurance");
-    const subscriberCoverageInformation = coverageBlock ? {
-      groupNumber: coverageBlock.fields["Group Number"],
-      planDate: coverageBlock.fields["Plan Date"] || findRowValueByLabel("Plan Date"),
-      planNetworkName: coverageBlock.fields["Plan Network Name"] || findRowValueByLabel("Plan Network Name"),
-      planSponsor: coverageBlock.fields["Plan Sponsor"] || findRowValueByLabel("Plan Sponsor"),
-      planBeginDate: coverageBlock.fields["Plan Begin Date"] || findRowValueByLabel("Plan Begin Date") || findRowValueByLabel("Benefit Begin Date"),
-      planEndDate: coverageBlock.fields["Plan End Date"] || findRowValueByLabel("Plan End Date"),
-      premiumPaidToDateEnd: coverageBlock.fields["Premium Paid-to Date End"],
-      insuranceType: coverageBlock.fields["Insurance Type"],
-      otherInsurance: otherInsuranceBlock?.fields["Payer Name"] ?? otherInsuranceBlock?.fields["Insurance Name"] ?? coverageBlock.fields["Other Insurance Payer Name"] ?? coverageBlock.fields["Other Insurance"] ?? coverageBlock.fields["Other Ins"] ?? findRowValueByLabel("Other Insurance Payer Name") ?? findRowValueByLabel("Other Payer Name") ?? findRowValueByLabel("Other Insurance") ?? findRowValueByLabel("Other Ins"),
-      otherInsuranceEffectiveDate: otherInsuranceBlock?.fields["Effective Date"] ?? otherInsuranceBlock?.fields["Eligibility Begin Date"] ?? coverageBlock.fields["Other Insurance Effective Date"] ?? coverageBlock.fields["Other Insurance Eff Date"] ?? coverageBlock.fields["Other Ins Eff Date"] ?? findRowValueByLabel("Other Insurance Effective Date") ?? findRowValueByLabel("Other Insurance Eff Date") ?? findRowValueByLabel("Other Ins Eff Date"),
+    const subscriberCoverageInformation = coverageBlock || fullCoverageBlocks.length ? {
+      groupNumber: coverageBlock?.fields["Group Number"] || valueFromBlocks(fullCoverageBlocks, "Group Number"),
+      planDate: coverageBlock?.fields["Plan Date"] || valueFromBlocks(fullCoverageBlocks, "Eligibility Date") || valueFromBlocks(fullCoverageBlocks, "Plan Date") || findRowValueByLabel("Plan Date"),
+      planNetworkName: coverageBlock?.fields["Plan Network Name"] || valueFromBlocks(fullCoverageBlocks, "Plan Network Name") || findRowValueByLabel("Plan Network Name"),
+      planSponsor: coverageBlock?.fields["Plan Sponsor"] || valueFromBlocks(fullCoverageBlocks, "Plan Sponsor") || findRowValueByLabel("Plan Sponsor"),
+      planBeginDate: coverageBlock?.fields["Plan Begin Date"] || valueFromBlocks(fullCoverageBlocks, "Plan Begin Date") || findRowValueByLabel("Plan Begin Date") || findRowValueByLabel("Benefit Begin Date"),
+      planEndDate: coverageBlock?.fields["Plan End Date"] || valueFromBlocks(fullCoverageBlocks, "Plan End Date") || findRowValueByLabel("Plan End Date"),
+      premiumPaidToDateEnd: coverageBlock?.fields["Premium Paid-to Date End"] || valueFromBlocks(fullCoverageBlocks, "Premium Paid-to Date End"),
+      insuranceType: coverageBlock?.fields["Insurance Type"] || valueFromBlocks(fullCoverageBlocks, "Insurance Type"),
+      otherInsurance: otherInsuranceBlock?.fields["Payer Name"] ?? otherInsuranceBlock?.fields["Insurance Name"] ?? coverageBlock?.fields["Other Insurance Payer Name"] ?? coverageBlock?.fields["Other Insurance"] ?? coverageBlock?.fields["Other Ins"] ?? findRowValueByLabel("Other Insurance Payer Name") ?? findRowValueByLabel("Other Payer Name") ?? findRowValueByLabel("Other Insurance") ?? findRowValueByLabel("Other Ins"),
+      otherInsuranceEffectiveDate: otherInsuranceBlock?.fields["Effective Date"] ?? otherInsuranceBlock?.fields["Eligibility Begin Date"] ?? coverageBlock?.fields["Other Insurance Effective Date"] ?? coverageBlock?.fields["Other Insurance Eff Date"] ?? coverageBlock?.fields["Other Ins Eff Date"] ?? findRowValueByLabel("Other Insurance Effective Date") ?? findRowValueByLabel("Other Insurance Eff Date") ?? findRowValueByLabel("Other Ins Eff Date"),
     } : undefined;
 
     const primaryCareProvider = findRowValueByLabel("Primary Care Provider");
     const ipa = findRowValueByLabel("Independent Physicians Association (IPA)") || findRowValueByLabel("IPA");
+    const fullSections = selectors.extractFullPayerResponse ? readFullSections() : [];
+    const fullPayerResponse = selectors.extractFullPayerResponse ? {
+      subscriberInformation: subscriberBlock || fullSubscriberBlocks,
+      subscriberCoverageInformation: coverageBlock || fullCoverageBlocks,
+      otherCoverageInformation: [
+        ...fullSections.filter((section) => section.title.toLowerCase().includes("other coverage")),
+        ...readBlocksByHeading("Other Coverage Information"),
+      ],
+      generalInformation: [
+        ...fullSections.filter((section) =>
+          section.title.toLowerCase().includes("qualified medicare beneficiary") ||
+          section.groups.some((group) => group.title.toLowerCase() === "general"),
+        ),
+        ...readBlocksByHeading("General"),
+      ],
+      sections: fullSections,
+    } : undefined;
 
     // ---- Health Benefit Plan Coverage (may be absent) ----
     const hbpc = findSectionByTitle((title) => title.toLowerCase().includes("health benefit plan coverage"));
@@ -709,8 +862,10 @@ const dataId = header.getAttribute("data-id");
       general: primaryCareProvider || ipa ? { primaryCareProvider, ipa } : undefined,
       healthBenefitPlanCoverage,
       professionalOffice,
+      fullPayerResponse,
     };
   }, {
+    extractFullPayerResponse: Boolean(options.projectConfig?.extractFullPayerResponse),
     minimalEligibilityOnly: isExactWaystarPayerMatch(payerName, "BayCare Plus Medicare Advantage (81079)") || isExactWaystarPayerMatch(payerName, "Aetna (Medicare Advantage) (60054MA)") || isExactWaystarPayerMatch(payerName, "United Healthcare(87726)") || isExactWaystarPayerMatch(payerName, "AARP Medicare Advantage Choice Plan (87726)"),
     inquiry: {
       activeCoverageDom: sanitizeDomSelector(WAYSTAR_SELECTORS.inquiry.activeCoverage),
@@ -1003,16 +1158,20 @@ function normalizeRelationship(value: string): string {
   if (["son", "daughter"].includes(normalized)) return "child";
   return normalized;
 }
-async function selectPayer(page: Page, payerName: string, fallbackNames: readonly string[] = []): Promise<void> {
+async function selectPayer(page: Page, payerName: string, projectConfig?: WaystarPayerProjectConfig): Promise<void> {
   let primaryError: unknown;
   try {
-    await selectPayerByName(page, payerName);
+    await selectPayerByName(page, payerName, Boolean(projectConfig?.skipProviderHandling));
     return;
   } catch (error) {
     primaryError = error;
   }
 
-  for (const fallbackName of fallbackNames) {
+  if (projectConfig?.allowAutoPopulatedProviderFallback && await isAutoPopulatedProviderReady(page)) {
+    return;
+  }
+
+  for (const fallbackName of projectConfig?.portalPayerNameFallbacks ?? []) {
     if (!fallbackName || fallbackName === payerName) continue;
     try {
       await selectPayerByName(page, fallbackName);
@@ -1024,11 +1183,12 @@ async function selectPayer(page: Page, payerName: string, fallbackNames: readonl
   throw primaryError;
 }
 
-async function selectPayerByName(page: Page, payerName: string): Promise<void> {
+async function selectPayerByName(page: Page, payerName: string, skipProviderReadiness = false): Promise<void> {
   const payerInput = page.locator(WAYSTAR_SELECTORS.inquiry.payerInput).first();
   if (await payerInput.isVisible().catch(() => false)) {
     const retainedPayer = await payerInput.inputValue().catch(() => "");
     if (isExactWaystarPayerMatch(retainedPayer, payerName)) {
+      if (skipProviderReadiness) return;
       if (await isProviderReady(page, 2000)) return;
       await commitTypedPayerSelection(payerInput);
       if (await isProviderReady(page, 5000)) {
@@ -1048,6 +1208,11 @@ async function selectPayerByName(page: Page, payerName: string): Promise<void> {
         await humanPause(page, 450, 850);
       } else if (searchTerm === payerName) {
         await commitTypedPayerSelection(payerInput);
+      }
+
+      if (skipProviderReadiness) {
+        const selectedPayer = await payerInput.inputValue().catch(() => "");
+        if (isExactWaystarPayerMatch(selectedPayer, payerName)) return;
       }
 
       if (await isProviderReady(page, 5000)) {
@@ -1070,6 +1235,7 @@ async function selectPayerByName(page: Page, payerName: string): Promise<void> {
       }
       await payerSelect.selectOption(match.value);
     });
+    if (skipProviderReadiness) return;
     await waitForProviderReady(page);
     return;
   }
@@ -1222,6 +1388,47 @@ async function selectServiceType(page: Page, serviceTypeCode: string): Promise<v
   }
 }
 
+async function selectServiceTypeByValue(page: Page, value: string): Promise<void> {
+  const serviceType = page.locator(WAYSTAR_SELECTORS.inquiry.serviceType).first();
+  await serviceType.waitFor({ state: "visible", timeout: 30000 });
+  await waitForEnabled(serviceType, "Waystar service type");
+  const matchingOptions = serviceType.locator(`option[value="${value}"]`);
+  if (await matchingOptions.count() === 0) {
+    throw new Error(`Waystar service type value ${value} was not available in #ddlSTCCode.`);
+  }
+
+  let selectedValue = "";
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    await serviceType.selectOption(value).catch(() => {});
+    await serviceType.blur().catch(() => {});
+    await page.waitForTimeout(200);
+    selectedValue = await serviceType.inputValue().catch(() => "");
+    if (selectedValue === value) return;
+
+    // Waystar sometimes rebuilds this dropdown and discards Playwright's
+    // selection. Apply the same option through the native select element and
+    // emit every event used by the portal's client-side handlers.
+    await evaluateWaystarPage(page, (expectedValue) => {
+      const selects = Array.from(document.querySelectorAll<HTMLSelectElement>("select#ddlSTCCode"));
+      const select = selects.find((candidate) => candidate.offsetParent !== null) ?? selects[0];
+      if (!select) return false;
+      const optionIndex = Array.from(select.options).findIndex((option) => option.value === expectedValue);
+      if (optionIndex < 0) return false;
+      select.selectedIndex = optionIndex;
+      select.value = expectedValue;
+      select.dispatchEvent(new Event("input", { bubbles: true }));
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+      select.dispatchEvent(new Event("blur", { bubbles: true }));
+      return select.value === expectedValue;
+    }, value).catch(() => false);
+    await page.waitForTimeout(300);
+    selectedValue = await serviceType.inputValue().catch(() => "");
+    if (selectedValue === value) return;
+  }
+
+  throw new Error(`Waystar service type selection did not stick after three attempts. Expected value ${value}, found ${selectedValue || "blank"}.`);
+}
+
 async function clickAddCodeIfVisible(page: Page): Promise<void> {
   const addCode = page.getByText("Add Code", { exact: true }).first();
   if (!(await addCode.isVisible().catch(() => false))) return;
@@ -1275,6 +1482,46 @@ async function fillVerifiedText(page: Page, selector: string, value: string, lab
 async function commitInputValue(input: Locator): Promise<void> {
   await input.blur().catch(() => {});
 }
+
+async function verifyMedRevenueMedicarePatientFields(
+  page: Page,
+  expected: { memberId: string; lastName: string; firstName: string },
+): Promise<void> {
+  const actual = {
+    memberId: await page.locator(WAYSTAR_SELECTORS.inquiry.memberId).first().inputValue().catch(() => ""),
+    lastName: await page.locator(WAYSTAR_SELECTORS.inquiry.lastName).first().inputValue().catch(() => ""),
+    firstName: await page.locator(WAYSTAR_SELECTORS.inquiry.firstName).first().inputValue().catch(() => ""),
+  };
+  const missing: string[] = [];
+  if (actual.memberId.trim() !== expected.memberId.trim()) missing.push(`memberId=${actual.memberId || "blank"}`);
+  if (actual.lastName.trim() !== expected.lastName.trim()) missing.push(`lastName=${actual.lastName || "blank"}`);
+  if (actual.firstName.trim() !== expected.firstName.trim()) missing.push(`firstName=${actual.firstName || "blank"}`);
+  if (missing.length) {
+    throw new Error(`MedRevenue Medicare patient fields were not present before submit. ${missing.join(", ")}.`);
+  }
+}
+
+async function verifySelectedServiceType(page: Page, serviceTypeCode: string): Promise<void> {
+  const selected = page.locator(WAYSTAR_SELECTORS.inquiry.serviceType).first().locator("option:checked").first();
+  const option = {
+    value: await selected.getAttribute("value").then((value) => value || "").catch(() => ""),
+    label: (await selected.textContent().catch(() => "") || "").trim(),
+  };
+  if (!findWaystarServiceTypeOption([option], serviceTypeCode)) {
+    throw new Error(`Waystar Service Type ${serviceTypeCode} was not selected before submit.`);
+  }
+}
+
+async function ensureSelectedServiceType(page: Page, serviceTypeCode: string): Promise<void> {
+  try {
+    await verifySelectedServiceType(page, serviceTypeCode);
+  } catch {
+    await waitForBlockingOverlaysToClear(page, 30000);
+    await selectServiceTypeByValue(page, serviceTypeCode);
+    await verifySelectedServiceType(page, serviceTypeCode);
+  }
+}
+
 async function verifyInquiryFieldsBeforeSubmit(
   page: Page,
   expected: {
@@ -1284,6 +1531,7 @@ async function verifyInquiryFieldsBeforeSubmit(
     lastName: string;
     firstName: string;
     dateOfBirth: string;
+    skipDateOfBirth?: boolean;
   },
   retryCount = 0,
 ): Promise<void> {
@@ -1309,7 +1557,7 @@ async function verifyInquiryFieldsBeforeSubmit(
   if (snapshot.firstName.trim() !== expected.firstName.trim()) {
     missing.push(`firstName=${snapshot.firstName || "blank"}`);
   }
-  if (!waystarDatesMatch(snapshot.dateOfBirth, expected.dateOfBirth)) {
+  if (!expected.skipDateOfBirth && !waystarDatesMatch(snapshot.dateOfBirth, expected.dateOfBirth)) {
     missing.push(`dateOfBirth=${snapshot.dateOfBirth || "blank"}`);
   }
 
@@ -1322,7 +1570,9 @@ async function verifyInquiryFieldsBeforeSubmit(
     await fillVerifiedText(page, WAYSTAR_SELECTORS.inquiry.memberId, expected.memberId, "Member ID");
     await fillVerifiedText(page, WAYSTAR_SELECTORS.inquiry.lastName, expected.lastName, "Last Name");
     await fillVerifiedText(page, WAYSTAR_SELECTORS.inquiry.firstName, expected.firstName, "First Name");
-    await fillVerifiedText(page, WAYSTAR_SELECTORS.inquiry.dateOfBirth, expected.dateOfBirth, "Date of Birth", true);
+    if (!expected.skipDateOfBirth) {
+      await fillVerifiedText(page, WAYSTAR_SELECTORS.inquiry.dateOfBirth, expected.dateOfBirth, "Date of Birth", true);
+    }
     await dismissWaystarDatePicker(page);
     return verifyInquiryFieldsBeforeSubmit(page, expected, 1);
   }
@@ -1397,6 +1647,7 @@ async function selectProviderWithProjectFallback(
     await selectProvider(page, credentials);
     if (credentials.providerId || credentials.providerName || !projectConfig?.provider) return;
   } catch (error) {
+    if (projectConfig?.allowAutoPopulatedProviderFallback && await isAutoPopulatedProviderReady(page)) return;
     if (!projectConfig?.provider?.id && !projectConfig?.provider?.name) throw error;
   }
 
@@ -1405,6 +1656,61 @@ async function selectProviderWithProjectFallback(
     providerId: projectConfig?.provider?.id,
     providerName: projectConfig?.provider?.name,
   });
+}
+
+async function isAutoPopulatedProviderReady(page: Page): Promise<boolean> {
+  const provider = page.locator([
+    "input[id*='provider' i]:visible",
+    "input[name*='provider' i]:visible",
+    "input[aria-label*='provider' i]:visible",
+  ].join(", ")).first();
+  if (!(await provider.isVisible().catch(() => false))) return false;
+  if (await provider.isDisabled().catch(() => true)) return false;
+  return Boolean((await provider.inputValue().catch(() => "")).trim());
+}
+
+async function fillPlanDatesFromDateOfService(
+  page: Page,
+  dateOfService: string,
+  projectConfig: WaystarPayerProjectConfig,
+): Promise<void> {
+  const planDate = normalizeWaystarDate(dateOfService);
+  const fromSelector = projectConfig.selectorFallbacks?.planDateFrom ?? "#txtPlanFrom";
+  const toSelector = projectConfig.selectorFallbacks?.planDateTo ?? "#txtPlanTo";
+  const fromInput = page.locator(fromSelector).first();
+  const toInput = page.locator(toSelector).first();
+  await fromInput.waitFor({ state: "visible", timeout: 30000 });
+  await toInput.waitFor({ state: "visible", timeout: 30000 });
+  await waitForEnabled(fromInput, "Waystar Plan Date From");
+  await waitForEnabled(toInput, "Waystar Plan Date To");
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    await evaluateWaystarPage(page, (args) => {
+      const from = document.querySelector<HTMLInputElement>(args.fromSelector);
+      const to = document.querySelector<HTMLInputElement>(args.toSelector);
+      if (!from || !to) throw new Error("Waystar Plan Date inputs were not found.");
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+      if (!setter) throw new Error("Browser input value setter is unavailable.");
+      // Set both values before dispatching either change event so Waystar never
+      // validates a temporary range containing one old/default date.
+      setter.call(from, args.value);
+      setter.call(to, args.value);
+      for (const input of [from, to]) {
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+        input.dispatchEvent(new Event("change", { bubbles: true }));
+        input.dispatchEvent(new Event("blur", { bubbles: true }));
+      }
+    }, { fromSelector, toSelector, value: planDate });
+    await dismissWaystarDatePicker(page);
+    await page.waitForTimeout(150);
+    const actualFrom = await fromInput.inputValue().catch(() => "");
+    const actualTo = await toInput.inputValue().catch(() => "");
+    if (waystarDatesMatch(actualFrom, planDate) && waystarDatesMatch(actualTo, planDate)) return;
+  }
+  const actualFrom = await fromInput.inputValue().catch(() => "");
+  const actualTo = await toInput.inputValue().catch(() => "");
+  throw new Error(
+    `MedRevenue Medicare Plan Dates did not retain the input DOS ${planDate}. From=${actualFrom || "blank"}, To=${actualTo || "blank"}.`,
+  );
 }
 
 export function payerSearchTerms(payerName: string): string[] {

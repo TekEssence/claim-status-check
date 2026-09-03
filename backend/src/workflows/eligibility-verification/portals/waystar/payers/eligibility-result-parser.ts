@@ -23,6 +23,13 @@ type WaystarEligibilityPayload = {
     benefitSections?: WaystarProfessionalOfficeSection[];
   };
   professionalOffice?: WaystarProfessionalOfficeSection[];
+  fullPayerResponse?: {
+    subscriberInformation?: unknown;
+    subscriberCoverageInformation?: unknown;
+    otherCoverageInformation?: unknown;
+    generalInformation?: unknown;
+    sections?: unknown;
+  };
 };
 
 type WaystarSubscriberInformation = {
@@ -172,6 +179,7 @@ export function parseWaystarEligibilityResult(
       patientInformation: patient,
       subscriberCoverageInformation: subscriberCoverage,
       professionalOffice,
+      ...(result.fullPayerResponse ? { fullPayerResponse: result.fullPayerResponse } : {}),
     },
   };
 }

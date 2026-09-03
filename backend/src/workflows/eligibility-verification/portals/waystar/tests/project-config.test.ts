@@ -18,9 +18,16 @@ test("Minimax Waystar configuration preserves all established payer defaults", (
 
 test("MedRevenue resolves the same Medicare payer through project configuration", () => {
   const config = getWaystarProjectConfig("medrevenue");
+  const medicareConfig = getWaystarPayerProjectConfig(config, "medicare");
   assert.equal(config.id, "medrevenue");
   assert.ok(config.payers?.medicare);
   assert.equal(medicarePayer.id, "medicare");
+  assert.equal(medicareConfig.skipProviderHandling, true);
+  assert.equal(medicareConfig.useDateOfServiceForPlanDates, true);
+  assert.equal(medicareConfig.serviceTypeDirectValue, "30");
+  assert.equal(medicareConfig.extractFullPayerResponse, true);
+  assert.equal(medicareConfig.selectorFallbacks?.planDateFrom, "#txtPlanFrom");
+  assert.equal(medicareConfig.selectorFallbacks?.planDateTo, "#txtPlanTo");
 });
 
 test("Waystar runner accepts both projects without another payer runner", () => {

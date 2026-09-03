@@ -3,13 +3,18 @@ import type { EligibilityProjectId } from "../../../../projects";
 export type WaystarInquirySelectorKey =
   | "payerInput" | "payerSelect" | "provider" | "serviceType"
   | "patientLookup" | "memberId" | "lastName" | "firstName"
-  | "dateOfBirth" | "submit";
+  | "dateOfBirth" | "planDateFrom" | "planDateTo" | "submit";
 
 export type WaystarPayerProjectConfig = {
   /** Tried only after the payer's existing portalPayerName fails. */
   portalPayerNameFallbacks?: readonly string[];
   serviceTypeCodeFallback?: string;
+  serviceTypeDirectValue?: string;
+  extractFullPayerResponse?: boolean;
   patientLookupCodeFallback?: string;
+  allowAutoPopulatedProviderFallback?: boolean;
+  skipProviderHandling?: boolean;
+  useDateOfServiceForPlanDates?: boolean;
   provider?: { name?: string; id?: string; tin?: string; npi?: string; ptan?: string };
   selectorFallbacks?: Partial<Record<WaystarInquirySelectorKey, string>>;
   outputMapping?: Readonly<Record<string, string>>;

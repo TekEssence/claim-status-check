@@ -1,5 +1,6 @@
 ﻿import ExcelJS from "exceljs";
 import type { EligibilityInputRow, EligibilityResult } from "../../types";
+import type { EligibilityProjectId } from "../../projects";
 
 const LEGACY_OUTPUT_COLUMNS: Array<{
   header: string;
@@ -61,7 +62,11 @@ export async function buildWaystarOutputWorkbook(options: {
   rows: Map<number, EligibilityInputRow>;
   results: Map<number, EligibilityResult>;
   errors: Map<number, string>;
+  projectId?: EligibilityProjectId;
 }): Promise<Buffer> {
+  if (options.projectId === "medrevenue") {
+    return buildMedRevenueWaystarOutputWorkbook(options);
+  }
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(await options.inputFile.arrayBuffer());
   const sheet = workbook.worksheets[0];
@@ -112,4 +117,203 @@ cell.alignment = { vertical: "top", wrapText: true };
   }
 
   return Buffer.from(await workbook.xlsx.writeBuffer());
+}
+
+async function buildMedRevenueWaystarOutputWorkbook(options: {
+  rows: Map<number, EligibilityInputRow>;
+  results: Map<number, EligibilityResult>;
+  errors: Map<number, string>;
+}): Promise<Buffer> {
+  const workbook = new ExcelJS.Workbook();
+  const orderedIndexes = Array.from(new Set([
+    ...options.rows.keys(),
+    ...options.results.keys(),
+    ...options.errors.keys(),
+  ])).sort((left, right) => left - right);
+  const inputHeaders = Array.from(new Set(
+    orderedIndexes.flatMap((rowIndex) => Object.keys(options.rows.get(rowIndex)?.raw ?? {})),
+  ));
+
+  const inputSheet = workbook.addWorksheet("Input");
+  inputSheet.addRow(inputHeaders);
+  for (const rowIndex of orderedIndexes) {
+    const raw = options.rows.get(rowIndex)?.raw ?? {};
+    inputSheet.addRow(inputHeaders.map((header) => raw[header] ?? ""));
+  }
+
+  const expandedValues = new Map<number, Record<string, string>>();
+  const expandedHeaders: string[] = [];
+  for (const rowIndex of orderedIndexes) {
+    const values = flattenMedRevenuePayerResponse(options.results.get(rowIndex));
+    expandedValues.set(rowIndex, values);
+    for (const header of Object.keys(values)) {
+      if (!expandedHeaders.includes(header)) expandedHeaders.push(header);
+    }
+  }
+
+  const outputHeaders = [
+    "Input Row", ...inputHeaders, "Result", "Coverage Status", "Eff Date", "End Date",
+    "Other Ins", "Other Ins Eff Date", "Relationship to Subscriber", "Plan Type",
+    "Bot Insurance Type", "Plan Status", "Member ID", "Patient Name",
+    "Date of Birth", "Plan Date", "Group Number", "Primary Care Provider", "Network",
+    "Coinsurance", "Copay", "Deductible", ...expandedHeaders, "Error",
+  ];
+  const outputSheet = workbook.addWorksheet("Output");
+  outputSheet.addRow(outputHeaders);
+
+  const auditSheet = workbook.addWorksheet("Audit Log");
+  auditSheet.addRow(["Timestamp", "Input Row", "Payer", "Step", "Status", "Message"]);
+  const errorSheet = workbook.addWorksheet("Error Log");
+  errorSheet.addRow(["Input Row", "Payer", "Error Type", "Message"]);
+
+  for (const rowIndex of orderedIndexes) {
+    const row = options.rows.get(rowIndex);
+    const result = options.results.get(rowIndex);
+    const error = options.errors.get(rowIndex) ?? "";
+    const resultLabel = medRevenueResultLabel(result, error);
+    const raw = row?.raw ?? {};
+    outputSheet.addRow([
+      rowIndex,
+      ...inputHeaders.map((header) => outputValue(raw[header])),
+      resultLabel,
+      outputValue(result?.coverageStatus),
+      outputValue(result?.effectiveDate),
+      outputValue(result?.terminationDate),
+      outputValue(result?.otherInsurance),
+      outputValue(result?.otherInsuranceEffectiveDate),
+      outputValue(result?.relationshipToSubscriber || row?.relationshipToSubscriber || "Self"),
+      outputValue(result?.planType),
+      outputValue(result?.insuranceType),
+      outputValue(result?.planStatus),
+      outputValue(result?.memberId || row?.memberId || row?.subscriberId),
+      outputValue(result?.patientName || [row?.patientFirstName, row?.patientLastName].filter(Boolean).join(" ")),
+      outputValue(result?.dateOfBirth || row?.dateOfBirth),
+      outputValue(result?.planDate || row?.dateOfService),
+      outputValue(result?.groupNumber),
+      outputValue(result?.primaryCareProvider),
+      outputValue(result?.inOutNetwork),
+      outputValue(result?.coinsurance),
+      outputValue(result?.copay),
+      outputValue(result?.deductible),
+      ...expandedHeaders.map((header) => outputValue(expandedValues.get(rowIndex)?.[header])),
+      outputValue(error || (resultLabel === "Subscriber Not Found" ? result?.planStatus : "")),
+    ]);
+
+    const auditStatus = error ? "Failed" : resultLabel;
+    auditSheet.addRow([
+      new Date().toISOString(), rowIndex, "Medicare", "Eligibility inquiry", auditStatus,
+      error || result?.planStatus || `Processed with ${resultLabel.toLowerCase()} result.`,
+    ]);
+    if (error || resultLabel === "Subscriber Not Found") {
+      errorSheet.addRow([
+        rowIndex,
+        "Medicare",
+        error ? "Processing Error" : "Subscriber Not Found",
+        error || result?.planStatus || "Waystar returned Subscriber Not Found.",
+      ]);
+    }
+  }
+
+  for (const sheet of workbook.worksheets) styleMedRevenueSheet(sheet);
+  return Buffer.from(await workbook.xlsx.writeBuffer());
+}
+
+function flattenMedRevenuePayerResponse(result?: EligibilityResult): Record<string, string> {
+  const full = result?.metadata?.fullPayerResponse;
+  if (!full || typeof full !== "object") return {};
+  const response = full as Record<string, unknown>;
+  const output: Record<string, string> = {};
+  appendResponseValues(output, "Subscriber", response.subscriberInformation);
+  appendResponseValues(output, "Subscriber Coverage", response.subscriberCoverageInformation);
+  appendResponseValues(output, "Other Coverage", response.otherCoverageInformation);
+  appendResponseValues(output, "Qualified Medicare Beneficiary General", response.generalInformation);
+  return output;
+}
+
+function appendResponseValues(output: Record<string, string>, prefix: string, value: unknown): void {
+  if (value === null || value === undefined || value === "") return;
+  if (Array.isArray(value)) {
+    value.forEach((entry, index) => {
+      const title = entry && typeof entry === "object" ? cleanHeader((entry as Record<string, unknown>).title) : "";
+      appendResponseValues(output, title ? `${prefix} - ${title}` : `${prefix} ${index + 1}`, entry);
+    });
+    return;
+  }
+  if (typeof value !== "object") {
+    addExpandedValue(output, prefix, String(value));
+    return;
+  }
+
+  const record = value as Record<string, unknown>;
+  if (record.name) addExpandedValue(output, `${prefix} Name`, String(record.name));
+  if (record.address) addExpandedValue(output, `${prefix} Address`, String(record.address));
+  if (record.fields && typeof record.fields === "object") {
+    for (const [label, fieldValue] of Object.entries(record.fields as Record<string, unknown>)) {
+      if (fieldValue !== null && fieldValue !== undefined && String(fieldValue).trim()) {
+        addExpandedValue(output, `${prefix} ${cleanHeader(label)}`, String(fieldValue));
+      }
+    }
+  }
+  if (Array.isArray(record.rows)) {
+    for (const row of record.rows) {
+      if (!row || typeof row !== "object") continue;
+      const labeled = row as Record<string, unknown>;
+      const label = cleanHeader(labeled.label);
+      const rowValue = String(labeled.value ?? "").trim();
+      if (label && rowValue) addExpandedValue(output, `${prefix} ${label}`, rowValue);
+    }
+  }
+  if (Array.isArray(record.groups)) {
+    for (const group of record.groups) {
+      if (!group || typeof group !== "object") continue;
+      const groupTitle = cleanHeader((group as Record<string, unknown>).title);
+      appendResponseValues(output, groupTitle ? `${prefix} - ${groupTitle}` : prefix, group);
+    }
+  }
+}
+
+function addExpandedValue(output: Record<string, string>, rawHeader: string, value: string): void {
+  const header = cleanHeader(rawHeader);
+  if (!header || !value.trim()) return;
+  if (!output[header]) {
+    output[header] = value.trim();
+    return;
+  }
+  if (output[header] === value.trim()) return;
+  let occurrence = 2;
+  while (output[`${header} ${occurrence}`]) occurrence += 1;
+  output[`${header} ${occurrence}`] = value.trim();
+}
+
+function cleanHeader(value: unknown): string {
+  return String(value ?? "").replace(/\s+/g, " ").trim();
+}
+
+function medRevenueResultLabel(result?: EligibilityResult, error = ""): string {
+  if (error) return "Failed";
+  const response = `${result?.planStatus ?? ""} ${result?.coverageStatus ?? ""}`.toLowerCase();
+  if (response.includes("subscriber not found")) return "Subscriber Not Found";
+  if (!result) return "Failed";
+  if (result.coverageStatus === "unknown" || result.coverageStatus === "error") return "Partial";
+  return "Patient Found";
+}
+
+function outputValue(value: unknown): ExcelJS.CellValue {
+  if (value === null || value === undefined || String(value).trim() === "") return "NA";
+  return value as ExcelJS.CellValue;
+}
+
+function styleMedRevenueSheet(sheet: ExcelJS.Worksheet): void {
+  const header = sheet.getRow(1);
+  header.font = { bold: true, color: { argb: "FFFFFFFF" } };
+  header.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF4472C4" } };
+  header.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
+  sheet.views = [{ state: "frozen", ySplit: 1 }];
+  sheet.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: Math.max(1, sheet.columnCount) } };
+  sheet.columns.forEach((column) => {
+    column.width = Math.max(12, Math.min(34, String(column.values?.[1] ?? "").length + 3));
+  });
+  sheet.eachRow((row, rowNumber) => {
+    if (rowNumber > 1) row.alignment = { vertical: "top", wrapText: true };
+  });
 }
