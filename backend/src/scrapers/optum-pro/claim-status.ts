@@ -23,13 +23,23 @@ type OptumProSearchResult = {
   claimNumber: string;
   claimReceivedDate: string;
   processedDate: string;
+  serviceDate: string;
+  claimStatus: string;
+  diagnosisCodes: string;
+  healthPlan: string;
   serviceCode: string;
+  serviceLineDate: string;
+  placeOfService: string;
+  modifiers: string;
+  units: string;
   billedAmount: string;
   planAllowedAmount: string;
+  adjustmentAmount: string;
   patientResponsibility: string;
   withholdAmount: string;
   deniedAmount: string;
   paidAmount: string;
+  netPaidAmount: string;
   lineStatus: string;
   explanationCode: string;
   explanationDescription: string;
@@ -247,43 +257,20 @@ function rootPageOf(page: Page): Page {
 }
 
 async function dismissOptumBlockingPopups(page: Page, stageLog?: StageLog): Promise<boolean> {
-  const popup = page.locator("text=/Your opinion matters!/i").first();
-  if (!(await popup.isVisible({ timeout: 500 }).catch(() => false))) return false;
+  const rootPage = rootPageOf(page);
+  const scopes = rootPage === page ? [page] : [page, rootPage];
+  for (const scope of scopes) {
+    const dialog = scope.getByRole("dialog").filter({ hasText: "Your opinion matters!" }).first();
+    if (!(await dialog.isVisible({ timeout: 500 }).catch(() => false))) continue;
 
-  const closeClicked = await page.evaluate(() => {
-    const clean = (value: string | null | undefined) => (value || "").replace(/\s+/g, " ").trim();
-    const visible = (element: Element) => {
-      const style = window.getComputedStyle(element);
-      const rect = element.getBoundingClientRect();
-      return style.visibility !== "hidden" && style.display !== "none" && rect.width > 0 && rect.height > 0;
-    };
-    const title = Array.from(document.querySelectorAll("body *"))
-      .find((element) => visible(element) && clean((element as HTMLElement).innerText) === "Your opinion matters!");
-    const root = title?.closest("[role='dialog'], mat-dialog-container, .cdk-overlay-pane")
-      ?? title?.parentElement?.parentElement?.parentElement
-      ?? document.body;
-    const elements = Array.from(root.querySelectorAll("button, [role='button']"))
-      .filter((element) => visible(element) && clean((element as HTMLElement).innerText) !== "Yes, after my visit");
-    const closeButton = elements.find((element) => {
-      const label = clean(element.getAttribute("aria-label")).toLowerCase();
-      const text = clean((element as HTMLElement).innerText);
-      return label.includes("close") || text === "";
-    }) as HTMLElement | undefined;
-    closeButton?.click();
-    return Boolean(closeButton);
-  }).catch(() => false);
-
-  if (closeClicked) {
-    await page.waitForTimeout(200);
-    await stageLog?.("info", "claim-search", "Dismissed Optum feedback popup.");
-    return true;
-  }
-
-  const noButton = page.locator("button:has-text('No'), [role='button']:has-text('No')").first();
-  if (await noButton.isVisible({ timeout: 500 }).catch(() => false)) {
-    await noButton.click({ timeout: 500 }).catch(() => {});
-    await page.waitForTimeout(200);
-    await stageLog?.("info", "claim-search", "Dismissed Optum feedback popup.");
+    const noButton = dialog.getByRole("button", { name: "No", exact: true });
+    if (await noButton.isVisible({ timeout: 500 }).catch(() => false)) {
+      await noButton.click({ force: true });
+    } else {
+      await dialog.getByRole("button", { name: "Close", exact: true }).click({ force: true });
+    }
+    await dialog.waitFor({ state: "hidden", timeout: 3000 }).catch(() => {});
+    await stageLog?.("info", "claim-search", "Dismissed Optum feedback popup by selecting No.");
     return true;
   }
 
@@ -295,6 +282,7 @@ async function retryAfterBlockingPopup<T>(
   stageLog: StageLog | undefined,
   action: () => Promise<T>,
 ): Promise<T> {
+  await dismissOptumBlockingPopups(page, stageLog);
   try {
     return await action();
   } catch (error) {
@@ -672,13 +660,23 @@ function emptyClaimResult(input: OptumProInputRow, fields: Partial<OptumProSearc
     claimNumber: "",
     claimReceivedDate: "",
     processedDate: "",
+    serviceDate: "",
+    claimStatus: "",
+    diagnosisCodes: "",
+    healthPlan: "",
     serviceCode: "",
+    serviceLineDate: "",
+    placeOfService: "",
+    modifiers: "",
+    units: "",
     billedAmount: "",
     planAllowedAmount: "",
+    adjustmentAmount: "",
     patientResponsibility: "",
     withholdAmount: "",
     deniedAmount: "",
     paidAmount: "",
+    netPaidAmount: "",
     lineStatus: "",
     explanationCode: "",
     explanationDescription: "",
@@ -1107,13 +1105,23 @@ function emptyResultForRow(row: OptumProInputRow, status: string, notes: string)
     claimNumber: "",
     claimReceivedDate: "",
     processedDate: "",
+    serviceDate: "",
+    claimStatus: "",
+    diagnosisCodes: "",
+    healthPlan: "",
     serviceCode: "",
+    serviceLineDate: "",
+    placeOfService: "",
+    modifiers: "",
+    units: "",
     billedAmount: "",
     planAllowedAmount: "",
+    adjustmentAmount: "",
     patientResponsibility: "",
     withholdAmount: "",
     deniedAmount: "",
     paidAmount: "",
+    netPaidAmount: "",
     lineStatus: "",
     explanationCode: "",
     explanationDescription: "",
@@ -1188,6 +1196,7 @@ async function saveOptumProPartialWorkbook(
 async function expandClaimDetailSections(page: Page): Promise<void> {
   const sectionNames = ["Payment information", "Billing information", "Claim information", "Line level details"];
   for (const sectionName of sectionNames) {
+    await dismissOptumBlockingPopups(page);
     const trigger = page.getByRole("button", { name: sectionName, exact: true }).first();
     await trigger.waitFor({ state: "visible", timeout: 10000 });
     for (let attempt = 0; attempt < 3; attempt++) {
@@ -1203,24 +1212,70 @@ async function expandClaimDetailSections(page: Page): Promise<void> {
   }
 }
 
+async function sectionValue(page: Page, sectionName: string, label: string): Promise<string> {
+  return page.evaluate(({ sectionName: wantedSection, label: wantedLabel }) => {
+    const clean = (value: string | null | undefined) => (value || "").replace(/\s+/g, " ").trim();
+    const trigger = Array.from(document.querySelectorAll<HTMLButtonElement>("button[aria-controls]"))
+      .find((button) => clean(button.textContent).toLowerCase() === wantedSection.toLowerCase());
+    const regionId = trigger?.getAttribute("aria-controls");
+    const region = regionId ? document.getElementById(regionId) : null;
+    if (!region) return "";
+    const labelElement = Array.from(region.querySelectorAll<HTMLElement>("*"))
+      .find((element) => clean(element.textContent).toLowerCase() === wantedLabel.toLowerCase() && element.children.length === 0);
+    if (!labelElement?.parentElement) return "";
+    const value = Array.from(labelElement.parentElement.children)
+      .find((element) => element !== labelElement && clean(element.textContent));
+    return clean((value as HTMLElement | undefined)?.innerText || value?.textContent);
+  }, { sectionName, label }).catch(() => "");
+}
+
+async function bulkPaymentAmount(page: Page, claimNumber: string): Promise<string> {
+  return page.evaluate((wantedClaim) => {
+    const clean = (value: string | null | undefined) => (value || "").replace(/\s+/g, " ").trim();
+    const normalize = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, "");
+    const trigger = Array.from(document.querySelectorAll<HTMLButtonElement>("button[aria-controls]"))
+      .find((button) => clean(button.textContent).toLowerCase() === "payment information");
+    const region = trigger?.getAttribute("aria-controls") ? document.getElementById(trigger.getAttribute("aria-controls")!) : null;
+    if (!region) return "";
+    for (const table of Array.from(region.querySelectorAll("table"))) {
+      const headers = Array.from(table.querySelectorAll("thead th")).map((header) => normalize(clean((header as HTMLElement).innerText)));
+      const claimIndex = headers.findIndex((header) => header === "claimnumber");
+      const amountIndex = headers.findIndex((header) => header.includes("netpaymentamount"));
+      if (claimIndex < 0 || amountIndex < 0) continue;
+      for (const row of Array.from(table.querySelectorAll("tbody tr"))) {
+        const cells = Array.from(row.querySelectorAll("td")).map((cell) => clean((cell as HTMLElement).innerText));
+        if (normalize(cells[claimIndex] || "") === normalize(wantedClaim)) return cells[amountIndex] || "";
+      }
+    }
+    return "";
+  }, claimNumber).catch(() => "");
+}
+
 async function extractClaimDetails(page: Page, row: OptumProInputRow): Promise<Partial<OptumProSearchResult>> {
   await acknowledgeFinancialInfoBanner(page);
   await expandClaimDetailSections(page);
   const lineDetails = await extractMatchedLineDetails(page, row.cpt);
-  const payeeId = await textAfterLabel(page, "Payee ID");
-  const payeeName = await textAfterLabel(page, "Payee name");
+  const payeeId = await sectionValue(page, "Payment information", "Payee ID");
+  const payeeName = await sectionValue(page, "Payment information", "Payee name");
+  const claimNumber = await sectionValue(page, "Claim information", "Claim number");
   return {
-    claimNumber: await textAfterLabel(page, "Claim number"),
-    claimReceivedDate: await textAfterLabel(page, "Claim received date"),
-    processedDate: await textAfterLabel(page, "Processed date"),
+    claimNumber,
+    claimReceivedDate: await sectionValue(page, "Claim information", "Claim received date"),
+    processedDate: await sectionValue(page, "Claim information", "Processed date"),
+    serviceDate: await sectionValue(page, "Claim information", "Service date"),
+    claimStatus: await sectionValue(page, "Claim information", "Status"),
+    diagnosisCodes: await sectionValue(page, "Claim information", "Diagnosis codes"),
+    healthPlan: await textAfterLabel(page, "Health plan"),
     ...lineDetails,
-    paymentMode: await textAfterLabel(page, "Payment mode"),
-    paymentType: await textAfterLabel(page, "Payment type"),
-    eftNumber: fallbackDash(await textAfterLabel(page, "EFT number")),
-    eftAmount: await textAfterLabel(page, "EFT amount"),
-    paymentDate: await textAfterLabel(page, "Payment date"),
-    paymentId: await textAfterLabel(page, "Payment ID") || payeeId,
-    paymentName: await textAfterLabel(page, "Payment name") || payeeName,
+    adjustmentAmount: lineDetails.adjustmentAmount || await sectionValue(page, "Billing information", "Adjustment amount"),
+    netPaidAmount: await sectionValue(page, "Billing information", "Net paid amount"),
+    paymentMode: await sectionValue(page, "Payment information", "Payment mode"),
+    paymentType: await sectionValue(page, "Payment information", "Payment type"),
+    eftNumber: fallbackDash(await sectionValue(page, "Payment information", "Payment reference ID")),
+    eftAmount: await bulkPaymentAmount(page, claimNumber),
+    paymentDate: await sectionValue(page, "Payment information", "Payment date"),
+    paymentId: payeeId,
+    paymentName: payeeName,
     payeeName,
   };
 }
@@ -1251,8 +1306,13 @@ async function extractMatchedLineDetails(page: Page, cpt: string): Promise<Parti
     if (!matchedRow) {
       const empty = {
         serviceCode: "",
+        serviceLineDate: "",
+        placeOfService: "",
+        modifiers: "",
+        units: "",
         billedAmount: "",
         planAllowedAmount: "",
+        adjustmentAmount: "",
         patientResponsibility: "",
         withholdAmount: "",
         deniedAmount: "",
@@ -1277,8 +1337,13 @@ async function extractMatchedLineDetails(page: Page, cpt: string): Promise<Parti
 
         const amountIndex = headers.findIndex((header) => header.includes("billedamount") && header.includes("paidamount"));
         const indexes = {
+          serviceDate: headers.findIndex((header) => header.includes("dateofservice") || header.includes("servicedate")),
+          placeOfService: headers.findIndex((header) => header.includes("placeofservice")),
+          modifiers: headers.findIndex((header) => header.includes("modifier")),
+          units: headers.findIndex((header) => header === "units" || header.includes("quantity")),
           billed: headers.findIndex((header) => headerIncludes(header, ["billedamount", "billedamt"])),
           allowed: headers.findIndex((header) => header.includes("planallowed") || header.includes("allowedamount")),
+          adjustment: headers.findIndex((header) => header.includes("adjustmentamount")),
           patient: headers.findIndex((header) => header.includes("patientresponsibility")),
           withhold: headers.findIndex((header) => header.includes("withhold")),
           denied: headers.findIndex((header) => header.includes("denied")),
@@ -1317,8 +1382,13 @@ async function extractMatchedLineDetails(page: Page, cpt: string): Promise<Parti
 
         return {
           serviceCode: cells[serviceIndex] || "",
+          serviceLineDate: indexes.serviceDate >= 0 ? cells[indexes.serviceDate] || "" : "",
+          placeOfService: indexes.placeOfService >= 0 ? cells[indexes.placeOfService] || "" : "",
+          modifiers: indexes.modifiers >= 0 ? cells[indexes.modifiers] || "" : "",
+          units: indexes.units >= 0 ? cells[indexes.units] || "" : "",
           billedAmount: indexes.billed >= 0 ? cells[indexes.billed] || "" : combinedAmounts[0] || "",
           planAllowedAmount: indexes.allowed >= 0 ? cells[indexes.allowed] || "" : combinedAmounts[1] || "",
+          adjustmentAmount: indexes.adjustment >= 0 ? cells[indexes.adjustment] || "" : combinedAmounts[2] || "",
           patientResponsibility: indexes.patient >= 0 ? cells[indexes.patient] || "" : "",
           withholdAmount: indexes.withhold >= 0 ? cells[indexes.withhold] || "" : combinedAmounts[3] || "",
           deniedAmount: indexes.denied >= 0 ? cells[indexes.denied] || "" : combinedAmounts[4] || "",
@@ -1929,40 +1999,84 @@ export async function runOptumProClaimSearch(
 
 function createOptumProOutputWorkbookBuffer(results: OptumProSearchResult[]): Buffer {
   const workbook = XLSX.utils.book_new();
-  const rows = results.map((result) => ({
-    ...result.input.raw,
-    member_id: outputMemberId(result.memberId),
-    result: result.status,
-    matched_patient: outputValue(result.matchedPatient),
-    matched_medical_group: outputValue(result.matchedGroup),
-    claim_number: outputValue(result.claimNumber),
-    claim_received_date: outputValue(result.claimReceivedDate),
-    processed_date: outputValue(result.processedDate),
-    service_code: outputValue(result.serviceCode),
-    billed_amount: outputValue(result.billedAmount),
-    plan_allowed_amount: outputValue(result.planAllowedAmount),
-    patient_responsibility: outputValue(result.patientResponsibility),
-    withhold_amount: outputValue(result.withholdAmount),
-    denied_amount: outputValue(result.deniedAmount),
-    paid_amount: outputValue(result.paidAmount),
-    line_status: outputValue(result.lineStatus),
-    explanation_code: outputValue(result.explanationCode),
-    explanation_description: outputValue(result.explanationDescription),
-    copay_amount: outputValue(result.copayAmount),
-    coinsurance_amount: outputValue(result.coinsuranceAmount),
-    deductible_amount: outputValue(result.deductibleAmount),
-    payment_mode: outputValue(result.paymentMode),
-    payment_type: outputValue(result.paymentType),
-    eft_number: outputValue(result.eftNumber),
-    eft_amount: outputValue(result.eftAmount),
-    payment_date: outputValue(result.paymentDate),
-    payment_id: outputValue(result.paymentId),
-    payment_name: outputValue(result.paymentName),
-    payee_name: outputValue(result.payeeName),
-    result_summary: outputValue(result.resultSummary),
-    notes: outputValue(result.notes),
-    extracted_at: new Date().toISOString(),
-  }));
-  XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(rows), "Output");
+  const inputHeaders = Array.from(new Set(results.flatMap((result) => Object.keys(result.input.raw))));
+  const botHeaders = [
+    "inputRowId", "memberId", "dos", "dosTo", "cptCode", "validationStatus", "validationMessage",
+    "Input Row", "Bot Status", "Bot Message", "Member ID", "DOS From", "DOS To", "CPT",
+    "Provider Claim ID", "Input Authorization #", "Claim #", "Received Date", "Service Date", "Auth #",
+    "Payee", "Billed Amount", "Contract Amount", "Net Amount", "Company", "Outcome", "Paid Date",
+    "Check #", "Service Line Date", "ServiceCode", "Modifier(s)", "Diag. Code", "Financial Resp.",
+    "Adjust Descr.", "Qty", "Billed", "Contract", "CoPay", "Coinsurance", "Deductible", "Adjust", "Net",
+    "Admin. Fee/Withhold", "Status", "Check Total Amount", "Final Status",
+  ];
+  const rawValue = (raw: Record<string, unknown>, aliases: string[]) => {
+    const wanted = aliases.map(normalizeHeader);
+    const entry = Object.entries(raw).find(([key]) => wanted.includes(normalizeHeader(key)));
+    return entry?.[1] == null ? "" : String(entry[1]).trim();
+  };
+  const outputDate = (value: string) => outputValue(value).replace(/\//g, "-");
+  const botRows = results.map((result) => {
+    const success = result.status === "Completed";
+    const netAmount = result.netPaidAmount || result.paidAmount;
+    const finalStatus = success
+      ? `DOS ${outputDate(result.input.dos)}: Checked Optum Pro claim received on ${outputDate(result.claimReceivedDate)} processed on ${outputDate(result.processedDate)} paid amount ${outputValue(netAmount)} EFT/Check # ${outputValue(result.eftNumber)}. Claim # ${outputValue(result.claimNumber)}. CPT ${outputValue(result.serviceCode)}.`
+      : result.notes || result.status;
+    return {
+      inputRowId: result.rowNumber,
+      memberId: result.input.memberId,
+      dos: outputDate(result.input.dos),
+      dosTo: outputDate(result.input.dos),
+      cptCode: result.input.cpt,
+      validationStatus: "valid",
+      validationMessage: "",
+      "Input Row": result.rowNumber,
+      "Bot Status": success ? "Success" : result.status,
+      "Bot Message": success ? "Claim found." : (result.notes || result.status),
+      "Member ID": outputMemberId(result.memberId),
+      "DOS From": outputDate(result.input.dos),
+      "DOS To": outputDate(result.input.dos),
+      CPT: result.input.cpt,
+      "Provider Claim ID": rawValue(result.input.raw, ["Provider Claim ID"]),
+      "Input Authorization #": rawValue(result.input.raw, ["Input Authorization #", "Authorization #", "Auth #"]),
+      "Claim #": outputValue(result.claimNumber),
+      "Received Date": outputDate(result.claimReceivedDate),
+      "Service Date": outputDate(result.serviceDate || result.input.dos),
+      "Auth #": "-",
+      Payee: outputValue(result.payeeName),
+      "Billed Amount": outputValue(result.billedAmount),
+      "Contract Amount": outputValue(result.planAllowedAmount),
+      "Net Amount": outputValue(netAmount),
+      Company: outputValue(result.healthPlan),
+      Outcome: outputValue(result.claimStatus || result.lineStatus),
+      "Paid Date": outputDate(result.paymentDate),
+      "Check #": outputValue(result.eftNumber),
+      "Service Line Date": outputValue(result.serviceLineDate),
+      ServiceCode: outputValue(result.serviceCode),
+      "Modifier(s)": outputValue(result.modifiers),
+      "Diag. Code": outputValue(result.diagnosisCodes),
+      "Financial Resp.": outputValue(result.patientResponsibility),
+      "Adjust Descr.": outputValue(result.explanationDescription),
+      Qty: outputValue(result.units),
+      Billed: outputValue(result.billedAmount),
+      Contract: outputValue(result.planAllowedAmount),
+      CoPay: outputValue(result.copayAmount),
+      Coinsurance: outputValue(result.coinsuranceAmount),
+      Deductible: outputValue(result.deductibleAmount),
+      Adjust: outputValue(result.adjustmentAmount),
+      Net: outputValue(netAmount),
+      "Admin. Fee/Withhold": outputValue(result.withholdAmount),
+      Status: outputValue(result.lineStatus || result.claimStatus),
+      "Check Total Amount": outputValue(result.eftAmount),
+      "Final Status": finalStatus,
+    };
+  });
+  const worksheetRows = [
+    [...inputHeaders, ...botHeaders],
+    ...results.map((result, index) => [
+      ...inputHeaders.map((header) => result.input.raw[header] ?? ""),
+      ...botHeaders.map((header) => botRows[index][header as keyof (typeof botRows)[number]] ?? ""),
+    ]),
+  ];
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(worksheetRows), "Output");
   return XLSX.write(workbook, { type: "buffer", bookType: "xlsx" }) as Buffer;
 }
