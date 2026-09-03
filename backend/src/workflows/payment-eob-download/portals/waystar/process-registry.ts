@@ -26,7 +26,7 @@ export function resolveWaystarPaymentProcess(clientName: string): WaystarPayment
     ? WAYSTAR_CLIENT_PROCESS_REGISTRY[clientKey as keyof typeof WAYSTAR_CLIENT_PROCESS_REGISTRY]
     : undefined;
   if (!processId) {
-    throw new Error(`Unsupported Waystar Client Name "${clientName || "(blank)"}". Supported clients: Posada, BPH, ESC, PSCD, TAJ, GEH, BCO, TWL, WMGU, and JTC.`);
+    throw new Error(`Unsupported Waystar Client Name "${clientName || "(blank)"}". Supported clients: Posada, BPH, ESC, PSCD, SSCE, TAJ, GEH, BCO, TWL, WMGU, and JTC.`);
   }
   return processId;
 }
