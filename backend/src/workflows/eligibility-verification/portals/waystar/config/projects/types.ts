@@ -15,6 +15,7 @@ export type WaystarPayerProjectConfig = {
   allowAutoPopulatedProviderFallback?: boolean;
   skipProviderHandling?: boolean;
   useDateOfServiceForPlanDates?: boolean;
+  fillDateOfBirth?: boolean;
   provider?: { name?: string; id?: string; tin?: string; npi?: string; ptan?: string };
   selectorFallbacks?: Partial<Record<WaystarInquirySelectorKey, string>>;
   outputMapping?: Readonly<Record<string, string>>;

@@ -120,194 +120,69 @@ cell.alignment = { vertical: "top", wrapText: true };
 }
 
 async function buildMedRevenueWaystarOutputWorkbook(options: {
+  inputFile: File;
   rows: Map<number, EligibilityInputRow>;
   results: Map<number, EligibilityResult>;
   errors: Map<number, string>;
 }): Promise<Buffer> {
   const workbook = new ExcelJS.Workbook();
-  const orderedIndexes = Array.from(new Set([
+  await workbook.xlsx.load(await options.inputFile.arrayBuffer());
+  const sheet = workbook.worksheets[0];
+  if (!sheet) throw new Error("The eligibility workbook does not contain a worksheet.");
+
+  // Deliberately mirrors the established Minimax columns without changing its
+  // code path. MedRevenue adds only the requested Plan Date column.
+  const outputColumns = [
+    ...BCBS_OUTPUT_COLUMNS.map((column) => ({ ...column })),
+    { header: "Plan Date", value: (_row: EligibilityInputRow | undefined, result: EligibilityResult | undefined) => result?.planDate ?? "" },
+    {
+      header: "Service Type",
+      value: (_row: EligibilityInputRow | undefined, result: EligibilityResult | undefined) =>
+        String(result?.metadata?.medRevenuePrescriptionDrugServiceType ?? ""),
+    },
+  ];
+  outputColumns[1] = { header: "Eff Date", value: (_row, result) => result?.effectiveDate ?? "" };
+  outputColumns[2] = { header: "End Date", value: (_row, result) => result?.terminationDate ?? "" };
+  const outputStartColumn = sheet.columnCount + 1;
+  const headerRow = sheet.getRow(1);
+  outputColumns.forEach((column, offset) => {
+    const cell = headerRow.getCell(outputStartColumn + offset);
+    cell.value = column.header;
+    cell.font = { bold: true, color: { argb: "FFFFFFFF" } };
+    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1F4E78" } };
+    cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
+    cell.border = {
+      top: { style: "thin", color: { argb: "FFB4C6E7" } },
+      left: { style: "thin", color: { argb: "FFB4C6E7" } },
+      bottom: { style: "thin", color: { argb: "FFB4C6E7" } },
+      right: { style: "thin", color: { argb: "FFB4C6E7" } },
+    };
+    sheet.getColumn(outputStartColumn + offset).width = Math.max(14, Math.min(32, column.header.length + 2));
+  });
+  headerRow.height = Math.max(headerRow.height || 15, 30);
+
+  const rowIndexes = new Set([
     ...options.rows.keys(),
     ...options.results.keys(),
     ...options.errors.keys(),
-  ])).sort((left, right) => left - right);
-  const inputHeaders = Array.from(new Set(
-    orderedIndexes.flatMap((rowIndex) => Object.keys(options.rows.get(rowIndex)?.raw ?? {})),
-  ));
-
-  const inputSheet = workbook.addWorksheet("Input");
-  inputSheet.addRow(inputHeaders);
-  for (const rowIndex of orderedIndexes) {
-    const raw = options.rows.get(rowIndex)?.raw ?? {};
-    inputSheet.addRow(inputHeaders.map((header) => raw[header] ?? ""));
-  }
-
-  const expandedValues = new Map<number, Record<string, string>>();
-  const expandedHeaders: string[] = [];
-  for (const rowIndex of orderedIndexes) {
-    const values = flattenMedRevenuePayerResponse(options.results.get(rowIndex));
-    expandedValues.set(rowIndex, values);
-    for (const header of Object.keys(values)) {
-      if (!expandedHeaders.includes(header)) expandedHeaders.push(header);
-    }
-  }
-
-  const outputHeaders = [
-    "Input Row", ...inputHeaders, "Result", "Coverage Status", "Plan Status", "Member ID", "Patient Name",
-    "Date of Birth", "Plan Date", ...expandedHeaders, "Error",
-  ];
-  const outputSheet = workbook.addWorksheet("Output");
-  outputSheet.addRow(outputHeaders);
-
-  const auditSheet = workbook.addWorksheet("Audit Log");
-  auditSheet.addRow(["Timestamp", "Input Row", "Payer", "Step", "Status", "Message"]);
-  const errorSheet = workbook.addWorksheet("Error Log");
-  errorSheet.addRow(["Input Row", "Payer", "Error Type", "Message"]);
-
-  for (const rowIndex of orderedIndexes) {
+  ]);
+  for (const rowIndex of rowIndexes) {
     const row = options.rows.get(rowIndex);
     const result = options.results.get(rowIndex);
-    const error = options.errors.get(rowIndex) ?? "";
-    const resultLabel = medRevenueResultLabel(result, error);
-    const raw = row?.raw ?? {};
-    outputSheet.addRow([
-      rowIndex,
-      ...inputHeaders.map((header) => outputValue(raw[header])),
-      resultLabel,
-      outputValue(result?.coverageStatus),
-      outputValue(result?.planStatus),
-      outputValue(result?.memberId || row?.memberId || row?.subscriberId),
-      outputValue(result?.patientName || [row?.patientFirstName, row?.patientLastName].filter(Boolean).join(" ")),
-      outputValue(result?.dateOfBirth || row?.dateOfBirth),
-      outputValue(result?.planDate || row?.dateOfService),
-      ...expandedHeaders.map((header) => outputValue(expandedValues.get(rowIndex)?.[header])),
-      outputValue(error || (resultLabel === "Subscriber Not Found" ? result?.planStatus : "")),
-    ]);
-
-    const auditStatus = error ? "Failed" : resultLabel;
-    auditSheet.addRow([
-      new Date().toISOString(), rowIndex, "Medicare", "Eligibility inquiry", auditStatus,
-      error || result?.planStatus || `Processed with ${resultLabel.toLowerCase()} result.`,
-    ]);
-    if (error || resultLabel === "Subscriber Not Found") {
-      errorSheet.addRow([
-        rowIndex,
-        "Medicare",
-        error ? "Processing Error" : "Subscriber Not Found",
-        error || result?.planStatus || "Waystar returned Subscriber Not Found.",
-      ]);
-    }
-  }
-
-  for (const sheet of workbook.worksheets) styleMedRevenueSheet(sheet);
-  return Buffer.from(await workbook.xlsx.writeBuffer());
-}
-
-function flattenMedRevenuePayerResponse(result?: EligibilityResult): Record<string, string> {
-  const full = result?.metadata?.fullPayerResponse;
-  if (!full || typeof full !== "object") return {};
-  const response = full as Record<string, unknown>;
-  const output: Record<string, string> = {};
-  appendResponseValues(output, "Subscriber", response.subscriberInformation);
-  appendResponseValues(output, "Subscriber Coverage", response.subscriberCoverageInformation);
-  appendResponseValues(output, "Other Coverage", response.otherCoverageInformation, true);
-  appendResponseValues(output, "Qualified Medicare Beneficiary", response.generalInformation);
-  return output;
-}
-
-function appendResponseValues(
-  output: Record<string, string>,
-  prefix: string,
-  value: unknown,
-  includeTitles = false,
-): void {
-  if (value === null || value === undefined || value === "") return;
-  if (Array.isArray(value)) {
-    value.forEach((entry) => {
-      appendResponseValues(output, prefix, entry, includeTitles);
+    const error = options.errors.get(rowIndex);
+    const worksheetRow = sheet.getRow(rowIndex);
+    outputColumns.forEach((column, offset) => {
+      const cell = worksheetRow.getCell(outputStartColumn + offset);
+      cell.value = formatOutputValue(column.value(row, result, error)) as ExcelJS.CellValue;
+      cell.alignment = { vertical: "top", wrapText: true };
+      cell.border = {
+        top: { style: "thin", color: { argb: "FFD9E2F3" } },
+        left: { style: "thin", color: { argb: "FFD9E2F3" } },
+        bottom: { style: "thin", color: { argb: "FFD9E2F3" } },
+        right: { style: "thin", color: { argb: "FFD9E2F3" } },
+      };
     });
-    return;
-  }
-  if (typeof value !== "object") {
-    addUniqueExpandedValue(output, prefix, String(value));
-    return;
   }
 
-  const record = value as Record<string, unknown>;
-  if (includeTitles && record.title) addUniqueExpandedValue(output, `${prefix} Type`, String(record.title));
-  if (record.name) addUniqueExpandedValue(output, `${prefix} Name`, String(record.name));
-  if (record.address) addUniqueExpandedValue(output, `${prefix} Address`, String(record.address));
-  if (record.fields && typeof record.fields === "object") {
-    for (const [label, fieldValue] of Object.entries(record.fields as Record<string, unknown>)) {
-      if (fieldValue !== null && fieldValue !== undefined && String(fieldValue).trim()) {
-        addUniqueExpandedValue(output, `${prefix} ${cleanHeader(label)}`, String(fieldValue));
-      }
-    }
-  }
-  if (Array.isArray(record.rows)) {
-    for (const row of record.rows) {
-      if (!row || typeof row !== "object") continue;
-      const labeled = row as Record<string, unknown>;
-      const label = cleanHeader(labeled.label);
-      const rowValue = String(labeled.value ?? "").trim();
-      if (label && rowValue) addUniqueExpandedValue(output, `${prefix} ${label}`, rowValue);
-    }
-  }
-  if (Array.isArray(record.groups)) {
-    for (const group of record.groups) {
-      if (!group || typeof group !== "object") continue;
-      appendResponseValues(output, prefix, group, includeTitles);
-    }
-  }
-}
-
-function addUniqueExpandedValue(output: Record<string, string>, header: string, value: string): void {
-  if (MEDREVENUE_EXCLUDED_RESPONSE_HEADERS.has(header.toLowerCase())) return;
-  const cleanedValue = value.trim();
-  if (!cleanedValue) return;
-  const existingValues = (output[header] ?? "")
-    .split("; ")
-    .map((entry) => entry.trim())
-    .filter(Boolean);
-  if (!existingValues.some((entry) => entry.toLowerCase() === cleanedValue.toLowerCase())) {
-    output[header] = [...existingValues, cleanedValue].join("; ");
-  }
-}
-
-const MEDREVENUE_EXCLUDED_RESPONSE_HEADERS = new Set([
-  "qualified medicare beneficiary plan date",
-  "qualified medicare beneficiary benefit date",
-  "qualified medicare beneficiary cob date",
-]);
-
-function cleanHeader(value: unknown): string {
-  return String(value ?? "").replace(/\s+/g, " ").trim();
-}
-
-function medRevenueResultLabel(result?: EligibilityResult, error = ""): string {
-  if (error) return "Failed";
-  const response = `${result?.planStatus ?? ""} ${result?.coverageStatus ?? ""}`.toLowerCase();
-  if (response.includes("subscriber not found")) return "Subscriber Not Found";
-  if (!result) return "Failed";
-  if (result.coverageStatus === "unknown" || result.coverageStatus === "error") return "Partial";
-  return "Patient Found";
-}
-
-function outputValue(value: unknown): ExcelJS.CellValue {
-  if (value === null || value === undefined || String(value).trim() === "") return "NA";
-  return value as ExcelJS.CellValue;
-}
-
-function styleMedRevenueSheet(sheet: ExcelJS.Worksheet): void {
-  const header = sheet.getRow(1);
-  header.font = { bold: true, color: { argb: "FFFFFFFF" } };
-  header.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF4472C4" } };
-  header.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
-  sheet.views = [{ state: "frozen", ySplit: 1 }];
-  sheet.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: Math.max(1, sheet.columnCount) } };
-  sheet.columns.forEach((column) => {
-    column.width = Math.max(12, Math.min(34, String(column.values?.[1] ?? "").length + 3));
-  });
-  sheet.eachRow((row, rowNumber) => {
-    if (rowNumber > 1) row.alignment = { vertical: "top", wrapText: true };
-  });
+  return Buffer.from(await workbook.xlsx.writeBuffer());
 }

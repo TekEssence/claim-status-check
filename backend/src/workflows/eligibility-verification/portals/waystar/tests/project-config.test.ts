@@ -24,10 +24,12 @@ test("MedRevenue resolves the same Medicare payer through project configuration"
   assert.equal(medicarePayer.id, "medicare");
   assert.equal(medicareConfig.skipProviderHandling, true);
   assert.equal(medicareConfig.useDateOfServiceForPlanDates, true);
+  assert.equal(medicareConfig.fillDateOfBirth, true);
   assert.equal(medicareConfig.serviceTypeDirectValue, "30");
   assert.equal(medicareConfig.extractFullPayerResponse, true);
   assert.equal(medicareConfig.selectorFallbacks?.planDateFrom, "#txtPlanFrom");
   assert.equal(medicareConfig.selectorFallbacks?.planDateTo, "#txtPlanTo");
+  assert.equal(medicareConfig.selectorFallbacks?.dateOfBirth, "#DOB");
 });
 
 test("Waystar runner accepts both projects without another payer runner", () => {

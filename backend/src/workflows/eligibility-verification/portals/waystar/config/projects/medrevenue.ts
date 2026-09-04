@@ -12,11 +12,13 @@ export const medRevenueWaystarConfig: WaystarProjectConfig = {
     medicare: {
       skipProviderHandling: true,
       useDateOfServiceForPlanDates: true,
+      fillDateOfBirth: true,
       serviceTypeDirectValue: "30",
       extractFullPayerResponse: true,
       selectorFallbacks: {
         planDateFrom: "#txtPlanFrom",
         planDateTo: "#txtPlanTo",
+        dateOfBirth: "#DOB",
       },
     },
   },

@@ -418,6 +418,7 @@ export async function submitWaystarInquiry(options: {
   const expectedLastName = row.patientLastName || "";
   const expectedFirstName = row.patientFirstName || "";
   const expectedDateOfBirth = normalizeWaystarDate(row.dateOfBirth || "");
+  let medRevenueDateOfBirthFilled = false;
   const useMedRevenueMedicareFlow = Boolean(
     options.projectConfig?.skipProviderHandling && options.projectConfig.useDateOfServiceForPlanDates,
   );
@@ -469,6 +470,12 @@ export async function submitWaystarInquiry(options: {
   await fillVerifiedText(inquiryPage, WAYSTAR_SELECTORS.inquiry.firstName, expectedFirstName, "First Name");
   if (!options.projectConfig?.useDateOfServiceForPlanDates) {
     await fillVerifiedText(inquiryPage, WAYSTAR_SELECTORS.inquiry.dateOfBirth, expectedDateOfBirth, "Date of Birth", true);
+  } else if (options.projectConfig?.fillDateOfBirth) {
+    const dateOfBirth = inquiryPage.locator(WAYSTAR_SELECTORS.inquiry.dateOfBirth).first();
+    if (await dateOfBirth.isVisible().catch(() => false)) {
+      await fillVerifiedText(inquiryPage, WAYSTAR_SELECTORS.inquiry.dateOfBirth, expectedDateOfBirth, "Date of Birth", true);
+      medRevenueDateOfBirthFilled = true;
+    }
   }
   await dismissWaystarDatePicker(inquiryPage);
   if (useMedRevenueMedicareFlow) {
@@ -476,6 +483,7 @@ export async function submitWaystarInquiry(options: {
       memberId: expectedMemberId,
       lastName: expectedLastName,
       firstName: expectedFirstName,
+      dateOfBirth: medRevenueDateOfBirthFilled ? expectedDateOfBirth : undefined,
     });
     await ensureSelectedServiceType(inquiryPage, expectedServiceType);
   } else {
@@ -724,6 +732,59 @@ const dataId = header.getAttribute("data-id");
         });
     }
 
+    function readMedicarePrescriptionDrugCoverage() {
+      const hasOtherCoverageHeading = Array.from(document.querySelectorAll("h4"))
+        .some((heading) => normalizeFieldLabel(textOf(heading)) === "other coverage information");
+      if (!hasOtherCoverageHeading) return undefined;
+
+      const title = Array.from(document.querySelectorAll("div.OtherCoverage"))
+        .find((element) => normalizeFieldLabel(textOf(element)) === "medicare prescription drug coverage");
+      if (!title) return undefined;
+
+      const wantedLabels = new Set(["payer", "benefit date", "service type"]);
+      const exactRows = (container: Element) => Array.from(container.querySelectorAll("div.Label"))
+        .map((labelElement) => {
+          const label = textOf(labelElement).replace(/:\s*$/, "").trim();
+          if (!wantedLabels.has(normalizeFieldLabel(label))) return undefined;
+
+          // These Waystar rows place div.Text beside div.Label. Read that
+          // sibling first so Service Type cannot accidentally receive Payer.
+          const sibling = labelElement.nextElementSibling;
+          let value = sibling?.matches(".Text, .Value") ? textOf(sibling) : "";
+          if (!value) {
+            const directValue = labelElement.parentElement?.querySelector(":scope > .Text, :scope > .Value") ?? null;
+            value = textOf(directValue);
+          }
+          if (!value) {
+            const row = labelElement.closest(".Row, tr") ?? labelElement.parentElement;
+            value = textOf(row?.querySelector(".Text, .Value, td:not(.Label)") ?? null);
+          }
+          return value ? { label, value } : undefined;
+        })
+        .filter((row): row is { label: string; value: string } => Boolean(row));
+      const explicitCard = title.closest(".HalfColumn, .SubSection, section");
+      let bestRows: Array<{ label: string; value: string }> = [];
+
+      // Prefer Waystar's own left/right card container. The same selector works
+      // regardless of which side contains the prescription-drug coverage.
+      if (explicitCard && explicitCard.querySelectorAll("div.OtherCoverage").length === 1) {
+        bestRows = exactRows(explicitCard);
+      }
+
+      let candidate: Element | null = title.parentElement;
+      for (let depth = 0; candidate && candidate !== document.body && depth < 7; depth += 1) {
+        // Never read the shared two-card parent: doing so can take Service Type
+        // from CA QMB PLAN when the prescription card is on the other side.
+        if (candidate.querySelectorAll("div.OtherCoverage").length > 1) break;
+        const rows = exactRows(candidate);
+        if (rows.length > bestRows.length) bestRows = rows;
+        if (bestRows.length === wantedLabels.size) break;
+        candidate = candidate.parentElement;
+      }
+
+      return bestRows.length ? { title: textOf(title), rows: bestRows } : undefined;
+    }
+
     function normalizeFieldLabel(value: string): string {
       return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
     }
@@ -801,10 +862,14 @@ const dataId = header.getAttribute("data-id");
     const primaryCareProvider = findRowValueByLabel("Primary Care Provider");
     const ipa = findRowValueByLabel("Independent Physicians Association (IPA)") || findRowValueByLabel("IPA");
     const fullSections = selectors.extractFullPayerResponse ? readFullSections() : [];
+    const medicarePrescriptionDrugCoverage = selectors.extractFullPayerResponse
+      ? readMedicarePrescriptionDrugCoverage()
+      : undefined;
     const fullPayerResponse = selectors.extractFullPayerResponse ? {
       subscriberInformation: subscriberBlock || fullSubscriberBlocks,
       subscriberCoverageInformation: coverageBlock || fullCoverageBlocks,
       otherCoverageInformation: [
+        ...(medicarePrescriptionDrugCoverage ? [medicarePrescriptionDrugCoverage] : []),
         ...fullSections.filter((section) => section.title.toLowerCase().includes("other coverage")),
         ...readBlocksByHeading("Other Coverage Information"),
       ],
@@ -1485,17 +1550,21 @@ async function commitInputValue(input: Locator): Promise<void> {
 
 async function verifyMedRevenueMedicarePatientFields(
   page: Page,
-  expected: { memberId: string; lastName: string; firstName: string },
+  expected: { memberId: string; lastName: string; firstName: string; dateOfBirth?: string },
 ): Promise<void> {
   const actual = {
     memberId: await page.locator(WAYSTAR_SELECTORS.inquiry.memberId).first().inputValue().catch(() => ""),
     lastName: await page.locator(WAYSTAR_SELECTORS.inquiry.lastName).first().inputValue().catch(() => ""),
     firstName: await page.locator(WAYSTAR_SELECTORS.inquiry.firstName).first().inputValue().catch(() => ""),
+    dateOfBirth: await page.locator(WAYSTAR_SELECTORS.inquiry.dateOfBirth).first().inputValue().catch(() => ""),
   };
   const missing: string[] = [];
   if (actual.memberId.trim() !== expected.memberId.trim()) missing.push(`memberId=${actual.memberId || "blank"}`);
   if (actual.lastName.trim() !== expected.lastName.trim()) missing.push(`lastName=${actual.lastName || "blank"}`);
   if (actual.firstName.trim() !== expected.firstName.trim()) missing.push(`firstName=${actual.firstName || "blank"}`);
+  if (expected.dateOfBirth && !waystarDatesMatch(actual.dateOfBirth, expected.dateOfBirth)) {
+    missing.push(`dateOfBirth=${actual.dateOfBirth || "blank"}`);
+  }
   if (missing.length) {
     throw new Error(`MedRevenue Medicare patient fields were not present before submit. ${missing.join(", ")}.`);
   }
