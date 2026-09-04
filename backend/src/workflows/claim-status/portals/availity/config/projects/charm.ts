@@ -54,6 +54,13 @@ export const charmAvailityConfig: AvailityProjectConfig = {
     state: { sourceField: "Portal State" },
     payer: { directField: "Portal Payer Name", mappingField: "Payer Name" },
   },
+  selectionOverrides: [
+    {
+      practice: "Feel Better",
+      payer: "Carelon Behavioral Health",
+      organization: "Open Mind Health",
+    },
+  ],
   provider: {
     groupField: "Group",
     inputNameField: "Provider Name",
@@ -62,6 +69,34 @@ export const charmAvailityConfig: AvailityProjectConfig = {
     requireProvider: true,
     allowInputNameFallback: true,
     includeInputNameAfterMapping: true,
+  },
+  fieldPolicies: {
+    hipaaStandard: [
+      {
+        practice: "Feel Better",
+        payer: "Carelon Behavioral Health",
+        fields: {
+          providerDropdown: {
+            fill: true,
+            value: "OPEN MIND MENTAL HEALTH PHYSICIANS, INC.",
+            required: true,
+          },
+          providerNpi: { fill: false },
+          providerTaxId: { fill: false },
+        },
+      },
+    ],
+    serviceDates: [
+      {
+        practice: "Open Mind",
+        payer: "TRIWEST-VA CCN",
+        fields: {
+          providerDropdown: { fill: false },
+          providerNpi: { fill: false, clear: true },
+          providerTaxId: { fill: true, valueFrom: "Provider Tax ID", required: true },
+        },
+      },
+    ],
   },
   matching: {
     matchBilledAmount: true,

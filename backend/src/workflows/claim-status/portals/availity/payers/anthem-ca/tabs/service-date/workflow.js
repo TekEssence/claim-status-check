@@ -3,7 +3,14 @@
 const logger = require("../../../../utils/logger");
 const { humanDelay, withRetry } = require("../../../../utils/browser");
 const { getClaimStatusFrame } = require("../../../../pages/navigation.page");
-const { fillInputProviderIdentifiers, hasInputProviderIdentifiers } = require("../../../../pages/provider-identifiers.page");
+const {
+  clearProviderStateForTaxIdFallback,
+  fillInputProviderIdentifiers,
+  getProviderTaxIdForPolicy,
+  hasInputProviderIdentifiers,
+  providerPolicySkipsProviderDropdown,
+  verifyProviderNpiMatches
+} = require("../../../../pages/provider-identifiers.page");
 const { PROVIDERS } = require("../../../../pages/claim-status-member.page");
 const { waitForSearchResultsToSettle, normalizeMoney, normalizeDateText } = require("../../../../pages/results.page");
 const { renderClaimSummary, renderFailedSummary } = require("../../../../services/summary-renderer");
@@ -52,6 +59,14 @@ function extractProviderTaxId(providerText) {
   return parts.reverse().find((part) => /^\d{9}$/.test(part)) || "";
 }
 
+function digitsOnly(value) {
+  return String(value || "").replace(/\D/g, "");
+}
+
+function getInputProviderTaxId(rowData = {}) {
+  return digitsOnly(rowData["Provider Tax ID"] || rowData["Tax ID"] || rowData["Provider TIN"]);
+}
+
 async function selectAutocompleteOption(scope, inputLocator, value) {
   await inputLocator.click({ force: true });
   await inputLocator.press(process.platform === "darwin" ? "Meta+A" : "Control+A").catch(() => {});
@@ -76,6 +91,22 @@ async function selectAutocompleteOption(scope, inputLocator, value) {
       throw new Error(`No Availity dropdown option was found for "${value}".`);
     }
   }
+}
+
+async function getProviderInput(frame) {
+  const providerLabel = frame.getByText("Select a Provider", { exact: true }).first();
+  return providerLabel.locator("xpath=ancestor::*[self::div or self::label][1]/following::input[@role='combobox'][1]");
+}
+
+async function clearProviderInput(frame) {
+  const providerInput = await getProviderInput(frame);
+  if (!await providerInput.isVisible({ timeout: 1500 }).catch(() => false)) {
+    return;
+  }
+
+  await providerInput.click({ force: true }).catch(() => {});
+  await providerInput.press(process.platform === "darwin" ? "Meta+A" : "Control+A").catch(() => {});
+  await providerInput.press("Backspace").catch(() => {});
 }
 
 async function fillProviderTaxId(frame, taxId) {
@@ -129,25 +160,38 @@ async function selectProvider(page, providerName, rowData = {}) {
     `Selecting Anthem-CA provider ${providerName}`,
     async () => {
       const frame = await getClaimStatusFrame(page);
-      const providerLabel = frame.getByText("Select a Provider", { exact: true }).first();
-      const providerInput = providerLabel.locator("xpath=ancestor::*[self::div or self::label][1]/following::input[@role='combobox'][1]");
+      const inputProviderTaxId = getInputProviderTaxId(rowData);
+      const providerAsTaxId = inputProviderTaxId && digitsOnly(providerName) === inputProviderTaxId ? inputProviderTaxId : "";
+      if (providerAsTaxId) {
+        logger.info(`Anthem-CA provider identifier "${providerName}" is a Tax ID. Filling Provider Tax ID directly.`);
+        await clearProviderStateForTaxIdFallback(page, { context: "Anthem-CA Service Dates Tax ID fallback", logger });
+        await fillProviderTaxId(frame, providerAsTaxId);
+        return;
+      }
+
+      const providerInput = await getProviderInput(frame);
       await providerInput.waitFor({ state: "visible", timeout: 15000 });
       try {
         await selectAutocompleteOption(frame, providerInput, providerName);
       } catch (providerError) {
-        if (!hasInputProviderIdentifiers(rowData)) {
+        if (!inputProviderTaxId && !hasInputProviderIdentifiers(rowData)) {
           throw new Error(`Provider "${providerName}" was not available in Availity and input Provider NPI/Tax ID is blank.`);
         }
 
-        logger.warn(`Provider "${providerName}" was not available. Continuing with input Provider NPI/Tax ID.`);
+        logger.warn(`Provider "${providerName}" was not available. Filling input Provider Tax ID "${inputProviderTaxId}" directly.`);
         await providerInput.click({ force: true }).catch(() => {});
         await providerInput.press(process.platform === "darwin" ? "Meta+A" : "Control+A").catch(() => {});
         await providerInput.press("Backspace").catch(() => {});
+        await clearProviderStateForTaxIdFallback(page, { context: "Anthem-CA Service Dates Tax ID fallback", logger });
+        if (inputProviderTaxId) {
+          await fillProviderTaxId(frame, inputProviderTaxId);
+        }
         return;
       }
 
       const selectedProviderText = await providerInput.inputValue({ timeout: 3000 }).catch(() => providerName);
-      const providerTaxId = extractProviderTaxId(selectedProviderText || providerName);
+      await verifyProviderNpiMatches(frame, providerName, { context: "Anthem-CA Service Dates", logger });
+      const providerTaxId = extractProviderTaxId(selectedProviderText || providerName) || getInputProviderTaxId(rowData);
       logger.info(`Anthem-CA provider Tax ID extracted as "${providerTaxId || "blank"}" from provider value "${selectedProviderText || providerName}".`);
       await fillProviderTaxId(frame, providerTaxId);
     },
@@ -575,9 +619,21 @@ async function processAnthemCaServiceDateResults(page, row, provider, resultSumm
   };
 }
 
-async function searchAnthemCaServiceDatesWithProvider(page, providerName, rowData) {
+async function searchAnthemCaServiceDatesWithProvider(page, providerName, rowData, options = {}) {
   logger.info(`Anthem-CA Service Dates provider attempt: ${providerName}`);
   await selectServiceDateTab(page);
+  if (providerPolicySkipsProviderDropdown(options.providerFieldPolicy)) {
+    const taxId = getProviderTaxIdForPolicy(rowData, options.providerFieldPolicy);
+    logger.info(`Anthem-CA Service Dates field policy skips Select a Provider. Filling Provider Tax ID "${taxId || "blank"}".`);
+    if (!taxId && options.providerFieldPolicy?.providerTaxId?.required) {
+      throw new Error("Anthem-CA Service Dates field policy requires Provider Tax ID, but the input value is blank.");
+    }
+    const frame = await clearProviderStateForTaxIdFallback(page, { context: "Anthem-CA Service Dates field policy", logger });
+    await fillProviderTaxId(frame, taxId);
+    await fillServiceDateSearchForm(page, rowData);
+    await submitServiceDateSearch(page);
+    return;
+  }
   await selectProvider(page, providerName, rowData);
   await fillInputProviderIdentifiers(page, rowData);
   await fillServiceDateSearchForm(page, rowData);
@@ -586,13 +642,15 @@ async function searchAnthemCaServiceDatesWithProvider(page, providerName, rowDat
 
 async function processClaim(page, row, options = {}) {
   logger.info("Using Anthem-CA workflow: Service Dates tab only.");
-  const providerOrder = Array.isArray(options.providerOrder) && options.providerOrder.length
+  const providerOrder = providerPolicySkipsProviderDropdown(options.providerFieldPolicy)
+    ? ["Provider Tax ID"]
+    : Array.isArray(options.providerOrder) && options.providerOrder.length
     ? options.providerOrder
     : PROVIDERS;
 
   let lastProviderFailure = "";
   for (const provider of providerOrder) {
-    await searchAnthemCaServiceDatesWithProvider(page, provider, row.data);
+    await searchAnthemCaServiceDatesWithProvider(page, provider, row.data, options);
 
     logger.info(`Waiting up to 5 seconds for ${provider} Anthem-CA Service Dates results to settle`);
     const resultSummary = await waitForSearchResultsToSettle(page, 5000);

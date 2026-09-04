@@ -6,6 +6,7 @@ import { DEFAULT_AVAILITY_REQUIRED_FIELDS, getAvailityProjectConfig } from "./co
 import type { AvailityProjectFieldConfig } from "./config/projects";
 import type { AvailityPortalSelections } from "./config/projects";
 import type { AvailityMatchingPolicy } from "./config/projects";
+import type { AvailityProviderFieldPolicy } from "./config/projects";
 
 export { AVAILITY_PROJECT_CONFIGS } from "./config/projects";
 
@@ -88,6 +89,16 @@ function findRowValue(row: AvailityInputRow, aliases: string[]): string {
     }
   }
   return "";
+}
+
+function matchesPolicyValue(ruleValue: string | undefined, actualValue: string): boolean {
+  if (!ruleValue) return true;
+  const normalizedRule = normalizeLookup(ruleValue);
+  const normalizedActual = normalizeLookup(actualValue);
+  if (!normalizedActual) return false;
+  return normalizedRule === normalizedActual
+    || normalizedActual.includes(normalizedRule)
+    || normalizedRule.includes(normalizedActual);
 }
 
 function parseMoney(value: unknown): number | null {
@@ -175,6 +186,11 @@ export function resolvePortalSelections(
   payerMapping: Map<string, string>,
 ): AvailityPortalSelections {
   const config = getAvailityProjectConfig(projectId);
+  const payerConfig = config.selections.payer;
+  const directPayer = payerConfig.directField ? findRowValue(row, [payerConfig.directField]) : "";
+  const mappingValue = findRowValue(row, [payerConfig.mappingField]);
+  const payer = directPayer || (mappingValue ? payerMapping.get(mappingValue.toLowerCase()) || "" : "");
+
   const organizationConfig = config.selections.organization;
   let organization: string | undefined;
   if (organizationConfig) {
@@ -193,10 +209,15 @@ export function resolvePortalSelections(
     }
   }
 
-  const payerConfig = config.selections.payer;
-  const directPayer = payerConfig.directField ? findRowValue(row, [payerConfig.directField]) : "";
-  const mappingValue = findRowValue(row, [payerConfig.mappingField]);
-  const payer = directPayer || (mappingValue ? payerMapping.get(mappingValue.toLowerCase()) || "" : "");
+  const practice = findRowValue(row, ["Group", "Practice", "Organization Group"]);
+  const selectionOverride = (config.selectionOverrides || []).find((rule) => {
+    const practiceMatches = matchesPolicyValue(rule.practice, practice);
+    const payerMatches = matchesPolicyValue(rule.payer, payer) || matchesPolicyValue(rule.payer, directPayer) || matchesPolicyValue(rule.payer, mappingValue);
+    return practiceMatches && payerMatches;
+  });
+  if (selectionOverride?.organization) {
+    organization = selectionOverride.organization;
+  }
 
   return {
     organization,
@@ -377,4 +398,39 @@ export function getProviderOrderForRow(projectId: string, row: AvailityInputRow,
     match.providerName,
     providerConfig.includeInputNameAfterMapping ? inputProviderName : "",
   ].filter(Boolean)));
+}
+
+export function getServiceDateProviderFieldPolicy(projectId: string, row: AvailityInputRow, portalPayerName: string): AvailityProviderFieldPolicy | undefined {
+  const config = getAvailityProjectConfig(projectId);
+  return findProviderFieldPolicy(config.fieldPolicies?.serviceDates || [], row, portalPayerName);
+}
+
+export function getHipaaProviderFieldPolicy(projectId: string, row: AvailityInputRow, portalPayerName: string): AvailityProviderFieldPolicy | undefined {
+  const config = getAvailityProjectConfig(projectId);
+  return findProviderFieldPolicy(config.fieldPolicies?.hipaaStandard || [], row, portalPayerName);
+}
+
+export function getProviderOrderFromFieldPolicy(providerFieldPolicy: AvailityProviderFieldPolicy | undefined): string[] | undefined {
+  const providerValue = providerFieldPolicy?.providerDropdown?.value?.trim();
+  if (providerFieldPolicy?.providerDropdown?.fill === true && providerValue) {
+    return [providerValue];
+  }
+  return undefined;
+}
+
+function findProviderFieldPolicy(
+  rules: { practice?: string; payer?: string; fields: AvailityProviderFieldPolicy }[],
+  row: AvailityInputRow,
+  portalPayerName: string,
+): AvailityProviderFieldPolicy | undefined {
+  if (!rules.length) return undefined;
+
+  const practice = findRowValue(row, ["Group", "Practice", "Organization Group"]);
+  const inputPayerName = findRowValue(row, ["Portal Payer Name", "Payer Name"]);
+
+  return rules.find((rule) => {
+    const practiceMatches = matchesPolicyValue(rule.practice, practice);
+    const payerMatches = matchesPolicyValue(rule.payer, portalPayerName) || matchesPolicyValue(rule.payer, inputPayerName);
+    return practiceMatches && payerMatches;
+  })?.fields;
 }

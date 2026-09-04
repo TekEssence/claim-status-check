@@ -29,6 +29,7 @@ export type AvailityProjectConfig = {
       mappingField: string;
     };
   };
+  selectionOverrides?: AvailitySelectionOverrideRule[];
   provider?: {
     groupField: string;
     values?: Record<string, string>;
@@ -41,10 +42,46 @@ export type AvailityProjectConfig = {
     allowInputNameFallback?: boolean;
     includeInputNameAfterMapping?: boolean;
   };
+  fieldPolicies?: {
+    hipaaStandard?: AvailityHipaaFieldPolicyRule[];
+    serviceDates?: AvailityServiceDateFieldPolicyRule[];
+  };
   matching: AvailityMatchingPolicy;
   payerMatchingOverrides?: Record<string, Partial<AvailityMatchingPolicy>>;
   preprocessingStrategy: "none" | "sumChargesByAccountEpisode";
   outputStrategy: "default" | "cptLineDetail";
+};
+
+export type AvailityFieldFillPolicy = {
+  fill?: boolean;
+  clear?: boolean;
+  value?: string;
+  valueFrom?: string;
+  required?: boolean;
+};
+
+export type AvailityProviderFieldPolicy = {
+  providerDropdown?: AvailityFieldFillPolicy;
+  providerNpi?: AvailityFieldFillPolicy;
+  providerTaxId?: AvailityFieldFillPolicy;
+};
+
+export type AvailityServiceDateFieldPolicyRule = {
+  practice?: string;
+  payer?: string;
+  fields: AvailityProviderFieldPolicy;
+};
+
+export type AvailityHipaaFieldPolicyRule = {
+  practice?: string;
+  payer?: string;
+  fields: AvailityProviderFieldPolicy;
+};
+
+export type AvailitySelectionOverrideRule = {
+  practice?: string;
+  payer?: string;
+  organization?: string;
 };
 
 export type AvailityMatchingPolicy = {

@@ -3,7 +3,7 @@
 const logger = require("../utils/logger");
 const { humanDelay, withRetry } = require("../utils/browser");
 const { getClaimStatusFrame } = require("./navigation.page");
-const { fillInputProviderIdentifiers, hasInputProviderIdentifiers } = require("./provider-identifiers.page");
+const { clearProviderStateForTaxIdFallback, fillInputProviderIdentifiers, getInputProviderIdentifiers, hasInputProviderIdentifiers, verifyProviderNpiMatches } = require("./provider-identifiers.page");
 
 const HIPAA_SELECTORS = {
   hipaaTab: "button[role='tab']:has-text('HIPAA Standard')",
@@ -534,6 +534,7 @@ async function selectProvider(page, providerName, options = {}) {
       logger.info(
         `HIPAA provider selected state after select: input="${selectedState.inputValue}", selected="${selectedState.selectedText}", hidden="${selectedState.hiddenValue}", npi="${selectedState.providerNpi}"`
       );
+      await verifyProviderNpiMatches(frame, providerName, { context: "HIPAA", logger });
     },
     { retries: 2, retryDelayMs: 1200 }
   );
@@ -741,17 +742,38 @@ async function submitHipaaSearch(page) {
 async function searchHipaaWithProvider(page, providerName, rowData, options = {}) {
   logger.info(`HIPAA Standard search provider attempt: ${providerName}`);
   await selectHipaaTab(page);
-  try {
-    await selectProvider(page, providerName, options);
-  } catch (error) {
-    if (options.requireDropdownProviderSelection) {
-      error.providerSelectionFailed = true;
-      throw error;
+  const providerIdentifiers = getInputProviderIdentifiers(rowData);
+  const providerAsTaxId = Boolean(providerIdentifiers.taxId && String(providerName || "").replace(/\D/g, "") === providerIdentifiers.taxId);
+  let fillTaxIdOnly = false;
+  if (providerAsTaxId && providerIdentifiers.taxId) {
+    logger.info(`HIPAA provider identifier "${providerName}" is a Tax ID. Filling Provider Tax ID directly.`);
+    await clearProviderStateForTaxIdFallback(page, { context: "HIPAA Tax ID fallback", logger });
+    fillTaxIdOnly = true;
+  } else {
+    try {
+      await selectProvider(page, providerName, options);
+    } catch (error) {
+      if (providerIdentifiers.taxId) {
+        fillTaxIdOnly = true;
+        const frame = await getClaimStatusFrame(page);
+        const providerInput = await getProviderInput(frame).catch(() => null);
+        if (providerInput) {
+          await providerInput.click({ force: true }).catch(() => {});
+          await providerInput.press(process.platform === "darwin" ? "Meta+A" : "Control+A").catch(() => {});
+          await providerInput.press("Backspace").catch(() => {});
+        }
+        await clearProviderStateForTaxIdFallback(page, { context: "HIPAA Tax ID fallback", logger });
+        logger.warn(`HIPAA provider "${providerName}" was not available. Filling input Provider Tax ID "${providerIdentifiers.taxId}" directly.`);
+      } else if (options.requireDropdownProviderSelection) {
+        error.providerSelectionFailed = true;
+        throw error;
+      } else {
+        if (!hasInputProviderIdentifiers(rowData)) throw error;
+        logger.warn(`HIPAA provider "${providerName}" was not available. Continuing with input Provider NPI/Tax ID.`);
+      }
     }
-    if (!hasInputProviderIdentifiers(rowData)) throw error;
-    logger.warn(`HIPAA provider "${providerName}" was not available. Continuing with input Provider NPI/Tax ID.`);
   }
-  await fillInputProviderIdentifiers(page, rowData);
+  await fillInputProviderIdentifiers(page, fillTaxIdOnly ? { ...rowData, "Provider NPI": "" } : rowData);
   await fillHipaaSearchForm(page, rowData);
   await submitHipaaSearch(page);
 }

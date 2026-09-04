@@ -7,7 +7,7 @@ import type { ScraperContext } from "../../types";
 import { launchAvailityBrowser } from "./browser";
 import { isRunnableAvailityPayerName, parseAvailityInput, readAvailityPayerMapping, unsupportedAvailityPayerMessage } from "./input";
 import { createAvailityOutputWorkbookBuffer } from "./output-writer";
-import { getMatchingPolicy, getMfaConfigForProject, getProviderOrderForRow, getRequiredFieldsForProject, readAvailityProviderMapping, resolvePortalSelections } from "./project-config";
+import { getHipaaProviderFieldPolicy, getMatchingPolicy, getMfaConfigForProject, getProviderOrderForRow, getProviderOrderFromFieldPolicy, getRequiredFieldsForProject, getServiceDateProviderFieldPolicy, readAvailityProviderMapping, resolvePortalSelections } from "./project-config";
 import type { AvailityPortalSelections } from "./config/projects";
 import { applyProjectOutputStrategy } from "./project-output";
 import type { AvailityAuditRow, AvailityErrorRow, AvailityInputRow, AvailityOutputRow, AvailityProviderMapping } from "./types";
@@ -414,13 +414,17 @@ async function processValidRow(
     inputPayerName: row.data["Payer Name"] || "",
     mappedPortalPayerName: selections.payer,
   });
-  const providerOrder = getProviderOrderForRow(options.projectId, row, options.providerMappings);
+  const hipaaProviderFieldPolicy = getHipaaProviderFieldPolicy(options.projectId, row, selections.payer);
+  const providerOrder = getProviderOrderFromFieldPolicy(hipaaProviderFieldPolicy)
+    || getProviderOrderForRow(options.projectId, row, options.providerMappings);
   const matchingPolicy = {
     ...getMatchingPolicy(options.projectId, selections.payer),
     fallbackProviderOnlyOnSelectionFailure: options.projectId === "charm",
   };
+  const providerFieldPolicy = getServiceDateProviderFieldPolicy(options.projectId, row, selections.payer);
   return workflow.processClaim(page, row, {
     providerOrder,
+    providerFieldPolicy,
     matchingPolicy,
   });
 }

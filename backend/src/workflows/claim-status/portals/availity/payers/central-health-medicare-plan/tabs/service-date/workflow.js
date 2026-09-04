@@ -3,6 +3,12 @@
 const logger = require("../../../../utils/logger");
 const { humanDelay, withRetry } = require("../../../../utils/browser");
 const { getClaimStatusFrame } = require("../../../../pages/navigation.page");
+const {
+  clearProviderStateForTaxIdFallback,
+  getProviderTaxIdForPolicy,
+  providerPolicySkipsProviderDropdown,
+  verifyProviderNpiMatches
+} = require("../../../../pages/provider-identifiers.page");
 const { PROVIDERS } = require("../../../../pages/claim-status-member.page");
 const { waitForSearchResultsToSettle, normalizeMoney, normalizeDateText } = require("../../../../pages/results.page");
 const { renderClaimSummary, renderFailedSummary } = require("../../../../services/summary-renderer");
@@ -51,6 +57,14 @@ function extractProviderTaxId(providerText) {
   return parts.reverse().find((part) => /^\d{9}$/.test(part)) || "";
 }
 
+function digitsOnly(value) {
+  return String(value || "").replace(/\D/g, "");
+}
+
+function getInputProviderTaxId(rowData = {}) {
+  return digitsOnly(rowData["Provider Tax ID"] || rowData["Tax ID"] || rowData["Provider TIN"]);
+}
+
 async function selectAutocompleteOption(scope, inputLocator, value) {
   await inputLocator.click({ force: true });
   await inputLocator.press(process.platform === "darwin" ? "Meta+A" : "Control+A").catch(() => {});
@@ -75,6 +89,22 @@ async function selectAutocompleteOption(scope, inputLocator, value) {
       throw new Error(`No Availity dropdown option was found for "${value}".`);
     }
   }
+}
+
+async function getProviderInput(frame) {
+  const providerLabel = frame.getByText("Select a Provider", { exact: true }).first();
+  return providerLabel.locator("xpath=ancestor::*[self::div or self::label][1]/following::input[@role='combobox'][1]");
+}
+
+async function clearProviderInput(frame) {
+  const providerInput = await getProviderInput(frame);
+  if (!await providerInput.isVisible({ timeout: 1500 }).catch(() => false)) {
+    return;
+  }
+
+  await providerInput.click({ force: true }).catch(() => {});
+  await providerInput.press(process.platform === "darwin" ? "Meta+A" : "Control+A").catch(() => {});
+  await providerInput.press("Backspace").catch(() => {});
 }
 
 async function fillProviderTaxId(frame, taxId) {
@@ -127,23 +157,48 @@ async function selectServiceDateTab(page) {
   );
 }
 
-async function selectProvider(page, providerName) {
+async function selectProvider(page, providerName, rowData = {}) {
   await withRetry(
     `Selecting Central Health Medicare Plan provider ${providerName}`,
     async () => {
       const frame = await getClaimStatusFrame(page);
-      const providerLabel = frame.getByText("Select a Provider", { exact: true }).first();
-      const providerInput = providerLabel.locator("xpath=ancestor::*[self::div or self::label][1]/following::input[@role='combobox'][1]");
+      const providerInput = await getProviderInput(frame);
       await providerInput.waitFor({ state: "visible", timeout: 15000 });
       await selectAutocompleteOption(frame, providerInput, providerName);
 
       const selectedProviderText = await providerInput.inputValue({ timeout: 3000 }).catch(() => providerName);
-      const providerTaxId = extractProviderTaxId(selectedProviderText || providerName);
+      await verifyProviderNpiMatches(frame, providerName, { context: "Central Health Medicare Plan Service Dates", logger });
+      const providerTaxId = extractProviderTaxId(selectedProviderText || providerName) || getInputProviderTaxId(rowData);
       logger.info(`Central Health Medicare Plan provider Tax ID extracted as "${providerTaxId || "blank"}" from provider value "${selectedProviderText || providerName}".`);
       await fillProviderTaxId(frame, providerTaxId);
     },
     { retries: 2, retryDelayMs: 1200 }
   );
+}
+
+async function selectProviderOrFillTaxId(page, providerName, rowData = {}) {
+  const inputProviderTaxId = getInputProviderTaxId(rowData);
+  const providerAsTaxId = inputProviderTaxId && digitsOnly(providerName) === inputProviderTaxId ? inputProviderTaxId : "";
+  if (providerAsTaxId) {
+    logger.info(`Central Health Medicare Plan provider identifier "${providerName}" is a Tax ID. Filling Provider Tax ID directly.`);
+    const frame = await clearProviderStateForTaxIdFallback(page, { context: "Central Health Medicare Plan Service Dates Tax ID fallback", logger });
+    await fillProviderTaxId(frame, providerAsTaxId);
+    return;
+  }
+
+  try {
+    await selectProvider(page, providerName, rowData);
+    return;
+  } catch (error) {
+    const taxId = inputProviderTaxId;
+    if (!taxId) {
+      throw error;
+    }
+
+    logger.warn(`Central Health Medicare Plan provider dropdown did not select "${providerName}". Filling Provider Tax ID "${taxId}" directly.`);
+    const frame = await clearProviderStateForTaxIdFallback(page, { context: "Central Health Medicare Plan Service Dates Tax ID fallback", logger });
+    await fillProviderTaxId(frame, taxId);
+  }
 }
 
 async function getMuiDateBoxText(dateBox) {
@@ -565,23 +620,37 @@ async function processCentralHealthMedicarePlanServiceDateResults(page, row, pro
   };
 }
 
-async function searchCentralHealthMedicarePlanServiceDatesWithProvider(page, providerName, rowData) {
+async function searchCentralHealthMedicarePlanServiceDatesWithProvider(page, providerName, rowData, options = {}) {
   logger.info(`Central Health Medicare Plan Service Dates provider attempt: ${providerName}`);
   await selectServiceDateTab(page);
-  await selectProvider(page, providerName);
+  if (providerPolicySkipsProviderDropdown(options.providerFieldPolicy)) {
+    const taxId = getProviderTaxIdForPolicy(rowData, options.providerFieldPolicy);
+    logger.info(`Central Health Medicare Plan Service Dates field policy skips Select a Provider. Filling Provider Tax ID "${taxId || "blank"}".`);
+    if (!taxId && options.providerFieldPolicy?.providerTaxId?.required) {
+      throw new Error("Central Health Medicare Plan Service Dates field policy requires Provider Tax ID, but the input value is blank.");
+    }
+    const frame = await clearProviderStateForTaxIdFallback(page, { context: "Central Health Medicare Plan Service Dates field policy", logger });
+    await fillProviderTaxId(frame, taxId);
+    await fillServiceDateSearchForm(page, rowData);
+    await submitServiceDateSearch(page);
+    return;
+  }
+  await selectProviderOrFillTaxId(page, providerName, rowData);
   await fillServiceDateSearchForm(page, rowData);
   await submitServiceDateSearch(page);
 }
 
 async function processClaim(page, row, options = {}) {
   logger.info("Using Central Health Medicare Plan workflow: Service Dates tab only.");
-  const providerOrder = Array.isArray(options.providerOrder) && options.providerOrder.length
+  const providerOrder = providerPolicySkipsProviderDropdown(options.providerFieldPolicy)
+    ? ["Provider Tax ID"]
+    : Array.isArray(options.providerOrder) && options.providerOrder.length
     ? options.providerOrder
     : PROVIDERS;
 
   let lastProviderFailure = "";
   for (const provider of providerOrder) {
-    await searchCentralHealthMedicarePlanServiceDatesWithProvider(page, provider, row.data);
+    await searchCentralHealthMedicarePlanServiceDatesWithProvider(page, provider, row.data, options);
 
     logger.info(`Waiting up to 5 seconds for ${provider} Central Health Medicare Plan Service Dates results to settle`);
     const resultSummary = await waitForSearchResultsToSettle(page, 5000);
