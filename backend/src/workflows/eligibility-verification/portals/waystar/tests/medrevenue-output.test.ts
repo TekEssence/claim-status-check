@@ -27,7 +27,21 @@ function result(rowIndex: number, planStatus: string, coverageStatus: Eligibilit
       fullPayerResponse: {
         subscriberInformation: { fields: { "Member ID": `member-${rowIndex}` } },
         otherCoverageInformation: [{ title: "OTHER COVERAGE INFORMATION", rows: [{ label: "Payer", value: "Example" }] }],
-        generalInformation: [{ title: "QUALIFIED MEDICARE BENEFICIARY", rows: [{ label: "Deductible", value: "$0.00" }] }],
+        generalInformation: [{
+          title: "QUALIFIED MEDICARE BENEFICIARY",
+          rows: [
+            { label: "Coverage Description", value: "CA QMB PLAN" },
+            { label: "Coverage Description", value: "MEDICARE PART A" },
+            { label: "Coverage Description", value: "MEDICARE PART B" },
+            { label: "Coverage Description", value: "MEDICARE PART B" },
+            { label: "Service Type", value: "Health Benefit Plan Coverage" },
+            { label: "Service Type", value: "Health Benefit Plan Coverage" },
+            { label: "Plan Date", value: "01/01/2026 to 04/30/2026" },
+            { label: "Benefit Date", value: "01/01/2026 to 12/31/2026" },
+            { label: "COB Date", value: "01/01/2025 to 04/30/2026" },
+            { label: "Deductible", value: "$0.00" },
+          ],
+        }],
       },
     },
   };
@@ -58,9 +72,23 @@ test("MedRevenue output retains found, partial, and subscriber-not-found rows in
   assert.equal(outputRows[3]?.[3], "Subscriber Not Found");
   const headers = outputRows[0] as string[];
   for (const removedHeader of [
-    "Plan Name", "Raw Result", "Processed", "Full Subscriber Information",
+    "Plan Name", "Eff Date", "End Date", "Other Ins", "Other Ins Eff Date",
+    "Relationship to Subscriber", "Plan Type", "Bot Insurance Type",
+    "Group Number", "Primary Care Provider", "Network", "Coinsurance", "Copay", "Deductible",
+    "Qualified Medicare Beneficiary Plan Date", "Qualified Medicare Beneficiary Benefit Date",
+    "Qualified Medicare Beneficiary COB Date",
+    "Raw Result", "Processed", "Full Subscriber Information",
     "Full Subscriber Coverage Information", "Full Other Coverage Information", "Full General Information",
   ]) {
     assert.equal(headers.includes(removedHeader), false);
   }
+  const coverageHeader = "Qualified Medicare Beneficiary Coverage Description";
+  const serviceTypeHeader = "Qualified Medicare Beneficiary Service Type";
+  assert.equal(headers.filter((header) => header === coverageHeader).length, 1);
+  assert.equal(headers.filter((header) => header === serviceTypeHeader).length, 1);
+  assert.equal(
+    outputRows[1]?.[headers.indexOf(coverageHeader)],
+    "CA QMB PLAN; MEDICARE PART A; MEDICARE PART B",
+  );
+  assert.equal(outputRows[1]?.[headers.indexOf(serviceTypeHeader)], "Health Benefit Plan Coverage");
 });

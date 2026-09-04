@@ -152,11 +152,8 @@ async function buildMedRevenueWaystarOutputWorkbook(options: {
   }
 
   const outputHeaders = [
-    "Input Row", ...inputHeaders, "Result", "Coverage Status", "Eff Date", "End Date",
-    "Other Ins", "Other Ins Eff Date", "Relationship to Subscriber", "Plan Type",
-    "Bot Insurance Type", "Plan Status", "Member ID", "Patient Name",
-    "Date of Birth", "Plan Date", "Group Number", "Primary Care Provider", "Network",
-    "Coinsurance", "Copay", "Deductible", ...expandedHeaders, "Error",
+    "Input Row", ...inputHeaders, "Result", "Coverage Status", "Plan Status", "Member ID", "Patient Name",
+    "Date of Birth", "Plan Date", ...expandedHeaders, "Error",
   ];
   const outputSheet = workbook.addWorksheet("Output");
   outputSheet.addRow(outputHeaders);
@@ -177,24 +174,11 @@ async function buildMedRevenueWaystarOutputWorkbook(options: {
       ...inputHeaders.map((header) => outputValue(raw[header])),
       resultLabel,
       outputValue(result?.coverageStatus),
-      outputValue(result?.effectiveDate),
-      outputValue(result?.terminationDate),
-      outputValue(result?.otherInsurance),
-      outputValue(result?.otherInsuranceEffectiveDate),
-      outputValue(result?.relationshipToSubscriber || row?.relationshipToSubscriber || "Self"),
-      outputValue(result?.planType),
-      outputValue(result?.insuranceType),
       outputValue(result?.planStatus),
       outputValue(result?.memberId || row?.memberId || row?.subscriberId),
       outputValue(result?.patientName || [row?.patientFirstName, row?.patientLastName].filter(Boolean).join(" ")),
       outputValue(result?.dateOfBirth || row?.dateOfBirth),
       outputValue(result?.planDate || row?.dateOfService),
-      outputValue(result?.groupNumber),
-      outputValue(result?.primaryCareProvider),
-      outputValue(result?.inOutNetwork),
-      outputValue(result?.coinsurance),
-      outputValue(result?.copay),
-      outputValue(result?.deductible),
       ...expandedHeaders.map((header) => outputValue(expandedValues.get(rowIndex)?.[header])),
       outputValue(error || (resultLabel === "Subscriber Not Found" ? result?.planStatus : "")),
     ]);
@@ -225,32 +209,37 @@ function flattenMedRevenuePayerResponse(result?: EligibilityResult): Record<stri
   const output: Record<string, string> = {};
   appendResponseValues(output, "Subscriber", response.subscriberInformation);
   appendResponseValues(output, "Subscriber Coverage", response.subscriberCoverageInformation);
-  appendResponseValues(output, "Other Coverage", response.otherCoverageInformation);
-  appendResponseValues(output, "Qualified Medicare Beneficiary General", response.generalInformation);
+  appendResponseValues(output, "Other Coverage", response.otherCoverageInformation, true);
+  appendResponseValues(output, "Qualified Medicare Beneficiary", response.generalInformation);
   return output;
 }
 
-function appendResponseValues(output: Record<string, string>, prefix: string, value: unknown): void {
+function appendResponseValues(
+  output: Record<string, string>,
+  prefix: string,
+  value: unknown,
+  includeTitles = false,
+): void {
   if (value === null || value === undefined || value === "") return;
   if (Array.isArray(value)) {
-    value.forEach((entry, index) => {
-      const title = entry && typeof entry === "object" ? cleanHeader((entry as Record<string, unknown>).title) : "";
-      appendResponseValues(output, title ? `${prefix} - ${title}` : `${prefix} ${index + 1}`, entry);
+    value.forEach((entry) => {
+      appendResponseValues(output, prefix, entry, includeTitles);
     });
     return;
   }
   if (typeof value !== "object") {
-    addExpandedValue(output, prefix, String(value));
+    addUniqueExpandedValue(output, prefix, String(value));
     return;
   }
 
   const record = value as Record<string, unknown>;
-  if (record.name) addExpandedValue(output, `${prefix} Name`, String(record.name));
-  if (record.address) addExpandedValue(output, `${prefix} Address`, String(record.address));
+  if (includeTitles && record.title) addUniqueExpandedValue(output, `${prefix} Type`, String(record.title));
+  if (record.name) addUniqueExpandedValue(output, `${prefix} Name`, String(record.name));
+  if (record.address) addUniqueExpandedValue(output, `${prefix} Address`, String(record.address));
   if (record.fields && typeof record.fields === "object") {
     for (const [label, fieldValue] of Object.entries(record.fields as Record<string, unknown>)) {
       if (fieldValue !== null && fieldValue !== undefined && String(fieldValue).trim()) {
-        addExpandedValue(output, `${prefix} ${cleanHeader(label)}`, String(fieldValue));
+        addUniqueExpandedValue(output, `${prefix} ${cleanHeader(label)}`, String(fieldValue));
       }
     }
   }
@@ -260,30 +249,35 @@ function appendResponseValues(output: Record<string, string>, prefix: string, va
       const labeled = row as Record<string, unknown>;
       const label = cleanHeader(labeled.label);
       const rowValue = String(labeled.value ?? "").trim();
-      if (label && rowValue) addExpandedValue(output, `${prefix} ${label}`, rowValue);
+      if (label && rowValue) addUniqueExpandedValue(output, `${prefix} ${label}`, rowValue);
     }
   }
   if (Array.isArray(record.groups)) {
     for (const group of record.groups) {
       if (!group || typeof group !== "object") continue;
-      const groupTitle = cleanHeader((group as Record<string, unknown>).title);
-      appendResponseValues(output, groupTitle ? `${prefix} - ${groupTitle}` : prefix, group);
+      appendResponseValues(output, prefix, group, includeTitles);
     }
   }
 }
 
-function addExpandedValue(output: Record<string, string>, rawHeader: string, value: string): void {
-  const header = cleanHeader(rawHeader);
-  if (!header || !value.trim()) return;
-  if (!output[header]) {
-    output[header] = value.trim();
-    return;
+function addUniqueExpandedValue(output: Record<string, string>, header: string, value: string): void {
+  if (MEDREVENUE_EXCLUDED_RESPONSE_HEADERS.has(header.toLowerCase())) return;
+  const cleanedValue = value.trim();
+  if (!cleanedValue) return;
+  const existingValues = (output[header] ?? "")
+    .split("; ")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  if (!existingValues.some((entry) => entry.toLowerCase() === cleanedValue.toLowerCase())) {
+    output[header] = [...existingValues, cleanedValue].join("; ");
   }
-  if (output[header] === value.trim()) return;
-  let occurrence = 2;
-  while (output[`${header} ${occurrence}`]) occurrence += 1;
-  output[`${header} ${occurrence}`] = value.trim();
 }
+
+const MEDREVENUE_EXCLUDED_RESPONSE_HEADERS = new Set([
+  "qualified medicare beneficiary plan date",
+  "qualified medicare beneficiary benefit date",
+  "qualified medicare beneficiary cob date",
+]);
 
 function cleanHeader(value: unknown): string {
   return String(value ?? "").replace(/\s+/g, " ").trim();
