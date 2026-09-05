@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { Browser, Locator, Page } from "playwright-core";
+import type { Browser, BrowserContext, Locator, Page } from "playwright-core";
 import { closeAutomationResources } from "@/backend/src/core/runtime-config";
 import { getJobDataPath } from "@/backend/src/core/storage";
 import { waitForScrapeJobInput } from "@/backend/src/jobs/job-store";
@@ -74,8 +74,8 @@ const OUTPUT_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml
 // them into cignaConfig.timing alongside betweenRowsMs/postSearchMs/etc.
 const SEARCH_OUTCOME_POLL_MS = 300;
 const SEARCH_OUTCOME_TIMEOUT_MS = 25000;
-const CLAIM_ROW_TIMEOUT_MS = 20000;
-const CLAIM_DETAIL_LOAD_TIMEOUT_MS = 20000;
+const CLAIM_ROW_TIMEOUT_MS = 10000;
+const CLAIM_DETAIL_LOAD_TIMEOUT_MS = 10000;
 const CLAIM_DETAIL_OPEN_ATTEMPTS = 3;
 // The "Claim Search" breadcrumb link (see goBackToSearch) was previously
 // only given 1500ms to appear before falling back to a full page reload.
@@ -95,6 +95,15 @@ const OTP_MAX_ATTEMPTS = 5;
 // re-login, so a session that drops occasionally over a long run doesn't
 // exhaust it.
 const MAX_SESSION_RELOGIN_ATTEMPTS = 3;
+const LOGIN_CONFIRM_TIMEOUT_MS = 30000;
+
+type CignaLoginSignals = {
+  authenticated: boolean;
+  otp: boolean;
+  password: boolean;
+  username: boolean;
+  securityChallenge: boolean;
+};
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -367,7 +376,7 @@ async function clickIfVisible(page: Page, selector: string, timeout = 2500): Pro
   const locator = await findVisibleLocator(page, selector, timeout);
   if (!locator) return false;
   await locator.click({ timeout: 5000 }).catch(async () => locator.evaluate((element) => (element as HTMLElement).click()));
-  await page.waitForTimeout(500);
+  await page.waitForTimeout(250);
   return true;
 }
 
@@ -383,7 +392,7 @@ async function fillByLabel(page: Page, labelText: RegExp, value: string): Promis
       await locator.waitFor({ state: "visible", timeout: 1200 });
       await locator.click({ timeout: 3000 });
       await locator.fill("");
-      await locator.fill(value);
+      await locator.pressSequentially(value, { delay: 65 });
       return true;
     } catch {
       // Try the next locator.
@@ -419,7 +428,7 @@ async function selectRadio(page: Page, selector: string): Promise<boolean> {
         await locator.evaluate((element) => (element as HTMLInputElement).click());
       });
     }
-    await page.waitForTimeout(400);
+    await page.waitForTimeout(150);
     return true;
   } catch {
     return false;
@@ -428,6 +437,52 @@ async function selectRadio(page: Page, selector: string): Promise<boolean> {
 
 async function visibleBodyText(page: Page): Promise<string> {
   return page.locator("body").innerText({ timeout: 1500 }).catch(() => "");
+}
+
+function safePageUrl(page: Page): string {
+  try {
+    const url = new URL(page.url());
+    url.search = "";
+    url.hash = "";
+    return url.toString();
+  } catch {
+    return "unavailable";
+  }
+}
+
+async function readLoginSignals(page: Page): Promise<CignaLoginSignals> {
+  const bodyText = await visibleBodyText(page);
+  const title = await page.title().catch(() => "");
+  const securityText = `${title}\n${bodyText}`;
+  return {
+    authenticated: await isLoggedIn(page),
+    otp: /verify your identity|enter 6-digit code|remember this device/i.test(bodyText),
+    password: Boolean(await findVisibleLocator(page, cignaConfig.selectors.password, 300)),
+    username: Boolean(await findVisibleLocator(page, cignaConfig.selectors.username, 300)),
+    securityChallenge: /request rejected|access denied|request blocked|security check|verify (?:that )?you are human|captcha|unusual activity|automated (?:traffic|activity)/i.test(securityText),
+  };
+}
+
+async function logLoginDiagnostics(context: ScraperContext, page: Page, stage: string, signals: CignaLoginSignals): Promise<void> {
+  const title = cleanText(await page.title().catch(() => "unavailable")).slice(0, 160) || "unavailable";
+  const browserVersion = page.context().browser()?.version() || "unavailable";
+  const fingerprint = await page
+    .evaluate(() => ({ userAgent: navigator.userAgent, webdriver: navigator.webdriver }))
+    .catch(() => ({ userAgent: "unavailable", webdriver: null }));
+  await context.log({
+    level: "info",
+    message: `Cigna login diagnostics (${stage}): url=${safePageUrl(page)}; title=${title}; browser=${browserVersion}; userAgent=${fingerprint.userAgent}; webdriver=${String(fingerprint.webdriver)}; authenticated=${signals.authenticated}; otp=${signals.otp}; username=${signals.username}; password=${signals.password}; securityChallenge=${signals.securityChallenge}.`,
+  });
+}
+
+async function waitForLoginState(page: Page, timeoutMs: number): Promise<CignaLoginSignals> {
+  const deadline = Date.now() + timeoutMs;
+  let signals = await readLoginSignals(page);
+  while (Date.now() < deadline && !signals.authenticated && !signals.otp && !signals.securityChallenge) {
+    await page.waitForTimeout(500);
+    signals = await readLoginSignals(page);
+  }
+  return signals;
 }
 
 async function captureDiagnostics(context: ScraperContext, page: Page, inputRow: CignaInputRow | null, reason: string): Promise<void> {
@@ -556,15 +611,29 @@ async function login(page: Page, input: Awaited<ReturnType<typeof parseCignaInpu
   ]);
   await page.waitForTimeout(cignaConfig.timing.postLoginMs);
 
-  const bodyText = await visibleBodyText(page);
-  if (/verify your identity|enter 6-digit code|remember this device/i.test(bodyText)) {
+  let signals = await waitForLoginState(page, LOGIN_CONFIRM_TIMEOUT_MS);
+  await logLoginDiagnostics(context, page, "after-password", signals);
+  if (signals.otp) {
     await submitOtp(page, context);
+    signals = await waitForLoginState(page, LOGIN_CONFIRM_TIMEOUT_MS);
+    await logLoginDiagnostics(context, page, "after-otp", signals);
   }
 
-  if (await findVisibleLocator(page, cignaConfig.selectors.password, 1000)) {
+  if (signals.authenticated) {
+    await context.log({ level: "info", message: "Cigna login completed and authenticated session confirmed." });
+    return;
+  }
+  await captureDiagnostics(context, page, null, "login-not-authenticated");
+  if (signals.password) {
     throw new Error("Cigna login failed or did not leave the password page.");
   }
-  await context.log({ level: "info", message: "Cigna login completed." });
+  if (signals.securityChallenge) {
+    throw new Error("Cigna displayed a security or automation challenge after login.");
+  }
+  if (signals.username || /\/login(\/|$|\?)/i.test(page.url())) {
+    throw new Error("Cigna returned to the login page without creating an authenticated session.");
+  }
+  throw new Error(`Cigna login reached an unknown unauthenticated page: ${safePageUrl(page)}.`);
 }
 
 // Best-effort detection that the Cigna session has dropped mid-run (portal
@@ -584,8 +653,17 @@ async function isSessionLoggedOut(page: Page): Promise<boolean> {
 async function openClaimSearch(page: Page, context: ScraperContext): Promise<void> {
   await context.log({ level: "info", message: "Opening Cigna Claims search page." });
   await page.goto(cignaConfig.claimSearchUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
-  await page.waitForLoadState("networkidle", { timeout: 20000 }).catch(() => {});
-  await findVisibleLocator(page, cignaConfig.selectors.claimSearchHeading, 30000);
+  const heading = await findVisibleLocator(page, cignaConfig.selectors.claimSearchHeading, 30000);
+  if (!heading) {
+    const signals = await readLoginSignals(page);
+    await logLoginDiagnostics(context, page, "claim-search-not-open", signals);
+    await captureDiagnostics(context, page, null, "claim-search-not-open");
+    throw new Error(
+      signals.authenticated
+        ? "Cigna authenticated session did not open the Claims search page."
+        : "Cigna Claims search redirected to an unauthenticated page.",
+    );
+  }
 }
 
 async function clearSearch(page: Page): Promise<void> {
@@ -652,7 +730,6 @@ async function runSearchAttempt(
       })
       .catch(() => {});
   }
-  await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
   return extractSearchRows(page);
 }
 
@@ -737,24 +814,43 @@ function rowMatchesInput(row: SearchResultRow, inputRow: CignaInputRow): boolean
 async function openClaimDetail(page: Page, result: SearchResultRow, context: ScraperContext): Promise<void> {
   const rowLocator = page.locator(`${cignaConfig.selectors.resultsBody} tr`).filter({ hasText: result.claimNumber });
   const linkLocator = rowLocator.locator("[data-test-id='c360-result-table-claimRefNumber-cell'] a").first();
+  const detailIndicators = page.locator(
+    "[data-test-id='claim-reference-number'], [data-test-id='procedures-table-row'], [data-test-id='payee-info-table'], [data-test-id='breadcrumb-1']",
+  );
+
+  const detailIsVisible = async (): Promise<boolean> => {
+    const count = await detailIndicators.count().catch(() => 0);
+    for (let index = 0; index < count; index += 1) {
+      if (await detailIndicators.nth(index).isVisible().catch(() => false)) return true;
+    }
+    return false;
+  };
+
+  const waitForDetail = async (): Promise<boolean> => {
+    const deadline = Date.now() + CLAIM_DETAIL_LOAD_TIMEOUT_MS;
+    while (Date.now() < deadline) {
+      if (await detailIsVisible()) return true;
+      if (await isSessionLoggedOut(page)) return false;
+      await page.waitForTimeout(250);
+    }
+    return detailIsVisible();
+  };
 
   let lastError: unknown;
   for (let attempt = 1; attempt <= CLAIM_DETAIL_OPEN_ATTEMPTS; attempt += 1) {
+    const attemptStartedAt = Date.now();
     try {
-      // Wait for the specific row to actually be visible before clicking -
-      // this is what was firing "Timeout 10000ms exceeded" when the table
-      // was still rendering after search.
+      // A previous click may already have reached the detail page even if its
+      // primary claim-number element was slow or absent. Never retry a result
+      // row click while the browser is already on claim details.
+      if (await detailIsVisible()) return;
       await rowLocator.first().waitFor({ state: "visible", timeout: CLAIM_ROW_TIMEOUT_MS });
       await linkLocator.waitFor({ state: "visible", timeout: CLAIM_ROW_TIMEOUT_MS });
-      await Promise.all([
-        page.waitForLoadState("domcontentloaded", { timeout: 30000 }).catch(() => {}),
-        linkLocator.click({ timeout: CLAIM_ROW_TIMEOUT_MS }),
-      ]);
-      await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
-      // Confirm the detail page actually rendered (not just navigated) before
-      // treating this as success, instead of a blind fixed-length wait.
-      const loaded = await findVisibleLocator(page, "[data-test-id='claim-reference-number']", CLAIM_DETAIL_LOAD_TIMEOUT_MS);
-      if (!loaded) throw new Error("Claim detail page did not render after clicking the claim link.");
+      await linkLocator.click({ timeout: CLAIM_ROW_TIMEOUT_MS });
+      if (!(await waitForDetail())) throw new Error("Claim detail page did not render after clicking the claim link.");
+      await context
+        .log({ level: "info", message: `Opened Cigna claim ${result.claimNumber} in ${Date.now() - attemptStartedAt}ms.` })
+        .catch(() => {});
       return;
     } catch (error) {
       lastError = error;
@@ -764,9 +860,16 @@ async function openClaimDetail(page: Page, result: SearchResultRow, context: Scr
           message: `Attempt ${attempt}/${CLAIM_DETAIL_OPEN_ATTEMPTS} to open claim ${result.claimNumber} failed: ${errorMessage(error)}`,
         })
         .catch(() => {});
-      if (attempt < CLAIM_DETAIL_OPEN_ATTEMPTS) await page.waitForTimeout(1000);
+      if (await detailIsVisible()) return;
+      // Only another click can help when the original results row is still
+      // present. If navigation already left the results page, fail promptly
+      // so the caller can restore Claim Search instead of wasting two 20s
+      // retries looking for a row that cannot exist on the current page.
+      if (!(await rowLocator.first().isVisible().catch(() => false))) break;
+      if (attempt < CLAIM_DETAIL_OPEN_ATTEMPTS) await page.waitForTimeout(300);
     }
   }
+  await captureDiagnostics(context, page, null, `claim-${result.claimNumber}-detail-not-open`);
   throw new Error(`Could not open claim detail for ${result.claimNumber}: ${errorMessage(lastError)}`);
 }
 
@@ -899,6 +1002,7 @@ async function goBackToSearch(page: Page, context: ScraperContext): Promise<void
 }
 
 async function processRow(page: Page, inputRow: CignaInputRow, state: CignaWorkbookState, context: ScraperContext): Promise<void> {
+  const rowStartedAt = Date.now();
   if (!inputRow.memberId) {
     state.outputRows.push(baseOutputRow(inputRow, "No Member ID", "No Member ID"));
     addAudit(state, inputRow, "validation", "failed", "No Member ID");
@@ -917,11 +1021,16 @@ async function processRow(page: Page, inputRow: CignaInputRow, state: CignaWorkb
     const status = /member not found|patient not found/i.test(pageText) ? "Member Not Found" : "No Claims Found";
     state.outputRows.push(baseOutputRow(inputRow, status, status));
     addAudit(state, inputRow, "search", "completed", status);
+    await context
+      .log({ level: "info", message: `Cigna row ${inputRow.inputRowId} completed in ${Date.now() - rowStartedAt}ms (${status}).`, rowIndex: inputRow.inputRowId })
+      .catch(() => {});
     return;
   }
 
   const matchingRows = searchRows.filter((row) => rowMatchesInput(row, inputRow));
   const rowsToCheck = matchingRows.length ? matchingRows : searchRows;
+  let failedCandidateCount = 0;
+  let lastCandidateError = "";
   await context.log({
     level: "info",
     message: `Cigna row ${inputRow.inputRowId}: found ${searchRows.length} result(s), checking ${rowsToCheck.length} candidate claim(s).`,
@@ -938,6 +1047,9 @@ async function processRow(page: Page, inputRow: CignaInputRow, state: CignaWorkb
       if (procedures.length) {
         for (const procedure of procedures) state.outputRows.push(outputRowFromClaim(inputRow, result, details, procedure));
         addAudit(state, inputRow, "detail", "completed", `Matched claim ${details.claimNumber || result.claimNumber} and CPT ${inputRow.cptCode}.`);
+        await context
+          .log({ level: "info", message: `Cigna row ${inputRow.inputRowId} completed in ${Date.now() - rowStartedAt}ms (claim found).`, rowIndex: inputRow.inputRowId })
+          .catch(() => {});
         return;
       }
       await context.log({
@@ -950,6 +1062,8 @@ async function processRow(page: Page, inputRow: CignaInputRow, state: CignaWorkb
       // should not abort every other candidate for this row - log it and
       // move on to the next one instead.
       const message = errorMessage(error);
+      failedCandidateCount += 1;
+      lastCandidateError = message;
       await context
         .log({
           level: "warn",
@@ -972,8 +1086,21 @@ async function processRow(page: Page, inputRow: CignaInputRow, state: CignaWorkb
     }
   }
 
+  if (failedCandidateCount > 0) {
+    const message = `${failedCandidateCount} candidate claim(s) could not be opened or read; CPT ${inputRow.cptCode} could not be verified.${lastCandidateError ? ` Last error: ${lastCandidateError}` : ""}`;
+    state.outputRows.push(baseOutputRow(inputRow, "Portal Error", message));
+    addAudit(state, inputRow, "detail", "failed", message);
+    await context
+      .log({ level: "warn", message: `Cigna row ${inputRow.inputRowId} ended with a portal error in ${Date.now() - rowStartedAt}ms: ${message}`, rowIndex: inputRow.inputRowId })
+      .catch(() => {});
+    return;
+  }
+
   state.outputRows.push(baseOutputRow(inputRow, "CPT not found in Procedures", `CPT not found in Procedures: ${inputRow.cptCode}.`));
   addAudit(state, inputRow, "detail", "completed", `No procedure matched CPT ${inputRow.cptCode}.`);
+  await context
+    .log({ level: "info", message: `Cigna row ${inputRow.inputRowId} completed in ${Date.now() - rowStartedAt}ms.`, rowIndex: inputRow.inputRowId })
+    .catch(() => {});
 }
 
 async function emitArtifacts(context: ScraperContext, state: CignaWorkbookState): Promise<void> {
@@ -998,13 +1125,16 @@ export async function runCignaClaimStatusJob(formData: FormData, context: Scrape
   const rows = readCignaInputWorkbook(input.inputWorkbookBuffer);
   const state: CignaWorkbookState = { outputRows: [], auditRows: [] };
   let browser: Browser | undefined;
+  let browserContext: BrowserContext | undefined;
   let page: Page | undefined;
 
   try {
     await context.log({ level: "info", message: `Cigna input loaded: ${rows.length} row(s).` });
     await context.emit({ type: "progress", completed: 0, total: rows.length });
-    browser = await launchCignaBrowser((message) => context.log({ level: "info", message }));
-    page = await browser.newPage({ viewport: { width: 1600, height: 1000 } });
+    const browserSession = await launchCignaBrowser((message) => context.log({ level: "info", message }));
+    browser = browserSession.browser;
+    browserContext = browserSession.context;
+    page = await browserContext.newPage();
     await login(page, input, context);
     await openClaimSearch(page, context);
 
@@ -1097,6 +1227,7 @@ export async function runCignaClaimStatusJob(formData: FormData, context: Scrape
   } finally {
     await closeAutomationResources({
       browser,
+      context: browserContext,
       page,
       log: (message: string) => context.log({ level: "info", message }),
     });

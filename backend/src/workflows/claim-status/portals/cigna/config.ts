@@ -54,7 +54,7 @@ export const cignaConfig = {
     postLoginMs: 1500,
     postSearchMs: 3500,
     detailLoadMs: 2500,
-    betweenRowsMs: 1200,
+    betweenRowsMs: 300,
     mfaWaitMs: 180000,
     otpTypedWaitMs: 120000,
   },
