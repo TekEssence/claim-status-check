@@ -8,6 +8,7 @@ import {
   matchWaystarPayerByPortalName,
 } from "./payer-registry";
 import type { WaystarPayerHandler } from "./payers/types";
+import type { WaystarProjectConfig } from "./config/projects";
 
 export const INSURANCE_HEADER_ALIASES = [
   "primary insurance name",
@@ -143,11 +144,13 @@ export type WaystarWorkbookRouting = {
 
 export type WaystarRoutingOptions = {
   payerMappings?: WaystarPayerPortalMapping[];
+  projectConfig?: WaystarProjectConfig;
 };
 
 export async function readWaystarEligibilityWorkbook(
   file: File,
   payerMappingFile?: File,
+  projectConfig?: WaystarProjectConfig,
 ): Promise<WaystarWorkbookRouting> {
   const workbook = XLSX.read(await file.arrayBuffer(), { type: "array" });
   const sheet = workbook.Sheets[workbook.SheetNames[0]];
@@ -162,7 +165,11 @@ export async function readWaystarEligibilityWorkbook(
     ? readWaystarPayerMappings(XLSX.read(await payerMappingFile.arrayBuffer(), { type: "array" }))
     : [];
   return routeWaystarRowsByPayer(rows, {
-    payerMappings: credentialMappings.length > 0 ? credentialMappings : inputMappings,
+    payerMappings: [
+      ...(credentialMappings.length > 0 ? credentialMappings : inputMappings),
+      ...projectPayerMappings(projectConfig),
+    ],
+    projectConfig,
   });
 }
 
@@ -172,7 +179,10 @@ export function routeWaystarRowsByPayer(
 ): WaystarWorkbookRouting {
   if (rows.length === 0) throw new Error("The eligibility workbook is empty.");
 
-  const payerHeader = findInsuranceHeader(Object.keys(rows[0]));
+  const payerHeader = findInsuranceHeader(
+    Object.keys(rows[0]),
+    options.projectConfig?.inputColumnMappings?.insuranceName,
+  );
   if (!payerHeader) {
     throw new Error(
       `Missing payer column. Add one of: ${INSURANCE_HEADER_ALIASES.join(", ")}.`,
@@ -186,14 +196,14 @@ export function routeWaystarRowsByPayer(
     const rowIndex = index + 2;
     const insuranceName = asText(raw[payerHeader]);
     const payer = resolveWaystarPayer(insuranceName, options.payerMappings);
-    if (!payer) {
+    if (!payer || !isPayerEnabledForProject(payer.id, options.projectConfig)) {
       unsupportedRows.push({ rowIndex, insuranceName });
       return;
     }
 
-    const memberId = findValue(raw, MEMBER_ID_HEADER_ALIASES);
-    const subscriberId = findValue(raw, SUBSCRIBER_ID_HEADER_ALIASES) || memberId;
-    const parsedName = resolvePatientName(raw);
+    const memberId = findValue(raw, projectAliases(options.projectConfig, "memberId", MEMBER_ID_HEADER_ALIASES));
+    const subscriberId = findValue(raw, projectAliases(options.projectConfig, "subscriberId", SUBSCRIBER_ID_HEADER_ALIASES)) || memberId;
+    const parsedName = resolvePatientName(raw, options.projectConfig);
 
     const eligibilityRow: EligibilityInputRow = {
       originalIndex: rowIndex,
@@ -201,10 +211,10 @@ export function routeWaystarRowsByPayer(
       subscriberId,
       patientFirstName: parsedName.firstName,
       patientLastName: parsedName.lastName,
-      relationshipToSubscriber: findValue(raw, RELATIONSHIP_HEADER_ALIASES),
-      dateOfBirth: findValue(raw, DATE_OF_BIRTH_HEADER_ALIASES),
-      dateOfService: findValue(raw, DATE_OF_SERVICE_HEADER_ALIASES),
-      serviceType: findValue(raw, SERVICE_TYPE_HEADER_ALIASES),
+      relationshipToSubscriber: findValue(raw, projectAliases(options.projectConfig, "relationshipToSubscriber", RELATIONSHIP_HEADER_ALIASES)),
+      dateOfBirth: findValue(raw, projectAliases(options.projectConfig, "dateOfBirth", DATE_OF_BIRTH_HEADER_ALIASES)),
+      dateOfService: findValue(raw, projectAliases(options.projectConfig, "dateOfService", DATE_OF_SERVICE_HEADER_ALIASES)),
+      serviceType: findValue(raw, projectAliases(options.projectConfig, "serviceType", SERVICE_TYPE_HEADER_ALIASES)),
       raw,
     };
 
@@ -225,12 +235,12 @@ export function routeWaystarRowsByPayer(
   };
 }
 
-function resolvePatientName(row: Record<string, unknown>): {
+function resolvePatientName(row: Record<string, unknown>, projectConfig?: WaystarProjectConfig): {
   firstName?: string;
   lastName?: string;
 } {
-  const explicitFirstName = findValue(row, FIRST_NAME_HEADER_ALIASES);
-  const explicitLastName = findValue(row, LAST_NAME_HEADER_ALIASES);
+  const explicitFirstName = findValue(row, projectAliases(projectConfig, "patientFirstName", FIRST_NAME_HEADER_ALIASES));
+  const explicitLastName = findValue(row, projectAliases(projectConfig, "patientLastName", LAST_NAME_HEADER_ALIASES));
   if (explicitFirstName || explicitLastName) {
     return {
       firstName: explicitFirstName,
@@ -238,7 +248,7 @@ function resolvePatientName(row: Record<string, unknown>): {
     };
   }
 
-  const fullName = findValue(row, FULL_NAME_HEADER_ALIASES);
+  const fullName = findValue(row, projectAliases(projectConfig, "patientName", FULL_NAME_HEADER_ALIASES));
   return splitPatientName(fullName);
 }
 
@@ -312,11 +322,31 @@ function resolveWaystarPayer(
   return matchWaystarPayer(insuranceName);
 }
 
-function findInsuranceHeader(headers: string[]): string | null {
-  const aliases = new Set(INSURANCE_HEADER_ALIASES.map(normalizeHeader));
+function findInsuranceHeader(headers: string[], projectAliases: readonly string[] = []): string | null {
+  const aliases = new Set([...INSURANCE_HEADER_ALIASES, ...projectAliases].map(normalizeHeader));
   return headers.find((header) => aliases.has(normalizeHeader(header))) ??
     headers.find(isLikelyInsuranceHeader) ??
     null;
+}
+
+function projectPayerMappings(projectConfig?: WaystarProjectConfig): WaystarPayerPortalMapping[] {
+  return Object.entries(projectConfig?.payerNameMappings ?? {}).map(([inputInsurancePayerState, payerPortal]) => ({
+    inputInsurancePayerState,
+    payerPortal,
+  }));
+}
+
+function projectAliases(
+  projectConfig: WaystarProjectConfig | undefined,
+  field: string,
+  defaults: readonly string[],
+): readonly string[] {
+  return [...defaults, ...(projectConfig?.inputColumnMappings?.[field] ?? [])];
+}
+
+function isPayerEnabledForProject(payerId: string, projectConfig?: WaystarProjectConfig): boolean {
+  if (!projectConfig?.payers) return true;
+  return Object.prototype.hasOwnProperty.call(projectConfig.payers, payerId);
 }
 
 function isLikelyInsuranceHeader(header: string): boolean {

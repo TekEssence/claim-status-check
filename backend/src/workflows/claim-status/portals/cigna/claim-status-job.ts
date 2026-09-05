@@ -507,15 +507,22 @@ async function isLoggedIn(page: Page): Promise<boolean> {
   return Boolean(await findVisibleLocator(page, cignaConfig.selectors.loggedInIndicator, 1500));
 }
 
-// True once we're confident a submitted OTP was rejected (explicit error
-// text), or once we've waited a bit and are neither logged in nor showing an
-// error but the code field is still sitting there unconsumed - in either
-// case, the safe move is to ask for a fresh code rather than hang until the
-// caller's outer timeout.
-async function otpAttemptFailed(page: Page): Promise<boolean> {
-  if (await findVisibleLocator(page, cignaConfig.selectors.otpErrorMessage, 1000)) return true;
-  if (await findVisibleLocator(page, cignaConfig.selectors.otpInput, 1000)) return true;
-  return false;
+// Cigna can leave the OTP form visible for several seconds while the accepted
+// login is still redirecting to the dashboard. Do not use the presence of the
+// input itself as evidence that the code was rejected; wait for an affirmative
+// success or error signal instead.
+async function waitForOtpOutcome(page: Page): Promise<"accepted" | "rejected" | "unknown"> {
+  const deadline = Date.now() + cignaConfig.timing.otpValidationMs;
+
+  while (Date.now() < deadline) {
+    if (await isLoggedIn(page)) return "accepted";
+    if (await findVisibleLocator(page, cignaConfig.selectors.otpErrorMessage, 300)) return "rejected";
+    await page.waitForTimeout(500);
+  }
+
+  if (await isLoggedIn(page)) return "accepted";
+  if (await findVisibleLocator(page, cignaConfig.selectors.otpErrorMessage, 500)) return "rejected";
+  return "unknown";
 }
 
 async function submitOtp(page: Page, context: ScraperContext): Promise<void> {
@@ -530,6 +537,10 @@ async function submitOtp(page: Page, context: ScraperContext): Promise<void> {
 
   for (let attempt = 1; attempt <= OTP_MAX_ATTEMPTS; attempt += 1) {
     if (context.isCancelled?.()) return;
+    if (await isLoggedIn(page)) {
+      await context.log({ level: "info", message: "Cigna verification code accepted." }).catch(() => {});
+      return;
+    }
 
     await context
       .log({
@@ -563,25 +574,20 @@ async function submitOtp(page: Page, context: ScraperContext): Promise<void> {
     await input.fill(code);
     await clickIfVisible(page, cignaConfig.selectors.otpContinue, 5000);
 
-    // Keep the job waiting while the portal validates the code, instead of
-    // deciding pass/fail the instant the click resolves.
+    // Keep the job waiting while the portal validates the code. The OTP form
+    // can remain visible during a successful but slow dashboard redirect.
     await page.waitForLoadState("domcontentloaded", { timeout: 15000 }).catch(() => {});
-    await page.waitForTimeout(1500);
-    if (await isLoggedIn(page)) {
+    const outcome = await waitForOtpOutcome(page);
+    if (outcome === "accepted") {
       await context.log({ level: "info", message: "Cigna verification code accepted." }).catch(() => {});
       return;
     }
-    if (!(await otpAttemptFailed(page))) {
-      // Not obviously accepted or rejected yet - give the page a bit longer
-      // to finish navigating before deciding this attempt failed.
-      await page.waitForURL(/cignaforhcp\.cigna\.com\/app\//i, { timeout: 8000 }).catch(() => {});
-      if (await isLoggedIn(page)) return;
-    }
 
-    await context
-      .log({ level: "warn", message: "The verification code is invalid or expired. Please enter the new code." })
-      .catch(() => {});
-    promptMessage = "The verification code is invalid or expired. Please enter the new code.";
+    promptMessage =
+      outcome === "rejected"
+        ? "The verification code is invalid or expired. Please enter the new code."
+        : "Cigna did not confirm the verification code. Please enter a new code.";
+    await context.log({ level: "warn", message: promptMessage }).catch(() => {});
     // Loop continues: field is re-cleared and a fresh input_request is sent above.
   }
 

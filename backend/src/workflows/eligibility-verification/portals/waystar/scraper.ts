@@ -11,6 +11,7 @@ import { getWaystarPayer } from "./payer-registry";
 import { loginToWaystar, submitWaystarInquiry } from "./portal";
 import { buildWaystarOutputWorkbook } from "./output";
 import { parseEligibilityProjectId, scopeEligibilityInputFile } from "../../projects";
+import { getWaystarPayerProjectConfig, getWaystarProjectConfig } from "./config/projects";
 
 function requireFile(formData: FormData, key: string, label: string): File {
   const value = formData.get(key);
@@ -30,7 +31,6 @@ export function createWaystarRunner(): AutomationRunner<EligibilityRunInput> {
         throw new Error("Waystar eligibility input must be multipart form data.");
       }
       const projectId = parseEligibilityProjectId(input.get("projectId"));
-      if (projectId !== "minimax") throw new Error("Waystar eligibility is currently configured only for Minimax.");
       return {
         inputFile: requireFile(input, "inputFile", "Eligibility input file"),
         credentialFile: requireFile(input, "credentialFile", "Credential file"),
@@ -38,8 +38,11 @@ export function createWaystarRunner(): AutomationRunner<EligibilityRunInput> {
       };
     },
     async run(input, context) {
-      const scopedInputFile = await scopeEligibilityInputFile(input.inputFile, input.projectId);
-      const routing = await readWaystarEligibilityWorkbook(scopedInputFile, input.credentialFile);
+      const projectConfig = getWaystarProjectConfig(input.projectId);
+      const scopedInputFile = await scopeEligibilityInputFile(input.inputFile, input.projectId, {
+        requireProjectColumn: projectConfig.requireInputProjectColumn,
+      });
+      const routing = await readWaystarEligibilityWorkbook(scopedInputFile, input.credentialFile, projectConfig);
       const credentialProfiles = await readWaystarCredentialProfiles(input.credentialFile);
       await context.log({ level: "info", message: `Eligibility project selected: ${input.projectId === "minimax" ? "Minimax" : "MedRevenue"}.`, eventName: "eligibility_project_selected", meta: { projectId: input.projectId } });
       await context.emit({
@@ -116,7 +119,10 @@ export function createWaystarRunner(): AutomationRunner<EligibilityRunInput> {
       try {
         payerBatches: for (const batch of routing.batches) {
           const payer = getWaystarPayer(batch.payerId);
-          const credentials = findWaystarCredentialsForPayer(credentialProfiles, payer, input.projectId);
+          const payerProjectConfig = getWaystarPayerProjectConfig(projectConfig, payer.id);
+          const credentials = findWaystarCredentialsForPayer(credentialProfiles, payer, input.projectId, {
+            allowUnscopedCredentials: projectConfig.allowUnscopedCredentials,
+          });
           if (!credentials) {
             failureCount += batch.rows.length;
             completed = Math.min(completed + batch.rows.length, routing.totalRows);
@@ -152,7 +158,9 @@ export function createWaystarRunner(): AutomationRunner<EligibilityRunInput> {
                 page,
                 log: (message) => context.log({ level: "debug", message, eventName: "eligibility_browser_cleanup" }),
               });
-              const session = await launchAutomationBrowser({ headless: true });
+              // Keep the shared Waystar browser visible while testing both
+              // Minimax and MedRevenue project configurations.
+              const session = await launchAutomationBrowser({ headless: false });
               browser = session.browser;
               browserContext = session.context;
               page = await browserContext.newPage();
@@ -196,6 +204,7 @@ export function createWaystarRunner(): AutomationRunner<EligibilityRunInput> {
                   payerName: payer.portalPayerName,
                   serviceTypeCode: payer.serviceTypeCode,
                   patientLookupCode: payer.patientLookupCode,
+                  projectConfig: payerProjectConfig,
                   isCancelled: context.isCancelled,
                   onWaiting: (elapsedSeconds) => context.log({
                     level: "info",
@@ -221,6 +230,7 @@ export function createWaystarRunner(): AutomationRunner<EligibilityRunInput> {
                     payerName: payer.portalPayerName,
                     serviceTypeCode: payer.serviceTypeCode,
                     patientLookupCode: payer.patientLookupCode,
+                    projectConfig: payerProjectConfig,
                     isCancelled: context.isCancelled,
                     onWaiting: (elapsedSeconds) => context.log({
                       level: "info",

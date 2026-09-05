@@ -4,6 +4,7 @@ import type { WaystarCredentials, WaystarSecurityQuestion } from "./credentials"
 import type { EligibilityInputRow } from "../../types";
 import { normalizeWaystarDate } from "./dates";
 import { installBrowserEvalHelpers } from "@/backend/src/core/playwright-browser-eval-helpers";
+import type { WaystarPayerProjectConfig } from "./config/projects";
 
 export type WaystarBenefitEntry = {
   type?: string;
@@ -393,6 +394,7 @@ export async function submitWaystarInquiry(options: {
   payerName: string;
   serviceTypeCode?: string;
   patientLookupCode?: string;
+  projectConfig?: WaystarPayerProjectConfig;
   isCancelled?: () => boolean;
   onWaiting?: (elapsedSeconds: number) => Promise<void>;
   row: EligibilityInputRow;
@@ -400,7 +402,7 @@ export async function submitWaystarInquiry(options: {
   const { page, credentials, payerName, row } = options;
   const inquiryPage = await openEligibilityInquiry(page);
   await humanPause(inquiryPage, 650, 1200);
-  const expectedServiceType = resolveWaystarServiceTypeCode(
+  let expectedServiceType = resolveWaystarServiceTypeCode(
     options.serviceTypeCode,
     row.serviceType,
     credentials.serviceTypeCode,
@@ -412,9 +414,9 @@ export async function submitWaystarInquiry(options: {
 
   await selectInquiryPatientType(inquiryPage, row.relationshipToSubscriber);
   await humanPause(inquiryPage);
-  await selectPayer(inquiryPage, payerName);
+  await selectPayer(inquiryPage, payerName, options.projectConfig?.portalPayerNameFallbacks);
   await humanPause(inquiryPage);
-  await selectProvider(inquiryPage, credentials);
+  await selectProviderWithProjectFallback(inquiryPage, credentials, options.projectConfig);
   await humanPause(inquiryPage);
   const patientLookup = inquiryPage.locator(WAYSTAR_SELECTORS.inquiry.patientLookup).first();
   if (await patientLookup.isVisible().catch(() => false)) {
@@ -422,9 +424,20 @@ export async function submitWaystarInquiry(options: {
     if (hasLookupOption) await patientLookup.selectOption("10");
   }
   await humanPause(inquiryPage);
-  await selectServiceType(inquiryPage, expectedServiceType);
-  if (options.patientLookupCode) {
-    await selectPatientLookupOption(inquiryPage, options.patientLookupCode);
+  await selectServiceType(inquiryPage, expectedServiceType).catch(async (error) => {
+    const fallback = options.projectConfig?.serviceTypeCodeFallback;
+    if (!fallback || fallback === expectedServiceType) throw error;
+    await selectServiceType(inquiryPage, fallback);
+    expectedServiceType = fallback;
+  });
+  let expectedPatientLookupCode = options.patientLookupCode;
+  if (expectedPatientLookupCode) {
+    await selectPatientLookupOption(inquiryPage, expectedPatientLookupCode).catch(async (error) => {
+      const fallback = options.projectConfig?.patientLookupCodeFallback;
+      if (!fallback || fallback === expectedPatientLookupCode) throw error;
+      await selectPatientLookupOption(inquiryPage, fallback);
+      expectedPatientLookupCode = fallback;
+    });
   }
   await waitForBlockingOverlaysToClear(inquiryPage, 30000);
   await dismissWaystarDatePicker(inquiryPage);
@@ -435,7 +448,7 @@ export async function submitWaystarInquiry(options: {
   await dismissWaystarDatePicker(inquiryPage);
   await verifyInquiryFieldsBeforeSubmit(inquiryPage, {
     serviceTypeCode: expectedServiceType,
-    patientLookupCode: options.patientLookupCode,
+    patientLookupCode: expectedPatientLookupCode,
     memberId: expectedMemberId,
     lastName: expectedLastName,
     firstName: expectedFirstName,
@@ -990,7 +1003,28 @@ function normalizeRelationship(value: string): string {
   if (["son", "daughter"].includes(normalized)) return "child";
   return normalized;
 }
-async function selectPayer(page: Page, payerName: string): Promise<void> {
+async function selectPayer(page: Page, payerName: string, fallbackNames: readonly string[] = []): Promise<void> {
+  let primaryError: unknown;
+  try {
+    await selectPayerByName(page, payerName);
+    return;
+  } catch (error) {
+    primaryError = error;
+  }
+
+  for (const fallbackName of fallbackNames) {
+    if (!fallbackName || fallbackName === payerName) continue;
+    try {
+      await selectPayerByName(page, fallbackName);
+      return;
+    } catch {
+      // The established payer name remains authoritative; fallbacks are best effort.
+    }
+  }
+  throw primaryError;
+}
+
+async function selectPayerByName(page: Page, payerName: string): Promise<void> {
   const payerInput = page.locator(WAYSTAR_SELECTORS.inquiry.payerInput).first();
   if (await payerInput.isVisible().catch(() => false)) {
     const retainedPayer = await payerInput.inputValue().catch(() => "");
@@ -1352,6 +1386,25 @@ async function selectProvider(page: Page, credentials: WaystarCredentials): Prom
       await provider.selectOption(match.value);
     });
   }
+}
+
+async function selectProviderWithProjectFallback(
+  page: Page,
+  credentials: WaystarCredentials,
+  projectConfig?: WaystarPayerProjectConfig,
+): Promise<void> {
+  try {
+    await selectProvider(page, credentials);
+    if (credentials.providerId || credentials.providerName || !projectConfig?.provider) return;
+  } catch (error) {
+    if (!projectConfig?.provider?.id && !projectConfig?.provider?.name) throw error;
+  }
+
+  await selectProvider(page, {
+    ...credentials,
+    providerId: projectConfig?.provider?.id,
+    providerName: projectConfig?.provider?.name,
+  });
 }
 
 export function payerSearchTerms(payerName: string): string[] {
