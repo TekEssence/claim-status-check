@@ -201,7 +201,7 @@ export function createWaystarRunner(): AutomationRunner<EligibilityRunInput> {
                 let payload = await submitWaystarInquiry({
                   page,
                   credentials,
-                  payerName: payer.portalPayerName,
+                  payerName: payerProjectConfig.portalPayerName ?? payer.portalPayerName,
                   serviceTypeCode: payer.serviceTypeCode,
                   patientLookupCode: payer.patientLookupCode,
                   projectConfig: payerProjectConfig,
@@ -230,7 +230,7 @@ export function createWaystarRunner(): AutomationRunner<EligibilityRunInput> {
                   payload = await submitWaystarInquiry({
                     page,
                     credentials,
-                    payerName: payer.portalPayerName,
+                    payerName: payerProjectConfig.portalPayerName ?? payer.portalPayerName,
                     serviceTypeCode: payer.serviceTypeCode,
                     patientLookupCode: payer.patientLookupCode,
                     projectConfig: payerProjectConfig,
