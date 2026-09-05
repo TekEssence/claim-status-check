@@ -35,6 +35,10 @@ function normalizedAccountText(value: string): string {
   return value.trim().replace(/\s+/g, " ").toLowerCase();
 }
 
+function exactTextPattern(value: string): RegExp {
+  return new RegExp(`^\\s*${value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+")}\\s*$`, "i");
+}
+
 function chooseAccountMatch(accountNames: string[], searchText: string): { index: number; name: string } {
   const wanted = normalizedAccountText(searchText);
   const candidates = accountNames
@@ -89,8 +93,32 @@ async function selectAccount(page: Page, credentials: WaystarPaymentCredentials,
     visibleResults.push({ locator, name: (await locator.innerText()).trim() });
   }
   const selected = chooseAccountMatch(visibleResults.map((result) => result.name), credentials.account);
-  const result = visibleResults[selected.index].locator;
-  await Promise.all([page.waitForLoadState("networkidle").catch(() => {}), result.click()]);
+  const selectedName = selected.name;
+  let clickError: unknown;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      // Waystar rebuilds this result list after searching. Re-resolve the link
+      // by its account text on every attempt instead of retaining a positional
+      // locator that can point at a detached DOM node.
+      const result = page.locator("#accountSearchChildModal a.change-account-link")
+        .filter({ hasText: exactTextPattern(selectedName) })
+        .first();
+      await result.waitFor({ state: "visible", timeout: 10000 });
+      await page.waitForTimeout(500);
+      await Promise.all([
+        page.waitForLoadState("networkidle").catch(() => {}),
+        result.evaluate((element) => (element as HTMLElement).click()),
+      ]);
+      clickError = undefined;
+      break;
+    } catch (error) {
+      clickError = error;
+      if (attempt < 3) await page.waitForTimeout(750);
+    }
+  }
+  if (clickError) {
+    throw new Error(`Unable to select Waystar account "${selectedName}" after the search results refreshed: ${clickError instanceof Error ? clickError.message : String(clickError)}`);
+  }
   await page.locator("#changeSuccess, #accountName").first().waitFor({ state: "visible", timeout: 30000 }).catch(() => {});
   await context.log({ level: "info", message: `Waystar account selected: ${selected.name}.`, eventName: "waystar_payment_account_selected" });
 }
