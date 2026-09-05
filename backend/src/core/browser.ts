@@ -21,6 +21,19 @@ const AUTOMATION_LAUNCH_ARGS = [
   "--disable-blink-features=AutomationControlled",
   "--window-size=1920,1080",
 ];
+const CONTAINER_CHROMIUM_ARGS = [
+  "--no-sandbox",
+  "--disable-setuid-sandbox",
+  "--disable-dev-shm-usage",
+  "--disable-gpu",
+  "--no-zygote",
+];
+
+export function getAutomationBrowserLaunchArgs(headless: boolean): string[] {
+  return headless
+    ? [...CONTAINER_CHROMIUM_ARGS, ...AUTOMATION_LAUNCH_ARGS]
+    : ["--start-maximized", ...AUTOMATION_LAUNCH_ARGS];
+}
 
 function summarizeLaunchError(error: unknown): string {
   const message = (error instanceof Error ? error.message : String(error)).replace(
@@ -39,19 +52,19 @@ async function launchLocalBrowser(headless: boolean): Promise<Browser> {
   if (executablePath) {
     attempts.push({
       label: `explicit executable ${executablePath}`,
-      options: { executablePath, headless, args: AUTOMATION_LAUNCH_ARGS },
+      options: { executablePath, headless, args: getAutomationBrowserLaunchArgs(headless) },
     });
   }
   if (browserChannel) {
     attempts.push({
       label: `configured browser channel ${browserChannel}`,
-      options: { channel: browserChannel, headless, args: AUTOMATION_LAUNCH_ARGS },
+      options: { channel: browserChannel, headless, args: getAutomationBrowserLaunchArgs(headless) },
     });
   }
   attempts.push(
-    { label: "Playwright bundled Chromium", options: { headless, args: AUTOMATION_LAUNCH_ARGS } },
-    { label: "installed Google Chrome", options: { channel: "chrome", headless, args: AUTOMATION_LAUNCH_ARGS } },
-    { label: "installed Microsoft Edge", options: { channel: "msedge", headless, args: AUTOMATION_LAUNCH_ARGS } },
+    { label: "Playwright bundled Chromium", options: { headless, args: getAutomationBrowserLaunchArgs(headless) } },
+    { label: "installed Google Chrome", options: { channel: "chrome", headless, args: getAutomationBrowserLaunchArgs(headless) } },
+    { label: "installed Microsoft Edge", options: { channel: "msedge", headless, args: getAutomationBrowserLaunchArgs(headless) } },
   );
 
   const seen = new Set<string>();

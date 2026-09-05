@@ -26,7 +26,7 @@ async function processClaim(page, row, options = {}) {
   const providerOrder = Array.isArray(options.providerOrder) && options.providerOrder.length
     ? options.providerOrder
     : SCAN_HEALTH_PROVIDER_ORDER;
-  return runHipaaProviderSearch(page, row, providerOrder, { matchingPolicy: options.matchingPolicy });
+  return runHipaaProviderSearch(page, row, providerOrder, { projectId: options.projectId, matchingPolicy: options.matchingPolicy });
 }
 
 module.exports = {

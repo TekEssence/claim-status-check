@@ -15,6 +15,7 @@ async function processClaim(page, row, options = {}) {
   if (hipaaAvailable) {
     logger.info("Using Anthem-CA workflow: HIPAA Standard tab first.");
     return runHipaaProviderSearch(page, row, providerOrder, {
+      projectId: options.projectId,
       matchingPolicy: options.matchingPolicy
     });
   }

@@ -3,6 +3,7 @@
 const logger = require("../../../../utils/logger");
 const { humanDelay, withRetry } = require("../../../../utils/browser");
 const { getClaimStatusFrame } = require("../../../../pages/navigation.page");
+const { clearProviderFormIfVisible } = require("../../../../pages/provider-identifiers.page");
 const { PROVIDERS } = require("../../../../pages/claim-status-member.page");
 const { waitForSearchResultsToSettle, normalizeMoney, normalizeDateText } = require("../../../../pages/results.page");
 const { renderClaimSummary, renderFailedSummary } = require("../../../../services/summary-renderer");
@@ -530,9 +531,12 @@ async function processWellcareServiceDateResults(page, row, provider, resultSumm
   };
 }
 
-async function searchWellcareServiceDatesWithProvider(page, providerName, rowData) {
+async function searchWellcareServiceDatesWithProvider(page, providerName, rowData, options = {}) {
   logger.info(`Wellcare Service Dates provider attempt: ${providerName}`);
   await selectServiceDateTab(page);
+  if (options.projectId === "charm") {
+    await clearProviderFormIfVisible(page, { context: "Charm Wellcare Service Dates", logger });
+  }
   await selectProvider(page, providerName);
   await fillServiceDateSearchForm(page, rowData);
   await submitServiceDateSearch(page);
@@ -546,7 +550,7 @@ async function processClaim(page, row, options = {}) {
 
   let lastProviderFailure = "";
   for (const provider of providerOrder) {
-    await searchWellcareServiceDatesWithProvider(page, provider, row.data);
+    await searchWellcareServiceDatesWithProvider(page, provider, row.data, options);
 
     logger.info(`Waiting up to 5 seconds for ${provider} Wellcare Service Dates results to settle`);
     const resultSummary = await waitForSearchResultsToSettle(page, 5000);

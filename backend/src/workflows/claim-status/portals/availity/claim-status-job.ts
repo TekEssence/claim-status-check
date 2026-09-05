@@ -7,7 +7,7 @@ import type { ScraperContext } from "../../types";
 import { launchAvailityBrowser } from "./browser";
 import { isRunnableAvailityPayerName, parseAvailityInput, readAvailityPayerMapping, unsupportedAvailityPayerMessage } from "./input";
 import { createAvailityOutputWorkbookBuffer } from "./output-writer";
-import { getHipaaProviderFieldPolicy, getMatchingPolicy, getMfaConfigForProject, getProviderOrderForRow, getProviderOrderFromFieldPolicy, getRequiredFieldsForProject, getServiceDateProviderFieldPolicy, readAvailityProviderMapping, resolvePortalSelections } from "./project-config";
+import { getMatchingPolicy, getMfaConfigForProject, getProviderOrderForRow, getRequiredFieldsForProject, getSelectionRuleProviderOrder, getServiceDateProviderFieldPolicy, readAvailityProviderMapping, resolvePortalSelections } from "./project-config";
 import type { AvailityPortalSelections } from "./config/projects";
 import { applyProjectOutputStrategy } from "./project-output";
 import type { AvailityAuditRow, AvailityErrorRow, AvailityInputRow, AvailityOutputRow, AvailityProviderMapping } from "./types";
@@ -361,7 +361,7 @@ async function processValidRow(
   row: AvailityInputRow,
   selections: AvailityPortalSelections,
   automationState: { selectedOrganization: string; selectedState: string; selectedPayer: string; claimStatusOpened: boolean },
-  options: { projectId: string; providerMappings: AvailityProviderMapping[] },
+  options: { projectId: string; providerMappings: AvailityProviderMapping[]; login: string },
 ) {
   if (!selections.payer?.trim()) {
     throw new Error(`Payer mapping is blank for "${row.data["Payer Name"] || "unknown payer"}". Update backend/src/workflows/claim-status/portals/availity/config/Payer_mapping_ava.xlsx.`);
@@ -414,15 +414,15 @@ async function processValidRow(
     inputPayerName: row.data["Payer Name"] || "",
     mappedPortalPayerName: selections.payer,
   });
-  const hipaaProviderFieldPolicy = getHipaaProviderFieldPolicy(options.projectId, row, selections.payer);
-  const providerOrder = getProviderOrderFromFieldPolicy(hipaaProviderFieldPolicy)
+  const providerOrder = getSelectionRuleProviderOrder(options.projectId, row, selections.payer, options.login)
     || getProviderOrderForRow(options.projectId, row, options.providerMappings);
   const matchingPolicy = {
     ...getMatchingPolicy(options.projectId, selections.payer),
     fallbackProviderOnlyOnSelectionFailure: options.projectId === "charm",
   };
-  const providerFieldPolicy = getServiceDateProviderFieldPolicy(options.projectId, row, selections.payer);
+  const providerFieldPolicy = getServiceDateProviderFieldPolicy(options.projectId, row, selections.payer, options.login);
   return workflow.processClaim(page, row, {
+    projectId: options.projectId,
     providerOrder,
     providerFieldPolicy,
     matchingPolicy,
@@ -542,7 +542,7 @@ export async function runAvailityClaimStatusJob(formData: FormData, context: Scr
       let validation: { isValid: boolean; validation_status: string; validation_message: string; mappedPayerName: string };
       let portalSelections: AvailityPortalSelections = { payer: "" };
       try {
-        portalSelections = resolvePortalSelections(input.projectId, row, payerMapping);
+        portalSelections = resolvePortalSelections(input.projectId, row, payerMapping, input.credentials.username);
         validation = validateRow(
           row,
           payerMapping,
@@ -589,6 +589,7 @@ export async function runAvailityClaimStatusJob(formData: FormData, context: Scr
           const result = await processValidRow(session.page, row, portalSelections, automationState, {
             projectId: input.projectId,
             providerMappings,
+            login: input.credentials.username,
           });
           if (rowRecoveryNotes.length) {
             result.notes = [result.notes, ...rowRecoveryNotes].filter(Boolean).join("; ");

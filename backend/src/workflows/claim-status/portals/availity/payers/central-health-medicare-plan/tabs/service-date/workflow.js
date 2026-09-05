@@ -5,6 +5,7 @@ const { humanDelay, withRetry } = require("../../../../utils/browser");
 const { getClaimStatusFrame } = require("../../../../pages/navigation.page");
 const {
   clearProviderStateForTaxIdFallback,
+  clearProviderFormIfVisible,
   getProviderTaxIdForPolicy,
   providerPolicySkipsProviderDropdown,
   verifyProviderNpiMatches
@@ -623,6 +624,9 @@ async function processCentralHealthMedicarePlanServiceDateResults(page, row, pro
 async function searchCentralHealthMedicarePlanServiceDatesWithProvider(page, providerName, rowData, options = {}) {
   logger.info(`Central Health Medicare Plan Service Dates provider attempt: ${providerName}`);
   await selectServiceDateTab(page);
+  if (options.projectId === "charm") {
+    await clearProviderFormIfVisible(page, { context: "Charm Central Health Medicare Plan Service Dates", logger });
+  }
   if (providerPolicySkipsProviderDropdown(options.providerFieldPolicy)) {
     const taxId = getProviderTaxIdForPolicy(rowData, options.providerFieldPolicy);
     logger.info(`Central Health Medicare Plan Service Dates field policy skips Select a Provider. Filling Provider Tax ID "${taxId || "blank"}".`);

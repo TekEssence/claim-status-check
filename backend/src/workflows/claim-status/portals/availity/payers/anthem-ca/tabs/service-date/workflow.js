@@ -5,6 +5,7 @@ const { humanDelay, withRetry } = require("../../../../utils/browser");
 const { getClaimStatusFrame } = require("../../../../pages/navigation.page");
 const {
   clearProviderStateForTaxIdFallback,
+  clearProviderFormIfVisible,
   fillInputProviderIdentifiers,
   getProviderTaxIdForPolicy,
   hasInputProviderIdentifiers,
@@ -622,6 +623,9 @@ async function processAnthemCaServiceDateResults(page, row, provider, resultSumm
 async function searchAnthemCaServiceDatesWithProvider(page, providerName, rowData, options = {}) {
   logger.info(`Anthem-CA Service Dates provider attempt: ${providerName}`);
   await selectServiceDateTab(page);
+  if (options.projectId === "charm") {
+    await clearProviderFormIfVisible(page, { context: "Charm Anthem-CA Service Dates", logger });
+  }
   if (providerPolicySkipsProviderDropdown(options.providerFieldPolicy)) {
     const taxId = getProviderTaxIdForPolicy(rowData, options.providerFieldPolicy);
     logger.info(`Anthem-CA Service Dates field policy skips Select a Provider. Filling Provider Tax ID "${taxId || "blank"}".`);
@@ -635,7 +639,10 @@ async function searchAnthemCaServiceDatesWithProvider(page, providerName, rowDat
     return;
   }
   await selectProvider(page, providerName, rowData);
-  await fillInputProviderIdentifiers(page, rowData);
+  await fillInputProviderIdentifiers(page, rowData, {
+    charmRequiredOnly: options.projectId === "charm",
+    logger,
+  });
   await fillServiceDateSearchForm(page, rowData);
   await submitServiceDateSearch(page);
 }

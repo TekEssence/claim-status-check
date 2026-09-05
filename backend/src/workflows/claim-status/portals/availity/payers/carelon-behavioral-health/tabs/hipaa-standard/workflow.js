@@ -20,6 +20,7 @@ async function processClaim(page, row, options = {}) {
   }
 
   return runHipaaProviderSearch(page, row, options.providerOrder || [], {
+    projectId: options.projectId,
     matchingPolicy: options.matchingPolicy
   });
 }

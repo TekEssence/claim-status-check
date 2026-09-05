@@ -53,6 +53,7 @@ async function processClaim(page, row, options = {}) {
       return runBluecareHipaaDirectSearch(page, row, providerOrder);
     }
     return runHipaaProviderSearch(page, row, providerOrder, {
+      projectId: options.projectId,
       matchingPolicy: options.matchingPolicy
     });
   }
@@ -127,6 +128,7 @@ async function processClaim(page, row, options = {}) {
     let hipaaResult;
     try {
       hipaaResult = await runHipaaProviderSearch(page, row, providerOrder, {
+        projectId: options.projectId,
         matchingPolicy: options.matchingPolicy
       });
     } catch (error) {
@@ -171,6 +173,7 @@ async function processClaim(page, row, options = {}) {
   }
 
   return runHipaaProviderSearch(page, row, providerOrder, {
+    projectId: options.projectId,
     matchingPolicy: options.matchingPolicy
   });
 }

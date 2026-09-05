@@ -7,6 +7,7 @@ import type { AvailityProjectFieldConfig } from "./config/projects";
 import type { AvailityPortalSelections } from "./config/projects";
 import type { AvailityMatchingPolicy } from "./config/projects";
 import type { AvailityProviderFieldPolicy } from "./config/projects";
+import type { AvailityRuleWhen, AvailitySelectionRule } from "./config/projects";
 
 export { AVAILITY_PROJECT_CONFIGS } from "./config/projects";
 
@@ -101,6 +102,40 @@ function matchesPolicyValue(ruleValue: string | undefined, actualValue: string):
     || normalizedRule.includes(normalizedActual);
 }
 
+function matchesAnyPolicyValue(ruleValue: string | string[] | undefined, actualValue: string): boolean {
+  if (Array.isArray(ruleValue)) {
+    return ruleValue.some((value) => matchesPolicyValue(value, actualValue));
+  }
+  return matchesPolicyValue(ruleValue, actualValue);
+}
+
+function ruleSpecificity(when: AvailityRuleWhen): number {
+  return Object.values(when).filter((value) => Array.isArray(value) ? value.length > 0 : Boolean(value)).length;
+}
+
+function matchesRuleWhen(
+  when: AvailityRuleWhen,
+  context: { practice: string; payer: string; inputPayerName: string; login: string; state: string },
+): boolean {
+  return matchesPolicyValue(when.practice, context.practice)
+    && (
+      matchesAnyPolicyValue(when.payer, context.payer)
+      || matchesAnyPolicyValue(when.payer, context.inputPayerName)
+    )
+    && matchesAnyPolicyValue(when.login, context.login)
+    && matchesAnyPolicyValue(when.state, context.state);
+}
+
+function findBestSelectionRule(
+  rules: AvailitySelectionRule[],
+  context: { practice: string; payer: string; inputPayerName: string; login: string; state: string },
+): AvailitySelectionRule | undefined {
+  return rules
+    .map((rule, index) => ({ rule, index, score: ruleSpecificity(rule.when) }))
+    .filter(({ rule }) => matchesRuleWhen(rule.when, context))
+    .sort((left, right) => right.score - left.score || left.index - right.index)[0]?.rule;
+}
+
 function parseMoney(value: unknown): number | null {
   const raw = String(value || "").trim();
   if (!raw) return null;
@@ -184,12 +219,15 @@ export function resolvePortalSelections(
   projectId: string,
   row: AvailityInputRow,
   payerMapping: Map<string, string>,
+  login = "",
 ): AvailityPortalSelections {
   const config = getAvailityProjectConfig(projectId);
   const payerConfig = config.selections.payer;
   const directPayer = payerConfig.directField ? findRowValue(row, [payerConfig.directField]) : "";
   const mappingValue = findRowValue(row, [payerConfig.mappingField]);
   const payer = directPayer || (mappingValue ? payerMapping.get(mappingValue.toLowerCase()) || "" : "");
+  const state = getPortalStateForRow(projectId, row) || "";
+  const practice = findRowValue(row, ["Group", "Practice", "Organization Group"]);
 
   const organizationConfig = config.selections.organization;
   let organization: string | undefined;
@@ -209,19 +247,20 @@ export function resolvePortalSelections(
     }
   }
 
-  const practice = findRowValue(row, ["Group", "Practice", "Organization Group"]);
-  const selectionOverride = (config.selectionOverrides || []).find((rule) => {
-    const practiceMatches = matchesPolicyValue(rule.practice, practice);
-    const payerMatches = matchesPolicyValue(rule.payer, payer) || matchesPolicyValue(rule.payer, directPayer) || matchesPolicyValue(rule.payer, mappingValue);
-    return practiceMatches && payerMatches;
+  const selectionRule = findBestSelectionRule(config.selectionRules || [], {
+    practice,
+    payer,
+    inputPayerName: directPayer || mappingValue,
+    login,
+    state,
   });
-  if (selectionOverride?.organization) {
-    organization = selectionOverride.organization;
+  if (selectionRule?.use.organization) {
+    organization = selectionRule.use.organization;
   }
 
   return {
     organization,
-    state: getPortalStateForRow(projectId, row),
+    state: state || undefined,
     payer,
   };
 }
@@ -400,22 +439,43 @@ export function getProviderOrderForRow(projectId: string, row: AvailityInputRow,
   ].filter(Boolean)));
 }
 
-export function getServiceDateProviderFieldPolicy(projectId: string, row: AvailityInputRow, portalPayerName: string): AvailityProviderFieldPolicy | undefined {
+export function getSelectionRuleProviderOrder(
+  projectId: string,
+  row: AvailityInputRow,
+  portalPayerName: string,
+  login = "",
+): string[] | undefined {
   const config = getAvailityProjectConfig(projectId);
-  return findProviderFieldPolicy(config.fieldPolicies?.serviceDates || [], row, portalPayerName);
+  const practice = findRowValue(row, ["Group", "Practice", "Organization Group"]);
+  const inputPayerName = findRowValue(row, ["Portal Payer Name", "Payer Name"]);
+  const state = getPortalStateForRow(projectId, row) || "";
+  const rule = findBestSelectionRule(config.selectionRules || [], {
+    practice,
+    payer: portalPayerName,
+    inputPayerName,
+    login,
+    state,
+  });
+  const providerName = rule?.use.providerName?.trim();
+  return providerName ? [providerName] : undefined;
 }
 
-export function getHipaaProviderFieldPolicy(projectId: string, row: AvailityInputRow, portalPayerName: string): AvailityProviderFieldPolicy | undefined {
+export function getServiceDateProviderFieldPolicy(projectId: string, row: AvailityInputRow, portalPayerName: string, login = ""): AvailityProviderFieldPolicy | undefined {
   const config = getAvailityProjectConfig(projectId);
-  return findProviderFieldPolicy(config.fieldPolicies?.hipaaStandard || [], row, portalPayerName);
-}
-
-export function getProviderOrderFromFieldPolicy(providerFieldPolicy: AvailityProviderFieldPolicy | undefined): string[] | undefined {
-  const providerValue = providerFieldPolicy?.providerDropdown?.value?.trim();
-  if (providerFieldPolicy?.providerDropdown?.fill === true && providerValue) {
-    return [providerValue];
+  const providerRule = findBestSelectionRule(config.selectionRules || [], {
+    practice: findRowValue(row, ["Group", "Practice", "Organization Group"]),
+    payer: portalPayerName,
+    inputPayerName: findRowValue(row, ["Portal Payer Name", "Payer Name"]),
+    login,
+    state: getPortalStateForRow(projectId, row) || "",
+  });
+  if (providerRule?.use.providerTaxIdFrom) {
+    return {
+      providerDropdown: { fill: false },
+      providerTaxId: { fill: true, valueFrom: providerRule.use.providerTaxIdFrom, required: true },
+    };
   }
-  return undefined;
+  return findProviderFieldPolicy(config.fieldPolicies?.serviceDates || [], row, portalPayerName);
 }
 
 function findProviderFieldPolicy(

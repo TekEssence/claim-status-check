@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { getAutomationBrowserLaunchArgs } from "@/backend/src/core/browser";
 import { getAutomationRuntimeConfig } from "@/backend/src/core/runtime-config";
 import { getWorkflowRuntimePath } from "@/backend/src/core/storage";
 import { chromium, type Browser } from "playwright-core";
@@ -7,7 +8,7 @@ async function launchOnce(executablePath: string | undefined, headless: boolean)
   return chromium.launch({
     executablePath,
     headless,
-    args: headless ? [] : ["--start-maximized"],
+    args: getAutomationBrowserLaunchArgs(headless),
     timeout: 60000,
   });
 }

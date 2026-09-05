@@ -29,7 +29,7 @@ export type AvailityProjectConfig = {
       mappingField: string;
     };
   };
-  selectionOverrides?: AvailitySelectionOverrideRule[];
+  selectionRules?: AvailitySelectionRule[];
   provider?: {
     groupField: string;
     values?: Record<string, string>;
@@ -43,7 +43,6 @@ export type AvailityProjectConfig = {
     includeInputNameAfterMapping?: boolean;
   };
   fieldPolicies?: {
-    hipaaStandard?: AvailityHipaaFieldPolicyRule[];
     serviceDates?: AvailityServiceDateFieldPolicyRule[];
   };
   matching: AvailityMatchingPolicy;
@@ -72,16 +71,20 @@ export type AvailityServiceDateFieldPolicyRule = {
   fields: AvailityProviderFieldPolicy;
 };
 
-export type AvailityHipaaFieldPolicyRule = {
+export type AvailityRuleWhen = {
   practice?: string;
-  payer?: string;
-  fields: AvailityProviderFieldPolicy;
+  payer?: string | string[];
+  login?: string | string[];
+  state?: string | string[];
 };
 
-export type AvailitySelectionOverrideRule = {
-  practice?: string;
-  payer?: string;
-  organization?: string;
+export type AvailitySelectionRule = {
+  when: AvailityRuleWhen;
+  use: {
+    organization?: string;
+    providerName?: string;
+    providerTaxIdFrom?: string;
+  };
 };
 
 export type AvailityMatchingPolicy = {

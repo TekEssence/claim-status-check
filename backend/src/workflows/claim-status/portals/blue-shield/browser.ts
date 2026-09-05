@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createHash } from "node:crypto";
+import { getAutomationBrowserLaunchArgs } from "@/backend/src/core/browser";
 import { chromium, type BrowserContext } from "playwright-core";
 import { envText } from "./env";
 import { monitorBlueShieldFeedbackPopups } from "./overlays";
@@ -24,6 +25,7 @@ export async function launchBlueShieldPersistentContext(
 
   const launch = (profilePath: string) => chromium.launchPersistentContext(profilePath, {
     acceptDownloads: true,
+    args: getAutomationBrowserLaunchArgs(true),
     executablePath,
     headless: true,
     viewport: { width: 1600, height: 1000 },

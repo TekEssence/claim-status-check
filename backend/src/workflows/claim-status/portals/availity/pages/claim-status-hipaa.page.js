@@ -3,7 +3,7 @@
 const logger = require("../utils/logger");
 const { humanDelay, withRetry } = require("../utils/browser");
 const { getClaimStatusFrame } = require("./navigation.page");
-const { clearProviderStateForTaxIdFallback, fillInputProviderIdentifiers, getInputProviderIdentifiers, hasInputProviderIdentifiers, verifyProviderNpiMatches } = require("./provider-identifiers.page");
+const { clearProviderFormIfVisible, clearProviderStateForTaxIdFallback, fillInputProviderIdentifiers, getInputProviderIdentifiers, hasInputProviderIdentifiers, verifyProviderNpiMatches } = require("./provider-identifiers.page");
 
 const HIPAA_SELECTORS = {
   hipaaTab: "button[role='tab']:has-text('HIPAA Standard')",
@@ -742,6 +742,10 @@ async function submitHipaaSearch(page) {
 async function searchHipaaWithProvider(page, providerName, rowData, options = {}) {
   logger.info(`HIPAA Standard search provider attempt: ${providerName}`);
   await selectHipaaTab(page);
+  const isCharm = options.projectId === "charm";
+  if (isCharm) {
+    await clearProviderFormIfVisible(page, { context: "Charm HIPAA", logger });
+  }
   const providerIdentifiers = getInputProviderIdentifiers(rowData);
   const providerAsTaxId = Boolean(providerIdentifiers.taxId && String(providerName || "").replace(/\D/g, "") === providerIdentifiers.taxId);
   let fillTaxIdOnly = false;
@@ -773,7 +777,10 @@ async function searchHipaaWithProvider(page, providerName, rowData, options = {}
       }
     }
   }
-  await fillInputProviderIdentifiers(page, fillTaxIdOnly ? { ...rowData, "Provider NPI": "" } : rowData);
+  await fillInputProviderIdentifiers(page, fillTaxIdOnly ? { ...rowData, "Provider NPI": "" } : rowData, {
+    charmRequiredOnly: isCharm,
+    logger,
+  });
   await fillHipaaSearchForm(page, rowData);
   await submitHipaaSearch(page);
 }

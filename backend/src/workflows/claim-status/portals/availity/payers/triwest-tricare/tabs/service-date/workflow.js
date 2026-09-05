@@ -5,6 +5,7 @@ const { humanDelay, withRetry } = require("../../../../utils/browser");
 const { getClaimStatusFrame } = require("../../../../pages/navigation.page");
 const {
   clearProviderStateForTaxIdFallback,
+  clearProviderFormIfVisible,
   getProviderTaxIdForPolicy,
   providerPolicySkipsProviderDropdown,
   verifyProviderNpiMatches
@@ -733,6 +734,9 @@ async function processTriwestTricareServiceDateResults(page, row, provider, resu
 async function searchTriwestTricareServiceDatesWithProvider(page, providerName, rowData, options = {}) {
   logger.info(`TRIWEST-TRICARE Service Dates provider attempt: ${providerName}`);
   await selectServiceDateTab(page);
+  if (options.projectId === "charm") {
+    await clearProviderFormIfVisible(page, { context: "Charm TRIWEST-TRICARE Service Dates", logger });
+  }
   if (providerPolicySkipsProviderDropdown(options.providerFieldPolicy)) {
     const taxId = getProviderTaxIdForPolicy(rowData, options.providerFieldPolicy);
     logger.info(`TRIWEST-TRICARE Service Dates field policy skips Select a Provider. Filling Provider Tax ID "${taxId || "blank"}".`);

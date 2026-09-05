@@ -3,6 +3,7 @@
 const logger = require("../../../../utils/logger");
 const { humanDelay, withRetry } = require("../../../../utils/browser");
 const { getClaimStatusFrame } = require("../../../../pages/navigation.page");
+const { clearProviderFormIfVisible } = require("../../../../pages/provider-identifiers.page");
 const { PROVIDERS } = require("../../../../pages/claim-status-member.page");
 const { waitForSearchResultsToSettle, normalizeMoney, normalizeDateText } = require("../../../../pages/results.page");
 const { renderClaimSummary, renderFailedSummary } = require("../../../../services/summary-renderer");
@@ -530,9 +531,12 @@ async function processHealthNetServiceDateResults(page, row, provider, resultSum
   };
 }
 
-async function searchHealthNetServiceDatesWithProvider(page, providerName, rowData) {
+async function searchHealthNetServiceDatesWithProvider(page, providerName, rowData, options = {}) {
   logger.info(`Health Net Service Dates provider attempt: ${providerName}`);
   await selectServiceDateTab(page);
+  if (options.projectId === "charm") {
+    await clearProviderFormIfVisible(page, { context: "Charm Health Net Service Dates", logger });
+  }
   await selectProvider(page, providerName);
   await fillServiceDateSearchForm(page, rowData);
   await submitServiceDateSearch(page);
@@ -546,7 +550,7 @@ async function processClaim(page, row, options = {}) {
 
   let lastProviderFailure = "";
   for (const provider of providerOrder) {
-    await searchHealthNetServiceDatesWithProvider(page, provider, row.data);
+    await searchHealthNetServiceDatesWithProvider(page, provider, row.data, options);
 
     logger.info(`Waiting up to 5 seconds for ${provider} Health Net Service Dates results to settle`);
     const resultSummary = await waitForSearchResultsToSettle(page, 5000);

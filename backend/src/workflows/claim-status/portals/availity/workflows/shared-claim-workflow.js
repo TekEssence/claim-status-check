@@ -386,6 +386,7 @@ async function runHipaaProviderSearch(page, row, providerOrder = PROVIDERS, opti
     try {
       await searchHipaaWithProvider(page, provider, row.data, {
         allowFuzzyProviderFallback: Boolean(options.matchingPolicy?.allowFuzzyProviderSelection),
+        projectId: options.projectId,
         requireDropdownProviderSelection: fallbackProviderOnlyOnSelectionFailure
       });
     } catch (error) {

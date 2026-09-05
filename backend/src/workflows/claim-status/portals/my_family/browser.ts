@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { getAutomationBrowserLaunchArgs } from "@/backend/src/core/browser";
 import { getAutomationRuntimeConfig } from "@/backend/src/core/runtime-config";
 import { getWorkflowRuntimePath } from "@/backend/src/core/storage";
 import { chromium, type Browser } from "playwright-core";
@@ -12,7 +13,7 @@ export async function launchMyFamilyBrowser(log: (message: string) => Promise<vo
   return chromium.launch({
     executablePath,
     headless: runtimeConfig.headless,
-    args: runtimeConfig.headless ? [] : ["--start-maximized"],
+    args: getAutomationBrowserLaunchArgs(runtimeConfig.headless),
     timeout: 60000,
   });
 }

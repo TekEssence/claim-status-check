@@ -20,12 +20,12 @@ export function getAvailityProjectConfig(projectId: string): AvailityProjectConf
 export { DEFAULT_AVAILITY_REQUIRED_FIELDS } from "./types";
 export type {
   AvailityFieldFillPolicy,
-  AvailityHipaaFieldPolicyRule,
   AvailityMatchingPolicy,
   AvailityPortalSelections,
   AvailityProjectConfig,
   AvailityProjectFieldConfig,
   AvailityProviderFieldPolicy,
-  AvailitySelectionOverrideRule,
+  AvailityRuleWhen,
+  AvailitySelectionRule,
   AvailityServiceDateFieldPolicyRule,
 } from "./types";
