@@ -201,7 +201,7 @@ export function createWaystarRunner(): AutomationRunner<EligibilityRunInput> {
                 let payload = await submitWaystarInquiry({
                   page,
                   credentials,
-                  payerName: payer.portalPayerName,
+                  payerName: payerProjectConfig.portalPayerName ?? payer.portalPayerName,
                   serviceTypeCode: payer.serviceTypeCode,
                   patientLookupCode: payer.patientLookupCode,
                   projectConfig: payerProjectConfig,
@@ -215,6 +215,9 @@ export function createWaystarRunner(): AutomationRunner<EligibilityRunInput> {
                   row,
                 });
                 let result = applyWaystarResultDefaults(payer.parseResult(payload, row), row);
+                if (input.projectId === "medrevenue" && payer.id === "medicare") {
+                  result = applyMedRevenueMedicareResultMappings(result);
+                }
                 if (isRetryablePayerError(result)) {
                   const payerResponse = describePayerError(result);
                   await context.log({
@@ -227,7 +230,7 @@ export function createWaystarRunner(): AutomationRunner<EligibilityRunInput> {
                   payload = await submitWaystarInquiry({
                     page,
                     credentials,
-                    payerName: payer.portalPayerName,
+                    payerName: payerProjectConfig.portalPayerName ?? payer.portalPayerName,
                     serviceTypeCode: payer.serviceTypeCode,
                     patientLookupCode: payer.patientLookupCode,
                     projectConfig: payerProjectConfig,
@@ -241,6 +244,9 @@ export function createWaystarRunner(): AutomationRunner<EligibilityRunInput> {
                     row,
                   });
                   result = applyWaystarResultDefaults(payer.parseResult(payload, row), row);
+                  if (input.projectId === "medrevenue" && payer.id === "medicare") {
+                    result = applyMedRevenueMedicareResultMappings(result);
+                  }
                 }
                 results.set(row.originalIndex, result);
                 await context.emit({
@@ -446,6 +452,76 @@ export function createWaystarRunner(): AutomationRunner<EligibilityRunInput> {
       }
     },
   };
+}
+
+export function applyMedRevenueMedicareResultMappings(result: EligibilityResult): EligibilityResult {
+  const fullResponse = result.metadata?.fullPayerResponse;
+  if (!fullResponse || typeof fullResponse !== "object") return result;
+  const response = fullResponse as Record<string, unknown>;
+
+  const eligibilityDate = findResponseValue(response.subscriberCoverageInformation, "Eligibility Date");
+  const prescriptionDrugCoverage = findResponseBlockByTitle(
+    response.otherCoverageInformation,
+    "Medicare Prescription Drug Coverage",
+  );
+  const prescriptionPayer = findResponseValue(prescriptionDrugCoverage, "Payer");
+  const prescriptionBenefitDate = findResponseValue(prescriptionDrugCoverage, "Benefit Date");
+  const prescriptionServiceType = findResponseValue(prescriptionDrugCoverage, "Service Type");
+
+  return {
+    ...result,
+    effectiveDate: eligibilityDate || result.effectiveDate,
+    otherInsurance: prescriptionPayer || result.otherInsurance,
+    otherInsuranceEffectiveDate: prescriptionBenefitDate || result.otherInsuranceEffectiveDate,
+    metadata: {
+      ...(result.metadata ?? {}),
+      ...(prescriptionServiceType ? { medRevenuePrescriptionDrugServiceType: prescriptionServiceType } : {}),
+    },
+  };
+}
+
+function findResponseBlockByTitle(value: unknown, expectedTitle: string): unknown {
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      const match = findResponseBlockByTitle(entry, expectedTitle);
+      if (match) return match;
+    }
+    return undefined;
+  }
+  if (!value || typeof value !== "object") return undefined;
+  const record = value as Record<string, unknown>;
+  if (String(record.title ?? "").trim().toLowerCase().includes(expectedTitle.toLowerCase())) return record;
+  for (const nested of Object.values(record)) {
+    const match = findResponseBlockByTitle(nested, expectedTitle);
+    if (match) return match;
+  }
+  return undefined;
+}
+
+function findResponseValue(value: unknown, expectedLabel: string): string {
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      const match = findResponseValue(entry, expectedLabel);
+      if (match) return match;
+    }
+    return "";
+  }
+  if (!value || typeof value !== "object") return "";
+  const record = value as Record<string, unknown>;
+  const fields = record.fields;
+  if (fields && typeof fields === "object") {
+    for (const [label, fieldValue] of Object.entries(fields as Record<string, unknown>)) {
+      if (label.trim().toLowerCase() === expectedLabel.toLowerCase()) return String(fieldValue ?? "").trim();
+    }
+  }
+  if (String(record.label ?? "").trim().toLowerCase() === expectedLabel.toLowerCase()) {
+    return String(record.value ?? "").trim();
+  }
+  for (const nested of Object.values(record)) {
+    const match = findResponseValue(nested, expectedLabel);
+    if (match) return match;
+  }
+  return "";
 }
 
 function toWaystarLiveResult(

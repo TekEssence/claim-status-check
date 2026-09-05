@@ -101,7 +101,10 @@ export function findWaystarCredentialsForPayer(
 }
 
 function readVerificationSheet(workbook: XLSX.WorkBook): WaystarSecurityQuestion[] {
-  const sheetName = workbook.SheetNames.find((name) => normalizeHeader(name) === "verification");
+  const sheetName = workbook.SheetNames.find((name) => {
+    const normalizedName = normalizeHeader(name);
+    return normalizedName === "verification" || normalizedName === "verification sheet";
+  });
   if (!sheetName) return [];
 
   const sheet = workbook.Sheets[sheetName];
@@ -112,11 +115,35 @@ function readVerificationSheet(workbook: XLSX.WorkBook): WaystarSecurityQuestion
     raw: false,
   });
 
-  return rows
+  const parsedRows = rows
     .map((row) => ({
       username: findValue(row, ["user name", "username", "login name", "waystar username"]) || undefined,
       question: findValue(row, ["question", "security question", "verification question"]),
       answer: findValue(row, ["answer", "security answer", "verification answer"]),
+    }))
+    .filter((entry) => entry.question && entry.answer);
+
+  if (parsedRows.length > 0) return parsedRows;
+
+  // Some customer workbooks carry formatting/merged metadata that prevents
+  // sheet_to_json's object mode from recognizing QUESTION and ANSWER as the
+  // headers. The Verification template is explicitly column A = question and
+  // column B = answer, so retain that supported layout as a safe fallback.
+  const matrix = XLSX.utils.sheet_to_json<unknown[]>(sheet, {
+    defval: "",
+    raw: false,
+    header: 1,
+  });
+  const headerIndex = matrix.findIndex((row) =>
+    normalizeHeader(asText(row[0])) === "question" && normalizeHeader(asText(row[1])) === "answer",
+  );
+  if (headerIndex < 0) return [];
+
+  return matrix
+    .slice(headerIndex + 1)
+    .map((row) => ({
+      question: asText(row[0]),
+      answer: asText(row[1]),
     }))
     .filter((entry) => entry.question && entry.answer);
 }

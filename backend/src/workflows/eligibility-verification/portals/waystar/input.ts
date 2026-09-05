@@ -195,13 +195,18 @@ export function routeWaystarRowsByPayer(
   rows.forEach((raw, index) => {
     const rowIndex = index + 2;
     const insuranceName = asText(raw[payerHeader]);
-    const payer = resolveWaystarPayer(insuranceName, options.payerMappings);
-    if (!payer || !isPayerEnabledForProject(payer.id, options.projectConfig)) {
+    const memberId = findValue(raw, projectAliases(options.projectConfig, "memberId", MEMBER_ID_HEADER_ALIASES));
+    const projectPayerId = matchProjectPayerRoutingRule(insuranceName, memberId, options.projectConfig);
+    const payer = projectPayerId
+      ? matchWaystarPayer(projectPayerId)
+      : resolveWaystarPayer(insuranceName, options.payerMappings);
+    if (!payer ||
+      !isPayerEnabledForProject(payer.id, options.projectConfig) ||
+      !isPayerAllowedByProjectRoutingRules(payer.id, insuranceName, memberId, options.projectConfig)) {
       unsupportedRows.push({ rowIndex, insuranceName });
       return;
     }
 
-    const memberId = findValue(raw, projectAliases(options.projectConfig, "memberId", MEMBER_ID_HEADER_ALIASES));
     const subscriberId = findValue(raw, projectAliases(options.projectConfig, "subscriberId", SUBSCRIBER_ID_HEADER_ALIASES)) || memberId;
     const parsedName = resolvePatientName(raw, options.projectConfig);
 
@@ -347,6 +352,40 @@ function projectAliases(
 function isPayerEnabledForProject(payerId: string, projectConfig?: WaystarProjectConfig): boolean {
   if (!projectConfig?.payers) return true;
   return Object.prototype.hasOwnProperty.call(projectConfig.payers, payerId);
+}
+
+function matchProjectPayerRoutingRule(
+  insuranceName: string,
+  memberId: string | undefined,
+  projectConfig?: WaystarProjectConfig,
+): string | undefined {
+  return projectConfig?.payerRoutingRules?.find((rule) =>
+    matchesProjectPayerRoutingRule(rule, insuranceName, memberId)
+  )?.payerId;
+}
+
+function isPayerAllowedByProjectRoutingRules(
+  payerId: string,
+  insuranceName: string,
+  memberId: string | undefined,
+  projectConfig?: WaystarProjectConfig,
+): boolean {
+  const payerRules = projectConfig?.payerRoutingRules?.filter((rule) => rule.payerId === payerId) ?? [];
+  return payerRules.length === 0 || payerRules.some((rule) => matchesProjectPayerRoutingRule(rule, insuranceName, memberId));
+}
+
+function matchesProjectPayerRoutingRule(
+  rule: NonNullable<WaystarProjectConfig["payerRoutingRules"]>[number],
+  insuranceName: string,
+  memberId: string | undefined,
+): boolean {
+  const normalizedInsurance = normalizeHeader(insuranceName);
+  const nameMatches = rule.insuranceNameAliases.some((alias) => {
+    const normalizedAlias = normalizeHeader(alias);
+    return normalizedInsurance === normalizedAlias || normalizedInsurance.startsWith(`${normalizedAlias} `);
+  });
+  if (!nameMatches) return false;
+  return !rule.memberIdStartsWithAlphabetic || /^[A-Za-z]/.test(memberId ?? "");
 }
 
 function isLikelyInsuranceHeader(header: string): boolean {

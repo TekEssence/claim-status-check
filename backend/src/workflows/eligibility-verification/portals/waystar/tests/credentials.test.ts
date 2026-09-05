@@ -6,6 +6,7 @@ import { findWaystarCredentialsForPayer, readWaystarCredentialProfiles, readWays
 function workbookFile(options: {
   credentialsRows: Record<string, unknown>[];
   verificationRows?: Record<string, unknown>[];
+  verificationSheetName?: string;
 }): File {
   const workbook = XLSX.utils.book_new();
   const credentialSheet = XLSX.utils.json_to_sheet(options.credentialsRows);
@@ -13,7 +14,7 @@ function workbookFile(options: {
 
   if (options.verificationRows) {
     const verificationSheet = XLSX.utils.json_to_sheet(options.verificationRows);
-    XLSX.utils.book_append_sheet(workbook, verificationSheet, "verification");
+    XLSX.utils.book_append_sheet(workbook, verificationSheet, options.verificationSheetName ?? "verification");
   }
 
   const buffer = XLSX.write(workbook, { type: "buffer", bookType: "xlsx" });
@@ -109,6 +110,24 @@ test("does not silently use another payer credential row", async () => {
   });
 
   assert.equal(selected, null);
+});
+
+test("reads the MedRevenue QUESTION and ANSWER layout from the Verification sheet", async () => {
+  const credentials = await readWaystarCredentials(workbookFile({
+    credentialsRows: [
+      { URL: "https://www.waystar.com/", Username: "medrevenue-user", Password: "demo-pass" },
+    ],
+    verificationSheetName: "Verification",
+    verificationRows: [
+      { QUESTION: "what was the first car you owned ?", ANSWER: "Benz" },
+      { QUESTION: "What was name of your first pet ?", ANSWER: "Tammy" },
+    ],
+  }));
+
+  assert.deepEqual(credentials.verificationAnswers, [
+    { username: undefined, question: "what was the first car you owned ?", answer: "Benz" },
+    { username: undefined, question: "What was name of your first pet ?", answer: "Tammy" },
+  ]);
 });
 
 test("uses an unscoped credential for MedRevenue only when project config permits it", async () => {

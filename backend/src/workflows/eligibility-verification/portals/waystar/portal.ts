@@ -418,6 +418,7 @@ export async function submitWaystarInquiry(options: {
   const expectedLastName = row.patientLastName || "";
   const expectedFirstName = row.patientFirstName || "";
   const expectedDateOfBirth = normalizeWaystarDate(row.dateOfBirth || "");
+  let medRevenueDateOfBirthFilled = false;
   const useMedRevenueMedicareFlow = Boolean(
     options.projectConfig?.skipProviderHandling && options.projectConfig.useDateOfServiceForPlanDates,
   );
@@ -469,6 +470,12 @@ export async function submitWaystarInquiry(options: {
   await fillVerifiedText(inquiryPage, WAYSTAR_SELECTORS.inquiry.firstName, expectedFirstName, "First Name");
   if (!options.projectConfig?.useDateOfServiceForPlanDates) {
     await fillVerifiedText(inquiryPage, WAYSTAR_SELECTORS.inquiry.dateOfBirth, expectedDateOfBirth, "Date of Birth", true);
+  } else if (options.projectConfig?.fillDateOfBirth) {
+    const dateOfBirth = inquiryPage.locator(WAYSTAR_SELECTORS.inquiry.dateOfBirth).first();
+    if (await dateOfBirth.isVisible().catch(() => false)) {
+      await fillVerifiedText(inquiryPage, WAYSTAR_SELECTORS.inquiry.dateOfBirth, expectedDateOfBirth, "Date of Birth", true);
+      medRevenueDateOfBirthFilled = true;
+    }
   }
   await dismissWaystarDatePicker(inquiryPage);
   if (useMedRevenueMedicareFlow) {
@@ -476,6 +483,7 @@ export async function submitWaystarInquiry(options: {
       memberId: expectedMemberId,
       lastName: expectedLastName,
       firstName: expectedFirstName,
+      dateOfBirth: medRevenueDateOfBirthFilled ? expectedDateOfBirth : undefined,
     });
     await ensureSelectedServiceType(inquiryPage, expectedServiceType);
   } else {
@@ -724,6 +732,59 @@ const dataId = header.getAttribute("data-id");
         });
     }
 
+    function readMedicarePrescriptionDrugCoverage() {
+      const hasOtherCoverageHeading = Array.from(document.querySelectorAll("h4"))
+        .some((heading) => normalizeFieldLabel(textOf(heading)) === "other coverage information");
+      if (!hasOtherCoverageHeading) return undefined;
+
+      const title = Array.from(document.querySelectorAll("div.OtherCoverage"))
+        .find((element) => normalizeFieldLabel(textOf(element)) === "medicare prescription drug coverage");
+      if (!title) return undefined;
+
+      const wantedLabels = new Set(["payer", "benefit date", "service type"]);
+      const exactRows = (container: Element) => Array.from(container.querySelectorAll("div.Label"))
+        .map((labelElement) => {
+          const label = textOf(labelElement).replace(/:\s*$/, "").trim();
+          if (!wantedLabels.has(normalizeFieldLabel(label))) return undefined;
+
+          // These Waystar rows place div.Text beside div.Label. Read that
+          // sibling first so Service Type cannot accidentally receive Payer.
+          const sibling = labelElement.nextElementSibling;
+          let value = sibling?.matches(".Text, .Value") ? textOf(sibling) : "";
+          if (!value) {
+            const directValue = labelElement.parentElement?.querySelector(":scope > .Text, :scope > .Value") ?? null;
+            value = textOf(directValue);
+          }
+          if (!value) {
+            const row = labelElement.closest(".Row, tr") ?? labelElement.parentElement;
+            value = textOf(row?.querySelector(".Text, .Value, td:not(.Label)") ?? null);
+          }
+          return value ? { label, value } : undefined;
+        })
+        .filter((row): row is { label: string; value: string } => Boolean(row));
+      const explicitCard = title.closest(".HalfColumn, .SubSection, section");
+      let bestRows: Array<{ label: string; value: string }> = [];
+
+      // Prefer Waystar's own left/right card container. The same selector works
+      // regardless of which side contains the prescription-drug coverage.
+      if (explicitCard && explicitCard.querySelectorAll("div.OtherCoverage").length === 1) {
+        bestRows = exactRows(explicitCard);
+      }
+
+      let candidate: Element | null = title.parentElement;
+      for (let depth = 0; candidate && candidate !== document.body && depth < 7; depth += 1) {
+        // Never read the shared two-card parent: doing so can take Service Type
+        // from CA QMB PLAN when the prescription card is on the other side.
+        if (candidate.querySelectorAll("div.OtherCoverage").length > 1) break;
+        const rows = exactRows(candidate);
+        if (rows.length > bestRows.length) bestRows = rows;
+        if (bestRows.length === wantedLabels.size) break;
+        candidate = candidate.parentElement;
+      }
+
+      return bestRows.length ? { title: textOf(title), rows: bestRows } : undefined;
+    }
+
     function normalizeFieldLabel(value: string): string {
       return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
     }
@@ -801,10 +862,14 @@ const dataId = header.getAttribute("data-id");
     const primaryCareProvider = findRowValueByLabel("Primary Care Provider");
     const ipa = findRowValueByLabel("Independent Physicians Association (IPA)") || findRowValueByLabel("IPA");
     const fullSections = selectors.extractFullPayerResponse ? readFullSections() : [];
+    const medicarePrescriptionDrugCoverage = selectors.extractFullPayerResponse
+      ? readMedicarePrescriptionDrugCoverage()
+      : undefined;
     const fullPayerResponse = selectors.extractFullPayerResponse ? {
       subscriberInformation: subscriberBlock || fullSubscriberBlocks,
       subscriberCoverageInformation: coverageBlock || fullCoverageBlocks,
       otherCoverageInformation: [
+        ...(medicarePrescriptionDrugCoverage ? [medicarePrescriptionDrugCoverage] : []),
         ...fullSections.filter((section) => section.title.toLowerCase().includes("other coverage")),
         ...readBlocksByHeading("Other Coverage Information"),
       ],
@@ -1161,7 +1226,7 @@ function normalizeRelationship(value: string): string {
 async function selectPayer(page: Page, payerName: string, projectConfig?: WaystarPayerProjectConfig): Promise<void> {
   let primaryError: unknown;
   try {
-    await selectPayerByName(page, payerName, Boolean(projectConfig?.skipProviderHandling));
+    await selectPayerByName(page, payerName, projectConfig);
     return;
   } catch (error) {
     primaryError = error;
@@ -1174,7 +1239,7 @@ async function selectPayer(page: Page, payerName: string, projectConfig?: Waysta
   for (const fallbackName of projectConfig?.portalPayerNameFallbacks ?? []) {
     if (!fallbackName || fallbackName === payerName) continue;
     try {
-      await selectPayerByName(page, fallbackName);
+      await selectPayerByName(page, fallbackName, projectConfig);
       return;
     } catch {
       // The established payer name remains authoritative; fallbacks are best effort.
@@ -1183,11 +1248,13 @@ async function selectPayer(page: Page, payerName: string, projectConfig?: Waysta
   throw primaryError;
 }
 
-async function selectPayerByName(page: Page, payerName: string, skipProviderReadiness = false): Promise<void> {
+async function selectPayerByName(page: Page, payerName: string, projectConfig?: WaystarPayerProjectConfig): Promise<void> {
+  const skipProviderReadiness = Boolean(projectConfig?.skipProviderHandling);
+  const requireExactSuggestionCommit = Boolean(projectConfig?.requireExactPayerSuggestionCommit);
   const payerInput = page.locator(WAYSTAR_SELECTORS.inquiry.payerInput).first();
   if (await payerInput.isVisible().catch(() => false)) {
     const retainedPayer = await payerInput.inputValue().catch(() => "");
-    if (isExactWaystarPayerMatch(retainedPayer, payerName)) {
+    if (isExactWaystarPayerMatch(retainedPayer, payerName) && !requireExactSuggestionCommit) {
       if (skipProviderReadiness) return;
       if (await isProviderReady(page, 2000)) return;
       await commitTypedPayerSelection(payerInput);
@@ -1197,14 +1264,21 @@ async function selectPayerByName(page: Page, payerName: string, skipProviderRead
       }
     }
 
-    const searchTerms = payerSearchTerms(payerName);
+    // SB040's legacy picker should be searched by its full configured name.
+    // A broad "BCBS" search can leave the text filled while no result is
+    // committed and the provider control remains disabled.
+    const searchTerms = requireExactSuggestionCommit ? [payerName] : payerSearchTerms(payerName);
     for (const searchTerm of searchTerms) {
       await typePayerSearch(page, payerInput, searchTerm);
-      const exactSuggestion = await findExactPayerSuggestion(page, payerName);
+      const exactSuggestion = await findExactPayerSuggestion(page, payerName, requireExactSuggestionCommit);
       if (exactSuggestion) {
         await exactSuggestion.scrollIntoViewIfNeeded().catch(() => {});
         await humanPause(page, 300, 650);
-        await exactSuggestion.click();
+        if (requireExactSuggestionCommit) {
+          await commitExactPayerSuggestion(page, payerInput, exactSuggestion, payerName);
+        } else {
+          await exactSuggestion.click();
+        }
         await humanPause(page, 450, 850);
       } else if (searchTerm === payerName) {
         await commitTypedPayerSelection(payerInput);
@@ -1243,7 +1317,7 @@ async function selectPayerByName(page: Page, payerName: string, skipProviderRead
   throw new Error("Waystar payer control was not found on the DDE inquiry page.");
 }
 
-async function findExactPayerSuggestion(page: Page, payerName: string) {
+async function findExactPayerSuggestion(page: Page, payerName: string, allowDirectTextFallback = false) {
   const deadline = Date.now() + 10000;
   while (Date.now() < deadline) {
     const suggestions = page.locator(WAYSTAR_PAYER_SUGGESTION_SELECTOR);
@@ -1254,6 +1328,16 @@ async function findExactPayerSuggestion(page: Page, payerName: string) {
       const label = (await suggestion.innerText().catch(() => "")).trim();
       if (isExactWaystarPayerMatch(label, payerName)) {
         return suggestion;
+      }
+    }
+    if (allowDirectTextFallback) {
+      // The older SB040 suggestion panel does not consistently expose jQuery
+      // UI list classes. Find the visible exact result text itself instead.
+      const exactLabels = page.getByText(payerName, { exact: true });
+      const exactCount = await exactLabels.count().catch(() => 0);
+      for (let index = 0; index < exactCount; index += 1) {
+        const exactLabel = exactLabels.nth(index);
+        if (await exactLabel.isVisible().catch(() => false)) return exactLabel;
       }
     }
     await page.waitForTimeout(250);
@@ -1388,6 +1472,48 @@ async function selectServiceType(page: Page, serviceTypeCode: string): Promise<v
   }
 }
 
+async function commitExactPayerSuggestion(
+  page: Page,
+  payerInput: Locator,
+  suggestion: Locator,
+  payerName: string,
+): Promise<void> {
+  // On the SB040 autocomplete the outer LI remains open when clicked; the
+  // selection event is attached to its inner anchor/option text instead.
+  const clickable = suggestion.locator("a, [role='option'], .ui-menu-item-wrapper").filter({ hasText: payerName }).first();
+  if (await clickable.isVisible().catch(() => false)) {
+    await clickable.click({ force: true });
+  } else {
+    const exactText = suggestion.getByText(payerName, { exact: true }).first();
+    if (await exactText.isVisible().catch(() => false)) await exactText.click({ force: true });
+    else await suggestion.click({ force: true });
+  }
+
+  // Trigger the legacy control's change/blur processing after the result
+  // click. This is what activates the dependent Provider control.
+  await payerInput.evaluate((element) => {
+    element.dispatchEvent(new Event("change", { bubbles: true }));
+    element.dispatchEvent(new Event("blur", { bubbles: true }));
+  }).catch(() => {});
+
+  const menuClosed = await page.locator(WAYSTAR_PAYER_SUGGESTION_SELECTOR).first()
+    .waitFor({ state: "hidden", timeout: 2000 })
+    .then(() => true)
+    .catch(() => false);
+  if (!menuClosed) {
+    // Keyboard selection is a safe fallback for the legacy jQuery autocomplete.
+    await payerInput.focus();
+    await payerInput.press("ArrowDown").catch(() => {});
+    await payerInput.press("Enter").catch(() => {});
+    await payerInput.press("Tab").catch(() => {});
+  }
+
+  const selectedPayer = await payerInput.inputValue().catch(() => "");
+  if (!isExactWaystarPayerMatch(selectedPayer, payerName)) {
+    throw new Error(`Waystar did not commit the exact payer suggestion ${payerName}. Found ${selectedPayer || "blank"}.`);
+  }
+}
+
 async function selectServiceTypeByValue(page: Page, value: string): Promise<void> {
   const serviceType = page.locator(WAYSTAR_SELECTORS.inquiry.serviceType).first();
   await serviceType.waitFor({ state: "visible", timeout: 30000 });
@@ -1485,17 +1611,21 @@ async function commitInputValue(input: Locator): Promise<void> {
 
 async function verifyMedRevenueMedicarePatientFields(
   page: Page,
-  expected: { memberId: string; lastName: string; firstName: string },
+  expected: { memberId: string; lastName: string; firstName: string; dateOfBirth?: string },
 ): Promise<void> {
   const actual = {
     memberId: await page.locator(WAYSTAR_SELECTORS.inquiry.memberId).first().inputValue().catch(() => ""),
     lastName: await page.locator(WAYSTAR_SELECTORS.inquiry.lastName).first().inputValue().catch(() => ""),
     firstName: await page.locator(WAYSTAR_SELECTORS.inquiry.firstName).first().inputValue().catch(() => ""),
+    dateOfBirth: await page.locator(WAYSTAR_SELECTORS.inquiry.dateOfBirth).first().inputValue().catch(() => ""),
   };
   const missing: string[] = [];
   if (actual.memberId.trim() !== expected.memberId.trim()) missing.push(`memberId=${actual.memberId || "blank"}`);
   if (actual.lastName.trim() !== expected.lastName.trim()) missing.push(`lastName=${actual.lastName || "blank"}`);
   if (actual.firstName.trim() !== expected.firstName.trim()) missing.push(`firstName=${actual.firstName || "blank"}`);
+  if (expected.dateOfBirth && !waystarDatesMatch(actual.dateOfBirth, expected.dateOfBirth)) {
+    missing.push(`dateOfBirth=${actual.dateOfBirth || "blank"}`);
+  }
   if (missing.length) {
     throw new Error(`MedRevenue Medicare patient fields were not present before submit. ${missing.join(", ")}.`);
   }
@@ -1680,36 +1810,41 @@ async function fillPlanDatesFromDateOfService(
   const fromInput = page.locator(fromSelector).first();
   const toInput = page.locator(toSelector).first();
   await fromInput.waitFor({ state: "visible", timeout: 30000 });
-  await toInput.waitFor({ state: "visible", timeout: 30000 });
   await waitForEnabled(fromInput, "Waystar Plan Date From");
-  await waitForEnabled(toInput, "Waystar Plan Date To");
+  const hasToInput = projectConfig.planDateToOptional
+    ? await toInput.isVisible().catch(() => false)
+    : true;
+  if (hasToInput) {
+    await toInput.waitFor({ state: "visible", timeout: 30000 });
+    await waitForEnabled(toInput, "Waystar Plan Date To");
+  }
   for (let attempt = 0; attempt < 2; attempt += 1) {
     await evaluateWaystarPage(page, (args) => {
       const from = document.querySelector<HTMLInputElement>(args.fromSelector);
       const to = document.querySelector<HTMLInputElement>(args.toSelector);
-      if (!from || !to) throw new Error("Waystar Plan Date inputs were not found.");
+      if (!from || (!args.toOptional && !to)) throw new Error("Waystar Plan Date inputs were not found.");
       const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
       if (!setter) throw new Error("Browser input value setter is unavailable.");
       // Set both values before dispatching either change event so Waystar never
       // validates a temporary range containing one old/default date.
       setter.call(from, args.value);
-      setter.call(to, args.value);
-      for (const input of [from, to]) {
+      if (to) setter.call(to, args.value);
+      for (const input of [from, to].filter((entry): entry is HTMLInputElement => Boolean(entry))) {
         input.dispatchEvent(new Event("input", { bubbles: true }));
         input.dispatchEvent(new Event("change", { bubbles: true }));
         input.dispatchEvent(new Event("blur", { bubbles: true }));
       }
-    }, { fromSelector, toSelector, value: planDate });
+    }, { fromSelector, toSelector, value: planDate, toOptional: projectConfig.planDateToOptional === true });
     await dismissWaystarDatePicker(page);
     await page.waitForTimeout(150);
     const actualFrom = await fromInput.inputValue().catch(() => "");
     const actualTo = await toInput.inputValue().catch(() => "");
-    if (waystarDatesMatch(actualFrom, planDate) && waystarDatesMatch(actualTo, planDate)) return;
+    if (waystarDatesMatch(actualFrom, planDate) && (!hasToInput || waystarDatesMatch(actualTo, planDate))) return;
   }
   const actualFrom = await fromInput.inputValue().catch(() => "");
   const actualTo = await toInput.inputValue().catch(() => "");
   throw new Error(
-    `MedRevenue Medicare Plan Dates did not retain the input DOS ${planDate}. From=${actualFrom || "blank"}, To=${actualTo || "blank"}.`,
+    `MedRevenue Plan Date(s) did not retain the input DOS ${planDate}. From=${actualFrom || "blank"}, To=${hasToInput ? actualTo || "blank" : "not shown"}.`,
   );
 }
 

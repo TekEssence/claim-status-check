@@ -16,6 +16,16 @@ test("matches verification-sheet answers using normalized question text", () => 
   assert.equal(resolveWaystarSecurityAnswer("Unknown question", verificationAnswers), null);
 });
 
+test("matches the exact MedRevenue Waystar car question from the Verification worksheet", () => {
+  assert.equal(
+    resolveWaystarSecurityAnswer("What was the first car you owned?", [
+      { question: "what was the first car you owned ?", answer: "Benz" },
+      { question: "What was name of your first pet ?", answer: "Tammy" },
+    ]),
+    "Benz",
+  );
+});
+
 test("matches the Waystar Medicare payer when formatting differs but payer id is the same", () => {
   assert.equal(
     isExactWaystarPayerMatch(
