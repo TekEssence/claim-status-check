@@ -73,6 +73,8 @@ test("MedRevenue config selects Blue Cross California without changing the regis
   assert.equal(blueCrossConfig.skipProviderHandling, true);
   assert.equal(blueCrossConfig.useDateOfServiceForPlanDates, true);
   assert.equal(blueCrossConfig.planDateToOptional, true);
+  assert.equal(blueCrossConfig.responsePlanDateSectionTitle, "Health Benefit Plan Coverage");
+  assert.equal(blueCrossConfig.extractSecondaryCoverage, true);
   assert.equal(blueCrossConfig.serviceTypeDirectValue, "30");
 });
 

@@ -32,6 +32,8 @@ export const medRevenueWaystarConfig: WaystarProjectConfig = {
       skipProviderHandling: true,
       useDateOfServiceForPlanDates: true,
       planDateToOptional: true,
+      responsePlanDateSectionTitle: "Health Benefit Plan Coverage",
+      extractSecondaryCoverage: true,
       fillDateOfBirth: true,
       serviceTypeDirectValue: "30",
       selectorFallbacks: {

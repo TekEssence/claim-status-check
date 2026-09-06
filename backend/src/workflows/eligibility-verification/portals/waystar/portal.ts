@@ -68,6 +68,7 @@ export type WaystarInquiryPayload = {
     otherCoverageInformation?: unknown;
     generalInformation?: unknown;
     sections?: unknown;
+    secondaryCoverageInformation?: unknown;
   };
 };
 
@@ -431,10 +432,6 @@ export async function submitWaystarInquiry(options: {
     await selectProviderWithProjectFallback(inquiryPage, credentials, options.projectConfig);
     await humanPause(inquiryPage);
   }
-  if (options.projectConfig?.useDateOfServiceForPlanDates) {
-    await fillPlanDatesFromDateOfService(inquiryPage, row.dateOfService || "", options.projectConfig);
-    await humanPause(inquiryPage);
-  }
   let expectedPatientLookupCode = options.patientLookupCode;
   if (!useMedRevenueMedicareFlow) {
     const patientLookup = inquiryPage.locator(WAYSTAR_SELECTORS.inquiry.patientLookup).first();
@@ -503,6 +500,13 @@ export async function submitWaystarInquiry(options: {
   // selection cannot be lost during the final pause before submission.
   if (useMedRevenueMedicareFlow) {
     await ensureSelectedServiceType(inquiryPage, expectedServiceType);
+  }
+
+  // Payer, service-type and patient changes can reset Waystar's default dates.
+  // Apply the row's DOS only after those updates, immediately before submit.
+  if (options.projectConfig?.useDateOfServiceForPlanDates) {
+    await waitForBlockingOverlaysToClear(inquiryPage, 30000);
+    await fillPlanDatesFromDateOfService(inquiryPage, row.dateOfService || "", options.projectConfig);
   }
 
   await Promise.all([
@@ -785,6 +789,36 @@ const dataId = header.getAttribute("data-id");
       return bestRows.length ? { title: textOf(title), rows: bestRows } : undefined;
     }
 
+    function readSecondaryCoverage() {
+      const wantedLabels = new Set(["coverage description", "cob date", "group or policy number", "service type"]);
+      const readExactRows = (card: Element) => Array.from(card.querySelectorAll(".Label, label, dt, th"))
+        .map((labelElement) => {
+          const label = textOf(labelElement).replace(/:\s*$/, "").trim();
+          if (!wantedLabels.has(normalizeFieldLabel(label))) return undefined;
+          const sibling = labelElement.nextElementSibling;
+          let value = sibling?.matches(".Text, .Value, dd, td") ? textOf(sibling) : "";
+          if (!value) {
+            const directValue = labelElement.parentElement?.querySelector(":scope > .Text, :scope > .Value, :scope > dd, :scope > td:not(.Label)") ?? null;
+            value = textOf(directValue);
+          }
+          return value ? { label, value } : undefined;
+        })
+        .filter((row): row is { label: string; value: string } => Boolean(row));
+      const titles = Array.from(document.querySelectorAll("div.OtherCoverage"));
+      for (const title of titles) {
+        const normalizedTitle = normalizeFieldLabel(textOf(title));
+        if (!normalizedTitle || normalizedTitle === "other coverage" || normalizedTitle === "medicare prescription drug coverage") continue;
+
+        const card = title.closest(".HalfColumn, .SubSection, section") ?? title.parentElement;
+        if (!card || card.querySelectorAll("div.OtherCoverage").length !== 1) continue;
+        const rows = readExactRows(card);
+        if (rows.some((row) => normalizeFieldLabel(row.label) === "coverage description")) {
+          return { title: textOf(title), rows };
+        }
+      }
+      return undefined;
+    }
+
     function normalizeFieldLabel(value: string): string {
       return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
     }
@@ -845,10 +879,19 @@ const dataId = header.getAttribute("data-id");
     const fullCoverageBlocks = selectors.extractFullPayerResponse
       ? [...readBlocksByHeading("Subscriber Coverage Information"), ...readBlocksByHeading("Patient Coverage Information")]
       : [];
+    const configuredPlanDateSection = selectors.responsePlanDateSectionTitle
+      ? findSectionByTitle((title) =>
+          normalizeFieldLabel(title) === normalizeFieldLabel(selectors.responsePlanDateSectionTitle),
+        )
+      : null;
+    const configuredSectionPlanDate = configuredPlanDateSection
+      ? readOrderedRows(configuredPlanDateSection.contents)
+          .find((entry) => normalizeFieldLabel(entry.label) === "plan date")?.value
+      : undefined;
     const otherInsuranceBlock = readHalfColumn("Other Insurance Information") ?? readHalfColumn("Other Insurance");
-    const subscriberCoverageInformation = coverageBlock || fullCoverageBlocks.length ? {
+    const subscriberCoverageInformation = coverageBlock || fullCoverageBlocks.length || configuredSectionPlanDate ? {
       groupNumber: coverageBlock?.fields["Group Number"] || valueFromBlocks(fullCoverageBlocks, "Group Number"),
-      planDate: coverageBlock?.fields["Plan Date"] || valueFromBlocks(fullCoverageBlocks, "Eligibility Date") || valueFromBlocks(fullCoverageBlocks, "Plan Date") || findRowValueByLabel("Plan Date"),
+      planDate: configuredSectionPlanDate || coverageBlock?.fields["Plan Date"] || valueFromBlocks(fullCoverageBlocks, "Eligibility Date") || valueFromBlocks(fullCoverageBlocks, "Plan Date") || findRowValueByLabel("Plan Date"),
       planNetworkName: coverageBlock?.fields["Plan Network Name"] || valueFromBlocks(fullCoverageBlocks, "Plan Network Name") || findRowValueByLabel("Plan Network Name"),
       planSponsor: coverageBlock?.fields["Plan Sponsor"] || valueFromBlocks(fullCoverageBlocks, "Plan Sponsor") || findRowValueByLabel("Plan Sponsor"),
       planBeginDate: coverageBlock?.fields["Plan Begin Date"] || valueFromBlocks(fullCoverageBlocks, "Plan Begin Date") || findRowValueByLabel("Plan Begin Date") || findRowValueByLabel("Benefit Begin Date"),
@@ -865,7 +908,10 @@ const dataId = header.getAttribute("data-id");
     const medicarePrescriptionDrugCoverage = selectors.extractFullPayerResponse
       ? readMedicarePrescriptionDrugCoverage()
       : undefined;
-    const fullPayerResponse = selectors.extractFullPayerResponse ? {
+    const secondaryCoverageInformation = selectors.extractSecondaryCoverage
+      ? readSecondaryCoverage()
+      : undefined;
+    const fullPayerResponse = selectors.extractFullPayerResponse || selectors.extractSecondaryCoverage ? {
       subscriberInformation: subscriberBlock || fullSubscriberBlocks,
       subscriberCoverageInformation: coverageBlock || fullCoverageBlocks,
       otherCoverageInformation: [
@@ -881,6 +927,7 @@ const dataId = header.getAttribute("data-id");
         ...readBlocksByHeading("General"),
       ],
       sections: fullSections,
+      secondaryCoverageInformation,
     } : undefined;
 
     // ---- Health Benefit Plan Coverage (may be absent) ----
@@ -931,6 +978,8 @@ const dataId = header.getAttribute("data-id");
     };
   }, {
     extractFullPayerResponse: Boolean(options.projectConfig?.extractFullPayerResponse),
+    extractSecondaryCoverage: Boolean(options.projectConfig?.extractSecondaryCoverage),
+    responsePlanDateSectionTitle: options.projectConfig?.responsePlanDateSectionTitle ?? "",
     minimalEligibilityOnly: isExactWaystarPayerMatch(payerName, "BayCare Plus Medicare Advantage (81079)") || isExactWaystarPayerMatch(payerName, "Aetna (Medicare Advantage) (60054MA)") || isExactWaystarPayerMatch(payerName, "United Healthcare(87726)") || isExactWaystarPayerMatch(payerName, "AARP Medicare Advantage Choice Plan (87726)"),
     inquiry: {
       activeCoverageDom: sanitizeDomSelector(WAYSTAR_SELECTORS.inquiry.activeCoverage),
@@ -1116,9 +1165,17 @@ async function handleAdditionalAuthentication(
     }),
   ]);
 
-  if (await page.locator(WAYSTAR_SELECTORS.additionalAuth.answer).first().isVisible().catch(() => false)) {
+  if (await isWaystarAdditionalAuthenticationPending(page)) {
     throw new Error("Waystar verification answer was entered, but the Verify action did not complete authentication.");
   }
+}
+
+export async function isWaystarAdditionalAuthenticationPending(page: Page): Promise<boolean> {
+  // Dashboard search fields also match the legacy answer selector. Check for
+  // the authenticated navigation before treating a text input as a challenge.
+  if (await page.locator(WAYSTAR_SELECTORS.navigation.eligibility).first().isVisible().catch(() => false)) return false;
+  if (await page.locator(".header-account-search-text").first().isVisible().catch(() => false)) return false;
+  return page.locator(WAYSTAR_SELECTORS.additionalAuth.answer).first().isVisible();
 }
 
 async function submitPaymentEobAdditionalAuthentication(page: Page, verify: Locator, questionText: string): Promise<void> {
@@ -1129,7 +1186,7 @@ async function submitPaymentEobAdditionalAuthentication(page: Page, verify: Loca
   const waitForOutcome = async (timeout: number): Promise<"completed" | "rejected" | "no-response"> => {
     const deadline = Date.now() + timeout;
     while (Date.now() < deadline) {
-      if (!await answerInput.isVisible().catch(() => false)) return "completed";
+      if (!await isWaystarAdditionalAuthenticationPending(page)) return "completed";
       if (await page.locator(errorSelector).first().isVisible().catch(() => false)) return "rejected";
       await page.waitForTimeout(250);
     }
@@ -1805,6 +1862,7 @@ async function fillPlanDatesFromDateOfService(
   projectConfig: WaystarPayerProjectConfig,
 ): Promise<void> {
   const planDate = normalizeWaystarDate(dateOfService);
+  if (!planDate) throw new Error("DOS is missing for this row. Cannot submit Waystar eligibility using the default Plan Date.");
   const fromSelector = projectConfig.selectorFallbacks?.planDateFrom ?? "#txtPlanFrom";
   const toSelector = projectConfig.selectorFallbacks?.planDateTo ?? "#txtPlanTo";
   const fromInput = page.locator(fromSelector).first();

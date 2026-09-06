@@ -218,6 +218,9 @@ export function createWaystarRunner(): AutomationRunner<EligibilityRunInput> {
                 if (input.projectId === "medrevenue" && payer.id === "medicare") {
                   result = applyMedRevenueMedicareResultMappings(result);
                 }
+                if (input.projectId === "medrevenue" && payer.id === "bcbs-ppo") {
+                  result = applyMedRevenueBlueCrossResultMappings(result);
+                }
                 if (isRetryablePayerError(result)) {
                   const payerResponse = describePayerError(result);
                   await context.log({
@@ -246,6 +249,9 @@ export function createWaystarRunner(): AutomationRunner<EligibilityRunInput> {
                   result = applyWaystarResultDefaults(payer.parseResult(payload, row), row);
                   if (input.projectId === "medrevenue" && payer.id === "medicare") {
                     result = applyMedRevenueMedicareResultMappings(result);
+                  }
+                  if (input.projectId === "medrevenue" && payer.id === "bcbs-ppo") {
+                    result = applyMedRevenueBlueCrossResultMappings(result);
                   }
                 }
                 results.set(row.originalIndex, result);
@@ -467,15 +473,40 @@ export function applyMedRevenueMedicareResultMappings(result: EligibilityResult)
   const prescriptionPayer = findResponseValue(prescriptionDrugCoverage, "Payer");
   const prescriptionBenefitDate = findResponseValue(prescriptionDrugCoverage, "Benefit Date");
   const prescriptionServiceType = findResponseValue(prescriptionDrugCoverage, "Service Type");
+  const alcoholismSection = findResponseBlockByTitle(response.sections, "Alcoholism");
+  const alcoholismMedicarePartBPlanDate = findResponseValue(alcoholismSection, "Plan Date");
 
   return {
     ...result,
     effectiveDate: eligibilityDate || result.effectiveDate,
+    planDate: alcoholismMedicarePartBPlanDate || result.planDate,
     otherInsurance: prescriptionPayer || result.otherInsurance,
     otherInsuranceEffectiveDate: prescriptionBenefitDate || result.otherInsuranceEffectiveDate,
     metadata: {
       ...(result.metadata ?? {}),
       ...(prescriptionServiceType ? { medRevenuePrescriptionDrugServiceType: prescriptionServiceType } : {}),
+    },
+  };
+}
+
+export function applyMedRevenueBlueCrossResultMappings(result: EligibilityResult): EligibilityResult {
+  const fullResponse = result.metadata?.fullPayerResponse;
+  if (!fullResponse || typeof fullResponse !== "object") return result;
+  const secondaryCoverage = (fullResponse as Record<string, unknown>).secondaryCoverageInformation;
+  const coverageDescription = findResponseValue(secondaryCoverage, "Coverage Description");
+  const cobDate = findResponseValue(secondaryCoverage, "COB Date");
+  const groupOrPolicyNumber = findResponseValue(secondaryCoverage, "Group or Policy Number");
+  const serviceType = findResponseValue(secondaryCoverage, "Service Type");
+
+  return {
+    ...result,
+    metadata: {
+      ...(result.metadata ?? {}),
+      ...(coverageDescription ? { medRevenueSecondaryCoverageDescription: coverageDescription } : {}),
+      ...(cobDate ? { medRevenueSecondaryCobDate: cobDate } : {}),
+      ...(groupOrPolicyNumber ? { medRevenueSecondaryGroupOrPolicyNumber: groupOrPolicyNumber } : {}),
+      ...(serviceType ? { medRevenueSecondaryServiceType: serviceType } : {}),
+      ...(serviceType ? { medRevenueOutputServiceType: serviceType } : {}),
     },
   };
 }

@@ -218,7 +218,8 @@ export function routeWaystarRowsByPayer(
       patientLastName: parsedName.lastName,
       relationshipToSubscriber: findValue(raw, projectAliases(options.projectConfig, "relationshipToSubscriber", RELATIONSHIP_HEADER_ALIASES)),
       dateOfBirth: findValue(raw, projectAliases(options.projectConfig, "dateOfBirth", DATE_OF_BIRTH_HEADER_ALIASES)),
-      dateOfService: findValue(raw, projectAliases(options.projectConfig, "dateOfService", DATE_OF_SERVICE_HEADER_ALIASES)),
+      dateOfService: (options.projectConfig?.id === "medrevenue" ? findValue(raw, ["DOS"]) : undefined)
+        ?? findValue(raw, projectAliases(options.projectConfig, "dateOfService", DATE_OF_SERVICE_HEADER_ALIASES)),
       serviceType: findValue(raw, projectAliases(options.projectConfig, "serviceType", SERVICE_TYPE_HEADER_ALIASES)),
       raw,
     };

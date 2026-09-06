@@ -138,9 +138,16 @@ async function buildMedRevenueWaystarOutputWorkbook(options: {
     {
       header: "Service Type",
       value: (_row: EligibilityInputRow | undefined, result: EligibilityResult | undefined) =>
-        String(result?.metadata?.medRevenuePrescriptionDrugServiceType ?? ""),
+        String(result?.metadata?.medRevenueOutputServiceType ?? result?.metadata?.medRevenuePrescriptionDrugServiceType ?? ""),
     },
   ];
+  if (Array.from(options.results.values()).some((result) => result.payerId === "bcbs-ppo")) {
+    outputColumns.push(
+      { header: "Secondary Coverage Description", value: (_row, result) => String(result?.metadata?.medRevenueSecondaryCoverageDescription ?? "") },
+      { header: "Secondary COB Date", value: (_row, result) => String(result?.metadata?.medRevenueSecondaryCobDate ?? "") },
+      { header: "Secondary Group or Policy Number", value: (_row, result) => String(result?.metadata?.medRevenueSecondaryGroupOrPolicyNumber ?? "") },
+    );
+  }
   outputColumns[1] = { header: "Eff Date", value: (_row, result) => result?.effectiveDate ?? "" };
   outputColumns[2] = { header: "End Date", value: (_row, result) => result?.terminationDate ?? "" };
   const outputStartColumn = sheet.columnCount + 1;
@@ -170,10 +177,14 @@ async function buildMedRevenueWaystarOutputWorkbook(options: {
     const row = options.rows.get(rowIndex);
     const result = options.results.get(rowIndex);
     const error = options.errors.get(rowIndex);
+    const rowFailed = Boolean(error) || result?.coverageStatus?.trim().toLowerCase() === "error";
     const worksheetRow = sheet.getRow(rowIndex);
     outputColumns.forEach((column, offset) => {
       const cell = worksheetRow.getCell(outputStartColumn + offset);
-      cell.value = formatOutputValue(column.value(row, result, error)) as ExcelJS.CellValue;
+      const value = rowFailed
+        ? column.header === "Coverage Status" ? result?.coverageStatus || "error" : "-"
+        : column.value(row, result, error);
+      cell.value = formatOutputValue(value) as ExcelJS.CellValue;
       cell.alignment = { vertical: "top", wrapText: true };
       cell.border = {
         top: { style: "thin", color: { argb: "FFD9E2F3" } },

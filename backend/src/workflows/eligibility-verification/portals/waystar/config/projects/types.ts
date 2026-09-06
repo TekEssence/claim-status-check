@@ -15,11 +15,14 @@ export type WaystarPayerProjectConfig = {
   serviceTypeCodeFallback?: string;
   serviceTypeDirectValue?: string;
   extractFullPayerResponse?: boolean;
+  extractSecondaryCoverage?: boolean;
   patientLookupCodeFallback?: string;
   allowAutoPopulatedProviderFallback?: boolean;
   skipProviderHandling?: boolean;
   useDateOfServiceForPlanDates?: boolean;
   planDateToOptional?: boolean;
+  /** Response section whose first Plan Date should populate the output Plan Date. */
+  responsePlanDateSectionTitle?: string;
   fillDateOfBirth?: boolean;
   provider?: { name?: string; id?: string; tin?: string; npi?: string; ptan?: string };
   selectorFallbacks?: Partial<Record<WaystarInquirySelectorKey, string>>;
