@@ -3,10 +3,9 @@
 const logger = require("../../../../utils/logger");
 const { humanDelay, withRetry } = require("../../../../utils/browser");
 const { getClaimStatusFrame } = require("../../../../pages/navigation.page");
+const { submitCharmSearchAfterProviderDropdown, trySubmitCharmSearchWithoutProviderDropdown } = require("../../../../pages/charm-provider-search.page");
 const {
   clearProviderStateForTaxIdFallback,
-  clearProviderFormIfVisible,
-  fillInputProviderIdentifiers,
   getProviderTaxIdForPolicy,
   providerPolicySkipsProviderDropdown,
   verifyProviderNpiMatches
@@ -630,9 +629,7 @@ async function processCentralHealthMedicarePlanServiceDateResults(page, row, pro
 async function searchCentralHealthMedicarePlanServiceDatesWithProvider(page, providerName, rowData, options = {}) {
   logger.info(`Central Health Medicare Plan Service Dates provider attempt: ${providerName}`);
   await selectServiceDateTab(page);
-  if (options.projectId === "charm") {
-    await clearProviderFormIfVisible(page, { context: "Charm Central Health Medicare Plan Service Dates", logger });
-  }
+  const charmContext = "Charm Central Health Medicare Plan Service Dates";
   if (providerPolicySkipsProviderDropdown(options.providerFieldPolicy)) {
     const taxId = getProviderTaxIdForPolicy(rowData, options.providerFieldPolicy);
     logger.info(`Central Health Medicare Plan Service Dates field policy skips Select a Provider. Filling Provider Tax ID "${taxId || "blank"}".`);
@@ -645,33 +642,24 @@ async function searchCentralHealthMedicarePlanServiceDatesWithProvider(page, pro
     await submitServiceDateSearch(page);
     return;
   }
-  if (options.projectId === "charm") {
-    const providerFill = await fillInputProviderIdentifiers(page, rowData, {
-      charmRequiredOnly: true,
-      logger,
-      providerMode: options.providerMode,
-    });
-    if (providerFill?.providerIdentifierReady) {
-      await fillServiceDateSearchForm(page, rowData);
-      await submitServiceDateSearch(page);
-      return;
-    }
-    if (!providerFill?.requiresProviderDropdown) {
-      throw new Error("Charm Central Health Medicare Plan Service Dates provider identifiers could not be filled deterministically.");
-    }
-  }
+  if (await trySubmitCharmSearchWithoutProviderDropdown(page, rowData, {
+    projectId: options.projectId,
+    context: charmContext,
+    logger,
+    providerMode: options.providerMode,
+    fillSearchForm: fillServiceDateSearchForm,
+    submitSearch: submitServiceDateSearch,
+  })) return;
   await selectProviderOrFillTaxId(page, providerName, rowData, options);
-  if (options.projectId === "charm") {
-    const providerFillAfterDropdown = await fillInputProviderIdentifiers(page, rowData, {
-      charmRequiredOnly: true,
-      logger,
-      providerMode: options.providerMode,
-      providerDropdownSelected: true,
-    });
-    if (providerFillAfterDropdown?.requiresProviderDropdown) {
-      throw new Error("Charm Central Health Medicare Plan Service Dates provider dropdown was selected, but required provider fields were still not auto-filled.");
-    }
-  }
+  if (await submitCharmSearchAfterProviderDropdown(page, rowData, {
+    projectId: options.projectId,
+    context: charmContext,
+    logger,
+    providerMode: options.providerMode,
+    providerDropdownSelected: true,
+    fillSearchForm: fillServiceDateSearchForm,
+    submitSearch: submitServiceDateSearch,
+  })) return;
   await fillServiceDateSearchForm(page, rowData);
   await submitServiceDateSearch(page);
 }

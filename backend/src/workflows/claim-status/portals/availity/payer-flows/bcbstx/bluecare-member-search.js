@@ -3,7 +3,7 @@
 const logger = require("../../utils/logger");
 const { humanDelay, withRetry } = require("../../utils/browser");
 const { getClaimStatusFrame } = require("../../pages/navigation.page");
-const { clearProviderFormIfVisible, fillInputProviderIdentifiers } = require("../../pages/provider-identifiers.page");
+const { submitCharmSearchAfterProviderDropdown, trySubmitCharmSearchWithoutProviderDropdown } = require("../../pages/charm-provider-search.page");
 const { throwIfVisibleFieldValidation } = require("../../pages/results.page");
 
 const SELECTORS = {
@@ -224,37 +224,24 @@ async function submitBluecareMemberSearch(page) {
 async function searchBluecareMemberWithProvider(page, providerName, rowData, options = {}) {
   logger.info(`Bluecare Member search provider attempt: ${providerName}`);
   await selectMemberTab(page);
-  if (options.projectId === "charm") {
-    await clearProviderFormIfVisible(page, { context: "Charm Bluecare Member", logger });
-    const providerFill = await fillInputProviderIdentifiers(page, rowData, {
-      charmRequiredOnly: true,
-      logger,
-      providerMode: options.providerMode,
-    });
-    if (providerFill?.providerIdentifierReady) {
-      await fillBluecareMemberSearchForm(page, rowData);
-      await submitBluecareMemberSearch(page);
-      return;
-    }
-    if (!providerFill?.requiresProviderDropdown) {
-      throw new Error("Charm Bluecare Member provider identifiers could not be filled deterministically.");
-    }
-  }
+  if (await trySubmitCharmSearchWithoutProviderDropdown(page, rowData, {
+    projectId: options.projectId,
+    context: "Charm Bluecare Member",
+    logger,
+    providerMode: options.providerMode,
+    fillSearchForm: fillBluecareMemberSearchForm,
+    submitSearch: submitBluecareMemberSearch,
+  })) return;
   await selectProvider(page, providerName);
-  if (options.projectId === "charm") {
-    const providerFillAfterDropdown = await fillInputProviderIdentifiers(page, rowData, {
-      charmRequiredOnly: true,
-      logger,
-      providerMode: options.providerMode,
-      providerDropdownSelected: true,
-    });
-    if (providerFillAfterDropdown?.requiresProviderDropdown) {
-      throw new Error("Charm Bluecare Member provider dropdown was selected, but required provider fields were still not auto-filled.");
-    }
-    if (!providerFillAfterDropdown?.providerIdentifierReady) {
-      throw new Error("Charm Bluecare Member provider identifiers were still incomplete after provider selection.");
-    }
-  }
+  if (await submitCharmSearchAfterProviderDropdown(page, rowData, {
+    projectId: options.projectId,
+    context: "Charm Bluecare Member",
+    logger,
+    providerMode: options.providerMode,
+    providerDropdownSelected: true,
+    fillSearchForm: fillBluecareMemberSearchForm,
+    submitSearch: submitBluecareMemberSearch,
+  })) return;
   await fillBluecareMemberSearchForm(page, rowData);
   await submitBluecareMemberSearch(page);
 }

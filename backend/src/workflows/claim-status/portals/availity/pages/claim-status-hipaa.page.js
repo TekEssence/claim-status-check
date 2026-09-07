@@ -3,7 +3,8 @@
 const logger = require("../utils/logger");
 const { humanDelay, withRetry } = require("../utils/browser");
 const { getClaimStatusFrame } = require("./navigation.page");
-const { clearProviderFormIfVisible, clearProviderStateForTaxIdFallback, fillInputProviderIdentifiers, getInputProviderIdentifiers, hasInputProviderIdentifiers, verifyProviderNpiMatches } = require("./provider-identifiers.page");
+const { submitCharmSearchAfterProviderDropdown, trySubmitCharmSearchWithoutProviderDropdown } = require("./charm-provider-search.page");
+const { clearProviderStateForTaxIdFallback, getInputProviderIdentifiers, hasInputProviderIdentifiers, verifyProviderNpiMatches } = require("./provider-identifiers.page");
 const { throwIfVisibleFieldValidation } = require("./results.page");
 
 const HIPAA_SELECTORS = {
@@ -745,23 +746,14 @@ async function searchHipaaWithProvider(page, providerName, rowData, options = {}
   await selectHipaaTab(page);
   const isCharm = options.projectId === "charm";
   const groupNameOnly = isCharm && options.providerMode === "groupNameOnly";
-  if (isCharm) {
-    await clearProviderFormIfVisible(page, { context: "Charm HIPAA", logger });
-    const providerFill = await fillInputProviderIdentifiers(page, rowData, {
-      charmRequiredOnly: true,
-      logger,
-      providerMode: options.providerMode,
-    });
-    if (providerFill?.providerIdentifierReady) {
-      await fillHipaaSearchForm(page, rowData);
-      await throwIfVisibleFieldValidation(page, "Charm HIPAA");
-      await submitHipaaSearch(page);
-      return;
-    }
-    if (!providerFill?.requiresProviderDropdown) {
-      throw new Error("Charm HIPAA provider identifiers could not be filled deterministically.");
-    }
-  }
+  if (await trySubmitCharmSearchWithoutProviderDropdown(page, rowData, {
+    projectId: options.projectId,
+    context: "Charm HIPAA",
+    logger,
+    providerMode: options.providerMode,
+    fillSearchForm: fillHipaaSearchForm,
+    submitSearch: submitHipaaSearch,
+  })) return;
   const providerIdentifiers = getInputProviderIdentifiers(rowData);
   const providerAsTaxId = Boolean(providerIdentifiers.taxId && String(providerName || "").replace(/\D/g, "") === providerIdentifiers.taxId);
   let fillTaxIdOnly = false;
@@ -799,18 +791,15 @@ async function searchHipaaWithProvider(page, providerName, rowData, options = {}
       }
     }
   }
-  const providerFillAfterDropdown = await fillInputProviderIdentifiers(page, fillTaxIdOnly ? { ...rowData, "Provider NPI": "" } : rowData, {
-    charmRequiredOnly: isCharm,
+  if (await submitCharmSearchAfterProviderDropdown(page, fillTaxIdOnly ? { ...rowData, "Provider NPI": "" } : rowData, {
+    projectId: options.projectId,
+    context: "Charm HIPAA",
     logger,
     providerMode: options.providerMode,
     providerDropdownSelected,
-  });
-  if (isCharm && providerFillAfterDropdown?.requiresProviderDropdown) {
-    throw new Error("Charm HIPAA provider dropdown was selected, but required provider fields were still not auto-filled.");
-  }
-  if (isCharm && !providerFillAfterDropdown?.providerIdentifierReady && !providerFillAfterDropdown?.requiresProviderDropdown) {
-    throw new Error("Charm HIPAA provider identifiers were still incomplete after provider selection.");
-  }
+    fillSearchForm: fillHipaaSearchForm,
+    submitSearch: submitHipaaSearch,
+  })) return;
   await fillHipaaSearchForm(page, rowData);
   if (isCharm) {
     await throwIfVisibleFieldValidation(page, "Charm HIPAA");

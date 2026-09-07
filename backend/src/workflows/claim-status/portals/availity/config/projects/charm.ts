@@ -108,6 +108,7 @@ export const charmAvailityConfig: AvailityProjectConfig = {
       },
     },
   ],
+  tabPriority: ["serviceDates", "hipaaStandard", "member", "claimHistory"],
   provider: {
     groupField: "Group",
     inputNameField: "Provider Name",

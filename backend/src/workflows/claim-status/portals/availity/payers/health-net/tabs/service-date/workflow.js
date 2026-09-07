@@ -3,7 +3,7 @@
 const logger = require("../../../../utils/logger");
 const { humanDelay, withRetry } = require("../../../../utils/browser");
 const { getClaimStatusFrame } = require("../../../../pages/navigation.page");
-const { clearProviderFormIfVisible, fillInputProviderIdentifiers } = require("../../../../pages/provider-identifiers.page");
+const { submitCharmSearchAfterProviderDropdown, trySubmitCharmSearchWithoutProviderDropdown } = require("../../../../pages/charm-provider-search.page");
 const { PROVIDERS } = require("../../../../pages/claim-status-member.page");
 const { waitForSearchResultsToSettle, normalizeMoney, normalizeDateText, throwIfVisibleFieldValidation } = require("../../../../pages/results.page");
 const { renderClaimSummary, renderFailedSummary } = require("../../../../services/summary-renderer");
@@ -535,34 +535,24 @@ async function processHealthNetServiceDateResults(page, row, provider, resultSum
 async function searchHealthNetServiceDatesWithProvider(page, providerName, rowData, options = {}) {
   logger.info(`Health Net Service Dates provider attempt: ${providerName}`);
   await selectServiceDateTab(page);
-  if (options.projectId === "charm") {
-    await clearProviderFormIfVisible(page, { context: "Charm Health Net Service Dates", logger });
-    const providerFill = await fillInputProviderIdentifiers(page, rowData, {
-      charmRequiredOnly: true,
-      logger,
-      providerMode: options.providerMode,
-    });
-    if (providerFill?.providerIdentifierReady) {
-      await fillServiceDateSearchForm(page, rowData);
-      await submitServiceDateSearch(page);
-      return;
-    }
-    if (!providerFill?.requiresProviderDropdown) {
-      throw new Error("Charm Health Net Service Dates provider identifiers could not be filled deterministically.");
-    }
-  }
+  if (await trySubmitCharmSearchWithoutProviderDropdown(page, rowData, {
+    projectId: options.projectId,
+    context: "Charm Health Net Service Dates",
+    logger,
+    providerMode: options.providerMode,
+    fillSearchForm: fillServiceDateSearchForm,
+    submitSearch: submitServiceDateSearch,
+  })) return;
   await selectProvider(page, providerName);
-  if (options.projectId === "charm") {
-    const providerFillAfterDropdown = await fillInputProviderIdentifiers(page, rowData, {
-      charmRequiredOnly: true,
-      logger,
-      providerMode: options.providerMode,
-      providerDropdownSelected: true,
-    });
-    if (providerFillAfterDropdown?.requiresProviderDropdown) {
-      throw new Error("Charm Health Net Service Dates provider dropdown was selected, but required provider fields were still not auto-filled.");
-    }
-  }
+  if (await submitCharmSearchAfterProviderDropdown(page, rowData, {
+    projectId: options.projectId,
+    context: "Charm Health Net Service Dates",
+    logger,
+    providerMode: options.providerMode,
+    providerDropdownSelected: true,
+    fillSearchForm: fillServiceDateSearchForm,
+    submitSearch: submitServiceDateSearch,
+  })) return;
   await fillServiceDateSearchForm(page, rowData);
   await submitServiceDateSearch(page);
 }

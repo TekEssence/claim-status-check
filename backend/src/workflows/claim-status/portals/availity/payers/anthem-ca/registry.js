@@ -21,11 +21,12 @@ async function processClaim(page, row, options = {}) {
   const providerOrder = Array.isArray(options.providerOrder) && options.providerOrder.length
     ? options.providerOrder
     : PROVIDERS;
-  if (options.projectId === "charm") {
+  const serviceDatesFirst = options.tabPriority?.[0] === "serviceDates";
+  if (serviceDatesFirst) {
     const serviceDatesAvailable = await isServiceDatesTabVisible(page);
-    logger.info(`Anthem-CA Charm tab priority detected: service_dates=${serviceDatesAvailable}`);
+    logger.info(`Anthem-CA configured tab priority detected: service_dates=${serviceDatesAvailable}`);
     if (serviceDatesAvailable) {
-      logger.info("Using Anthem-CA workflow: Service Dates tab first for Charm.");
+      logger.info("Using Anthem-CA workflow: Service Dates tab first from project config.");
       return serviceDatesWorkflow.processClaim(page, row, {
         ...options,
         providerOrder

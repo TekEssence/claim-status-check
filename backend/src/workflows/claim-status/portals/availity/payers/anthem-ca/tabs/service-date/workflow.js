@@ -3,9 +3,9 @@
 const logger = require("../../../../utils/logger");
 const { humanDelay, withRetry } = require("../../../../utils/browser");
 const { getClaimStatusFrame } = require("../../../../pages/navigation.page");
+const { submitCharmSearchAfterProviderDropdown, trySubmitCharmSearchWithoutProviderDropdown } = require("../../../../pages/charm-provider-search.page");
 const {
   clearProviderStateForTaxIdFallback,
-  clearProviderFormIfVisible,
   fillInputProviderIdentifiers,
   getProviderTaxIdForPolicy,
   hasInputProviderIdentifiers,
@@ -628,9 +628,7 @@ async function processAnthemCaServiceDateResults(page, row, provider, resultSumm
 async function searchAnthemCaServiceDatesWithProvider(page, providerName, rowData, options = {}) {
   logger.info(`Anthem-CA Service Dates provider attempt: ${providerName}`);
   await selectServiceDateTab(page);
-  if (options.projectId === "charm") {
-    await clearProviderFormIfVisible(page, { context: "Charm Anthem-CA Service Dates", logger });
-  }
+  const charmContext = "Charm Anthem-CA Service Dates";
   if (providerPolicySkipsProviderDropdown(options.providerFieldPolicy)) {
     const taxId = getProviderTaxIdForPolicy(rowData, options.providerFieldPolicy);
     logger.info(`Anthem-CA Service Dates field policy skips Select a Provider. Filling Provider Tax ID "${taxId || "blank"}".`);
@@ -643,33 +641,25 @@ async function searchAnthemCaServiceDatesWithProvider(page, providerName, rowDat
     await submitServiceDateSearch(page);
     return;
   }
-  if (options.projectId === "charm") {
-    const providerFill = await fillInputProviderIdentifiers(page, rowData, {
-      charmRequiredOnly: true,
-      logger,
-      providerMode: options.providerMode,
-    });
-    if (providerFill?.providerIdentifierReady) {
-      await fillServiceDateSearchForm(page, rowData);
-      await submitServiceDateSearch(page);
-      return;
-    }
-    if (!providerFill?.requiresProviderDropdown) {
-      throw new Error("Charm Anthem-CA Service Dates provider identifiers could not be filled deterministically.");
-    }
-  }
+  if (await trySubmitCharmSearchWithoutProviderDropdown(page, rowData, {
+    projectId: options.projectId,
+    context: charmContext,
+    logger,
+    providerMode: options.providerMode,
+    fillSearchForm: fillServiceDateSearchForm,
+    submitSearch: submitServiceDateSearch,
+  })) return;
   await selectProvider(page, providerName, rowData, options);
-  if (options.projectId === "charm") {
-    const providerFillAfterDropdown = await fillInputProviderIdentifiers(page, rowData, {
-      charmRequiredOnly: true,
-      logger,
-      providerMode: options.providerMode,
-      providerDropdownSelected: true,
-    });
-    if (providerFillAfterDropdown?.requiresProviderDropdown) {
-      throw new Error("Charm Anthem-CA Service Dates provider dropdown was selected, but required provider fields were still not auto-filled.");
-    }
-  } else {
+  if (await submitCharmSearchAfterProviderDropdown(page, rowData, {
+    projectId: options.projectId,
+    context: charmContext,
+    logger,
+    providerMode: options.providerMode,
+    providerDropdownSelected: true,
+    fillSearchForm: fillServiceDateSearchForm,
+    submitSearch: submitServiceDateSearch,
+  })) return;
+  if (options.projectId !== "charm") {
     await fillInputProviderIdentifiers(page, rowData, {
       charmRequiredOnly: false,
       logger,

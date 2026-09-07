@@ -3,10 +3,9 @@
 const logger = require("../../../../utils/logger");
 const { humanDelay, withRetry } = require("../../../../utils/browser");
 const { getClaimStatusFrame } = require("../../../../pages/navigation.page");
+const { submitCharmSearchAfterProviderDropdown, trySubmitCharmSearchWithoutProviderDropdown } = require("../../../../pages/charm-provider-search.page");
 const {
   clearProviderStateForTaxIdFallback,
-  clearProviderFormIfVisible,
-  fillInputProviderIdentifiers,
   getProviderTaxIdForPolicy,
   providerPolicySkipsProviderDropdown,
   verifyProviderNpiMatches
@@ -661,9 +660,7 @@ async function processMolinaServiceDateResults(page, row, provider, resultSummar
 async function searchMolinaServiceDatesWithProvider(page, providerName, rowData, options = {}) {
   logger.info(`Molina Service Dates provider attempt: ${providerName}`);
   await selectServiceDateTab(page);
-  if (options.projectId === "charm") {
-    await clearProviderFormIfVisible(page, { context: "Charm Molina Service Dates", logger });
-  }
+  const charmContext = "Charm Molina Service Dates";
   if (providerPolicySkipsProviderDropdown(options.providerFieldPolicy)) {
     const taxId = getProviderTaxIdForPolicy(rowData, options.providerFieldPolicy);
     logger.info(`Molina Service Dates field policy skips Select a Provider. Filling Provider Tax ID "${taxId || "blank"}".`);
@@ -676,33 +673,24 @@ async function searchMolinaServiceDatesWithProvider(page, providerName, rowData,
     await submitServiceDateSearch(page);
     return;
   }
-  if (options.projectId === "charm") {
-    const providerFill = await fillInputProviderIdentifiers(page, rowData, {
-      charmRequiredOnly: true,
-      logger,
-      providerMode: options.providerMode,
-    });
-    if (providerFill?.providerIdentifierReady) {
-      await fillServiceDateSearchForm(page, rowData);
-      await submitServiceDateSearch(page);
-      return;
-    }
-    if (!providerFill?.requiresProviderDropdown) {
-      throw new Error("Charm Molina Service Dates provider identifiers could not be filled deterministically.");
-    }
-  }
+  if (await trySubmitCharmSearchWithoutProviderDropdown(page, rowData, {
+    projectId: options.projectId,
+    context: charmContext,
+    logger,
+    providerMode: options.providerMode,
+    fillSearchForm: fillServiceDateSearchForm,
+    submitSearch: submitServiceDateSearch,
+  })) return;
   await selectProviderOrFillTaxId(page, providerName, rowData, options);
-  if (options.projectId === "charm") {
-    const providerFillAfterDropdown = await fillInputProviderIdentifiers(page, rowData, {
-      charmRequiredOnly: true,
-      logger,
-      providerMode: options.providerMode,
-      providerDropdownSelected: true,
-    });
-    if (providerFillAfterDropdown?.requiresProviderDropdown) {
-      throw new Error("Charm Molina Service Dates provider dropdown was selected, but required provider fields were still not auto-filled.");
-    }
-  }
+  if (await submitCharmSearchAfterProviderDropdown(page, rowData, {
+    projectId: options.projectId,
+    context: charmContext,
+    logger,
+    providerMode: options.providerMode,
+    providerDropdownSelected: true,
+    fillSearchForm: fillServiceDateSearchForm,
+    submitSearch: submitServiceDateSearch,
+  })) return;
   await fillServiceDateSearchForm(page, rowData);
   await submitServiceDateSearch(page);
 }

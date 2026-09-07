@@ -7,7 +7,7 @@ import type { AvailityProjectFieldConfig } from "./config/projects";
 import type { AvailityPortalSelections } from "./config/projects";
 import type { AvailityMatchingPolicy } from "./config/projects";
 import type { AvailityProviderFieldPolicy } from "./config/projects";
-import type { AvailityRuleWhen, AvailitySelectionRule } from "./config/projects";
+import type { AvailityRuleWhen, AvailitySelectionRule, AvailityTabId } from "./config/projects";
 
 export { AVAILITY_PROJECT_CONFIGS } from "./config/projects";
 
@@ -489,6 +489,10 @@ export function getSelectionRuleProviderMode(
     state,
   });
   return rule?.use.providerMode || (rule?.use.providerName ? "groupNameOnly" : undefined);
+}
+
+export function getTabPriorityForProject(projectId: string): AvailityTabId[] {
+  return getAvailityProjectConfig(projectId).tabPriority || [];
 }
 
 export function getServiceDateProviderFieldPolicy(projectId: string, row: AvailityInputRow, portalPayerName: string, login = ""): AvailityProviderFieldPolicy | undefined {

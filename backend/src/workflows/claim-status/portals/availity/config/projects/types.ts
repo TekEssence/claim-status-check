@@ -30,6 +30,7 @@ export type AvailityProjectConfig = {
     };
   };
   selectionRules?: AvailitySelectionRule[];
+  tabPriority?: AvailityTabId[];
   provider?: {
     groupField: string;
     values?: Record<string, string>;
@@ -79,6 +80,7 @@ export type AvailityRuleWhen = {
 };
 
 export type AvailityProviderSelectionMode = "individualNpiFirst" | "groupNameFirst" | "groupNameOnly";
+export type AvailityTabId = "serviceDates" | "hipaaStandard" | "member" | "claimHistory";
 
 export type AvailitySelectionRule = {
   when: AvailityRuleWhen;

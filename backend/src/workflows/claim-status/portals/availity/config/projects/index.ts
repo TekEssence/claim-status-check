@@ -28,4 +28,5 @@ export type {
   AvailityRuleWhen,
   AvailitySelectionRule,
   AvailityServiceDateFieldPolicyRule,
+  AvailityTabId,
 } from "./types";

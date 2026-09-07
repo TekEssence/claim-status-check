@@ -47,8 +47,8 @@ async function processClaim(page, row, options = {}) {
     ? options.providerOrder
     : PROVIDERS;
 
-  if (options.projectId === "charm" && await isSearchTabVisible(page, "Service Dates")) {
-    logger.info("Using Blue Cross-family Charm tab priority: Service Dates tab first.");
+  if (options.tabPriority?.[0] === "serviceDates" && await isSearchTabVisible(page, "Service Dates")) {
+    logger.info("Using Blue Cross-family project tab priority: Service Dates tab first.");
     return serviceDatesWorkflow.processClaim(page, row, {
       ...options,
       providerOrder
