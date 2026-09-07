@@ -16,14 +16,22 @@ export type WaystarPayerProjectConfig = {
   serviceTypeDirectValue?: string;
   extractFullPayerResponse?: boolean;
   extractSecondaryCoverage?: boolean;
+  extractUhcOtherCoverage?: boolean;
   patientLookupCodeFallback?: string;
   allowAutoPopulatedProviderFallback?: boolean;
   skipProviderHandling?: boolean;
   useDateOfServiceForPlanDates?: boolean;
+  /** Also fill DOS before service-code selection for payers requiring that sequence. */
+  fillPlanDatesBeforeServiceType?: boolean;
   planDateToOptional?: boolean;
   /** Response section whose first Plan Date should populate the output Plan Date. */
   responsePlanDateSectionTitle?: string;
   fillDateOfBirth?: boolean;
+  memberIdAndDobOnly?: boolean;
+  /** Use the workbook member ID without legacy payer-specific padding. */
+  preserveMemberId?: boolean;
+  /** Commit the visible plan-date field through keyboard input and blur. */
+  typePlanDate?: boolean;
   provider?: { name?: string; id?: string; tin?: string; npi?: string; ptan?: string };
   selectorFallbacks?: Partial<Record<WaystarInquirySelectorKey, string>>;
   outputMapping?: Readonly<Record<string, string>>;
@@ -33,6 +41,9 @@ export type WaystarPayerProjectConfig = {
 export type WaystarProjectRoutingRule = {
   payerId: string;
   insuranceNameAliases: readonly string[];
+  insuranceNameMatch?: "contains";
+  /** An alternative to the insurance-name condition, not an additional requirement. */
+  memberIdPrefixAlternative?: string;
   memberIdStartsWithAlphabetic?: boolean;
 };
 

@@ -3,6 +3,7 @@ import { WAYSTAR_SELECTORS } from "./selectors";
 import type { WaystarCredentials, WaystarSecurityQuestion } from "./credentials";
 import type { EligibilityInputRow } from "../../types";
 import { normalizeWaystarDate } from "./dates";
+import { extractMedRevenueUhcOtherCoverage } from "./payers/united-healthcare-all-states/medrevenue-other-coverage";
 import { installBrowserEvalHelpers } from "@/backend/src/core/playwright-browser-eval-helpers";
 import type { WaystarPayerProjectConfig } from "./config/projects";
 
@@ -66,6 +67,7 @@ export type WaystarInquiryPayload = {
     subscriberInformation?: unknown;
     subscriberCoverageInformation?: unknown;
     otherCoverageInformation?: unknown;
+    uhcOtherCoveragePayerBlocks?: import("./payers/united-healthcare-all-states/medrevenue-other-coverage").UhcOtherCoverageBlock[];
     generalInformation?: unknown;
     sections?: unknown;
     secondaryCoverageInformation?: unknown;
@@ -415,7 +417,10 @@ export async function submitWaystarInquiry(options: {
     row.serviceType,
     credentials.serviceTypeCode,
   );
-  const expectedMemberId = normalizeWaystarMemberIdForPayer(payerName, row.memberId || row.subscriberId || "");
+  const inputMemberId = row.memberId || row.subscriberId || "";
+  const expectedMemberId = options.projectConfig?.preserveMemberId
+    ? inputMemberId.trim()
+    : normalizeWaystarMemberIdForPayer(payerName, inputMemberId);
   const expectedLastName = row.patientLastName || "";
   const expectedFirstName = row.patientFirstName || "";
   const expectedDateOfBirth = normalizeWaystarDate(row.dateOfBirth || "");
@@ -449,6 +454,11 @@ export async function submitWaystarInquiry(options: {
     }
   }
   await humanPause(inquiryPage);
+  if (options.projectConfig?.useDateOfServiceForPlanDates && options.projectConfig.fillPlanDatesBeforeServiceType) {
+    await waitForBlockingOverlaysToClear(inquiryPage, 30000);
+    await fillPlanDatesFromDateOfService(inquiryPage, row.dateOfService || "", options.projectConfig);
+    await humanPause(inquiryPage);
+  }
   if (options.projectConfig?.serviceTypeDirectValue) {
     expectedServiceType = options.projectConfig.serviceTypeDirectValue;
     await selectServiceTypeByValue(inquiryPage, expectedServiceType);
@@ -463,9 +473,11 @@ export async function submitWaystarInquiry(options: {
   await waitForBlockingOverlaysToClear(inquiryPage, 30000);
   await dismissWaystarDatePicker(inquiryPage);
   await fillVerifiedText(inquiryPage, WAYSTAR_SELECTORS.inquiry.memberId, expectedMemberId, "Member ID");
-  await fillVerifiedText(inquiryPage, WAYSTAR_SELECTORS.inquiry.lastName, expectedLastName, "Last Name");
-  await fillVerifiedText(inquiryPage, WAYSTAR_SELECTORS.inquiry.firstName, expectedFirstName, "First Name");
-  if (!options.projectConfig?.useDateOfServiceForPlanDates) {
+  if (!options.projectConfig?.memberIdAndDobOnly) {
+    await fillVerifiedText(inquiryPage, WAYSTAR_SELECTORS.inquiry.lastName, expectedLastName, "Last Name");
+    await fillVerifiedText(inquiryPage, WAYSTAR_SELECTORS.inquiry.firstName, expectedFirstName, "First Name");
+  }
+  if (options.projectConfig?.memberIdAndDobOnly || !options.projectConfig?.useDateOfServiceForPlanDates) {
     await fillVerifiedText(inquiryPage, WAYSTAR_SELECTORS.inquiry.dateOfBirth, expectedDateOfBirth, "Date of Birth", true);
   } else if (options.projectConfig?.fillDateOfBirth) {
     const dateOfBirth = inquiryPage.locator(WAYSTAR_SELECTORS.inquiry.dateOfBirth).first();
@@ -475,7 +487,10 @@ export async function submitWaystarInquiry(options: {
     }
   }
   await dismissWaystarDatePicker(inquiryPage);
-  if (useMedRevenueMedicareFlow) {
+  if (options.projectConfig?.memberIdAndDobOnly) {
+    await verifyWaystarMemberIdAndDob(inquiryPage, expectedMemberId, expectedDateOfBirth);
+    await ensureSelectedServiceType(inquiryPage, expectedServiceType);
+  } else if (useMedRevenueMedicareFlow) {
     await verifyMedRevenueMedicarePatientFields(inquiryPage, {
       memberId: expectedMemberId,
       lastName: expectedLastName,
@@ -547,7 +562,7 @@ export async function submitWaystarInquiry(options: {
   
   // --- END TEMPORARY DEBUG DUMP ---
 
-  return evaluateWaystarPage(inquiryPage, (selectors) => {
+  const payload = await evaluateWaystarPage(inquiryPage, (selectors) => {
     // ---- generic helpers ----
     function textOf(el: Element | null): string {
       return el?.textContent?.trim() || "";
@@ -988,6 +1003,11 @@ const dataId = header.getAttribute("data-id");
       sectionStatus: sanitizeDomSelector(WAYSTAR_SELECTORS.inquiry.sectionStatus),
     },
   });
+  if (options.projectConfig?.extractUhcOtherCoverage) {
+    const blocks = await inquiryPage.evaluate(extractMedRevenueUhcOtherCoverage);
+    return { ...payload, fullPayerResponse: { ...payload.fullPayerResponse, uhcOtherCoveragePayerBlocks: blocks } };
+  }
+  return payload;
 }
 
 export function resolveWaystarSecurityAnswer(
@@ -1666,6 +1686,14 @@ async function commitInputValue(input: Locator): Promise<void> {
   await input.blur().catch(() => {});
 }
 
+export async function verifyWaystarMemberIdAndDob(page: Page, memberId: string, dateOfBirth: string): Promise<void> {
+  const actualMemberId = await page.locator(WAYSTAR_SELECTORS.inquiry.memberId).first().inputValue();
+  const actualDob = await page.locator(WAYSTAR_SELECTORS.inquiry.dateOfBirth).first().inputValue();
+  if (!memberId.trim() || actualMemberId.trim() !== memberId.trim() || !dateOfBirth || !waystarDatesMatch(actualDob, dateOfBirth)) {
+    throw new Error("MedRevenue Member ID or Date of Birth did not retain the input value before submit.");
+  }
+}
+
 async function verifyMedRevenueMedicarePatientFields(
   page: Page,
   expected: { memberId: string; lastName: string; firstName: string; dateOfBirth?: string },
@@ -1865,6 +1893,17 @@ async function fillPlanDatesFromDateOfService(
   if (!planDate) throw new Error("DOS is missing for this row. Cannot submit Waystar eligibility using the default Plan Date.");
   const fromSelector = projectConfig.selectorFallbacks?.planDateFrom ?? "#txtPlanFrom";
   const toSelector = projectConfig.selectorFallbacks?.planDateTo ?? "#txtPlanTo";
+  if (projectConfig.typePlanDate) {
+    // UHC exposes a single visible Plan Date. Use real input/blur events so
+    // its date widget commits the DOS before moving to the service code.
+    await fillVerifiedText(page, `${fromSelector}:visible`, planDate, "Plan Date", true);
+    const visibleToSelector = `${toSelector}:visible`;
+    if (!projectConfig.planDateToOptional || await page.locator(visibleToSelector).first().isVisible()) {
+      await fillVerifiedText(page, visibleToSelector, planDate, "Plan Date To", true);
+    }
+    await dismissWaystarDatePicker(page);
+    return;
+  }
   const fromInput = page.locator(fromSelector).first();
   const toInput = page.locator(toSelector).first();
   await fromInput.waitFor({ state: "visible", timeout: 30000 });

@@ -141,7 +141,7 @@ async function buildMedRevenueWaystarOutputWorkbook(options: {
         String(result?.metadata?.medRevenueOutputServiceType ?? result?.metadata?.medRevenuePrescriptionDrugServiceType ?? ""),
     },
   ];
-  if (Array.from(options.results.values()).some((result) => result.payerId === "bcbs-ppo")) {
+  if (Array.from(options.results.values()).some((result) => result.payerId === "bcbs-ppo" || result.payerId === "blue-shield")) {
     outputColumns.push(
       { header: "Secondary Coverage Description", value: (_row, result) => String(result?.metadata?.medRevenueSecondaryCoverageDescription ?? "") },
       { header: "Secondary COB Date", value: (_row, result) => String(result?.metadata?.medRevenueSecondaryCobDate ?? "") },

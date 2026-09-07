@@ -4,6 +4,7 @@ import type {
   EligibilityPayerBatch,
 } from "../../types";
 import {
+  getWaystarPayer,
   matchWaystarPayer,
   matchWaystarPayerByPortalName,
 } from "./payer-registry";
@@ -198,7 +199,7 @@ export function routeWaystarRowsByPayer(
     const memberId = findValue(raw, projectAliases(options.projectConfig, "memberId", MEMBER_ID_HEADER_ALIASES));
     const projectPayerId = matchProjectPayerRoutingRule(insuranceName, memberId, options.projectConfig);
     const payer = projectPayerId
-      ? matchWaystarPayer(projectPayerId)
+      ? getWaystarPayer(projectPayerId, options.projectConfig?.id)
       : resolveWaystarPayer(insuranceName, options.payerMappings);
     if (!payer ||
       !isPayerEnabledForProject(payer.id, options.projectConfig) ||
@@ -360,6 +361,11 @@ function matchProjectPayerRoutingRule(
   memberId: string | undefined,
   projectConfig?: WaystarProjectConfig,
 ): string | undefined {
+  // Explicit member prefixes override conflicting insurance names.
+  const prefixRule = projectConfig?.payerRoutingRules?.find((rule) =>
+    rule.memberIdPrefixAlternative && (memberId ?? "").trim().toUpperCase().startsWith(rule.memberIdPrefixAlternative.toUpperCase())
+  );
+  if (prefixRule) return prefixRule.payerId;
   return projectConfig?.payerRoutingRules?.find((rule) =>
     matchesProjectPayerRoutingRule(rule, insuranceName, memberId)
   )?.payerId;
@@ -381,8 +387,10 @@ function matchesProjectPayerRoutingRule(
   memberId: string | undefined,
 ): boolean {
   const normalizedInsurance = normalizeHeader(insuranceName);
+  if (rule.memberIdPrefixAlternative && (memberId ?? "").trim().toUpperCase().startsWith(rule.memberIdPrefixAlternative.toUpperCase())) return true;
   const nameMatches = rule.insuranceNameAliases.some((alias) => {
     const normalizedAlias = normalizeHeader(alias);
+    if (rule.insuranceNameMatch === "contains") return ` ${normalizedInsurance} `.includes(` ${normalizedAlias} `);
     return normalizedInsurance === normalizedAlias || normalizedInsurance.startsWith(`${normalizedAlias} `);
   });
   if (!nameMatches) return false;

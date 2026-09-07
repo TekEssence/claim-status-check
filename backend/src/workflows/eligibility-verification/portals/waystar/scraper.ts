@@ -118,7 +118,7 @@ export function createWaystarRunner(): AutomationRunner<EligibilityRunInput> {
 
       try {
         payerBatches: for (const batch of routing.batches) {
-          const payer = getWaystarPayer(batch.payerId);
+          const payer = getWaystarPayer(batch.payerId, input.projectId);
           const payerProjectConfig = getWaystarPayerProjectConfig(projectConfig, payer.id);
           const credentials = findWaystarCredentialsForPayer(credentialProfiles, payer, input.projectId, {
             allowUnscopedCredentials: projectConfig.allowUnscopedCredentials,
@@ -218,7 +218,7 @@ export function createWaystarRunner(): AutomationRunner<EligibilityRunInput> {
                 if (input.projectId === "medrevenue" && payer.id === "medicare") {
                   result = applyMedRevenueMedicareResultMappings(result);
                 }
-                if (input.projectId === "medrevenue" && payer.id === "bcbs-ppo") {
+                if (input.projectId === "medrevenue" && (payer.id === "bcbs-ppo" || payer.id === "blue-shield")) {
                   result = applyMedRevenueBlueCrossResultMappings(result);
                 }
                 if (isRetryablePayerError(result)) {
@@ -250,7 +250,7 @@ export function createWaystarRunner(): AutomationRunner<EligibilityRunInput> {
                   if (input.projectId === "medrevenue" && payer.id === "medicare") {
                     result = applyMedRevenueMedicareResultMappings(result);
                   }
-                  if (input.projectId === "medrevenue" && payer.id === "bcbs-ppo") {
+                  if (input.projectId === "medrevenue" && (payer.id === "bcbs-ppo" || payer.id === "blue-shield")) {
                     result = applyMedRevenueBlueCrossResultMappings(result);
                   }
                 }
@@ -630,6 +630,9 @@ export function describeEligibilityExtraction(result: EligibilityResult): {
   extracted: string[];
   missing: string[];
 } {
+  if (result.payerId === "blue-shield") {
+    return describeEligibilityExtraction({ ...result, payerId: "bcbs-ppo" });
+  }
   if ((result.payerId === "medicare" || result.payerId === "amerigroup-wellpoint" || result.payerId === "bcbs-ppo" || result.payerId === "cigna-open-access-plus" || result.payerId === "baycare-plus-medicare-advantage" || result.payerId === "aetna" || result.payerId === "aetna-medicare-ppo" || result.payerId === "united-healthcare-all-states" || result.payerId === "aarp-medicare-complete" || result.payerId === "umr" || result.payerId === "humana-medicare-ppo" || result.payerId === "av-med")) {
     const fields = [
       { label: "Coverage Status", value: result.coverageStatus !== "unknown" && result.coverageStatus !== "error", required: true },

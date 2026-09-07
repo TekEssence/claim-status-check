@@ -12,6 +12,9 @@ import { avMedPayer } from "./payers/av-med";
 import { humanaMedicarePpoPayer } from "./payers/humana-medicare-ppo";
 import { umrPayer } from "./payers/umr";
 import type { WaystarPayerHandler } from "./payers/types";
+import { medRevenueBlueShieldPayer } from "./payers/blue-shield";
+import { parseWaystarEligibilityResult } from "./payers/eligibility-result-parser";
+import { applyMedRevenueUhcOtherCoverage } from "./payers/united-healthcare-all-states/medrevenue-other-coverage";
 
 export const waystarPayerRegistry = {
   medicare: medicarePayer,
@@ -28,7 +31,26 @@ export const waystarPayerRegistry = {
   umr: umrPayer,
 } satisfies Record<string, WaystarPayerHandler>;
 
-export function getWaystarPayer(payerId: string): WaystarPayerHandler {
+export function getWaystarPayer(payerId: string, projectId?: string): WaystarPayerHandler {
+  // Keep this payer out of the shared name matcher and Minimax registry.
+  if (projectId === "medrevenue" && payerId === "blue-shield") return medRevenueBlueShieldPayer;
+  if (projectId === "medrevenue" && payerId === "united-healthcare-all-states") {
+    return {
+      ...unitedHealthcareAllStatesPayer,
+      name: "UHC",
+      requiredFields: ["memberId", "dateOfBirth"],
+      portalPayerName: "UHC (87726)",
+      insuranceNameAliases: [...unitedHealthcareAllStatesPayer.insuranceNameAliases, "UHC", "UnitedHealthcare", "United Health Care"],
+      parseResult(payload, row) {
+        // Preserve MedRevenue's Plan Date and response metadata alongside the
+        // established UHC coverage mapping. The Minimax parser is unchanged.
+        return applyMedRevenueUhcOtherCoverage({
+          ...parseWaystarEligibilityResult(payload, row, "united-healthcare-all-states"),
+          ...unitedHealthcareAllStatesPayer.parseResult(payload, row),
+        });
+      },
+    };
+  }
   const payer = waystarPayerRegistry[payerId as keyof typeof waystarPayerRegistry];
   if (!payer) {
     throw new UnknownPortalError(`waystar/${payerId}`);

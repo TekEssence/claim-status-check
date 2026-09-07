@@ -78,6 +78,15 @@ test("MedRevenue config selects Blue Cross California without changing the regis
   assert.equal(blueCrossConfig.serviceTypeDirectValue, "30");
 });
 
+test("Blue Cross early DOS filling remains scoped to MedRevenue without changing Medicare", () => {
+  for (const projectId of ["minimax", "medrevenue"] as const) {
+    for (const payerId of ["medicare", "bcbs-ppo"]) {
+      const config = getWaystarPayerProjectConfig(getWaystarProjectConfig(projectId), payerId);
+      assert.equal(Boolean(config.fillPlanDatesBeforeServiceType), projectId === "medrevenue" && payerId === "bcbs-ppo");
+    }
+  }
+});
+
 test("MedRevenue routes Blue Cross only when Member ID starts alphabetically", () => {
   const routing = routeWaystarRowsByPayer([
     { "Primary Insurance Name": "Blue Cross California", "Member ID": "ABC123" },
