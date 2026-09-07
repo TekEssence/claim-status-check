@@ -254,6 +254,19 @@ export function createWaystarRunner(): AutomationRunner<EligibilityRunInput> {
                     result = applyMedRevenueBlueCrossResultMappings(result);
                   }
                 }
+                if (input.projectId === "medrevenue") {
+                  const services = payload.fullPayerResponse?.otherCoverageServiceTypes;
+                  if (services !== undefined) {
+                    result = { ...result, metadata: { ...result.metadata, medRevenueOutputServiceType: services.join("; ") } };
+                  }
+                }
+                if (input.projectId === "medrevenue" && ["umr", "aetna"].includes(payer.id) && !result.effectiveDate) {
+                  const label = payer.id === "umr" ? "Benefit Begin Date" : "Eligibility Begin Date";
+                  const section = payer.id === "umr" ? "Other Coverage Information" : "Subscriber Coverage Information";
+                  await context.log({ level: "warn", eventName: "eligibility_effective_date_missing", rowIndex: row.originalIndex,
+                    message: `${payer.name} row ${row.originalIndex}: response extraction could not read ${label}; Eff Date remains blank. Please retain this row's portal response for inspection.` });
+                  errorReportLines.push(`${payer.name} row ${row.originalIndex}: ${label} was not captured from ${section}; Eff Date is blank. ${payload.effectiveDateDiagnostic ?? ""}`);
+                }
                 results.set(row.originalIndex, result);
                 await context.emit({
                   type: "eligibility_waystar_result",

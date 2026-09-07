@@ -34,7 +34,28 @@ test("Blue Shield verification accesses no name fields and detects a cleared DOB
 });
 import { getWaystarPayer, matchWaystarPayer } from "../payer-registry";
 
-test("MedRevenue routes Blue Shield names OR X member prefixes into their own batch", () => {
+test("MedRevenue Blue Shield names always select SB542 and X prefixes use SB542 except Blue Cross", () => {
+  const projectConfig = getWaystarProjectConfig("medrevenue");
+  const cases = [
+    ...["Blue Shield", "BLUESHILED", "BlueShield"].flatMap(name =>
+      ["912345", "A12345", "X12345"].map(id => ({ name, id, payer: "blue-shield" }))),
+    ...["SCAN", "United Healthcare", "Medicare", "Unknown", ""].map(name =>
+      ({ name, id: " x12345 ", payer: "blue-shield" })),
+    ...["Blue Cross", "BLUE CROSS OF CALIFORNIA", "Blue Cross California"].map(name =>
+      ({ name, id: "X12345", payer: "bcbs-ppo" })),
+  ];
+  for (const { name, id, payer } of cases) {
+    const routing = routeWaystarRowsByPayer([
+      { "Primary Insurance Name": name, "Member ID": id },
+    ], { projectConfig });
+    assert.deepEqual(routing.unsupportedRows, [], name);
+    assert.equal(routing.batches[0]?.payerId, payer, `${name} / ${id}`);
+    assert.equal(getWaystarPayerProjectConfig(projectConfig, payer).portalPayerName,
+      payer === "blue-shield" ? "Blue Shield California(SB542)" : "Blue Cross California (SB040)");
+  }
+});
+
+test("MedRevenue preserves explicit Blue Cross names ahead of the X-prefix fallback", () => {
   const rows = [
     { "Primary Insurance Payer": "BLUE SHIELD", "Member ID": "123" },
     { "Primary Insurance Payer": "California BlueShield PPO", "Member ID": "A123" },
@@ -49,11 +70,24 @@ test("MedRevenue routes Blue Shield names OR X member prefixes into their own ba
   ];
   const routing = routeWaystarRowsByPayer(rows, { projectConfig: getWaystarProjectConfig("medrevenue") });
   assert.deepEqual(routing.batches.map((batch) => [batch.payerId, batch.rows.map((row) => row.originalIndex)]), [
-    ["blue-shield", [2, 3, 4, 5, 6, 7]],
-    ["bcbs-ppo", [8]],
+    ["blue-shield", [2, 3, 4, 6, 7]],
+    ["bcbs-ppo", [5, 8]],
     ["medicare", [9]],
   ]);
   assert.deepEqual(routing.unsupportedRows.map((row) => row.rowIndex), [10, 11]);
+});
+
+test("MedRevenue Blue Cross variants with X-prefixed IDs select SB040, not SB542", () => {
+  for (const name of ["BLUE CROSS", "BLUE CROSS OF CALIFORNIA", "Blue Cross California"]) {
+    const routing = routeWaystarRowsByPayer([
+      { "Primary Insurance name": name, "member ID#": "XTEST123" },
+      { "Primary Insurance name": "BLUESHILED", "member ID#": "XTEST456" },
+    ], { projectConfig: getWaystarProjectConfig("medrevenue") });
+    assert.deepEqual(routing.unsupportedRows, []);
+    assert.deepEqual(routing.batches.map(batch => batch.payerId), ["bcbs-ppo", "blue-shield"]);
+    assert.equal(getWaystarPayerProjectConfig(getWaystarProjectConfig("medrevenue"), routing.batches[0].payerId).portalPayerName, "Blue Cross California (SB040)");
+    assert.equal(getWaystarPayerProjectConfig(getWaystarProjectConfig("medrevenue"), routing.batches[1].payerId).portalPayerName, "Blue Shield California(SB542)");
+  }
 });
 
 test("Minimax and default routing retain Medicare even when Member ID starts with X", () => {
@@ -76,14 +110,14 @@ test("Blue Shield parsing retains its distinct payer identity", () => {
   assert.equal(result.payerId, "blue-shield");
 });
 
-test("MedRevenue Blue Shield selects SB542 and fills both DOS dates using Blue Cross processing settings", () => {
+test("MedRevenue Blue Shield selects SB542 and fills available DOS dates using Blue Cross processing settings", () => {
   const project = getWaystarProjectConfig("medrevenue");
   const shield = getWaystarPayerProjectConfig(project, "blue-shield");
   const cross = getWaystarPayerProjectConfig(project, "bcbs-ppo");
   assert.equal(shield.portalPayerName, "Blue Shield California(SB542)");
   assert.equal(isExactWaystarPayerMatch(shield.portalPayerName!, "Blue Shield California (SB542)"), true);
   assert.equal(isExactWaystarPayerMatch(shield.portalPayerName!, cross.portalPayerName!), false);
-  assert.equal(shield.planDateToOptional, false);
+  assert.equal(shield.planDateToOptional, true);
   assert.equal(shield.selectorFallbacks?.planDateTo, "#txtPlanTo");
   for (const key of ["requireExactPayerSuggestionCommit", "skipProviderHandling", "useDateOfServiceForPlanDates", "fillPlanDatesBeforeServiceType", "fillDateOfBirth", "serviceTypeDirectValue", "extractSecondaryCoverage", "responsePlanDateSectionTitle"] as const) {
     assert.equal(shield[key], cross[key], key);

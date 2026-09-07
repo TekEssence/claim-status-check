@@ -180,7 +180,17 @@ export function routeWaystarRowsByPayer(
 ): WaystarWorkbookRouting {
   if (rows.length === 0) throw new Error("The eligibility workbook is empty.");
 
-  const payerHeader = findInsuranceHeader(
+  const headers = Object.keys(rows[0]);
+  const isMedRevenue = options.projectConfig?.id === "medrevenue";
+  // Mixed MedRevenue exports may also contain generic payer/patient ID columns.
+  // Prefer the primary coverage columns regardless of their spreadsheet order.
+  const primaryInsuranceHeader = isMedRevenue
+    ? findPreferredHeader(headers, ["primary insurance name", "primary insurance", "primary insurance payer", "primary insurance payer state"])
+    : undefined;
+  const memberIdHeader = isMedRevenue
+    ? findPreferredHeader(headers, MEMBER_ID_HEADER_ALIASES.filter((alias) => alias !== "id"))
+    : undefined;
+  const payerHeader = primaryInsuranceHeader ?? findInsuranceHeader(
     Object.keys(rows[0]),
     options.projectConfig?.inputColumnMappings?.insuranceName,
   );
@@ -196,7 +206,9 @@ export function routeWaystarRowsByPayer(
   rows.forEach((raw, index) => {
     const rowIndex = index + 2;
     const insuranceName = asText(raw[payerHeader]);
-    const memberId = findValue(raw, projectAliases(options.projectConfig, "memberId", MEMBER_ID_HEADER_ALIASES));
+    const memberId = memberIdHeader
+      ? asText(raw[memberIdHeader]) || undefined
+      : findValue(raw, projectAliases(options.projectConfig, "memberId", MEMBER_ID_HEADER_ALIASES));
     const projectPayerId = matchProjectPayerRoutingRule(insuranceName, memberId, options.projectConfig);
     const payer = projectPayerId
       ? getWaystarPayer(projectPayerId, options.projectConfig?.id)
@@ -336,6 +348,14 @@ function findInsuranceHeader(headers: string[], projectAliases: readonly string[
     null;
 }
 
+function findPreferredHeader(headers: string[], aliases: readonly string[]): string | undefined {
+  for (const alias of aliases) {
+    const header = headers.find((candidate) => normalizeHeader(candidate) === normalizeHeader(alias));
+    if (header) return header;
+  }
+  return undefined;
+}
+
 function projectPayerMappings(projectConfig?: WaystarProjectConfig): WaystarPayerPortalMapping[] {
   return Object.entries(projectConfig?.payerNameMappings ?? {}).map(([inputInsurancePayerState, payerPortal]) => ({
     inputInsurancePayerState,
@@ -361,6 +381,28 @@ function matchProjectPayerRoutingRule(
   memberId: string | undefined,
   projectConfig?: WaystarProjectConfig,
 ): string | undefined {
+  if (projectConfig?.id === "medrevenue") {
+    const matchesName = (payerId: string) => projectConfig.payerRoutingRules?.some((rule) =>
+      rule.payerId === payerId && matchesProjectPayerRoutingRule(
+        { ...rule, memberIdPrefixAlternative: undefined, memberIdStartsWithAlphabetic: false },
+        insuranceName, memberId,
+      )
+    );
+    if (matchesName("blue-shield")) return "blue-shield";
+    for (const payerId of ["aetna", "umr", "cigna-open-access-plus"]) {
+      if (matchesName(payerId)) return payerId;
+    }
+    if ((memberId ?? "").trim().toUpperCase().startsWith("X")) {
+      // Named Aetna/UMR/Cigna above and Blue Cross take priority over the X fallback.
+      return matchesName("bcbs-ppo") ? "bcbs-ppo" : "blue-shield";
+    }
+  }
+  const preferredNameRule = projectConfig?.payerRoutingRules?.find((rule) =>
+    rule.preferInsuranceName && matchesProjectPayerRoutingRule(
+      { ...rule, memberIdPrefixAlternative: undefined }, insuranceName, memberId,
+    )
+  );
+  if (preferredNameRule) return preferredNameRule.payerId;
   // Explicit member prefixes override conflicting insurance names.
   const prefixRule = projectConfig?.payerRoutingRules?.find((rule) =>
     rule.memberIdPrefixAlternative && (memberId ?? "").trim().toUpperCase().startsWith(rule.memberIdPrefixAlternative.toUpperCase())

@@ -13,6 +13,7 @@ import { humanaMedicarePpoPayer } from "./payers/humana-medicare-ppo";
 import { umrPayer } from "./payers/umr";
 import type { WaystarPayerHandler } from "./payers/types";
 import { medRevenueBlueShieldPayer } from "./payers/blue-shield";
+import { medRevenueScanPayer } from "./payers/scan";
 import { parseWaystarEligibilityResult } from "./payers/eligibility-result-parser";
 import { applyMedRevenueUhcOtherCoverage } from "./payers/united-healthcare-all-states/medrevenue-other-coverage";
 
@@ -32,6 +33,52 @@ export const waystarPayerRegistry = {
 } satisfies Record<string, WaystarPayerHandler>;
 
 export function getWaystarPayer(payerId: string, projectId?: string): WaystarPayerHandler {
+  if (projectId === "medrevenue" && payerId === "cigna-open-access-plus") return {
+    ...cignaOpenAccessPlusPayer,
+    credentialProject: undefined,
+    parseResult(payload, row) {
+      const source = payload as { subscriberCoverageInformation?: { planBeginDate?: unknown } } | null;
+      const planBeginDate = source?.subscriberCoverageInformation?.planBeginDate;
+      return {
+        ...cignaOpenAccessPlusPayer.parseResult(payload, row),
+        planDate: typeof planBeginDate === "string" ? planBeginDate.trim() || undefined : undefined,
+      };
+    },
+  };
+  if (projectId === "medrevenue" && payerId === "umr") return {
+    ...umrPayer,
+    parseResult(payload, row) {
+      const source = payload as {
+        healthBenefitPlanCoverage?: { benefitBeginDate?: unknown };
+        exactResponseDates?: { benefitBeginDate?: unknown; planBeginDate?: unknown };
+        subscriberCoverageInformation?: { planBeginDate?: unknown };
+      } | null;
+      const dateValue = (value: unknown) => typeof value === "string" ? value.trim() || undefined : undefined;
+      return {
+        ...umrPayer.parseResult(payload, row),
+        effectiveDate: dateValue(source?.exactResponseDates?.benefitBeginDate),
+        planDate: dateValue(source?.subscriberCoverageInformation?.planBeginDate) || dateValue(source?.exactResponseDates?.planBeginDate),
+      };
+    },
+  };
+  if (projectId === "medrevenue" && payerId === "aetna") return {
+    ...aetnaPayer,
+    credentialProject: undefined,
+    parseResult(payload, row) {
+      const source = payload as {
+        healthBenefitPlanCoverage?: { eligibilityBeginDate?: unknown };
+        exactResponseDates?: { eligibilityBeginDate?: unknown; planBeginDate?: unknown };
+        subscriberCoverageInformation?: { planBeginDate?: unknown };
+      } | null;
+      const dateValue = (value: unknown) => typeof value === "string" ? value.trim() || undefined : undefined;
+      return {
+        ...aetnaPayer.parseResult(payload, row),
+        effectiveDate: dateValue(source?.exactResponseDates?.eligibilityBeginDate),
+        planDate: dateValue(source?.subscriberCoverageInformation?.planBeginDate) || dateValue(source?.exactResponseDates?.planBeginDate),
+      };
+    },
+  };
+  if (projectId === "medrevenue" && payerId === "scan") return medRevenueScanPayer;
   // Keep this payer out of the shared name matcher and Minimax registry.
   if (projectId === "medrevenue" && payerId === "blue-shield") return medRevenueBlueShieldPayer;
   if (projectId === "medrevenue" && payerId === "united-healthcare-all-states") {

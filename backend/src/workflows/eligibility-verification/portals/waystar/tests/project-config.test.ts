@@ -58,7 +58,7 @@ test("project input mappings route through the shared Medicare handler", () => {
 
 test("MedRevenue configuration does not enable unrelated Waystar payers", () => {
   const routing = routeWaystarRowsByPayer([
-    { "Payer Name": "Aetna", "Patient First Name": "Jane", "Patient Last Name": "Doe" },
+    { "Payer Name": "Humana Medicare PPO", "Patient First Name": "Jane", "Patient Last Name": "Doe" },
   ], { projectConfig: getWaystarProjectConfig("medrevenue") });
 
   assert.equal(routing.batches.length, 0);

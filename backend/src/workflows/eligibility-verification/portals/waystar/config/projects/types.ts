@@ -8,6 +8,8 @@ export type WaystarInquirySelectorKey =
 export type WaystarPayerProjectConfig = {
   /** Project-only portal payer name; the registered payer default is unchanged. */
   portalPayerName?: string;
+  /** Search text only; selection must still match portalPayerName exactly. */
+  payerSearchText?: string;
   /** Require an actual autocomplete item commit instead of accepting typed payer text. */
   requireExactPayerSuggestionCommit?: boolean;
   /** Tried only after the payer's existing portalPayerName fails. */
@@ -28,6 +30,13 @@ export type WaystarPayerProjectConfig = {
   responsePlanDateSectionTitle?: string;
   fillDateOfBirth?: boolean;
   memberIdAndDobOnly?: boolean;
+  /** Restore the payer's demographic lookup and recheck patient values before submit. */
+  restorePatientLookup?: boolean;
+  repairPatientValueReset?: boolean;
+  exactUmrDates?: boolean;
+  retryPlanDatesWithKeyboard?: boolean;
+  exactAetnaDates?: boolean;
+  exactCignaPlanDate?: boolean;
   /** Use the workbook member ID without legacy payer-specific padding. */
   preserveMemberId?: boolean;
   /** Commit the visible plan-date field through keyboard input and blur. */
@@ -40,6 +49,8 @@ export type WaystarPayerProjectConfig = {
 
 export type WaystarProjectRoutingRule = {
   payerId: string;
+  /** An explicit insurance-name match takes precedence over member-ID heuristics. */
+  preferInsuranceName?: boolean;
   insuranceNameAliases: readonly string[];
   insuranceNameMatch?: "contains";
   /** An alternative to the insurance-name condition, not an additional requirement. */

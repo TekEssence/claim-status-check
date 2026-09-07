@@ -1,8 +1,9 @@
-﻿import type { BrowserContext, Locator, Page } from "playwright-core";
+import type { BrowserContext, Locator, Page } from "playwright-core";
 import { WAYSTAR_SELECTORS } from "./selectors";
 import type { WaystarCredentials, WaystarSecurityQuestion } from "./credentials";
 import type { EligibilityInputRow } from "../../types";
 import { normalizeWaystarDate } from "./dates";
+import { extractWaystarResponseDates } from "./payers/response-dates";
 import { extractMedRevenueUhcOtherCoverage } from "./payers/united-healthcare-all-states/medrevenue-other-coverage";
 import { installBrowserEvalHelpers } from "@/backend/src/core/playwright-browser-eval-helpers";
 import type { WaystarPayerProjectConfig } from "./config/projects";
@@ -22,6 +23,7 @@ export type WaystarBenefitSection = {
 };
 
 export type WaystarInquiryPayload = {
+  effectiveDateDiagnostic?: string;
   overallStatus: string;
   sectionStatuses: Array<{ title: string; status: string }>;
   subscriberInformation?: {
@@ -67,6 +69,7 @@ export type WaystarInquiryPayload = {
     subscriberInformation?: unknown;
     subscriberCoverageInformation?: unknown;
     otherCoverageInformation?: unknown;
+    otherCoverageServiceTypes?: string[];
     uhcOtherCoveragePayerBlocks?: import("./payers/united-healthcare-all-states/medrevenue-other-coverage").UhcOtherCoverageBlock[];
     generalInformation?: unknown;
     sections?: unknown;
@@ -472,42 +475,54 @@ export async function submitWaystarInquiry(options: {
   }
   await waitForBlockingOverlaysToClear(inquiryPage, 30000);
   await dismissWaystarDatePicker(inquiryPage);
-  await fillVerifiedText(inquiryPage, WAYSTAR_SELECTORS.inquiry.memberId, expectedMemberId, "Member ID");
-  if (!options.projectConfig?.memberIdAndDobOnly) {
-    await fillVerifiedText(inquiryPage, WAYSTAR_SELECTORS.inquiry.lastName, expectedLastName, "Last Name");
-    await fillVerifiedText(inquiryPage, WAYSTAR_SELECTORS.inquiry.firstName, expectedFirstName, "First Name");
-  }
-  if (options.projectConfig?.memberIdAndDobOnly || !options.projectConfig?.useDateOfServiceForPlanDates) {
-    await fillVerifiedText(inquiryPage, WAYSTAR_SELECTORS.inquiry.dateOfBirth, expectedDateOfBirth, "Date of Birth", true);
-  } else if (options.projectConfig?.fillDateOfBirth) {
-    const dateOfBirth = inquiryPage.locator(WAYSTAR_SELECTORS.inquiry.dateOfBirth).first();
-    if (await dateOfBirth.isVisible().catch(() => false)) {
+  const fillPatientDetails = async () => {
+    if (options.projectConfig?.restorePatientLookup) {
+      await restoreMedRevenuePatientLookup(inquiryPage, Boolean(options.projectConfig.memberIdAndDobOnly));
+    }
+    await fillVerifiedText(inquiryPage, WAYSTAR_SELECTORS.inquiry.memberId, expectedMemberId, "Member ID");
+    if (!options.projectConfig?.memberIdAndDobOnly) {
+      await fillVerifiedText(inquiryPage, WAYSTAR_SELECTORS.inquiry.lastName, expectedLastName, "Last Name");
+      await fillVerifiedText(inquiryPage, WAYSTAR_SELECTORS.inquiry.firstName, expectedFirstName, "First Name");
+    }
+    if (options.projectConfig?.restorePatientLookup || options.projectConfig?.memberIdAndDobOnly || !options.projectConfig?.useDateOfServiceForPlanDates) {
       await fillVerifiedText(inquiryPage, WAYSTAR_SELECTORS.inquiry.dateOfBirth, expectedDateOfBirth, "Date of Birth", true);
       medRevenueDateOfBirthFilled = true;
+    } else if (options.projectConfig?.fillDateOfBirth) {
+      const dateOfBirth = inquiryPage.locator(WAYSTAR_SELECTORS.inquiry.dateOfBirth).first();
+      if (await dateOfBirth.isVisible().catch(() => false)) {
+        await fillVerifiedText(inquiryPage, WAYSTAR_SELECTORS.inquiry.dateOfBirth, expectedDateOfBirth, "Date of Birth", true);
+        medRevenueDateOfBirthFilled = true;
+      }
     }
-  }
-  await dismissWaystarDatePicker(inquiryPage);
-  if (options.projectConfig?.memberIdAndDobOnly) {
-    await verifyWaystarMemberIdAndDob(inquiryPage, expectedMemberId, expectedDateOfBirth);
-    await ensureSelectedServiceType(inquiryPage, expectedServiceType);
-  } else if (useMedRevenueMedicareFlow) {
-    await verifyMedRevenueMedicarePatientFields(inquiryPage, {
-      memberId: expectedMemberId,
-      lastName: expectedLastName,
-      firstName: expectedFirstName,
-      dateOfBirth: medRevenueDateOfBirthFilled ? expectedDateOfBirth : undefined,
-    });
-    await ensureSelectedServiceType(inquiryPage, expectedServiceType);
-  } else {
-    await verifyInquiryFieldsBeforeSubmit(inquiryPage, {
-      serviceTypeCode: expectedServiceType,
-      patientLookupCode: expectedPatientLookupCode,
-      memberId: expectedMemberId,
-      lastName: expectedLastName,
-      firstName: expectedFirstName,
-      dateOfBirth: expectedDateOfBirth,
-    });
-  }
+    await dismissWaystarDatePicker(inquiryPage);
+    if (options.projectConfig?.memberIdAndDobOnly) {
+      if (options.projectConfig.repairPatientValueReset) {
+        await repairWaystarMemberIdAndDob(inquiryPage, expectedMemberId, expectedDateOfBirth);
+      } else {
+        await verifyWaystarMemberIdAndDob(inquiryPage, expectedMemberId, expectedDateOfBirth);
+      }
+      await ensureSelectedServiceType(inquiryPage, expectedServiceType);
+    } else if (useMedRevenueMedicareFlow) {
+      await (options.projectConfig?.exactAetnaDates || options.projectConfig?.exactUmrDates || options.projectConfig?.exactCignaPlanDate
+        ? repairMedRevenueAetnaUmrPatientFields : verifyMedRevenueMedicarePatientFields)(inquiryPage, {
+        memberId: expectedMemberId,
+        lastName: expectedLastName,
+        firstName: expectedFirstName,
+        dateOfBirth: medRevenueDateOfBirthFilled ? expectedDateOfBirth : undefined,
+      }, options.projectConfig?.exactCignaPlanDate ? "Cigna" : undefined);
+      await ensureSelectedServiceType(inquiryPage, expectedServiceType);
+    } else {
+      await verifyInquiryFieldsBeforeSubmit(inquiryPage, {
+        serviceTypeCode: expectedServiceType,
+        patientLookupCode: expectedPatientLookupCode,
+        memberId: expectedMemberId,
+        lastName: expectedLastName,
+        firstName: expectedFirstName,
+        dateOfBirth: expectedDateOfBirth,
+      });
+    }
+  };
+  await fillPatientDetails();
   await humanPause(inquiryPage, 1800, 3000);
 
   // Waystar can rebuild the service-type dropdown after patient fields change.
@@ -522,6 +537,28 @@ export async function submitWaystarInquiry(options: {
   if (options.projectConfig?.useDateOfServiceForPlanDates) {
     await waitForBlockingOverlaysToClear(inquiryPage, 30000);
     await fillPlanDatesFromDateOfService(inquiryPage, row.dateOfService || "", options.projectConfig);
+  }
+
+  if (options.projectConfig?.restorePatientLookup) {
+    // Date and service changes can rebuild the demographic form. Refill once,
+    // then check again after restoring DOS; never submit cleared patient data.
+    const verifyPatients = () => options.projectConfig?.memberIdAndDobOnly
+      ? verifyWaystarMemberIdAndDob(inquiryPage, expectedMemberId, expectedDateOfBirth)
+      : (options.projectConfig?.exactAetnaDates || options.projectConfig?.exactUmrDates || options.projectConfig?.exactCignaPlanDate
+        ? repairMedRevenueAetnaUmrPatientFields : verifyMedRevenueMedicarePatientFields)(inquiryPage, {
+        memberId: expectedMemberId, lastName: expectedLastName,
+        firstName: expectedFirstName, dateOfBirth: expectedDateOfBirth,
+      }, options.projectConfig?.exactCignaPlanDate ? "Cigna" : undefined);
+    try {
+      await verifySelectedServiceType(inquiryPage, expectedServiceType);
+      await verifyPatients();
+    } catch {
+      await fillPatientDetails();
+      await ensureSelectedServiceType(inquiryPage, expectedServiceType);
+      await fillPlanDatesFromDateOfService(inquiryPage, row.dateOfService || "", options.projectConfig);
+      await verifySelectedServiceType(inquiryPage, expectedServiceType);
+      await verifyPatients();
+    }
   }
 
   await Promise.all([
@@ -909,7 +946,9 @@ const dataId = header.getAttribute("data-id");
       planDate: configuredSectionPlanDate || coverageBlock?.fields["Plan Date"] || valueFromBlocks(fullCoverageBlocks, "Eligibility Date") || valueFromBlocks(fullCoverageBlocks, "Plan Date") || findRowValueByLabel("Plan Date"),
       planNetworkName: coverageBlock?.fields["Plan Network Name"] || valueFromBlocks(fullCoverageBlocks, "Plan Network Name") || findRowValueByLabel("Plan Network Name"),
       planSponsor: coverageBlock?.fields["Plan Sponsor"] || valueFromBlocks(fullCoverageBlocks, "Plan Sponsor") || findRowValueByLabel("Plan Sponsor"),
-      planBeginDate: coverageBlock?.fields["Plan Begin Date"] || valueFromBlocks(fullCoverageBlocks, "Plan Begin Date") || findRowValueByLabel("Plan Begin Date") || findRowValueByLabel("Benefit Begin Date"),
+      planBeginDate: selectors.exactCignaPlanDate
+        ? valueFromBlocks(readBlocksByHeading("Subscriber Coverage Information"), "Plan Begin Date")
+        : coverageBlock?.fields["Plan Begin Date"] || valueFromBlocks(fullCoverageBlocks, "Plan Begin Date") || findRowValueByLabel("Plan Begin Date") || (selectors.exactUmrDates || selectors.exactAetnaDates ? undefined : findRowValueByLabel("Benefit Begin Date")),
       planEndDate: coverageBlock?.fields["Plan End Date"] || valueFromBlocks(fullCoverageBlocks, "Plan End Date") || findRowValueByLabel("Plan End Date"),
       premiumPaidToDateEnd: coverageBlock?.fields["Premium Paid-to Date End"] || valueFromBlocks(fullCoverageBlocks, "Premium Paid-to Date End"),
       insuranceType: coverageBlock?.fields["Insurance Type"] || valueFromBlocks(fullCoverageBlocks, "Insurance Type"),
@@ -968,7 +1007,7 @@ const dataId = header.getAttribute("data-id");
         planStatus: hbpc.status,
         planType: textOf(planTypeEl) || undefined,
         planSponsor: findRowValueByLabel("Plan Sponsor"),
-        benefitBeginDate: findRowValueByLabel("Benefit Begin Date") || findRowValueByLabel("Plan Begin Date"),
+        benefitBeginDate: findRowValueByLabel("Benefit Begin Date") || (selectors.exactAetnaDates ? undefined : findRowValueByLabel("Plan Begin Date")),
         benefitSections: hbpcSections.length > 0 ? hbpcSections : undefined,
       };
     }
@@ -994,6 +1033,9 @@ const dataId = header.getAttribute("data-id");
   }, {
     extractFullPayerResponse: Boolean(options.projectConfig?.extractFullPayerResponse),
     extractSecondaryCoverage: Boolean(options.projectConfig?.extractSecondaryCoverage),
+    exactUmrDates: Boolean(options.projectConfig?.exactUmrDates),
+    exactAetnaDates: Boolean(options.projectConfig?.exactAetnaDates),
+    exactCignaPlanDate: Boolean(options.projectConfig?.exactCignaPlanDate),
     responsePlanDateSectionTitle: options.projectConfig?.responsePlanDateSectionTitle ?? "",
     minimalEligibilityOnly: isExactWaystarPayerMatch(payerName, "BayCare Plus Medicare Advantage (81079)") || isExactWaystarPayerMatch(payerName, "Aetna (Medicare Advantage) (60054MA)") || isExactWaystarPayerMatch(payerName, "United Healthcare(87726)") || isExactWaystarPayerMatch(payerName, "AARP Medicare Advantage Choice Plan (87726)"),
     inquiry: {
@@ -1003,9 +1045,55 @@ const dataId = header.getAttribute("data-id");
       sectionStatus: sanitizeDomSelector(WAYSTAR_SELECTORS.inquiry.sectionStatus),
     },
   });
-  if (options.projectConfig?.extractUhcOtherCoverage) {
+  if (options.projectConfig?.exactUmrDates || options.projectConfig?.exactAetnaDates) {
+    // Optional enrichment must never discard an already extracted response.
+    try {
+    const dates: ReturnType<typeof extractWaystarResponseDates> = {
+      eligibilityBeginDate: undefined, benefitBeginDate: undefined, planBeginDate: undefined,
+    };
+    const dateReadErrors = new Set<string>();
+    // Status can finish before the payer's coverage cards. Read the response
+    // frames as well as the main document, allowing those cards to render.
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      for (const frame of inquiryPage.frames()) {
+        const found = await frame.evaluate(buildWaystarPageExpression(extractWaystarResponseDates, undefined))
+          .catch((error: unknown) => {
+            dateReadErrors.add(error instanceof Error ? error.message : String(error));
+            return null;
+          }) as ReturnType<typeof extractWaystarResponseDates> | null;
+        if (!found) continue;
+        for (const key of ["eligibilityBeginDate", "benefitBeginDate", "planBeginDate"] as const) {
+          if (!dates[key] && found[key]) dates[key] = found[key];
+        }
+      }
+      const effective = options.projectConfig.exactUmrDates ? dates.benefitBeginDate : dates.eligibilityBeginDate;
+      if (effective && dates.planBeginDate) break;
+      if (attempt < 5) await inquiryPage.waitForTimeout(1000);
+    }
+    Object.assign(payload, { exactResponseDates: dates });
+    if (!(options.projectConfig.exactUmrDates ? dates.benefitBeginDate : dates.eligibilityBeginDate)) {
+      const sectionTitle = options.projectConfig.exactUmrDates ? "Other Coverage Information" : "Subscriber Coverage Information";
+      const sectionCounts = await Promise.all(inquiryPage.frames().map(frame => frame.evaluate((title) =>
+        Array.from(document.querySelectorAll("h1,h2,h3,h4,h5,h6"))
+          .filter(heading => heading.textContent?.replace(/\s+/g, " ").trim().replace(/:$/, "").toLowerCase() === title.toLowerCase()).length, sectionTitle,
+      ).catch(() => -1)));
+      Object.assign(payload, { effectiveDateDiagnostic: `${sectionTitle} section counts per frame: ${sectionCounts.join(", ")}. ${dateReadErrors.size ? `Date read errors: ${[...dateReadErrors].join("; ")}` : "No matching date value was found in those sections."}` });
+    }
+    } catch (error) {
+      Object.assign(payload, { effectiveDateDiagnostic: `Date extraction interrupted: ${error instanceof Error ? error.message : String(error)}` });
+      // Retain the original payload, including coverage and existing dates,
+      // if the page closes or navigates during the optional date read.
+    }
+  }
+  if (options.projectConfig?.extractUhcOtherCoverage || options.projectConfig?.settings?.extractOtherCoverageServiceTypes) {
     const blocks = await inquiryPage.evaluate(extractMedRevenueUhcOtherCoverage);
-    return { ...payload, fullPayerResponse: { ...payload.fullPayerResponse, uhcOtherCoveragePayerBlocks: blocks } };
+    return { ...payload, fullPayerResponse: {
+      ...payload.fullPayerResponse,
+      ...(options.projectConfig?.extractUhcOtherCoverage ? { uhcOtherCoveragePayerBlocks: blocks } : {}),
+      ...(options.projectConfig?.settings?.extractOtherCoverageServiceTypes ? {
+        otherCoverageServiceTypes: [...new Set(blocks.map(block => block.serviceType).filter(Boolean))],
+      } : {}),
+    } };
   }
   return payload;
 }
@@ -1344,7 +1432,7 @@ async function selectPayerByName(page: Page, payerName: string, projectConfig?: 
     // SB040's legacy picker should be searched by its full configured name.
     // A broad "BCBS" search can leave the text filled while no result is
     // committed and the provider control remains disabled.
-    const searchTerms = requireExactSuggestionCommit ? [payerName] : payerSearchTerms(payerName);
+    const searchTerms = payerSearchTerms(payerName, projectConfig);
     for (const searchTerm of searchTerms) {
       await typePayerSearch(page, payerInput, searchTerm);
       const exactSuggestion = await findExactPayerSuggestion(page, payerName, requireExactSuggestionCommit);
@@ -1357,7 +1445,12 @@ async function selectPayerByName(page: Page, payerName: string, projectConfig?: 
           await exactSuggestion.click();
         }
         await humanPause(page, 450, 850);
+      } else if (projectConfig?.payerSearchText && requireExactSuggestionCommit) {
+        throw new Error(`Waystar search "${searchTerm}" did not return the exact payer ${payerName}. No payer was selected.`);
       } else if (searchTerm === payerName) {
+        if (projectConfig?.restorePatientLookup && requireExactSuggestionCommit) {
+          throw new Error(`Waystar exact payer suggestion ${payerName} was not available. Typed text alone cannot confirm payer selection.`);
+        }
         await commitTypedPayerSelection(payerInput);
       }
 
@@ -1478,6 +1571,41 @@ export function findWaystarPatientLookupOption(
   return options.find((option) => option.value === lookupCode) ??
     options.find((option) => normalizeText(option.label) === normalizedExpectedLabel) ??
     null;
+}
+
+export function findMedRevenuePatientLookupOption(
+  options: Array<{ value: string; label: string }>, memberIdAndDobOnly: boolean,
+): { value: string; label: string } | null {
+  const compatible = options.filter(({ value, label }) => {
+    const text = normalizeText(label);
+    return Boolean(value) && /\b(sbr|subscriber|member)\s+id\b/.test(text) &&
+      /\b(dob|date of birth)\b/.test(text) &&
+      (memberIdAndDobOnly || (/\b(lname|last name)\b/.test(text) && /\b(fname|first name)\b/.test(text)));
+  });
+  return (memberIdAndDobOnly
+    ? compatible.find(({ label }) => !/\b(lname|fname|name)\b/.test(normalizeText(label)))
+    : undefined) ?? compatible[0] ?? null;
+}
+
+export async function restoreMedRevenuePatientLookup(page: Page, memberIdAndDobOnly: boolean): Promise<void> {
+  const required = [WAYSTAR_SELECTORS.inquiry.memberId, WAYSTAR_SELECTORS.inquiry.dateOfBirth,
+    ...(!memberIdAndDobOnly ? [WAYSTAR_SELECTORS.inquiry.lastName, WAYSTAR_SELECTORS.inquiry.firstName] : [])];
+  const fieldsVisible = async () => (await Promise.all(required.map((selector) =>
+    page.locator(selector).first().isVisible().catch(() => false)))).every(Boolean);
+  if (await fieldsVisible()) return;
+  const lookup = page.locator(WAYSTAR_SELECTORS.inquiry.patientLookup).first();
+  if (await lookup.isVisible().catch(() => false)) {
+    await waitForEnabled(lookup, "Waystar Look Up By");
+    const option = findMedRevenuePatientLookupOption(await readWaystarSelectOptions(lookup), memberIdAndDobOnly);
+    if (!option) throw new Error("Waystar Look Up By has no option exposing the required Member ID, DOB and patient name fields for this payer.");
+    await lookup.selectOption(option.value);
+    await waitForBlockingOverlaysToClear(page, 30000);
+  }
+  for (const selector of required) {
+    await page.locator(selector).first().waitFor({ state: "visible", timeout: 30000 }).catch(() => {
+      throw new Error(`Waystar inquiry field ${selector} was not visible after restoring Look Up By. The portal form is missing the field; this does not indicate missing Excel data.`);
+    });
+  }
 }
 
 async function selectPatientLookupOption(page: Page, lookupCode: string): Promise<void> {
@@ -1694,6 +1822,67 @@ export async function verifyWaystarMemberIdAndDob(page: Page, memberId: string, 
   }
 }
 
+export async function repairWaystarMemberIdAndDob(page: Page, memberId: string, dateOfBirth: string): Promise<void> {
+  if (!memberId.trim() || !dateOfBirth.trim()) throw new Error("Blue Shield requires a nonempty Member ID and Date of Birth before submit.");
+  let mismatches: string[] = [];
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    await waitForBlockingOverlaysToClear(page, 30000);
+    await restoreMedRevenuePatientLookup(page, true);
+    // DOB blur can clear an ID that passed its individual fill check. Repair
+    // only the changed field so a retained DOB does not trigger another reset.
+    const memberInput = page.locator(WAYSTAR_SELECTORS.inquiry.memberId).first();
+    if ((await memberInput.inputValue()).trim() !== memberId.trim()) {
+      await fillVerifiedText(page, WAYSTAR_SELECTORS.inquiry.memberId, memberId, "Member ID");
+    }
+    const dobInput = page.locator(WAYSTAR_SELECTORS.inquiry.dateOfBirth).first();
+    if (!waystarDatesMatch(await dobInput.inputValue(), dateOfBirth)) {
+      await fillVerifiedText(page, WAYSTAR_SELECTORS.inquiry.dateOfBirth, dateOfBirth, "Date of Birth", true);
+    }
+    await dismissWaystarDatePicker(page);
+    await page.waitForTimeout(350);
+    await waitForBlockingOverlaysToClear(page, 30000);
+    const actualMemberId = await memberInput.inputValue();
+    const actualDob = await dobInput.inputValue();
+    mismatches = [];
+    if (actualMemberId.trim() !== memberId.trim()) mismatches.push(`Member ID ${actualMemberId.trim() ? "changed" : "was cleared"}`);
+    if (!waystarDatesMatch(actualDob, dateOfBirth)) mismatches.push(`Date of Birth ${actualDob.trim() ? "changed" : "was cleared"}`);
+    if (!mismatches.length) return;
+  }
+  throw new Error(`Blue Shield patient values did not remain stable after three repair attempts: ${mismatches.join("; ")}. Inquiry was not submitted.`);
+}
+
+export async function repairMedRevenueAetnaUmrPatientFields(
+  page: Page,
+  expected: { memberId: string; lastName: string; firstName: string; dateOfBirth?: string },
+  payerLabel = "Aetna/UMR",
+): Promise<void> {
+  // Demographic blur handlers can clear fields filled earlier. Refill only
+  // mismatches so a retained DOB does not repeatedly clear the Member ID.
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    await waitForBlockingOverlaysToClear(page, 30000);
+    for (const [selector, value, label, date] of [
+      [WAYSTAR_SELECTORS.inquiry.dateOfBirth, expected.dateOfBirth, "Date of Birth", true],
+      [WAYSTAR_SELECTORS.inquiry.lastName, expected.lastName, "Last Name", false],
+      [WAYSTAR_SELECTORS.inquiry.firstName, expected.firstName, "First Name", false],
+      [WAYSTAR_SELECTORS.inquiry.memberId, expected.memberId, "Member ID", false],
+    ] as const) {
+      if (value === undefined) continue;
+      const actual = await page.locator(selector).first().inputValue();
+      if (date ? !waystarDatesMatch(actual, value) : actual.trim() !== value.trim()) {
+        await fillVerifiedText(page, selector, value, label, date);
+      }
+    }
+    await dismissWaystarDatePicker(page);
+    await page.waitForTimeout(350);
+    try {
+      await verifyMedRevenueMedicarePatientFields(page, expected);
+      return;
+    } catch {
+      if (attempt === 2) throw new Error(`MedRevenue ${payerLabel} patient fields did not retain their input values after three repair attempts. Inquiry was not submitted.`);
+    }
+  }
+}
+
 async function verifyMedRevenueMedicarePatientFields(
   page: Page,
   expected: { memberId: string; lastName: string; firstName: string; dateOfBirth?: string },
@@ -1884,7 +2073,7 @@ async function isAutoPopulatedProviderReady(page: Page): Promise<boolean> {
   return Boolean((await provider.inputValue().catch(() => "")).trim());
 }
 
-async function fillPlanDatesFromDateOfService(
+export async function fillPlanDatesFromDateOfService(
   page: Page,
   dateOfService: string,
   projectConfig: WaystarPayerProjectConfig,
@@ -1918,7 +2107,7 @@ async function fillPlanDatesFromDateOfService(
   for (let attempt = 0; attempt < 2; attempt += 1) {
     await evaluateWaystarPage(page, (args) => {
       const from = document.querySelector<HTMLInputElement>(args.fromSelector);
-      const to = document.querySelector<HTMLInputElement>(args.toSelector);
+      const to = args.hasToInput ? document.querySelector<HTMLInputElement>(args.toSelector) : null;
       if (!from || (!args.toOptional && !to)) throw new Error("Waystar Plan Date inputs were not found.");
       const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
       if (!setter) throw new Error("Browser input value setter is unavailable.");
@@ -1931,21 +2120,34 @@ async function fillPlanDatesFromDateOfService(
         input.dispatchEvent(new Event("change", { bubbles: true }));
         input.dispatchEvent(new Event("blur", { bubbles: true }));
       }
-    }, { fromSelector, toSelector, value: planDate, toOptional: projectConfig.planDateToOptional === true });
+    }, { fromSelector, toSelector, value: planDate, hasToInput, toOptional: projectConfig.planDateToOptional === true });
     await dismissWaystarDatePicker(page);
     await page.waitForTimeout(150);
     const actualFrom = await fromInput.inputValue().catch(() => "");
-    const actualTo = await toInput.inputValue().catch(() => "");
+    const actualTo = hasToInput ? await toInput.inputValue().catch(() => "") : "";
     if (waystarDatesMatch(actualFrom, planDate) && (!hasToInput || waystarDatesMatch(actualTo, planDate))) return;
   }
+  if (projectConfig.retryPlanDatesWithKeyboard) {
+    // UMR's widget may discard values assigned through script. Retry the same
+    // input DOS via keyboard; response dates never participate in this step.
+    await waitForBlockingOverlaysToClear(page, 30000);
+    await fillVerifiedText(page, `${fromSelector}:visible`, planDate, "Plan Date From", true);
+    if (hasToInput) await fillVerifiedText(page, `${toSelector}:visible`, planDate, "Plan Date To", true);
+    await dismissWaystarDatePicker(page);
+    await page.waitForTimeout(200);
+    await waitForBlockingOverlaysToClear(page, 30000);
+  }
   const actualFrom = await fromInput.inputValue().catch(() => "");
-  const actualTo = await toInput.inputValue().catch(() => "");
+  const actualTo = hasToInput ? await toInput.inputValue().catch(() => "") : "";
+  if (waystarDatesMatch(actualFrom, planDate) && (!hasToInput || waystarDatesMatch(actualTo, planDate))) return;
   throw new Error(
     `MedRevenue Plan Date(s) did not retain the input DOS ${planDate}. From=${actualFrom || "blank"}, To=${hasToInput ? actualTo || "blank" : "not shown"}.`,
   );
 }
 
-export function payerSearchTerms(payerName: string): string[] {
+export function payerSearchTerms(payerName: string, projectConfig?: WaystarPayerProjectConfig): string[] {
+  if (projectConfig?.payerSearchText?.trim()) return [projectConfig.payerSearchText.trim()];
+  if (projectConfig?.requireExactPayerSuggestionCommit) return [payerName];
   const normalized = normalizeText(payerName);
   if (extractWaystarPayerId(payerName) === "61101" && normalized.includes("humana")) {
     return ["humana"];
