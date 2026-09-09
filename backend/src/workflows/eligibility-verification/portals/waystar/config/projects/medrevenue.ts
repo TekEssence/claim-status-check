@@ -5,7 +5,7 @@ export const medRevenueWaystarConfig: WaystarProjectConfig = {
   id: "medrevenue",
   requireInputProjectColumn: false,
   allowUnscopedCredentials: true,
-  settings: { extractOtherCoverageServiceTypes: true },
+  settings: { extractOtherCoverageServiceTypes: true, verifyPayerBeforeSubmit: true },
   inputColumnMappings: {
     dateOfService: ["Date of Service (DOS)", "Plan Date", "Plan Date(s)"],
   },
@@ -136,6 +136,8 @@ export const medRevenueWaystarConfig: WaystarProjectConfig = {
       selectorFallbacks: { planDateFrom: "#txtPlanFrom", planDateTo: "#txtPlanTo" },
     },
     medicare: {
+      settings: { requireFullPayerName: true },
+      requireExactPayerSuggestionCommit: true,
       skipProviderHandling: true,
       useDateOfServiceForPlanDates: true,
       fillDateOfBirth: true,

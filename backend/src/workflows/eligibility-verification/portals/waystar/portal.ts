@@ -435,6 +435,9 @@ export async function submitWaystarInquiry(options: {
   await selectInquiryPatientType(inquiryPage, row.relationshipToSubscriber);
   await humanPause(inquiryPage);
   await selectPayer(inquiryPage, payerName, options.projectConfig);
+  if (options.projectConfig?.settings?.verifyPayerBeforeSubmit) {
+    await verifyWaystarSelectedPayer(inquiryPage, payerName, options.projectConfig);
+  }
   await humanPause(inquiryPage);
   if (!useMedRevenueMedicareFlow) {
     await selectProviderWithProjectFallback(inquiryPage, credentials, options.projectConfig);
@@ -561,6 +564,9 @@ export async function submitWaystarInquiry(options: {
     }
   }
 
+  if (options.projectConfig?.settings?.verifyPayerBeforeSubmit) {
+    await verifyWaystarSelectedPayer(inquiryPage, payerName, options.projectConfig);
+  }
   await Promise.all([
     inquiryPage.waitForLoadState("networkidle").catch(() => {}),
     inquiryPage.locator(WAYSTAR_SELECTORS.inquiry.submit).click(),
@@ -1131,6 +1137,28 @@ export function normalizeWaystarMemberIdForPayer(payerName: string, memberId: st
   const isAarpMedicareComplete = isExactWaystarPayerMatch(payerName, "AARP Medicare Advantage Choice Plan (87726)");
   return (isBayCare || isUnitedHealthcare || isAarpMedicareComplete) && /^\d+$/.test(value) ? `000${value}` : value;
 }
+export function matchesConfiguredWaystarPayer(candidate: string, target: string, config?: WaystarPayerProjectConfig): boolean {
+  return config?.settings?.requireFullPayerName
+    ? normalizePayerSuggestion(candidate) === normalizePayerSuggestion(target)
+    : isExactWaystarPayerMatch(candidate, target);
+}
+
+export async function verifyWaystarSelectedPayer(page: Page, expected: string, config?: WaystarPayerProjectConfig): Promise<void> {
+  await waitForBlockingOverlaysToClear(page, 30000);
+  // Check again after change handlers have had time to reset the control.
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    if (attempt) await page.waitForTimeout(500);
+    const input = page.locator(WAYSTAR_SELECTORS.inquiry.payerInput).first();
+    const select = page.locator(WAYSTAR_SELECTORS.inquiry.payerSelect).first();
+    const actual = await input.isVisible().catch(() => false)
+      ? await input.inputValue()
+      : await select.locator("option:checked").innerText();
+    if (!matchesConfiguredWaystarPayer(actual, expected, config)) {
+      throw new Error(`Waystar payer changed or was not selected. Expected ${expected}, found ${actual || "blank"}. Inquiry was not submitted.`);
+    }
+  }
+}
+
 export function isExactWaystarPayerMatch(candidate: string, target: string): boolean {
   const normalizedCandidate = normalizePayerSuggestion(candidate);
   const normalizedTarget = normalizePayerSuggestion(target);
@@ -1419,7 +1447,7 @@ async function selectPayerByName(page: Page, payerName: string, projectConfig?: 
   const payerInput = page.locator(WAYSTAR_SELECTORS.inquiry.payerInput).first();
   if (await payerInput.isVisible().catch(() => false)) {
     const retainedPayer = await payerInput.inputValue().catch(() => "");
-    if (isExactWaystarPayerMatch(retainedPayer, payerName) && !requireExactSuggestionCommit) {
+    if (matchesConfiguredWaystarPayer(retainedPayer, payerName, projectConfig) && !requireExactSuggestionCommit) {
       if (skipProviderReadiness) return;
       if (await isProviderReady(page, 2000)) return;
       await commitTypedPayerSelection(payerInput);
@@ -1435,7 +1463,7 @@ async function selectPayerByName(page: Page, payerName: string, projectConfig?: 
     const searchTerms = payerSearchTerms(payerName, projectConfig);
     for (const searchTerm of searchTerms) {
       await typePayerSearch(page, payerInput, searchTerm);
-      const exactSuggestion = await findExactPayerSuggestion(page, payerName, requireExactSuggestionCommit);
+      const exactSuggestion = await findExactPayerSuggestion(page, payerName, requireExactSuggestionCommit, projectConfig);
       if (exactSuggestion) {
         await exactSuggestion.scrollIntoViewIfNeeded().catch(() => {});
         await humanPause(page, 300, 650);
@@ -1456,7 +1484,7 @@ async function selectPayerByName(page: Page, payerName: string, projectConfig?: 
 
       if (skipProviderReadiness) {
         const selectedPayer = await payerInput.inputValue().catch(() => "");
-        if (isExactWaystarPayerMatch(selectedPayer, payerName)) return;
+        if (matchesConfiguredWaystarPayer(selectedPayer, payerName, projectConfig)) return;
       }
 
       if (await isProviderReady(page, 5000)) {
@@ -1473,7 +1501,7 @@ async function selectPayerByName(page: Page, payerName: string, projectConfig?: 
   if (await payerSelect.isVisible().catch(() => false)) {
     await payerSelect.selectOption({ label: payerName }).catch(async () => {
       const options = await readWaystarSelectOptions(payerSelect);
-      const match = options.find((option) => isExactWaystarPayerMatch(option.label, payerName));
+      const match = options.find((option) => matchesConfiguredWaystarPayer(option.label, payerName, projectConfig));
       if (!match?.value) {
         throw new Error(`Waystar payer ${payerName} was not found in the DDE payer dropdown.`);
       }
@@ -1487,7 +1515,7 @@ async function selectPayerByName(page: Page, payerName: string, projectConfig?: 
   throw new Error("Waystar payer control was not found on the DDE inquiry page.");
 }
 
-async function findExactPayerSuggestion(page: Page, payerName: string, allowDirectTextFallback = false) {
+async function findExactPayerSuggestion(page: Page, payerName: string, allowDirectTextFallback = false, projectConfig?: WaystarPayerProjectConfig) {
   const deadline = Date.now() + 10000;
   while (Date.now() < deadline) {
     const suggestions = page.locator(WAYSTAR_PAYER_SUGGESTION_SELECTOR);
@@ -1496,7 +1524,7 @@ async function findExactPayerSuggestion(page: Page, payerName: string, allowDire
       const suggestion = suggestions.nth(index);
       await suggestion.scrollIntoViewIfNeeded().catch(() => {});
       const label = (await suggestion.innerText().catch(() => "")).trim();
-      if (isExactWaystarPayerMatch(label, payerName)) {
+      if (matchesConfiguredWaystarPayer(label, payerName, projectConfig)) {
         return suggestion;
       }
     }

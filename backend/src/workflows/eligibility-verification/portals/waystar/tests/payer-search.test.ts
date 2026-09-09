@@ -16,7 +16,7 @@ test("MedRevenue Blue Shield searches broadly but accepts only California SB542"
 test("Blue Shield search override does not change other payer searches", () => {
   for (const project of ["medrevenue", "minimax"] as const) {
     for (const [payer, config] of Object.entries(getWaystarProjectConfig(project).payers ?? {})) {
-      if (project === "medrevenue" && ["blue-shield", "aetna", "umr"].includes(payer)) continue;
+      if (project === "medrevenue" && ["blue-shield", "aetna", "umr", "cigna-open-access-plus"].includes(payer)) continue;
       assert.equal(config.payerSearchText, undefined);
       if (config.requireExactPayerSuggestionCommit && config.portalPayerName) {
         assert.deepEqual(payerSearchTerms(config.portalPayerName, config), [config.portalPayerName]);

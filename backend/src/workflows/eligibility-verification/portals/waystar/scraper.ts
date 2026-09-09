@@ -326,7 +326,7 @@ export function createWaystarRunner(): AutomationRunner<EligibilityRunInput> {
                   }
                 }
                 const fieldRetries = fieldRetryCounts.get(row.originalIndex) ?? 0;
-                if (isWaystarInquiryFieldError(message) && fieldRetries < 1) {
+                if ((isWaystarInquiryFieldError(message) || (input.projectId === "medrevenue" && message.startsWith("Waystar payer changed or was not selected."))) && fieldRetries < 1) {
                   fieldRetryCounts.set(row.originalIndex, fieldRetries + 1);
                   await closeWaystarInquiryWindows(page);
                   batch.rows.push(row);

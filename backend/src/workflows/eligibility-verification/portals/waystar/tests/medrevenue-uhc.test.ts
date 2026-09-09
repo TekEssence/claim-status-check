@@ -12,7 +12,7 @@ test("MedRevenue routes UHC names, medical groups and 9 prefixes to UHC", () => 
     const routing = routeWaystarRowsByPayer([{ "Primary Insurance Name": name, "Member ID": "A123" }], { projectConfig: getWaystarProjectConfig("medrevenue") });
     assert.equal(routing.batches[0]?.payerId, "united-healthcare-all-states", name);
   }
-  for (const name of ["Medicare", "Blue Cross", "Unknown", ""]) {
+  for (const name of ["Blue Cross", "Unknown", ""]) {
     const routing = routeWaystarRowsByPayer([{ "Primary Insurance Name": name, "Member ID": " 912345 " }], { projectConfig: getWaystarProjectConfig("medrevenue") });
     assert.equal(routing.batches[0]?.payerId, "united-healthcare-all-states", name);
     assert.equal(routing.batches[0].rows[0].memberId, "912345");

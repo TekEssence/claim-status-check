@@ -396,6 +396,9 @@ function matchProjectPayerRoutingRule(
       // Named Aetna/UMR/Cigna above and Blue Cross take priority over the X fallback.
       return matchesName("bcbs-ppo") ? "bcbs-ppo" : "blue-shield";
     }
+    // Medicare member IDs can start with 9. Keep the named Medicare payer
+    // before the numeric-prefix fallback can redirect the row to UHC.
+    if (matchWaystarPayer(insuranceName)?.id === "medicare") return "medicare";
   }
   const preferredNameRule = projectConfig?.payerRoutingRules?.find((rule) =>
     rule.preferInsuranceName && matchesProjectPayerRoutingRule(
