@@ -356,7 +356,9 @@ export async function updateScrapeJobSnapshot(params: {
       .update(automationJobs)
       .set({
         status: nextStatus,
-        currentCompleted: params.currentCompleted ?? existing.currentCompleted,
+        currentCompleted: params.currentCompleted !== undefined
+          ? Math.max(existing.currentCompleted, params.currentCompleted)
+          : existing.currentCompleted,
         totalItems: params.totalRows ?? existing.totalItems,
         updatedAt: now,
         finishedAt: isTerminalStatus ? now : existing.finishedAt,

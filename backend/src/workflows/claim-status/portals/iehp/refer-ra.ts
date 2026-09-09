@@ -268,7 +268,9 @@ export async function processReferToRaDownloads({
 
     try {
       const pdfBuffer = fs.readFileSync(pdfPath);
-      await sendEvent({ type: "pdf_download", filename: pdfFileName, base64: pdfBuffer.toString("base64") });
+      if (process.env.IEHP_EMIT_RA_PDFS === "true") {
+        await sendEvent({ type: "pdf_download", filename: pdfFileName, base64: pdfBuffer.toString("base64") });
+      }
 
       const pdfText = await extractTextFromPdf(pdfBuffer);
       const pdfPages = await extractTextPagesFromPdf(pdfBuffer);

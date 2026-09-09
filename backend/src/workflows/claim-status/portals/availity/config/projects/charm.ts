@@ -43,7 +43,7 @@ export const charmAvailityConfig: AvailityProjectConfig = {
         "Feel Better": "FEEL BETTER BEHAVIORAL HEALTH SERVICES LLC",
         Columbia: "Columbia River Natural Medicine, LLC",
         "Grey Matters": "William Nields, PLLC",
-        Dumont: "Dumont medical PLLC",
+        Dumont: "Open Mind Health",
         Premier: "Premier Health",
         Bentonville: "BENTONVILLE PEDIATRICS, P.A.",
       },
@@ -128,6 +128,6 @@ export const charmAvailityConfig: AvailityProjectConfig = {
     reportCombinedMemberPatientMismatch: false,
     allowFuzzyProviderSelection: true,
   },
-  preprocessingStrategy: "none",
+  preprocessingStrategy: "groupCharmByStatePracticePayer",
   outputStrategy: "default",
 };

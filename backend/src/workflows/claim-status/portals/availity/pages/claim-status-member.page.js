@@ -3,7 +3,7 @@
 const logger = require("../utils/logger");
 const { humanDelay, withRetry } = require("../utils/browser");
 const { getClaimStatusFrame } = require("./navigation.page");
-const { submitCharmSearchAfterProviderDropdown, trySubmitCharmSearchWithoutProviderDropdown } = require("./charm-provider-search.page");
+const { submitCharmSearchWithProvider } = require("./charm-provider-search.page");
 const { throwIfVisibleFieldValidation } = require("./results.page");
 
 const PROVIDERS = ["TRINITY PAIN MANAGEMENT", "DAO, THUAN DUC"];
@@ -442,24 +442,16 @@ async function hasNoResults(page) {
 async function searchMemberWithProvider(page, providerName, rowData, options = {}) {
   logger.info(`Member search provider attempt: ${providerName}`);
   await selectMemberTab(page);
-  if (await trySubmitCharmSearchWithoutProviderDropdown(page, rowData, {
+  if (await submitCharmSearchWithProvider(page, providerName, rowData, {
     projectId: options.projectId,
     context: "Charm Member",
     logger,
     providerMode: options.providerMode,
+    selectProvider,
     fillSearchForm: fillMemberSearchForm,
     submitSearch: submitMemberSearch,
   })) return;
   await selectProvider(page, providerName);
-  if (await submitCharmSearchAfterProviderDropdown(page, rowData, {
-    projectId: options.projectId,
-    context: "Charm Member",
-    logger,
-    providerMode: options.providerMode,
-    providerDropdownSelected: true,
-    fillSearchForm: fillMemberSearchForm,
-    submitSearch: submitMemberSearch,
-  })) return;
   await fillMemberSearchForm(page, rowData);
   if (options.projectId === "charm") {
     await throwIfVisibleFieldValidation(page, "Charm Member");

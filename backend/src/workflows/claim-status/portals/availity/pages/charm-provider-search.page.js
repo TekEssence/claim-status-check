@@ -1,10 +1,13 @@
 "use strict";
 
 const { clearProviderFormIfVisible, fillInputProviderIdentifiers } = require("./provider-identifiers.page");
-const { throwIfVisibleFieldValidation } = require("./results.page");
+const { throwIfUnknownCharmRequiredFields, throwIfVisibleFieldValidation } = require("./results.page");
 
 async function fillSearchFieldsAndSubmit(page, rowData, options = {}) {
   await options.fillSearchForm(page, rowData);
+  if (options.projectId === "charm") {
+    await throwIfUnknownCharmRequiredFields(page, options.context || "Charm Availity");
+  }
   await throwIfVisibleFieldValidation(page, options.context || "Charm Availity");
   await options.submitSearch(page);
 }
@@ -68,7 +71,31 @@ async function submitCharmSearchAfterProviderDropdown(page, rowData, options = {
   return true;
 }
 
+async function submitCharmSearchWithProvider(page, providerName, rowData, options = {}) {
+  if (options.projectId !== "charm") return false;
+  if (typeof options.selectProvider !== "function") {
+    throw new Error("Charm Availity shared search requires selectProvider.");
+  }
+
+  if (await trySubmitCharmSearchWithoutProviderDropdown(page, rowData, options)) {
+    return true;
+  }
+
+  if (options.providerMode === "none") {
+    throw new Error(`${options.context || "Charm Availity"} providerMode "none" skips Select a Provider, but required provider fields could not be filled directly from claim data.`);
+  }
+
+  const selectedProviderText = await options.selectProvider(page, providerName, rowData, options);
+  await submitCharmSearchAfterProviderDropdown(page, rowData, {
+    ...options,
+    providerDropdownSelected: true,
+    providerDropdownText: selectedProviderText,
+  });
+  return true;
+}
+
 module.exports = {
+  submitCharmSearchWithProvider,
   submitCharmSearchAfterProviderDropdown,
   trySubmitCharmSearchWithoutProviderDropdown,
 };

@@ -193,6 +193,16 @@ describe("Charm project config", () => {
     assert.equal(resolvePortalSelections("charm", row, new Map()).organization, "Institute on Complementary Medicine");
   });
 
+  it("resolves the Charm Dumont organization", () => {
+    const row: AvailityInputRow = {
+      input_row_id: 1,
+      source_row_number: 2,
+      data: applyProjectColumnMapping("charm", { Practice: "Dumont" }),
+    };
+
+    assert.equal(resolvePortalSelections("charm", row, new Map()).organization, "Open Mind Health");
+  });
+
   it("resolves the correctly spelled Charm Feel Better organization", () => {
     const row: AvailityInputRow = {
       input_row_id: 1,
@@ -233,6 +243,51 @@ describe("Charm project config", () => {
     };
 
     assert.equal(getOrganizationForRow("charm", row), "Open Mind Health");
+  });
+
+  it("groups Charm rows by state, practice, then portal payer before processing", () => {
+    const rows: AvailityInputRow[] = [
+      {
+        input_row_id: 1,
+        source_row_number: 2,
+        data: applyProjectColumnMapping("charm", {
+          Practice: "Open Mind",
+          "State to choose in Availity": "Florida",
+          "Payer to choose in Availity": "AETNA",
+        }),
+      },
+      {
+        input_row_id: 2,
+        source_row_number: 3,
+        data: applyProjectColumnMapping("charm", {
+          Practice: "Grey Matters",
+          "State to choose in Availity": "California",
+          "Payer to choose in Availity": "ANTHEM-CA",
+        }),
+      },
+      {
+        input_row_id: 3,
+        source_row_number: 4,
+        data: applyProjectColumnMapping("charm", {
+          Practice: "Open Mind",
+          "State to choose in Availity": "California",
+          "Payer to choose in Availity": "AETNA",
+        }),
+      },
+      {
+        input_row_id: 4,
+        source_row_number: 5,
+        data: applyProjectColumnMapping("charm", {
+          Practice: "Open Mind",
+          "State to choose in Availity": "California",
+          "Payer to choose in Availity": "CARELON BEHAVIORAL HEALTH",
+        }),
+      },
+    ];
+
+    const processed = applyProjectPreprocessing("charm", rows);
+
+    assert.deepEqual(processed.map((row) => row.input_row_id), [2, 3, 4, 1]);
   });
 
   it("keeps Minimax and Medrevenu organization blank", () => {

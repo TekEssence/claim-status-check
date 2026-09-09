@@ -35,8 +35,7 @@ import {
   type ScrapeJobSummary,
 } from "../../api/scrape-jobs-api";
 import { clearCognitoAccessToken, getCognitoAccessToken, getCognitoUserProfile, isCognitoMode, redirectToCognitoLogin, redirectToCognitoLogout, storeCognitoTokenFromHash } from "../../api/cognito-auth";
-import { clearStoredRunContext, loadClaimFileHandle, loadIehpLoginFile, saveClaimFileHandle, saveIehpLoginFile } from "../../lib/run-context-store";
-import type { FileSystemFileHandle } from "../../types/file-system-access";
+import { clearStoredRunContext, saveIehpLoginFile } from "../../lib/run-context-store";
 import type { ErrorScreenshot, JobProgressValue, ScrapeJobEvent } from "../../types/job";
 import { IehpInputForm } from "./portals/iehp/IehpInputForm";
 import { IehpResultView } from "./portals/iehp/IehpResultView";
@@ -99,8 +98,7 @@ import {
   type DownloadFile,
 } from "./shared/artifacts";
 import {
-  getMissingLocalExcelMessage, loadIehpWorkbookBundle,
-  isFileAccessPermissionError, loadUhcWorkbookBundle, selectExcelFileHandle,
+  loadIehpWorkbookBundle, loadUhcWorkbookBundle,
   type UhcWorkbookBundle,
 } from "./shared/workbook-files";
 export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: PortalId | null }) {
@@ -139,7 +137,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
   const [settingsPasswordStatus, setSettingsPasswordStatus] = useState("");
   const [settingsPasswordSubmitting, setSettingsPasswordSubmitting] = useState(false);
   const [iehpLoginFile, setIehpLoginFile] = useState<File | null>(null);
-  const [claimFileHandle, setClaimFileHandle] = useState<FileSystemFileHandle | null>(null);
+  const [iehpClaimFile, setIehpClaimFile] = useState<File | null>(null);
   const [claimFileName, setClaimFileName] = useState<string>("");
   const [aerialCredentialFile, setAerialCredentialFile] = useState<File | null>(null);
   const [aerialInputFile, setAerialInputFile] = useState<File | null>(null);
@@ -190,7 +188,6 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
   const [downloadingWorkflowJobId, setDownloadingWorkflowJobId] = useState("");
   const [cancellingWorkflowJobId, setCancellingWorkflowJobId] = useState("");
   const [jobRestoreLoading, setJobRestoreLoading] = useState(true);
-  const [pendingIehpRestoreJob, setPendingIehpRestoreJob] = useState<CurrentScrapeJob | null>(null);
   const [pendingRegalRestoreJob, setPendingRegalRestoreJob] = useState<CurrentScrapeJob | null>(null);
   const [pendingBlueShieldRestoreJob, setPendingBlueShieldRestoreJob] = useState<CurrentScrapeJob | null>(null);
   const [dashboardStatsData, setDashboardStatsData] = useState<DashboardStatsData>({
@@ -308,8 +305,8 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
   });
   const blockPortalFormForProcessing = isProcessing && !workflowRunTrackingEnabled;
   const canSubmitIehp = useMemo(
-    () => Boolean(iehpLoginFile && claimFileHandle && canStartAnotherRun),
-    [iehpLoginFile, claimFileHandle, canStartAnotherRun],
+    () => Boolean(iehpLoginFile && iehpClaimFile && canStartAnotherRun),
+    [iehpLoginFile, iehpClaimFile, canStartAnotherRun],
   );
   const selectedAerialSubportal = getAerialSubportal(aerialSubportal);
   const canSubmitAerial = useMemo(
@@ -710,39 +707,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
         setActiveView("portal-selection");
 
         if (currentJob.portalId === "iehp") {
-          const [storedClaimHandle, storedLoginFile] = await Promise.all([loadClaimFileHandle(), loadIehpLoginFile()]);
-          if (cancelled) return;
-          let canAutoResumeIehp = true;
-
-          if (storedClaimHandle) {
-            setClaimFileHandle(storedClaimHandle);
-            setClaimFileName(currentJob.claimFileName || "");
-            const currentPermission = await storedClaimHandle.queryPermission({ mode: "readwrite" }).catch(() => "prompt" as const);
-            if (currentPermission !== "granted") {
-              canAutoResumeIehp = false;
-            }
-          }
-          if (storedLoginFile) {
-            setIehpLoginFile(storedLoginFile);
-          }
-
-          if (storedClaimHandle && storedLoginFile && canAutoResumeIehp) {
-            await resumeExistingIehpRun(currentJob, storedClaimHandle, storedLoginFile);
-          } else {
-            setPendingIehpRestoreJob(currentJob);
-            if (!storedClaimHandle) {
-              setStatus(`Could not restore the active run: ${getMissingLocalExcelMessage(currentJob.claimFileName)}`);
-            } else if (!canAutoResumeIehp) {
-              const normalizedResumeMessage = `Previous IEHP run restored. Click Allow And Continue to continue from row ${currentJob.currentCompleted + 1}.`;
-              setStatus(normalizedResumeMessage);
-              if (typeof window !== "undefined") {
-                window.alert(normalizedResumeMessage);
-              }
-            } else {
-              setStatus("A run is active, but the local IEHP login file context could not be restored automatically. Please upload the login file again if needed.");
-            }
-            setIsProcessing(false);
-          }
+          await reconnectDownloadOnlyRun(currentJob, "iehp", "IEHP");
         } else if (currentJob.portalId === "aerial") {
           await reconnectAerialRun(currentJob);
         } else if (currentJob.portalId === "availity") {
@@ -764,12 +729,6 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
         }
       } catch (error) {
         if (!cancelled) {
-          if (isFileAccessPermissionError(error) || getErrorMessage(error).includes("Browser file permission is not currently granted")) {
-            const currentJob = await getCurrentScrapeJob().catch(() => null);
-            if (currentJob?.portalId === "iehp") {
-              setPendingIehpRestoreJob(currentJob);
-            }
-          }
           setStatus(`Could not restore the active run: ${getErrorMessage(error)}`);
           setIsProcessing(false);
         }
@@ -1107,7 +1066,6 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     setAstronaResults([]);
     setIsProcessing(false);
     setActiveJobId("");
-    setPendingIehpRestoreJob(null);
     setPendingRegalRestoreJob(null);
     setPendingBlueShieldRestoreJob(null);
     setRegalJobId("");
@@ -1272,7 +1230,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     setSettingsPasswordSubmitting(false);
     setSelectedPortalId(null);
     setIehpLoginFile(null);
-    setClaimFileHandle(null);
+    setIehpClaimFile(null);
     setClaimFileName("");
     setAerialCredentialFile(null);
     setAerialInputFile(null);
@@ -1313,7 +1271,6 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     setWorkflowRuns([]);
     setWorkflowRunsError("");
     setSelectedWorkflowRunId("");
-    setPendingIehpRestoreJob(null);
     setPendingBlueShieldRestoreJob(null);
   }
 
@@ -1528,40 +1485,9 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     }
   }
 
-  async function selectClaimFile() {
-    try {
-      const fileHandle = await selectExcelFileHandle();
-      if (!fileHandle) return null;
-
-      setClaimFileHandle(fileHandle);
-      await saveClaimFileHandle(fileHandle).catch(() => {});
-      const file = await fileHandle.getFile();
-      setClaimFileName(file.name);
-
-      if (pendingIehpRestoreJob) {
-        const loginFileToUse = iehpLoginFile ?? (await loadIehpLoginFile().catch(() => null));
-        if (!loginFileToUse) {
-          setStatus("The active IEHP run is waiting, but the login file could not be restored. Please upload the login file again.");
-          return fileHandle;
-        }
-
-        setIehpLoginFile(loginFileToUse);
-        setPendingIehpRestoreJob(null);
-        void resumeExistingIehpRun(pendingIehpRestoreJob, fileHandle, loginFileToUse).catch((error) => {
-          setPendingIehpRestoreJob(pendingIehpRestoreJob);
-          setStatus(`Could not restore the active run: ${getErrorMessage(error)}`);
-          setIsProcessing(false);
-        });
-      }
-
-      return fileHandle;
-    } catch (error) {
-      if ((error as Error).name !== "AbortError") {
-        console.error("Failed to select file:", error);
-        setStatus(`Failed to select file: ${getErrorMessage(error)}`);
-      }
-      return null;
-    }
+  function handleIehpClaimFileChange(file: File | null) {
+    setIehpClaimFile(file);
+    setClaimFileName(file?.name ?? "");
   }
 
   function handleLoginFileChange(file: File | null) {
@@ -1572,26 +1498,20 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
   }
 
   async function runIehpSession(options: {
-    claimFileHandle: FileSystemFileHandle;
+    claimFile: File;
     loginFile: File;
     existingJobId?: string;
     initialStartIndex?: number;
     attachToRunningJob?: boolean;
     initialLogs?: string[];
     initialProgress?: JobProgressValue | null;
-    allowPermissionPrompt?: boolean;
   }) {
-    const workbookBundle = await loadIehpWorkbookBundle(options.claimFileHandle, {
-      requestPermission: options.allowPermissionPrompt ?? true,
-      fileNameForErrors: options.claimFileHandle ? claimFileName : "",
-    });
+    const workbookBundle = await loadIehpWorkbookBundle(options.claimFile);
     const { claimRows, totalRows } = workbookBundle;
 
-    setClaimFileHandle(options.claimFileHandle);
-    const liveClaimFile = await options.claimFileHandle.getFile();
+    const liveClaimFile = options.claimFile;
     setClaimFileName(liveClaimFile.name);
     setIehpLoginFile(options.loginFile);
-    await saveClaimFileHandle(options.claimFileHandle).catch(() => {});
     await saveIehpLoginFile(options.loginFile).catch(() => {});
 
     setIsProcessing(true);
@@ -1621,8 +1541,23 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
         if (eventData.type === "log" && eventData.message) {
           setLogs((prev) => [...prev, eventData.message ?? ""]);
         } else if (eventData.type === "progress" && typeof eventData.completed === "number" && typeof eventData.total === "number") {
-          currentCompleted = eventData.completed;
-          setProgress({ completed: eventData.completed, total: eventData.total, currentRow: eventData.currentRow });
+          const eventCompleted = eventData.completed;
+          const eventTotal = eventData.total;
+          const eventCurrentRow = eventData.currentRow;
+          currentCompleted = Math.max(currentCompleted, eventCompleted);
+          setProgress((previous) => {
+            const previousCompleted = previous?.completed ?? 0;
+            const completed = Math.max(previousCompleted, eventCompleted);
+            return {
+              completed,
+              total: Math.max(previous?.total ?? 0, eventTotal),
+              ...(completed === eventCompleted && eventCurrentRow !== undefined
+                ? { currentRow: eventCurrentRow }
+                : previous?.currentRow !== undefined
+                  ? { currentRow: previous.currentRow }
+                  : {}),
+            };
+          });
         } else if (eventData.type === "row_update") {
           // IEHP output is now generated by the worker and stored as a separate S3 artifact.
         } else if (eventData.type === "error_screenshot" && eventData.image) {
@@ -1666,7 +1601,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
           subscribedJobId = await startScrapeJob(formData);
           setActiveJobId(subscribedJobId);
           setIehpLoginFile(null);
-          setClaimFileHandle(null);
+          setIehpClaimFile(null);
           setClaimFileName("");
           setIsProcessing(false);
           void refreshWorkflowRuns({ silent: true });
@@ -1712,31 +1647,6 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     setActiveJobId("");
   }
 
-  async function resumeExistingIehpRun(currentJob: CurrentScrapeJob, storedClaimHandle: FileSystemFileHandle, storedLoginFile: File) {
-    if (currentJob.status === "waiting_resume") {
-      await runIehpSession({
-        claimFileHandle: storedClaimHandle,
-        loginFile: storedLoginFile,
-        existingJobId: currentJob.jobId,
-        initialStartIndex: currentJob.currentCompleted,
-        initialLogs: currentJob.logs,
-        initialProgress:
-          currentJob.totalRows > 0 ? { completed: currentJob.currentCompleted, total: currentJob.totalRows } : null,
-      });
-      return;
-    }
-
-    await runIehpSession({
-      claimFileHandle: storedClaimHandle,
-      loginFile: storedLoginFile,
-      existingJobId: currentJob.jobId,
-      initialStartIndex: currentJob.currentCompleted,
-      attachToRunningJob: true,
-      initialProgress:
-        currentJob.totalRows > 0 ? { completed: currentJob.currentCompleted, total: currentJob.totalRows } : null,
-    });
-  }
-
   async function reconnectAerialRun(currentJob: CurrentScrapeJob) {
     setIsProcessing(true);
     setActiveJobId(currentJob.jobId);
@@ -1756,7 +1666,6 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     let hasError = false;
     let wasCancelled = false;
     let finalErrorMessage = "";
-    const subscribedJobId = "";
     const streamAbortController = new AbortController();
 
     try {
@@ -2315,31 +2224,18 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
   async function submitIehp(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
 
-    if (!iehpLoginFile || !claimFileHandle) {
+    if (!iehpLoginFile || !iehpClaimFile) {
       setStatus("Please provide both required files.");
       return;
     }
 
-    const resumeJob = pendingIehpRestoreJob;
-
     try {
-      if (resumeJob) {
-        setPendingIehpRestoreJob(null);
-        setIsProcessing(true);
-        setStatus(`Resuming previous IEHP run from row ${resumeJob.currentCompleted + 1}...`);
-        await resumeExistingIehpRun(resumeJob, claimFileHandle, iehpLoginFile);
-        return;
-      }
-
       resetRunState("Reading claim file...");
       await runIehpSession({
-        claimFileHandle,
+        claimFile: iehpClaimFile,
         loginFile: iehpLoginFile,
       });
     } catch (error) {
-      if (resumeJob) {
-        setPendingIehpRestoreJob(resumeJob);
-      }
       setStatus(`Failed to process IEHP claims: ${getErrorMessage(error)}`);
       setIsProcessing(false);
     }
@@ -3350,10 +3246,9 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
                       canSubmit={canSubmitIehp}
                       claimFileName={claimFileName}
                       isProcessing={blockPortalFormForProcessing}
-                      isResumePending={Boolean(pendingIehpRestoreJob)}
                       loginFileName={iehpLoginFile?.name ?? ""}
+                      onClaimFileChange={handleIehpClaimFileChange}
                       onLoginFileChange={handleLoginFileChange}
-                      onSelectClaimFile={selectClaimFile}
                       onSubmit={submitIehp}
                     />
                       ),

@@ -51,6 +51,11 @@ type IehpOutputWorkbook = {
   changed: boolean;
 };
 
+type UploadIehpOutputWorkbookOptions = {
+  finalize?: boolean;
+  announce?: boolean;
+};
+
 const fileInputs: FileInputSpec[] = [
   {
     formField: "claimExcel",
@@ -424,11 +429,29 @@ async function persistAutomationEvent(jobId: string, workflowId: AutomationWorkf
   }
 }
 
-async function uploadIehpOutputWorkbook(jobId: string, outputWorkbook: IehpOutputWorkbook | null): Promise<boolean> {
+async function buildIehpOutputBuffer(outputWorkbook: IehpOutputWorkbook, finalize: boolean): Promise<Buffer> {
+  if (finalize) {
+    postProcessWorksheet(outputWorkbook.worksheet);
+    return Buffer.from(await outputWorkbook.workbook.xlsx.writeBuffer());
+  }
+
+  const clone = new ExcelJS.Workbook();
+  await clone.xlsx.load(await outputWorkbook.workbook.xlsx.writeBuffer());
+  const worksheet = clone.worksheets[0];
+  if (worksheet) {
+    postProcessWorksheet(worksheet);
+  }
+  return Buffer.from(await clone.xlsx.writeBuffer());
+}
+
+async function uploadIehpOutputWorkbook(
+  jobId: string,
+  outputWorkbook: IehpOutputWorkbook | null,
+  options: UploadIehpOutputWorkbookOptions = {},
+): Promise<boolean> {
   if (!outputWorkbook) return false;
 
-  postProcessWorksheet(outputWorkbook.worksheet);
-  const buffer = Buffer.from(await outputWorkbook.workbook.xlsx.writeBuffer());
+  const buffer = await buildIehpOutputBuffer(outputWorkbook, options.finalize ?? true);
   const outputBucket = process.env.WORKFLOW_OUTPUTS_BUCKET;
   if (!outputBucket) throw new Error("WORKFLOW_OUTPUTS_BUCKET must be set to upload IEHP output.");
 
@@ -465,8 +488,10 @@ async function uploadIehpOutputWorkbook(jobId: string, outputWorkbook: IehpOutpu
     mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     pathOrKey: key,
   }).catch(() => {});
-  await appendWorkflowEvent(jobId, "output_ready", { type: "output_ready", filename }).catch(() => {});
-  await publishWorkflowEvent(jobId, { type: "output_ready", filename }).catch(() => {});
+  if (options.announce ?? true) {
+    await appendWorkflowEvent(jobId, "output_ready", { type: "output_ready", filename }).catch(() => {});
+    await publishWorkflowEvent(jobId, { type: "output_ready", filename }).catch(() => {});
+  }
   return true;
 }
 
@@ -778,6 +803,7 @@ export async function main(): Promise<void> {
   const job = createScrapeJob(jobId);
   const cancellation = startCancellationPoll(jobId);
   const iehpOutputWorkbook = portalId === "iehp" ? await buildIehpOutputWorkbook(formData) : null;
+  let lastIehpSnapshotCompleted = 0;
   let scraperErrorMessage = "";
 
   await createOrUpdateJob(jobId, userId, portalId, formData);
@@ -807,6 +833,26 @@ export async function main(): Promise<void> {
         iehpOutputWorkbook.changed = true;
       }
       await persistEvent(job.id, event);
+      if (
+        portalId === "iehp" &&
+        iehpOutputWorkbook?.changed &&
+        typeof event === "object" &&
+        event !== null &&
+        "type" in event &&
+        event.type === "progress"
+      ) {
+        const completed = getScrapeJob(job.id)?.currentCompleted ?? 0;
+        if (completed > lastIehpSnapshotCompleted) {
+          await uploadIehpOutputWorkbook(jobId, iehpOutputWorkbook, {
+            finalize: false,
+            announce: false,
+          }).catch((uploadError) => {
+            console.error("IEHP partial workbook snapshot upload failed", uploadError);
+          });
+          lastIehpSnapshotCompleted = completed;
+          iehpOutputWorkbook.changed = false;
+        }
+      }
     },
     log: async (event) => {
       const payload = {

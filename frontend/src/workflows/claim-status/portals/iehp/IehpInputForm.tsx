@@ -57,9 +57,9 @@ export function IehpInputForm({
             mode="action"
             acceptedFormats=".xlsx, .xls"
             actionLabel="Select Claim File"
-            description="Choose the exact claims workbook that will be updated in place as processing continues."
+            description="Choose the IEHP claims workbook. Results are generated as a separate downloadable output file."
             fileName={claimFileName}
-            helperText="Browser file-system access keeps the workbook linked for live write-back updates."
+            helperText="Browser file-system access is used only to read the selected workbook for this run."
             icon={FileSpreadsheet}
             onAction={() => void onSelectClaimFile?.()}
             sizeHint="25 MB"

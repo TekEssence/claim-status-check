@@ -3,7 +3,7 @@
 const logger = require("../../utils/logger");
 const { humanDelay, withRetry } = require("../../utils/browser");
 const { getClaimStatusFrame } = require("../../pages/navigation.page");
-const { submitCharmSearchAfterProviderDropdown, trySubmitCharmSearchWithoutProviderDropdown } = require("../../pages/charm-provider-search.page");
+const { submitCharmSearchWithProvider } = require("../../pages/charm-provider-search.page");
 const { throwIfVisibleFieldValidation } = require("../../pages/results.page");
 
 const SELECTORS = {
@@ -224,24 +224,16 @@ async function submitBluecareMemberSearch(page) {
 async function searchBluecareMemberWithProvider(page, providerName, rowData, options = {}) {
   logger.info(`Bluecare Member search provider attempt: ${providerName}`);
   await selectMemberTab(page);
-  if (await trySubmitCharmSearchWithoutProviderDropdown(page, rowData, {
+  if (await submitCharmSearchWithProvider(page, providerName, rowData, {
     projectId: options.projectId,
     context: "Charm Bluecare Member",
     logger,
     providerMode: options.providerMode,
+    selectProvider,
     fillSearchForm: fillBluecareMemberSearchForm,
     submitSearch: submitBluecareMemberSearch,
   })) return;
   await selectProvider(page, providerName);
-  if (await submitCharmSearchAfterProviderDropdown(page, rowData, {
-    projectId: options.projectId,
-    context: "Charm Bluecare Member",
-    logger,
-    providerMode: options.providerMode,
-    providerDropdownSelected: true,
-    fillSearchForm: fillBluecareMemberSearchForm,
-    submitSearch: submitBluecareMemberSearch,
-  })) return;
   await fillBluecareMemberSearchForm(page, rowData);
   await submitBluecareMemberSearch(page);
 }

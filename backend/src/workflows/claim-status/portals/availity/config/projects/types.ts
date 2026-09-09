@@ -43,33 +43,10 @@ export type AvailityProjectConfig = {
     allowInputNameFallback?: boolean;
     includeInputNameAfterMapping?: boolean;
   };
-  fieldPolicies?: {
-    serviceDates?: AvailityServiceDateFieldPolicyRule[];
-  };
   matching: AvailityMatchingPolicy;
   payerMatchingOverrides?: Record<string, Partial<AvailityMatchingPolicy>>;
-  preprocessingStrategy: "none" | "sumChargesByAccountEpisode";
+  preprocessingStrategy: "none" | "sumChargesByAccountEpisode" | "groupCharmByStatePracticePayer";
   outputStrategy: "default" | "cptLineDetail";
-};
-
-export type AvailityFieldFillPolicy = {
-  fill?: boolean;
-  clear?: boolean;
-  value?: string;
-  valueFrom?: string;
-  required?: boolean;
-};
-
-export type AvailityProviderFieldPolicy = {
-  providerDropdown?: AvailityFieldFillPolicy;
-  providerNpi?: AvailityFieldFillPolicy;
-  providerTaxId?: AvailityFieldFillPolicy;
-};
-
-export type AvailityServiceDateFieldPolicyRule = {
-  practice?: string;
-  payer?: string;
-  fields: AvailityProviderFieldPolicy;
 };
 
 export type AvailityRuleWhen = {
@@ -79,7 +56,7 @@ export type AvailityRuleWhen = {
   state?: string | string[];
 };
 
-export type AvailityProviderSelectionMode = "individualNpiFirst" | "groupNameFirst" | "groupNameOnly";
+export type AvailityProviderSelectionMode = "individualNpiFirst" | "groupNameFirst" | "groupNameOnly" | "none";
 export type AvailityTabId = "serviceDates" | "hipaaStandard" | "member" | "claimHistory";
 
 export type AvailitySelectionRule = {

@@ -443,8 +443,13 @@ export async function submitWaystarInquiry(options: {
     await selectProviderWithProjectFallback(inquiryPage, credentials, options.projectConfig);
     await humanPause(inquiryPage);
   }
-  let expectedPatientLookupCode = options.patientLookupCode;
-  if (!useMedRevenueMedicareFlow) {
+  if (options.projectConfig?.useDateOfServiceForPlanDates) {
+    await fillPlanDatesFromDateOfService(inquiryPage, row.dateOfService || "", options.projectConfig);
+    await humanPause(inquiryPage);
+  }
+  const requireSubscriberLookup = options.projectConfig?.requireSubscriberLookup === true;
+  let expectedPatientLookupCode = requireSubscriberLookup ? "10" : options.patientLookupCode;
+  if (!useMedRevenueMedicareFlow && !requireSubscriberLookup) {
     const patientLookup = inquiryPage.locator(WAYSTAR_SELECTORS.inquiry.patientLookup).first();
     if (await patientLookup.isVisible().catch(() => false)) {
       const hasLookupOption = await patientLookup.locator('option[value="10"]').count() > 0;
@@ -482,12 +487,20 @@ export async function submitWaystarInquiry(options: {
     if (options.projectConfig?.restorePatientLookup) {
       await restoreMedRevenuePatientLookup(inquiryPage, Boolean(options.projectConfig.memberIdAndDobOnly));
     }
+    if (requireSubscriberLookup) {
+      await ensureWaystarSubscriberLookup(inquiryPage);
+    }
     await fillVerifiedText(inquiryPage, WAYSTAR_SELECTORS.inquiry.memberId, expectedMemberId, "Member ID");
-    if (!options.projectConfig?.memberIdAndDobOnly) {
+    if (requireSubscriberLookup || !options.projectConfig?.memberIdAndDobOnly) {
       await fillVerifiedText(inquiryPage, WAYSTAR_SELECTORS.inquiry.lastName, expectedLastName, "Last Name");
       await fillVerifiedText(inquiryPage, WAYSTAR_SELECTORS.inquiry.firstName, expectedFirstName, "First Name");
     }
-    if (options.projectConfig?.restorePatientLookup || options.projectConfig?.memberIdAndDobOnly || !options.projectConfig?.useDateOfServiceForPlanDates) {
+    if (
+      requireSubscriberLookup ||
+      options.projectConfig?.restorePatientLookup ||
+      options.projectConfig?.memberIdAndDobOnly ||
+      !options.projectConfig?.useDateOfServiceForPlanDates
+    ) {
       await fillVerifiedText(inquiryPage, WAYSTAR_SELECTORS.inquiry.dateOfBirth, expectedDateOfBirth, "Date of Birth", true);
       medRevenueDateOfBirthFilled = true;
     } else if (options.projectConfig?.fillDateOfBirth) {
@@ -498,7 +511,7 @@ export async function submitWaystarInquiry(options: {
       }
     }
     await dismissWaystarDatePicker(inquiryPage);
-    if (options.projectConfig?.memberIdAndDobOnly) {
+    if (options.projectConfig?.memberIdAndDobOnly && !requireSubscriberLookup) {
       if (options.projectConfig.repairPatientValueReset) {
         await repairWaystarMemberIdAndDob(inquiryPage, expectedMemberId, expectedDateOfBirth);
       } else {
@@ -518,6 +531,7 @@ export async function submitWaystarInquiry(options: {
       await verifyInquiryFieldsBeforeSubmit(inquiryPage, {
         serviceTypeCode: expectedServiceType,
         patientLookupCode: expectedPatientLookupCode,
+        requireSubscriberLookup,
         memberId: expectedMemberId,
         lastName: expectedLastName,
         firstName: expectedFirstName,
@@ -1655,6 +1669,31 @@ async function selectPatientLookupOption(page: Page, lookupCode: string): Promis
     throw new Error(`Waystar Look Up By selection did not stick. Expected ${expected.label}, found ${selected.label || selected.value || "blank"}.`);
   }
 }
+
+/** Minimax requires all four patient fields, regardless of the payer's default lookup. */
+export async function ensureWaystarSubscriberLookup(page: Page): Promise<void> {
+  const lookup = page.locator(WAYSTAR_SELECTORS.inquiry.patientLookup).first();
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      await waitForBlockingOverlaysToClear(page, 30000);
+      await lookup.waitFor({ state: "visible", timeout: 10000 });
+      await waitForEnabled(lookup, "Waystar Look Up By");
+      if (await lookup.inputValue() !== "10") {
+        await lookup.selectOption("10", { timeout: 10000 });
+      }
+      await waitForBlockingOverlaysToClear(page, 30000);
+      for (const selector of [WAYSTAR_SELECTORS.inquiry.memberId, WAYSTAR_SELECTORS.inquiry.lastName,
+        WAYSTAR_SELECTORS.inquiry.firstName, WAYSTAR_SELECTORS.inquiry.dateOfBirth]) {
+        await page.locator(selector).first().waitFor({ state: "visible", timeout: 3000 });
+      }
+      // A payer/service-type refresh can restore the default after the change event.
+      if (await lookup.inputValue() === "10") return;
+    } catch (error) {
+      if (page.isClosed()) throw error;
+    }
+  }
+  throw new Error("Waystar inquiry fields were not present on the page before submit: Look Up By must be Sbr ID, LName, FName, DOB (10), with all four fields visible.");
+}
 async function selectServiceType(page: Page, serviceTypeCode: string): Promise<void> {
   const serviceType = page.locator(WAYSTAR_SELECTORS.inquiry.serviceType).first();
   await serviceType.waitFor({ state: "visible", timeout: 30000 });
@@ -1959,6 +1998,7 @@ async function verifyInquiryFieldsBeforeSubmit(
   expected: {
     serviceTypeCode: string;
     patientLookupCode?: string;
+    requireSubscriberLookup?: boolean;
     memberId: string;
     lastName: string;
     firstName: string;
@@ -1975,7 +2015,7 @@ async function verifyInquiryFieldsBeforeSubmit(
   ], expected.serviceTypeCode)) {
     missing.push(`serviceType=${snapshot.serviceTypeLabel || snapshot.serviceTypeValue || "blank"}`);
   }
-  if (expected.patientLookupCode && !findWaystarPatientLookupOption([
+  if (expected.requireSubscriberLookup ? snapshot.patientLookupValue !== "10" : expected.patientLookupCode && !findWaystarPatientLookupOption([
     { value: snapshot.patientLookupValue, label: snapshot.patientLookupLabel },
   ], expected.patientLookupCode)) {
     missing.push(`patientLookup=${snapshot.patientLookupLabel || snapshot.patientLookupValue || "blank"}`);
@@ -1996,7 +2036,9 @@ async function verifyInquiryFieldsBeforeSubmit(
   if (missing.length > 0 && retryCount === 0) {
     await dismissWaystarDatePicker(page);
     await selectServiceType(page, expected.serviceTypeCode);
-    if (expected.patientLookupCode) {
+    if (expected.requireSubscriberLookup) {
+      await ensureWaystarSubscriberLookup(page);
+    } else if (expected.patientLookupCode) {
       await selectPatientLookupOption(page, expected.patientLookupCode);
     }
     await fillVerifiedText(page, WAYSTAR_SELECTORS.inquiry.memberId, expected.memberId, "Member ID");

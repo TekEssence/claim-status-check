@@ -3,14 +3,11 @@ import * as XLSX from "xlsx";
 import type { FileSystemFileHandle, WindowWithFilePicker } from "../../../types/file-system-access";
 import type { ClaimRow } from "../../../types/job";
 import { parseUhcClaimRows } from "../portals/uhc/workbook";
-import { postProcessWorksheet } from "../portals/iehp/workbook";
 import { getErrorMessage } from "./artifacts";
 
 export type IehpWorkbookBundle = {
   claimRows: ClaimRow[];
   totalRows: number;
-  excelWb: ExcelJS.Workbook;
-  worksheet: ExcelJS.Worksheet;
 };
 
 export type UhcWorkbookBundle = {
@@ -74,33 +71,9 @@ export async function selectExcelFileHandle(): Promise<FileSystemFileHandle | nu
 }
 
 export async function loadIehpWorkbookBundle(
-  claimFileHandle: FileSystemFileHandle,
-  options: { requestPermission?: boolean; fileNameForErrors?: string } = {},
+  claimFile: File,
 ): Promise<IehpWorkbookBundle> {
-  const fileNameForErrors = options.fileNameForErrors ?? "";
-  const currentPermission = await claimFileHandle.queryPermission({ mode: "readwrite" }).catch(() => "prompt" as const);
-  if (currentPermission !== "granted") {
-    if (!options.requestPermission) {
-      throw new Error(getExcelReauthorizeMessage(fileNameForErrors));
-    }
-    if ((await claimFileHandle.requestPermission({ mode: "readwrite" }).catch(() => "denied" as const)) !== "granted") {
-      throw new Error("Write permission denied. Cannot update Excel file.");
-    }
-  }
-
-  let file: File;
-  try {
-    file = await claimFileHandle.getFile();
-  } catch (error) {
-    if (isMissingLocalFileError(error)) {
-      throw new Error(getMissingLocalExcelMessage(fileNameForErrors));
-    }
-    if (isFileAccessPermissionError(error)) {
-      throw new Error(getExcelReauthorizeMessage(fileNameForErrors));
-    }
-    throw error;
-  }
-  const arrayBuffer = await file.arrayBuffer();
+  const arrayBuffer = await claimFile.arrayBuffer();
   const xlsxWb = XLSX.read(arrayBuffer, { type: "array", cellDates: false });
   const sheetName = xlsxWb.SheetNames[0];
   const rawClaimRows = XLSX.utils.sheet_to_json(xlsxWb.Sheets[sheetName]) as Record<string, unknown>[];
@@ -110,18 +83,9 @@ export async function loadIehpWorkbookBundle(
     throw new Error("Claim Excel file contains no rows to process.");
   }
 
-  const excelWb = new ExcelJS.Workbook();
-  await excelWb.xlsx.load(arrayBuffer);
-  const worksheet = excelWb.worksheets[0];
-  if (!worksheet) {
-    throw new Error("Claim Excel file does not contain a worksheet.");
-  }
-
   return {
     claimRows,
     totalRows: claimRows.length,
-    excelWb,
-    worksheet,
   };
 }
 
@@ -171,24 +135,3 @@ export async function writeWorkbookToClaimFile(claimFileHandle: FileSystemFileHa
   await writable.write(updatedBuffer);
   await writable.close();
 }
-
-export async function cloneWorkbook(excelWb: ExcelJS.Workbook): Promise<ExcelJS.Workbook> {
-  const buffer = await excelWb.xlsx.writeBuffer();
-  const clonedWb = new ExcelJS.Workbook();
-  await clonedWb.xlsx.load(buffer);
-  return clonedWb;
-}
-
-export async function writeIehpPostProcessedCheckpoint(
-  claimFileHandle: FileSystemFileHandle,
-  excelWb: ExcelJS.Workbook,
-): Promise<void> {
-  const checkpointWb = await cloneWorkbook(excelWb);
-  const checkpointWorksheet = checkpointWb.getWorksheet(1);
-  if (!checkpointWorksheet) {
-    throw new Error("Claim Excel file does not contain a worksheet.");
-  }
-  postProcessWorksheet(checkpointWorksheet);
-  await writeWorkbookToClaimFile(claimFileHandle, checkpointWb);
-}
-

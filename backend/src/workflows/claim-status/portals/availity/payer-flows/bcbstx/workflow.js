@@ -39,7 +39,7 @@ async function processClaim(page, row, options = {}) {
     }
 
     logger.warn("Bluecare Member search did not find a matching Service Date + Charges row. Falling back to Bluecare HIPAA direct-detail search.");
-    const hipaaResult = await runBluecareHipaaDirectSearch(page, row, PROVIDERS);
+    const hipaaResult = await runBluecareHipaaDirectSearch(page, row, PROVIDERS, options);
     if (hipaaResult.status !== "success") {
       const memberNote = memberResult.notes || "Bluecare Member search did not find a matching Service Date + Charges row.";
       const hipaaNote = hipaaResult.notes || "Bluecare HIPAA direct-detail search did not find a matching Service Date + Charges row.";

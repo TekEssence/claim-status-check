@@ -130,9 +130,17 @@ export async function updateWorkflowJob(params: {
   const values: Partial<typeof workflowJobs.$inferInsert> = { updatedAt: now };
 
   const existingRows = await runDbWithRetry((db) =>
-    db.select({ status: workflowJobs.status }).from(workflowJobs).where(eq(workflowJobs.jobId, params.jobId)).limit(1),
+    db
+      .select({
+        status: workflowJobs.status,
+        currentCompleted: workflowJobs.currentCompleted,
+      })
+      .from(workflowJobs)
+      .where(eq(workflowJobs.jobId, params.jobId))
+      .limit(1),
   );
   const existingStatus = existingRows[0]?.status ?? "";
+  const existingCompleted = existingRows[0]?.currentCompleted ?? 0;
   const allowStatusUpdate = params.status !== undefined
     && !(existingStatus === "cancelling" && params.status !== "cancelled")
     && !(existingStatus === "completed" && params.status !== "completed")
@@ -142,7 +150,7 @@ export async function updateWorkflowJob(params: {
 
   if (allowStatusUpdate) values.status = params.status;
   if (params.ecsTaskArn !== undefined) values.ecsTaskArn = params.ecsTaskArn;
-  if (params.currentCompleted !== undefined) values.currentCompleted = params.currentCompleted;
+  if (params.currentCompleted !== undefined) values.currentCompleted = Math.max(existingCompleted, params.currentCompleted);
   if (params.totalRows !== undefined) values.totalRows = params.totalRows;
   if (params.errorMessage !== undefined) values.errorMessage = params.errorMessage;
   if (params.startedAt !== undefined) values.startedAt = params.startedAt;

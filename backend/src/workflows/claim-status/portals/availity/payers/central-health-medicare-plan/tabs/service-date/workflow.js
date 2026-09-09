@@ -6,8 +6,6 @@ const { getClaimStatusFrame } = require("../../../../pages/navigation.page");
 const { submitCharmSearchAfterProviderDropdown, trySubmitCharmSearchWithoutProviderDropdown } = require("../../../../pages/charm-provider-search.page");
 const {
   clearProviderStateForTaxIdFallback,
-  getProviderTaxIdForPolicy,
-  providerPolicySkipsProviderDropdown,
   verifyProviderNpiMatches
 } = require("../../../../pages/provider-identifiers.page");
 const { PROVIDERS } = require("../../../../pages/claim-status-member.page");
@@ -630,18 +628,6 @@ async function searchCentralHealthMedicarePlanServiceDatesWithProvider(page, pro
   logger.info(`Central Health Medicare Plan Service Dates provider attempt: ${providerName}`);
   await selectServiceDateTab(page);
   const charmContext = "Charm Central Health Medicare Plan Service Dates";
-  if (providerPolicySkipsProviderDropdown(options.providerFieldPolicy)) {
-    const taxId = getProviderTaxIdForPolicy(rowData, options.providerFieldPolicy);
-    logger.info(`Central Health Medicare Plan Service Dates field policy skips Select a Provider. Filling Provider Tax ID "${taxId || "blank"}".`);
-    if (!taxId && options.providerFieldPolicy?.providerTaxId?.required) {
-      throw new Error("Central Health Medicare Plan Service Dates field policy requires Provider Tax ID, but the input value is blank.");
-    }
-    const frame = await clearProviderStateForTaxIdFallback(page, { context: "Central Health Medicare Plan Service Dates field policy", logger });
-    await fillProviderTaxId(frame, taxId);
-    await fillServiceDateSearchForm(page, rowData);
-    await submitServiceDateSearch(page);
-    return;
-  }
   if (await trySubmitCharmSearchWithoutProviderDropdown(page, rowData, {
     projectId: options.projectId,
     context: charmContext,
@@ -650,6 +636,9 @@ async function searchCentralHealthMedicarePlanServiceDatesWithProvider(page, pro
     fillSearchForm: fillServiceDateSearchForm,
     submitSearch: submitServiceDateSearch,
   })) return;
+  if (options.projectId === "charm" && options.providerMode === "none") {
+    throw new Error(`${charmContext} providerMode "none" skips Select a Provider, but required provider fields could not be filled directly from claim data.`);
+  }
   await selectProviderOrFillTaxId(page, providerName, rowData, options);
   if (await submitCharmSearchAfterProviderDropdown(page, rowData, {
     projectId: options.projectId,
@@ -666,9 +655,7 @@ async function searchCentralHealthMedicarePlanServiceDatesWithProvider(page, pro
 
 async function processClaim(page, row, options = {}) {
   logger.info("Using Central Health Medicare Plan workflow: Service Dates tab only.");
-  const providerOrder = providerPolicySkipsProviderDropdown(options.providerFieldPolicy)
-    ? ["Provider Tax ID"]
-    : Array.isArray(options.providerOrder) && options.providerOrder.length
+  const providerOrder = Array.isArray(options.providerOrder) && options.providerOrder.length
     ? options.providerOrder
     : PROVIDERS;
 

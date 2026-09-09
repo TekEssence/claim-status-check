@@ -6,7 +6,6 @@ import { DEFAULT_AVAILITY_REQUIRED_FIELDS, getAvailityProjectConfig } from "./co
 import type { AvailityProjectFieldConfig } from "./config/projects";
 import type { AvailityPortalSelections } from "./config/projects";
 import type { AvailityMatchingPolicy } from "./config/projects";
-import type { AvailityProviderFieldPolicy } from "./config/projects";
 import type { AvailityRuleWhen, AvailitySelectionRule, AvailityTabId } from "./config/projects";
 
 export { AVAILITY_PROJECT_CONFIGS } from "./config/projects";
@@ -316,12 +315,35 @@ function sumChargesByAccountEpisode(rows: AvailityInputRow[]): AvailityInputRow[
   });
 }
 
+function groupCharmByStatePracticePayer(rows: AvailityInputRow[]): AvailityInputRow[] {
+  const groupingKeys = (row: AvailityInputRow) => [
+    findRowValue(row, ["Portal State", "State to choose in Availity"]),
+    findRowValue(row, ["Group", "Practice"]),
+    findRowValue(row, ["Portal Payer Name", "Payer to choose in Availity", "Payer Name"]),
+  ].map(normalizeLookup);
+
+  return rows
+    .map((row, index) => ({ row, index }))
+    .sort((left, right) => {
+      const leftKeys = groupingKeys(left.row);
+      const rightKeys = groupingKeys(right.row);
+
+      for (let keyIndex = 0; keyIndex < leftKeys.length; keyIndex += 1) {
+        const comparison = leftKeys[keyIndex].localeCompare(rightKeys[keyIndex]);
+        if (comparison !== 0) return comparison;
+      }
+      return left.index - right.index;
+    })
+    .map(({ row }) => row);
+}
+
 const PREPROCESSING_STRATEGIES: Record<
-  "none" | "sumChargesByAccountEpisode",
+  "none" | "sumChargesByAccountEpisode" | "groupCharmByStatePracticePayer",
   (rows: AvailityInputRow[]) => AvailityInputRow[]
 > = {
   none: (rows) => rows,
   sumChargesByAccountEpisode,
+  groupCharmByStatePracticePayer,
 };
 
 export function getOrganizationForRow(projectId: string, row: AvailityInputRow): string | undefined {
@@ -460,6 +482,7 @@ export function getSelectionRuleProviderOrder(
   const providerName = rule?.use.providerName?.trim();
   const providerMode = rule?.use.providerMode || (providerName ? "groupNameOnly" : undefined);
   if (!providerMode) return undefined;
+  if (providerMode === "none") return ["Direct provider identifiers"];
 
   const inputProviderNpi = providerConfig?.inputNpiField
     ? findRowValue(row, [providerConfig.inputNpiField])
@@ -493,27 +516,4 @@ export function getSelectionRuleProviderMode(
 
 export function getTabPriorityForProject(projectId: string): AvailityTabId[] {
   return getAvailityProjectConfig(projectId).tabPriority || [];
-}
-
-export function getServiceDateProviderFieldPolicy(projectId: string, row: AvailityInputRow, portalPayerName: string, login = ""): AvailityProviderFieldPolicy | undefined {
-  const config = getAvailityProjectConfig(projectId);
-  void login;
-  return findProviderFieldPolicy(config.fieldPolicies?.serviceDates || [], row, portalPayerName);
-}
-
-function findProviderFieldPolicy(
-  rules: { practice?: string; payer?: string; fields: AvailityProviderFieldPolicy }[],
-  row: AvailityInputRow,
-  portalPayerName: string,
-): AvailityProviderFieldPolicy | undefined {
-  if (!rules.length) return undefined;
-
-  const practice = findRowValue(row, ["Group", "Practice", "Organization Group"]);
-  const inputPayerName = findRowValue(row, ["Portal Payer Name", "Payer Name"]);
-
-  return rules.find((rule) => {
-    const practiceMatches = matchesPolicyValue(rule.practice, practice);
-    const payerMatches = matchesPolicyValue(rule.payer, portalPayerName) || matchesPolicyValue(rule.payer, inputPayerName);
-    return practiceMatches && payerMatches;
-  })?.fields;
 }

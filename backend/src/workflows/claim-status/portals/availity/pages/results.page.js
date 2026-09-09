@@ -45,6 +45,102 @@ function formatPortalMessages(messages) {
   return ["Portal Response:", ...messages.map((message) => `${message.severity}: ${message.text}`)].join("\n");
 }
 
+function normalizeRequiredFieldLabel(value) {
+  return String(value || "")
+    .replace(/\*/g, "")
+    .replace(/\?/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function requiredFieldKey(value) {
+  return normalizeRequiredFieldLabel(value).replace(/[^a-z0-9]+/gi, "").toLowerCase();
+}
+
+const KNOWN_CHARM_REQUIRED_FIELD_KEYS = new Set([
+  "organization",
+  "payer",
+  "istheproviderthesameastheorganizationname",
+  "selectaprovider",
+  "providernpi",
+  "providertaxid",
+  "memberid",
+  "patientlastname",
+  "patientfirstname",
+  "patientdateofbirth",
+  "servicedates",
+  "servicefromdate",
+  "servicetodate",
+  "selectapatient",
+  "patientaccountnumber",
+  "patientgender",
+  "patientsrelationshiptosubscriber",
+]);
+
+async function getVisibleRequiredFieldLabels(page) {
+  const frame = await getClaimStatusFrame(page);
+  const labels = await frame.evaluate(() => {
+    const normalize = (value) => String(value || "")
+      .replace(/\*/g, "")
+      .replace(/\?/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+
+    const isVisible = (element) => {
+      const style = window.getComputedStyle(element);
+      const rect = element.getBoundingClientRect();
+      return style.visibility !== "hidden" && style.display !== "none" && rect.width > 0 && rect.height > 0;
+    };
+
+    const fieldLabelFor = (element) => {
+      const id = element.getAttribute("id");
+      if (id) {
+        const exactLabel = document.querySelector(`label[for="${CSS.escape(id)}"]`);
+        if (exactLabel && isVisible(exactLabel)) return normalize(exactLabel.innerText || exactLabel.textContent || "");
+      }
+
+      const container = element.closest(".MuiFormControl-root, .MuiTextField-root, .form-group, .form-field, div");
+      const label = container?.querySelector("label");
+      if (label && isVisible(label)) return normalize(label.innerText || label.textContent || "");
+
+      return normalize(element.getAttribute("aria-label") || element.getAttribute("name") || element.getAttribute("id") || "");
+    };
+
+    const requiredLabels = [];
+    for (const label of Array.from(document.querySelectorAll("label"))) {
+      if (!isVisible(label)) continue;
+      const text = label.innerText || label.textContent || "";
+      if (/\*/.test(text)) {
+        const normalized = normalize(text);
+        if (normalized) requiredLabels.push(normalized);
+      }
+    }
+
+    for (const element of Array.from(document.querySelectorAll("input, textarea, select, [role='combobox']"))) {
+      if (!isVisible(element)) continue;
+      const required = element.required
+        || element.getAttribute("required") != null
+        || element.getAttribute("aria-required") === "true";
+      if (!required) continue;
+
+      const label = fieldLabelFor(element);
+      if (label) requiredLabels.push(label);
+    }
+
+    return Array.from(new Set(requiredLabels));
+  }).catch(() => []);
+
+  return labels.map(normalizeRequiredFieldLabel).filter(Boolean);
+}
+
+async function throwIfUnknownCharmRequiredFields(page, context = "Charm Availity") {
+  const requiredLabels = await getVisibleRequiredFieldLabels(page);
+  const unknownLabels = requiredLabels.filter((label) => !KNOWN_CHARM_REQUIRED_FIELD_KEYS.has(requiredFieldKey(label)));
+  if (!unknownLabels.length) return;
+
+  throw new Error(`${context} skipped this claim because Availity showed new mandatory field(s) that are not wired in code: ${unknownLabels.join(", ")}.`);
+}
+
 async function getPortalMessages(page) {
   const frame = await getClaimStatusFrame(page);
   const resultAlerts = await frame.locator("#results [role='alert'], #results .MuiAlert-root").evaluateAll((nodes) => nodes
@@ -319,5 +415,6 @@ module.exports = {
   getPortalMessages,
   formatPortalMessages,
   getVisibleFieldValidationMessages,
-  throwIfVisibleFieldValidation
+  throwIfVisibleFieldValidation,
+  throwIfUnknownCharmRequiredFields
 };

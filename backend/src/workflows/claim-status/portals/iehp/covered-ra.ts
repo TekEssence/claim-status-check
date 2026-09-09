@@ -285,7 +285,9 @@ export async function processCoveredRaDownloads({
       /*
       ###New Code -Start###
       */
-      await sendEvent({ type: "pdf_download", filename: pdfFileName, base64: candidatePdfBuffer.toString("base64") });
+      if (process.env.IEHP_EMIT_RA_PDFS === "true") {
+        await sendEvent({ type: "pdf_download", filename: pdfFileName, base64: candidatePdfBuffer.toString("base64") });
+      }
       /*
       ###New Code - End###
       */

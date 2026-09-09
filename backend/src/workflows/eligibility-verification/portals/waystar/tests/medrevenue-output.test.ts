@@ -61,7 +61,7 @@ test("MedRevenue uses the unchanged Minimax output format plus Plan Date", async
   const medRevenueRows = XLSX.utils.sheet_to_json<Record<string, string>>(
     medRevenueWorkbook.Sheets[medRevenueWorkbook.SheetNames[0]], { defval: "" },
   );
-  const minimaxHeaders = Object.keys(minimaxRows[0]);
+  const minimaxHeaders = Object.keys(minimaxRows[0]).filter((header) => header !== "error");
   const medRevenueHeaders = Object.keys(medRevenueRows[0]);
 
   assert.deepEqual(medRevenueHeaders.slice(0, -2), minimaxHeaders);

@@ -7,9 +7,7 @@ const { submitCharmSearchAfterProviderDropdown, trySubmitCharmSearchWithoutProvi
 const {
   clearProviderStateForTaxIdFallback,
   fillInputProviderIdentifiers,
-  getProviderTaxIdForPolicy,
   hasInputProviderIdentifiers,
-  providerPolicySkipsProviderDropdown,
   verifyProviderNpiMatches
 } = require("../../../../pages/provider-identifiers.page");
 const { PROVIDERS } = require("../../../../pages/claim-status-member.page");
@@ -629,18 +627,6 @@ async function searchAnthemCaServiceDatesWithProvider(page, providerName, rowDat
   logger.info(`Anthem-CA Service Dates provider attempt: ${providerName}`);
   await selectServiceDateTab(page);
   const charmContext = "Charm Anthem-CA Service Dates";
-  if (providerPolicySkipsProviderDropdown(options.providerFieldPolicy)) {
-    const taxId = getProviderTaxIdForPolicy(rowData, options.providerFieldPolicy);
-    logger.info(`Anthem-CA Service Dates field policy skips Select a Provider. Filling Provider Tax ID "${taxId || "blank"}".`);
-    if (!taxId && options.providerFieldPolicy?.providerTaxId?.required) {
-      throw new Error("Anthem-CA Service Dates field policy requires Provider Tax ID, but the input value is blank.");
-    }
-    const frame = await clearProviderStateForTaxIdFallback(page, { context: "Anthem-CA Service Dates field policy", logger });
-    await fillProviderTaxId(frame, taxId);
-    await fillServiceDateSearchForm(page, rowData);
-    await submitServiceDateSearch(page);
-    return;
-  }
   if (await trySubmitCharmSearchWithoutProviderDropdown(page, rowData, {
     projectId: options.projectId,
     context: charmContext,
@@ -649,6 +635,9 @@ async function searchAnthemCaServiceDatesWithProvider(page, providerName, rowDat
     fillSearchForm: fillServiceDateSearchForm,
     submitSearch: submitServiceDateSearch,
   })) return;
+  if (options.projectId === "charm" && options.providerMode === "none") {
+    throw new Error(`${charmContext} providerMode "none" skips Select a Provider, but required provider fields could not be filled directly from claim data.`);
+  }
   await selectProvider(page, providerName, rowData, options);
   if (await submitCharmSearchAfterProviderDropdown(page, rowData, {
     projectId: options.projectId,
@@ -671,9 +660,7 @@ async function searchAnthemCaServiceDatesWithProvider(page, providerName, rowDat
 
 async function processClaim(page, row, options = {}) {
   logger.info("Using Anthem-CA workflow: Service Dates tab only.");
-  const providerOrder = providerPolicySkipsProviderDropdown(options.providerFieldPolicy)
-    ? ["Provider Tax ID"]
-    : Array.isArray(options.providerOrder) && options.providerOrder.length
+  const providerOrder = Array.isArray(options.providerOrder) && options.providerOrder.length
     ? options.providerOrder
     : PROVIDERS;
 

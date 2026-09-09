@@ -6,6 +6,7 @@ export type WaystarInquirySelectorKey =
   | "dateOfBirth" | "planDateFrom" | "planDateTo" | "submit";
 
 export type WaystarPayerProjectConfig = {
+  requireSubscriberLookup?: boolean;
   /** Project-only portal payer name; the registered payer default is unchanged. */
   portalPayerName?: string;
   /** Search text only; selection must still match portalPayerName exactly. */

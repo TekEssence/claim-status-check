@@ -184,7 +184,10 @@ export function createWaystarRunner(): AutomationRunner<EligibilityRunInput> {
             const fieldRetryCounts = new Map<number, number>();
             for (let rowPosition = 0; rowPosition < batch.rows.length; rowPosition += 1) {
               const row = batch.rows[rowPosition];
-              await context.emit({ type: "progress", completed, total: routing.totalRows, currentRow: row.originalIndex });
+              const retryRows = new Set([...timeoutRetryCounts.keys(), ...sessionRetryCounts.keys(), ...fieldRetryCounts.keys()]);
+              const pendingRetries = [...retryRows].filter((index) => !results.has(index) && !rowErrors.has(index)).length;
+              await context.emit({ type: "progress", completed, total: routing.totalRows, currentRow: row.originalIndex,
+                payerName: payer.name, pendingRetries, stage: retryRows.has(row.originalIndex) ? "retrying" : "processing" });
               if (context.isCancelled?.()) {
                 await context.log({
                   level: "warn",
@@ -379,7 +382,8 @@ export function createWaystarRunner(): AutomationRunner<EligibilityRunInput> {
               }
 
               completed = Math.min(completed + 1, routing.totalRows);
-              await context.emit({ type: "progress", completed, total: routing.totalRows, currentRow: row.originalIndex });
+              await context.emit({ type: "progress", completed, total: routing.totalRows, payerName: payer.name,
+                pendingRetries: [...retryRows].filter((index) => !results.has(index) && !rowErrors.has(index)).length });
               await closeWaystarInquiryWindows(page);
             }
           } catch (error) {

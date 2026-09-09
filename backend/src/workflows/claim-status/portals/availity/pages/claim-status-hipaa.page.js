@@ -754,6 +754,9 @@ async function searchHipaaWithProvider(page, providerName, rowData, options = {}
     fillSearchForm: fillHipaaSearchForm,
     submitSearch: submitHipaaSearch,
   })) return;
+  if (isCharm && options.providerMode === "none") {
+    throw new Error("Charm HIPAA providerMode \"none\" skips Select a Provider, but required provider fields could not be filled directly from claim data.");
+  }
   const providerIdentifiers = getInputProviderIdentifiers(rowData);
   const providerAsTaxId = Boolean(providerIdentifiers.taxId && String(providerName || "").replace(/\D/g, "") === providerIdentifiers.taxId);
   let fillTaxIdOnly = false;

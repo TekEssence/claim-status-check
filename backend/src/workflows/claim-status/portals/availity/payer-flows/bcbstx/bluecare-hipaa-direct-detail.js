@@ -5,6 +5,7 @@ const { humanDelay, withRetry } = require("../../utils/browser");
 const { getClaimStatusFrame } = require("../../pages/navigation.page");
 const { PROVIDERS } = require("../../pages/claim-status-member.page");
 const { fillHipaaSearchForm, HIPAA_SELECTORS, selectHipaaTab, selectProvider } = require("../../pages/claim-status-hipaa.page");
+const { submitCharmSearchWithProvider } = require("../../pages/charm-provider-search.page");
 const { normalizeDateText, normalizeMoney, throwIfVisibleFieldValidation } = require("../../pages/results.page");
 const { normalizeStatus } = require("../../services/status-normalizer");
 const { renderClaimSummary, renderFailedSummary } = require("../../services/summary-renderer");
@@ -69,9 +70,18 @@ async function submitBluecareHipaaSearchExpectingDetail(page) {
   );
 }
 
-async function searchBluecareHipaaWithProvider(page, providerName, rowData) {
+async function searchBluecareHipaaWithProvider(page, providerName, rowData, options = {}) {
   logger.info(`Bluecare HIPAA search provider attempt: ${providerName}`);
   await selectHipaaTab(page);
+  if (await submitCharmSearchWithProvider(page, providerName, rowData, {
+    projectId: options.projectId,
+    context: "Charm Bluecare HIPAA",
+    logger,
+    providerMode: options.providerMode,
+    selectProvider,
+    fillSearchForm: fillHipaaSearchForm,
+    submitSearch: submitBluecareHipaaSearchExpectingDetail,
+  })) return;
   await selectProvider(page, providerName);
   await fillHipaaSearchForm(page, rowData);
   await submitBluecareHipaaSearchExpectingDetail(page);
@@ -260,11 +270,11 @@ async function returnToHipaaSearch(page) {
   await humanDelay(1000, 1800);
 }
 
-async function runBluecareHipaaDirectSearch(page, row, providerOrder = PROVIDERS) {
+async function runBluecareHipaaDirectSearch(page, row, providerOrder = PROVIDERS, options = {}) {
   let lastProviderFailure = "";
 
   for (const provider of providerOrder) {
-    await searchBluecareHipaaWithProvider(page, provider, row.data);
+    await searchBluecareHipaaWithProvider(page, provider, row.data, options);
 
     const frame = await getClaimStatusFrame(page);
     const portalAlertMessage = await frame.locator("[role='alert'], .MuiAlert-root").first()

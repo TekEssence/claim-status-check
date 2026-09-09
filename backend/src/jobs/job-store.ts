@@ -94,7 +94,7 @@ export function emitScrapeJobEvent(jobId: string, data: StreamEvent): void {
   if (!job) return;
 
   if (data.type === "progress" && typeof data.completed === "number") {
-    job.currentCompleted = data.completed;
+    job.currentCompleted = Math.max(job.currentCompleted, data.completed);
     if (typeof data.total === "number") {
       job.totalRows = data.total;
     }

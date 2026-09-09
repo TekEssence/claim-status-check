@@ -261,16 +261,6 @@ async function verifyProviderNpiMatches(frame, providerName, options = {}) {
   }
 }
 
-function providerPolicySkipsProviderDropdown(providerFieldPolicy = {}) {
-  return providerFieldPolicy?.providerDropdown?.fill === false;
-}
-
-function getProviderTaxIdForPolicy(rowData, providerFieldPolicy = {}) {
-  const valueFrom = providerFieldPolicy?.providerTaxId?.valueFrom;
-  const configuredValue = valueFrom ? rowData?.[valueFrom] : "";
-  return digitsOnly(configuredValue || rowData?.["Provider Tax ID"] || rowData?.["Tax ID"] || rowData?.["Provider TIN"]);
-}
-
 async function typeAndVerify(input, value, label, options = {}) {
   await input.waitFor({ state: "visible", timeout: 10000 });
   await input.click({ force: true });
@@ -375,8 +365,9 @@ async function fillCharmMandatoryProviderIdentifiers(page, rowData, options = {}
   const requiredFields = [];
   let providerIdentifierReady = false;
   let requiresProviderDropdown = false;
+  const directIdentifiersOnly = options.providerMode === "none";
   const groupNameOnly = options.providerMode === "groupNameOnly";
-  const hasConfiguredProviderSelection = Boolean(options.providerMode);
+  const hasConfiguredProviderSelection = Boolean(options.providerMode) && !directIdentifiersOnly;
   const providerDropdownSelected = Boolean(options.providerDropdownSelected);
   const selectedProviderText = providerDropdownSelected ? await getSelectedProviderTextForIdentifiers(frame, options) : "";
   const selectedProviderIdentifiers = extractProviderIdentifiersFromText(selectedProviderText);
@@ -394,13 +385,11 @@ async function fillCharmMandatoryProviderIdentifiers(page, rowData, options = {}
         options.logger?.info?.(`Charm provider fill: Provider NPI was not auto-filled. Filling selected provider NPI "${selectedProviderIdentifiers.npi}" from dropdown value "${selectedProviderText}".`);
         await typeAndVerify(npiInput, selectedProviderIdentifiers.npi, "Provider NPI", { pressTab: false });
         providerIdentifierReady = true;
+      } else if (!providerDropdownSelected && hasConfiguredProviderSelection) {
+        options.logger?.info?.("Charm provider fill: Provider NPI is mandatory and expects mapped provider selection to auto-fill it.");
+        requiresProviderDropdown = true;
       } else if (groupNameOnly) {
-        if (hasConfiguredProviderSelection) {
-          options.logger?.info?.("Charm provider fill: Provider NPI is mandatory and expects mapped provider selection to auto-fill it.");
-          requiresProviderDropdown = true;
-        } else {
-          throw new Error("Provider NPI is mandatory on this Availity form, but no deterministic provider mapping is configured to auto-fill it.");
-        }
+        throw new Error("Provider NPI is mandatory on this Availity form, but no deterministic provider mapping is configured to auto-fill it.");
       } else if (await isInputReadonly(npiInput)) {
         if (hasConfiguredProviderSelection) {
           options.logger?.info?.("Charm provider fill: Provider NPI is mandatory but read-only. Provider dropdown selection is required to auto-fill it.");
@@ -419,6 +408,13 @@ async function fillCharmMandatoryProviderIdentifiers(page, rowData, options = {}
         await typeAndVerify(npiInput, npi, "Provider NPI", { pressTab: false });
         providerIdentifierReady = true;
       }
+    } else if (npiRequired && providerDropdownSelected && currentNpi && selectedProviderIdentifiers.npi && currentNpi !== selectedProviderIdentifiers.npi) {
+      if (await isInputReadonly(npiInput)) {
+        throw new Error(`Provider NPI is mandatory and read-only with stale value "${currentNpi}". Selected provider value contains NPI "${selectedProviderIdentifiers.npi}", but Availity did not update the field.`);
+      }
+      options.logger?.warn?.(`Charm provider fill: Provider NPI had stale value "${currentNpi}". Replacing with selected provider NPI "${selectedProviderIdentifiers.npi}".`);
+      await typeAndVerify(npiInput, selectedProviderIdentifiers.npi, "Provider NPI", { pressTab: false });
+      providerIdentifierReady = true;
     } else if (npiRequired && providerDropdownSelected && currentNpi) {
       options.logger?.info?.(`Charm provider fill: Provider NPI was auto-filled from selected provider as "${currentNpi}". Leaving it unchanged.`);
       providerIdentifierReady = true;
@@ -460,6 +456,9 @@ async function fillCharmMandatoryProviderIdentifiers(page, rowData, options = {}
           options.logger?.info?.(`Charm provider fill: selected Provider Tax ID dropdown option "${selectedProviderIdentifiers.taxId}".`);
         }
         providerIdentifierReady = true;
+      } else if (!providerDropdownSelected && hasConfiguredProviderSelection) {
+        options.logger?.info?.("Charm provider fill: Provider Tax ID is mandatory and expects mapped provider selection to auto-fill it.");
+        requiresProviderDropdown = true;
       } else if (!taxId) {
         throw new Error("Provider Tax ID is mandatory on this Availity form, but Provider Tax ID is blank in the claim file.");
       } else {
@@ -471,6 +470,17 @@ async function fillCharmMandatoryProviderIdentifiers(page, rowData, options = {}
         }
         providerIdentifierReady = true;
       }
+    } else if (taxIdRequired && providerDropdownSelected && currentTaxId && selectedProviderIdentifiers.taxId && currentTaxId !== selectedProviderIdentifiers.taxId) {
+      if (await isInputReadonly(taxIdInput)) {
+        throw new Error(`Provider Tax ID is mandatory and read-only with stale value "${currentTaxId}". Selected provider value contains Tax ID "${selectedProviderIdentifiers.taxId}", but Availity did not update the field.`);
+      }
+      options.logger?.warn?.(`Charm provider fill: Provider Tax ID had stale value "${currentTaxId}". Replacing with selected provider Tax ID "${selectedProviderIdentifiers.taxId}".`);
+      await typeAndVerify(taxIdInput, selectedProviderIdentifiers.taxId, "Provider Tax ID", { pressTab: false });
+      const selected = await selectExactAutocompleteOptionIfVisible(frame, selectedProviderIdentifiers.taxId);
+      if (selected) {
+        options.logger?.info?.(`Charm provider fill: selected Provider Tax ID dropdown option "${selectedProviderIdentifiers.taxId}".`);
+      }
+      providerIdentifierReady = true;
     } else if (taxIdRequired && providerDropdownSelected && currentTaxId) {
       options.logger?.info?.(`Charm provider fill: Provider Tax ID was auto-filled from selected provider as "${currentTaxId}". Leaving it unchanged.`);
       providerIdentifierReady = true;
@@ -495,10 +505,14 @@ async function fillCharmMandatoryProviderIdentifiers(page, rowData, options = {}
 
   if (await isProviderDropdownRequired(frame)) {
     requiredFields.push("Select a Provider");
-    if (!hasConfiguredProviderSelection) {
+    if (!providerDropdownSelected && !hasConfiguredProviderSelection) {
       throw new Error("Select a Provider is mandatory on this Availity form, but no deterministic provider mapping/mode is configured.");
     }
-    requiresProviderDropdown = true;
+    if (!providerDropdownSelected) {
+      requiresProviderDropdown = true;
+    } else {
+      providerIdentifierReady = true;
+    }
   }
 
   if (requiresProviderDropdown) {
@@ -538,9 +552,7 @@ module.exports = {
   clearProviderFormIfVisible,
   clearProviderStateForTaxIdFallback,
   fillInputProviderIdentifiers,
-  getProviderTaxIdForPolicy,
   getInputProviderIdentifiers,
   hasInputProviderIdentifiers,
-  providerPolicySkipsProviderDropdown,
   verifyProviderNpiMatches
 };

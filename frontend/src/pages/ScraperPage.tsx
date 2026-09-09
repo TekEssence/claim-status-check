@@ -3,11 +3,8 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import * as XLSX from "xlsx";
-import ExcelJS from "exceljs";
-import { applyClaimRowUpdateToWorksheet, postProcessWorksheet } from "../workflows/claim-status/portals/iehp/workbook";
 import { cancelScrapeJob as cancelScrapeJobRequest, getActiveScrapeJobErrorId, getCurrentScrapeJob, startScrapeJob, subscribeToScrapeJobEvents, submitScrapeJobInput, type CurrentScrapeJob } from "../api/scrape-jobs-api";
-import { clearStoredRunContext, loadClaimFileHandle, loadIehpLoginFile, saveClaimFileHandle, saveIehpLoginFile } from "../lib/run-context-store";
-import type { FileSystemFileHandle, WindowWithFilePicker } from "../types/file-system-access";
+import { clearStoredRunContext, saveIehpLoginFile } from "../lib/run-context-store";
 import type { ClaimRow, ErrorScreenshot, JobProgressValue, ScrapeJobEvent } from "../types/job";
 import { IehpInputForm } from "../workflows/claim-status/portals/iehp/IehpInputForm";
 import { IehpResultView } from "../workflows/claim-status/portals/iehp/IehpResultView";
@@ -50,8 +47,6 @@ function hasFullWorkflowAccess(user: AuthUser | null): boolean {
 type IehpWorkbookBundle = {
   claimRows: ClaimRow[];
   totalRows: number;
-  excelWb: ExcelJS.Workbook;
-  worksheet: ExcelJS.Worksheet;
 };
 
 export type PortalId = "iehp" | "aerial" | "regal" | "blue-shield" | "optum-pro";
@@ -141,87 +136,10 @@ function buildDownloadArtifactKey(eventData: ScrapeJobEvent): string {
   ].join("|");
 }
 
-function isMissingLocalFileError(error: unknown): boolean {
-  const message = getErrorMessage(error).toLowerCase();
-  return (
-    message.includes("notfounderror") ||
-    message.includes("the requested file could not be found") ||
-    message.includes("could not find the file") ||
-    message.includes("file or directory could not be found") ||
-    message.includes("not be found")
-  );
-}
-
-function isFileAccessPermissionError(error: unknown): boolean {
-  const message = getErrorMessage(error).toLowerCase();
-  return (
-    message.includes("notallowederror") ||
-    message.includes("securityerror") ||
-    message.includes("request is not allowed by the user agent or the platform in the current context") ||
-    message.includes("permission") ||
-    message.includes("user activation")
-  );
-}
-
-function getMissingLocalExcelMessage(fileName: string): string {
-  return `The previously selected Excel file${fileName ? ` (${fileName})` : ""} was not found on this computer. Please reselect the same claim file and continue.`;
-}
-
-function getExcelReauthorizeMessage(fileName: string): string {
-  return `Please click Allow And Continue to allow access to the same claim Excel${fileName ? ` (${fileName})` : ""} and continue the previous IEHP run.`;
-}
-
-async function selectExcelFileHandle(): Promise<FileSystemFileHandle | null> {
-  const picker = (window as WindowWithFilePicker).showOpenFilePicker;
-  if (!picker) {
-    throw new Error("Your browser does not support direct file updates. Use Chrome or Edge.");
-  }
-
-  const [fileHandle] = await picker({
-    types: [
-      {
-        description: "Excel Files",
-        accept: {
-          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": [".xlsx"],
-          "application/vnd.ms-excel": [".xls"],
-        },
-      },
-    ],
-    excludeAcceptAllOption: true,
-    multiple: false,
-  });
-
-  return fileHandle ?? null;
-}
-
 async function loadIehpWorkbookBundle(
-  claimFileHandle: FileSystemFileHandle,
-  options: { requestPermission?: boolean; fileNameForErrors?: string } = {},
+  claimFile: File,
 ): Promise<IehpWorkbookBundle> {
-  const fileNameForErrors = options.fileNameForErrors ?? "";
-  const currentPermission = await claimFileHandle.queryPermission({ mode: "readwrite" }).catch(() => "prompt" as const);
-  if (currentPermission !== "granted") {
-    if (!options.requestPermission) {
-      throw new Error(getExcelReauthorizeMessage(fileNameForErrors));
-    }
-    if ((await claimFileHandle.requestPermission({ mode: "readwrite" }).catch(() => "denied" as const)) !== "granted") {
-      throw new Error("Write permission denied. Cannot update Excel file.");
-    }
-  }
-
-  let file: File;
-  try {
-    file = await claimFileHandle.getFile();
-  } catch (error) {
-    if (isMissingLocalFileError(error)) {
-      throw new Error(getMissingLocalExcelMessage(fileNameForErrors));
-    }
-    if (isFileAccessPermissionError(error)) {
-      throw new Error(getExcelReauthorizeMessage(fileNameForErrors));
-    }
-    throw error;
-  }
-  const arrayBuffer = await file.arrayBuffer();
+  const arrayBuffer = await claimFile.arrayBuffer();
   const xlsxWb = XLSX.read(arrayBuffer, { type: "array", cellDates: false });
   const sheetName = xlsxWb.SheetNames[0];
   const rawClaimRows = XLSX.utils.sheet_to_json(xlsxWb.Sheets[sheetName]) as Record<string, unknown>[];
@@ -231,34 +149,10 @@ async function loadIehpWorkbookBundle(
     throw new Error("Claim Excel file contains no rows to process.");
   }
 
-  const excelWb = new ExcelJS.Workbook();
-  await excelWb.xlsx.load(arrayBuffer);
-  const worksheet = excelWb.getWorksheet(1);
-  if (!worksheet) {
-    throw new Error("Claim Excel file does not contain a worksheet.");
-  }
-
   return {
     claimRows,
     totalRows: claimRows.length,
-    excelWb,
-    worksheet,
   };
-}
-
-async function writeWorkbookToClaimFile(claimFileHandle: FileSystemFileHandle, excelWb: ExcelJS.Workbook): Promise<void> {
-  const permission = await claimFileHandle.queryPermission({ mode: "readwrite" });
-  if (permission !== "granted") {
-    const requestedPermission = await claimFileHandle.requestPermission({ mode: "readwrite" });
-    if (requestedPermission !== "granted") {
-      throw new Error("Browser write permission was denied. Please allow file access and run again.");
-    }
-  }
-
-  const updatedBuffer = await excelWb.xlsx.writeBuffer();
-  const writable = await claimFileHandle.createWritable();
-  await writable.write(updatedBuffer);
-  await writable.close();
 }
 
 export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: PortalId | null }) {
@@ -290,7 +184,7 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
   const [settingsPasswordSubmitting, setSettingsPasswordSubmitting] = useState(false);
   const [selectedPortalId, setSelectedPortalId] = useState<PortalId | null>(null);
   const [iehpLoginFile, setIehpLoginFile] = useState<File | null>(null);
-  const [claimFileHandle, setClaimFileHandle] = useState<FileSystemFileHandle | null>(null);
+  const [iehpClaimFile, setIehpClaimFile] = useState<File | null>(null);
   const [claimFileName, setClaimFileName] = useState<string>("");
   const [aerialCredentialFile, setAerialCredentialFile] = useState<File | null>(null);
   const [aerialInputFile, setAerialInputFile] = useState<File | null>(null);
@@ -317,7 +211,6 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
   const [errorScreenshots, setErrorScreenshots] = useState<ErrorScreenshot[]>([]);
   const [progress, setProgress] = useState<JobProgressValue | null>(null);
   const [jobRestoreLoading, setJobRestoreLoading] = useState(true);
-  const [pendingIehpRestoreJob, setPendingIehpRestoreJob] = useState<CurrentScrapeJob | null>(null);
 
   const effectivePortalId = forcedPortalId ?? selectedPortalId;
   const selectedPortal =
@@ -333,8 +226,8 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
               ? optumProFrontendPortalConfig
               : null;
   const canSubmitIehp = useMemo(
-    () => Boolean(iehpLoginFile && claimFileHandle && !isProcessing),
-    [iehpLoginFile, claimFileHandle, isProcessing],
+    () => Boolean(iehpLoginFile && iehpClaimFile && !isProcessing),
+    [iehpLoginFile, iehpClaimFile, isProcessing],
   );
   const selectedAerialSubportal = getAerialSubportal(aerialSubportal);
   const canSubmitAerial = useMemo(
@@ -424,39 +317,7 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
         setActiveView("portal-selection");
 
         if (currentJob.portalId === "iehp") {
-          const [storedClaimHandle, storedLoginFile] = await Promise.all([loadClaimFileHandle(), loadIehpLoginFile()]);
-          if (cancelled) return;
-          let canAutoResumeIehp = true;
-
-          if (storedClaimHandle) {
-            setClaimFileHandle(storedClaimHandle);
-            setClaimFileName(currentJob.claimFileName || "");
-            const currentPermission = await storedClaimHandle.queryPermission({ mode: "readwrite" }).catch(() => "prompt" as const);
-            if (currentPermission !== "granted") {
-              canAutoResumeIehp = false;
-            }
-          }
-          if (storedLoginFile) {
-            setIehpLoginFile(storedLoginFile);
-          }
-
-          if (storedClaimHandle && storedLoginFile && canAutoResumeIehp) {
-            await resumeExistingIehpRun(currentJob, storedClaimHandle, storedLoginFile);
-          } else {
-            setPendingIehpRestoreJob(currentJob);
-            if (!storedClaimHandle) {
-              setStatus(`Could not restore the active run: ${getMissingLocalExcelMessage(currentJob.claimFileName)}`);
-            } else if (!canAutoResumeIehp) {
-              const normalizedResumeMessage = `Previous IEHP run restored. Click Allow And Continue to continue from row ${currentJob.currentCompleted + 1}.`;
-              setStatus(normalizedResumeMessage);
-              if (typeof window !== "undefined") {
-                window.alert(normalizedResumeMessage);
-              }
-            } else {
-              setStatus("A run is active, but the local IEHP login file context could not be restored automatically. Please upload the login file again if needed.");
-            }
-            setIsProcessing(false);
-          }
+          await reconnectDownloadOnlyRun(currentJob, "iehp", "IEHP");
         } else if (currentJob.portalId === "aerial") {
           await reconnectAerialRun(currentJob);
         } else if (currentJob.portalId === "regal") {
@@ -468,12 +329,6 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
         }
       } catch (error) {
         if (!cancelled) {
-          if (isFileAccessPermissionError(error) || getErrorMessage(error).includes("Browser file permission is not currently granted")) {
-            const currentJob = await getCurrentScrapeJob().catch(() => null);
-            if (currentJob?.portalId === "iehp") {
-              setPendingIehpRestoreJob(currentJob);
-            }
-          }
           setStatus(`Could not restore the active run: ${getErrorMessage(error)}`);
           setIsProcessing(false);
         }
@@ -690,7 +545,7 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
     setSettingsPasswordSubmitting(false);
     setSelectedPortalId(null);
     setIehpLoginFile(null);
-    setClaimFileHandle(null);
+    setIehpClaimFile(null);
     setClaimFileName("");
     setAerialCredentialFile(null);
     setAerialInputFile(null);
@@ -813,42 +668,6 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
     }
   }
 
-  async function selectClaimFile() {
-    try {
-      const fileHandle = await selectExcelFileHandle();
-      if (!fileHandle) return null;
-
-      setClaimFileHandle(fileHandle);
-      await saveClaimFileHandle(fileHandle).catch(() => {});
-      const file = await fileHandle.getFile();
-      setClaimFileName(file.name);
-
-      if (pendingIehpRestoreJob) {
-        const loginFileToUse = iehpLoginFile ?? (await loadIehpLoginFile().catch(() => null));
-        if (!loginFileToUse) {
-          setStatus("The active IEHP run is waiting, but the login file could not be restored. Please upload the login file again.");
-          return fileHandle;
-        }
-
-        setIehpLoginFile(loginFileToUse);
-        setPendingIehpRestoreJob(null);
-        void resumeExistingIehpRun(pendingIehpRestoreJob, fileHandle, loginFileToUse).catch((error) => {
-          setPendingIehpRestoreJob(pendingIehpRestoreJob);
-          setStatus(`Could not restore the active run: ${getErrorMessage(error)}`);
-          setIsProcessing(false);
-        });
-      }
-
-      return fileHandle;
-    } catch (error) {
-      if ((error as Error).name !== "AbortError") {
-        console.error("Failed to select file:", error);
-        setStatus(`Failed to select file: ${getErrorMessage(error)}`);
-      }
-      return null;
-    }
-  }
-
   function handleLoginFileChange(file: File | null) {
     setIehpLoginFile(file);
     if (file) {
@@ -856,27 +675,26 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
     }
   }
 
+  function handleIehpClaimFileChange(file: File | null) {
+    setIehpClaimFile(file);
+    setClaimFileName(file?.name ?? "");
+  }
+
   async function runIehpSession(options: {
-    claimFileHandle: FileSystemFileHandle;
+    claimFile: File;
     loginFile: File;
     existingJobId?: string;
     initialStartIndex?: number;
     attachToRunningJob?: boolean;
     initialLogs?: string[];
     initialProgress?: JobProgressValue | null;
-    allowPermissionPrompt?: boolean;
   }) {
-    const workbookBundle = await loadIehpWorkbookBundle(options.claimFileHandle, {
-      requestPermission: options.allowPermissionPrompt ?? true,
-      fileNameForErrors: options.claimFileHandle ? claimFileName : "",
-    });
-    const { claimRows, totalRows, excelWb, worksheet } = workbookBundle;
+    const workbookBundle = await loadIehpWorkbookBundle(options.claimFile);
+    const { claimRows, totalRows } = workbookBundle;
 
-    setClaimFileHandle(options.claimFileHandle);
-    const liveClaimFile = await options.claimFileHandle.getFile();
+    const liveClaimFile = options.claimFile;
     setClaimFileName(liveClaimFile.name);
     setIehpLoginFile(options.loginFile);
-    await saveClaimFileHandle(options.claimFileHandle).catch(() => {});
     await saveIehpLoginFile(options.loginFile).catch(() => {});
 
     setIsProcessing(true);
@@ -898,54 +716,32 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
     ): Promise<void> => {
       let currentCompleted = startIndex;
       let chunkHasError = false;
-      let writeQueue = Promise.resolve();
-      let writeFailure: Error | null = null;
-      let writeFailureAlertShown = false;
       let subscribedJobId = logicalJobId;
-      let cancellationRequested = false;
       const streamAbortController = new AbortController();
-
-      const handleWriteFailure = (error: unknown): never => {
-        const message = getErrorMessage(error);
-        const userMessage = `Excel update failed. The workbook may be open, locked, moved, or browser file permission may have been lost. Please close Excel, verify file access, and run again. Some recent updates may not have been saved. Details: ${message}`;
-        const failure = new Error(userMessage);
-        writeFailure = failure;
-        chunkHasError = true;
-        setStatus(`Error: ${userMessage}`);
-        streamAbortController.abort();
-        if (!cancellationRequested && subscribedJobId) {
-          cancellationRequested = true;
-          void cancelScrapeJobRequest(subscribedJobId).catch((cancelError) => {
-            console.error("Failed to cancel scrape job after Excel write failure", cancelError);
-          });
-        }
-        if (!writeFailureAlertShown) {
-          writeFailureAlertShown = true;
-          window.alert(userMessage);
-        }
-        throw failure;
-      };
 
         const handleJobEvent = async (eventData: ScrapeJobEvent) => {
           if (eventData.type === "log" && eventData.message) {
             setLogs((prev) => [...prev, eventData.message ?? ""]);
           } else if (eventData.type === "progress" && typeof eventData.completed === "number" && typeof eventData.total === "number") {
-            currentCompleted = eventData.completed;
-            setProgress({ completed: eventData.completed, total: eventData.total });
+            const eventCompleted = eventData.completed;
+            const eventTotal = eventData.total;
+            const eventCurrentRow = eventData.currentRow;
+            currentCompleted = Math.max(currentCompleted, eventCompleted);
+            setProgress((previous) => {
+              const previousCompleted = previous?.completed ?? 0;
+              const completed = Math.max(previousCompleted, eventCompleted);
+              return {
+                completed,
+                total: Math.max(previous?.total ?? 0, eventTotal),
+                ...(completed === eventCompleted && eventCurrentRow !== undefined
+                  ? { currentRow: eventCurrentRow }
+                  : previous?.currentRow !== undefined
+                    ? { currentRow: previous.currentRow }
+                    : {}),
+              };
+            });
           } else if (eventData.type === "row_update") {
-          applyClaimRowUpdateToWorksheet(worksheet, {
-            index: eventData.index ?? 0,
-            update: eventData.update ?? {},
-          });
-
-          writeQueue = writeQueue.then(async () => {
-            try {
-              await writeWorkbookToClaimFile(options.claimFileHandle, excelWb);
-            } catch (writeErr) {
-              console.error("Failed to write to file:", writeErr);
-              handleWriteFailure(writeErr);
-            }
-          });
+          // IEHP output is generated by the worker and stored as a separate artifact.
           } else if (eventData.type === "error_screenshot" && typeof eventData.index === "number" && eventData.image) {
             setErrorScreenshots((prev) => [...prev, { index: eventData.index ?? -1, image: eventData.image ?? "" }]);
           } else if (eventData.type === "debug_html" && typeof eventData.index === "number" && eventData.html) {
@@ -972,6 +768,7 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
           formData.append("portalId", "iehp");
           formData.append("loginExcel", options.loginFile);
           formData.append("loginFileName", options.loginFile.name);
+          formData.append("claimExcel", liveClaimFile);
           formData.append("claimFileName", liveClaimFile.name);
           formData.append("claimRows", JSON.stringify(claimRows));
           formData.append("startIndex", startIndex.toString());
@@ -991,14 +788,9 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
           },
         });
 
-        await writeQueue;
       } catch (error) {
-        if (writeFailure) {
-          console.error("Processing stopped because Excel write failed", writeFailure);
-        } else {
-          console.error("fetchEventSource failed", error);
-          chunkHasError = true;
-        }
+        console.error("fetchEventSource failed", error);
+        chunkHasError = true;
       }
 
       const effectiveJobId = subscribedJobId || logicalJobId || options.existingJobId || "";
@@ -1010,9 +802,6 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
         await processChunk(currentCompleted, effectiveJobId, "start");
       } else {
         try {
-          setStatus("Running post-processing (generating summary columns & duplicating rows)...");
-          postProcessWorksheet(worksheet);
-          await writeWorkbookToClaimFile(options.claimFileHandle, excelWb);
           setStatus("IEHP processing completed.");
           await clearStoredRunContext().catch(() => {});
         } catch (postError) {
@@ -1027,29 +816,91 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
     await processChunk(options.initialStartIndex ?? 0, options.existingJobId ?? "", options.attachToRunningJob ? "attach" : "start");
   }
 
-  async function resumeExistingIehpRun(currentJob: CurrentScrapeJob, storedClaimHandle: FileSystemFileHandle, storedLoginFile: File) {
-    if (currentJob.status === "waiting_resume") {
-      await runIehpSession({
-        claimFileHandle: storedClaimHandle,
-        loginFile: storedLoginFile,
-        existingJobId: currentJob.jobId,
-        initialStartIndex: currentJob.currentCompleted,
-        initialLogs: currentJob.logs,
-        initialProgress:
-          currentJob.totalRows > 0 ? { completed: currentJob.currentCompleted, total: currentJob.totalRows } : null,
-      });
-      return;
-    }
+  async function reconnectDownloadOnlyRun(currentJob: CurrentScrapeJob, portalId: PortalId, portalName: string) {
+    setIsProcessing(true);
+    setSelectedPortalId(portalId);
+    setLogs(currentJob.logs ?? []);
+    setErrorScreenshots(
+      (currentJob.artifacts ?? [])
+        .filter((artifact) => artifact.artifactType === "error_screenshot" && artifact.contentBase64)
+        .map((artifact) => ({
+          index: artifact.rowIndex ?? -1,
+          image: artifact.contentBase64 ?? "",
+        })),
+    );
+    setProgress(currentJob.totalRows > 0 ? { completed: currentJob.currentCompleted, total: currentJob.totalRows } : null);
+    setStatus(`Reconnecting to current ${portalName} run...`);
 
-    await runIehpSession({
-      claimFileHandle: storedClaimHandle,
-      loginFile: storedLoginFile,
-      existingJobId: currentJob.jobId,
-      initialStartIndex: currentJob.currentCompleted,
-      attachToRunningJob: true,
-      initialProgress:
-        currentJob.totalRows > 0 ? { completed: currentJob.currentCompleted, total: currentJob.totalRows } : null,
-    });
+    let hasError = false;
+    let wasCancelled = false;
+    let finalErrorMessage = "";
+    const streamAbortController = new AbortController();
+
+    try {
+      await subscribeToScrapeJobEvents({
+        jobId: currentJob.jobId,
+        signal: streamAbortController.signal,
+        onEvent: async (eventData) => {
+          if (eventData.type === "log" && eventData.message) {
+            setLogs((prev) => [...prev, eventData.message ?? ""]);
+          } else if (eventData.type === "progress" && typeof eventData.completed === "number" && typeof eventData.total === "number") {
+            const eventCompleted = eventData.completed;
+            const eventTotal = eventData.total;
+            const eventCurrentRow = eventData.currentRow;
+            setProgress((previous) => {
+              const completed = Math.max(previous?.completed ?? 0, eventCompleted);
+              return {
+                completed,
+                total: Math.max(previous?.total ?? 0, eventTotal),
+                ...(completed === eventCompleted && eventCurrentRow !== undefined
+                  ? { currentRow: eventCurrentRow }
+                  : previous?.currentRow !== undefined
+                    ? { currentRow: previous.currentRow }
+                    : {}),
+              };
+            });
+          } else if (eventData.type === "error_screenshot" && typeof eventData.index === "number" && eventData.image) {
+            setErrorScreenshots((prev) => [...prev, { index: eventData.index ?? -1, image: eventData.image ?? "" }]);
+          } else if (eventData.type === "file_download" && eventData.filename && eventData.base64) {
+            const artifactKey = buildDownloadArtifactKey(eventData);
+            if (!hasDownloadedArtifact(currentJob.jobId, artifactKey)) {
+              downloadBase64File(eventData.filename, eventData.base64, eventData.mimeType || "application/octet-stream");
+              rememberDownloadedArtifact(currentJob.jobId, artifactKey);
+              setStatus(`Downloaded ${eventData.filename}`);
+            }
+          } else if (eventData.type === "warning" && eventData.message) {
+            setLogs((prev) => [...prev, eventData.message ?? ""]);
+            setStatus(eventData.message);
+          } else if (eventData.type === "error" && eventData.message) {
+            finalErrorMessage = eventData.message;
+            setLogs((prev) => [...prev, `ERROR: ${eventData.message}`]);
+            setStatus(`Error: ${eventData.message}`);
+            hasError = true;
+          } else if (eventData.type === "cancelled") {
+            wasCancelled = true;
+            setStatus(eventData.message || "Processing cancelled.");
+            setLogs((prev) => [...prev, eventData.message || "Processing cancelled."]);
+          }
+        },
+        onStreamError(error) {
+          console.error(`${portalName} stream error:`, error);
+          finalErrorMessage = getErrorMessage(error);
+          setLogs((prev) => [...prev, `STREAM ERROR: ${finalErrorMessage}`]);
+          setStatus(`Stream error: ${finalErrorMessage}`);
+          hasError = true;
+        },
+      });
+
+      setStatus(
+        wasCancelled
+          ? `${portalName} processing cancelled.`
+          : hasError
+            ? `${portalName} processing finished with errors${finalErrorMessage ? `: ${finalErrorMessage}` : "."}`
+            : `${portalName} processing completed.`,
+      );
+    } finally {
+      setIsProcessing(false);
+    }
   }
 
   async function reconnectAerialRun(currentJob: CurrentScrapeJob) {
@@ -1069,7 +920,6 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
 
     let hasError = false;
     let finalErrorMessage = "";
-    let subscribedJobId = "";
     const streamAbortController = new AbortController();
 
     try {
@@ -1394,31 +1244,18 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
   async function submitIehp(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
 
-    if (!iehpLoginFile || !claimFileHandle) {
+    if (!iehpLoginFile || !iehpClaimFile) {
       setStatus("Please provide both required files.");
       return;
     }
 
-    const resumeJob = pendingIehpRestoreJob;
-
     try {
-      if (resumeJob) {
-        setPendingIehpRestoreJob(null);
-        setIsProcessing(true);
-        setStatus(`Resuming previous IEHP run from row ${resumeJob.currentCompleted + 1}...`);
-        await resumeExistingIehpRun(resumeJob, claimFileHandle, iehpLoginFile);
-        return;
-      }
-
       resetRunState("Reading claim file...");
       await runIehpSession({
-        claimFileHandle,
+        claimFile: iehpClaimFile,
         loginFile: iehpLoginFile,
       });
     } catch (error) {
-      if (resumeJob) {
-        setPendingIehpRestoreJob(resumeJob);
-      }
       setStatus(`Failed to process IEHP claims: ${getErrorMessage(error)}`);
       setIsProcessing(false);
     }
@@ -2202,9 +2039,9 @@ export function ScraperPage({ forcedPortalId = null }: { forcedPortalId?: Portal
                     canSubmit={canSubmitIehp}
                     claimFileName={claimFileName}
                     isProcessing={isProcessing}
-                    isResumePending={Boolean(pendingIehpRestoreJob)}
+                    loginFileName={iehpLoginFile?.name ?? ""}
+                    onClaimFileChange={handleIehpClaimFileChange}
                     onLoginFileChange={handleLoginFileChange}
-                    onSelectClaimFile={selectClaimFile}
                     onSubmit={submitIehp}
                   />
                   <IehpResultView errorScreenshots={errorScreenshots} logs={logs} progress={progress} status={status} />

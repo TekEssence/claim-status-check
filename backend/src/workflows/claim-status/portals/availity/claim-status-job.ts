@@ -7,7 +7,7 @@ import type { ScraperContext } from "../../types";
 import { launchAvailityBrowser } from "./browser";
 import { isRunnableAvailityPayerName, parseAvailityInput, readAvailityPayerMapping, unsupportedAvailityPayerMessage } from "./input";
 import { createAvailityOutputWorkbookBuffer } from "./output-writer";
-import { getMatchingPolicy, getMfaConfigForProject, getProviderOrderForRow, getRequiredFieldsForProject, getSelectionRuleProviderMode, getSelectionRuleProviderOrder, getServiceDateProviderFieldPolicy, getTabPriorityForProject, readAvailityProviderMapping, resolvePortalSelections } from "./project-config";
+import { getMatchingPolicy, getMfaConfigForProject, getProviderOrderForRow, getRequiredFieldsForProject, getSelectionRuleProviderMode, getSelectionRuleProviderOrder, getTabPriorityForProject, readAvailityProviderMapping, resolvePortalSelections } from "./project-config";
 import type { AvailityPortalSelections } from "./config/projects";
 import { applyProjectOutputStrategy } from "./project-output";
 import type { AvailityAuditRow, AvailityErrorRow, AvailityInputRow, AvailityOutputRow, AvailityProviderMapping } from "./types";
@@ -421,12 +421,10 @@ async function processValidRow(
     ...getMatchingPolicy(options.projectId, selections.payer),
     fallbackProviderOnlyOnSelectionFailure: options.projectId === "charm",
   };
-  const providerFieldPolicy = getServiceDateProviderFieldPolicy(options.projectId, row, selections.payer, options.login);
   return workflow.processClaim(page, row, {
     projectId: options.projectId,
     providerOrder,
     providerMode,
-    providerFieldPolicy,
     matchingPolicy,
     tabPriority: getTabPriorityForProject(options.projectId),
   });

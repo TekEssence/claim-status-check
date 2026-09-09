@@ -56,7 +56,7 @@ test("creates a Waystar output workbook with verified inputs, results, and row e
   const headerValues = styledSheet.getRow(1).values as unknown[];
   assert.deepEqual(headerValues.slice(5), [
     "Coverage Status", "Eff Date", "End Date", "Other Ins",
-    "Other Ins Eff Date", "Relationship to Subscriber", "Plan Type", "Bot Insurance Type",
+    "Other Ins Eff Date", "Relationship to Subscriber", "Plan Type", "Bot Insurance Type", "error",
   ]);
 
   const workbook = XLSX.read(output, { type: "buffer" });
@@ -64,6 +64,8 @@ test("creates a Waystar output workbook with verified inputs, results, and row e
   assert.equal(rows[0]["Coverage Status"], "active");
   assert.equal(rows[0]["Relationship to Subscriber"], "Spouse");
   assert.equal(rows[1]["Relationship to Subscriber"], "Self");
+  assert.equal(rows[0].error, "-");
+  assert.equal(rows[1].error, "Portal response was unavailable.");
   assert.equal("Bot Network" in rows[0], false);
   assert.equal("Bot Error" in rows[0], false);});
 test("writes UMR Plan Network Name in the existing Plan Type column", async () => {
@@ -94,4 +96,23 @@ test("writes UMR Plan Network Name in the existing Plan Type column", async () =
   assert.equal(rows[0]["Plan Type"], "UNITEDHEALTHCARE CHOICE PLUS");
   assert.equal("Plan Name" in rows[0], false);
   assert.equal("Bot Plan Name" in rows[0], false);
+});
+
+test("includes an unresolved payer error in the Minimax error column", async () => {
+  const inputWorkbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(inputWorkbook, XLSX.utils.aoa_to_sheet([
+    ["Member ID"], ["TEST-MEMBER"],
+  ]), "Eligibility");
+  const inputBuffer = XLSX.write(inputWorkbook, { type: "buffer", bookType: "xlsx" });
+  const output = await buildWaystarOutputWorkbook({
+    inputFile: new File([new Uint8Array(inputBuffer)], "input.xlsx"),
+    projectId: "minimax",
+    rows: new Map(),
+    results: new Map([[2, { rowIndex: 2, payerId: "aetna", coverageStatus: "error",
+      planStatus: "Failed at payer: subscriber not found", benefits: [] }]]),
+    errors: new Map(),
+  });
+  const workbook = XLSX.read(output, { type: "buffer" });
+  const rows = XLSX.utils.sheet_to_json<Record<string, string>>(workbook.Sheets[workbook.SheetNames[0]]);
+  assert.equal(rows[0].error, "Failed at payer: subscriber not found");
 });

@@ -58,7 +58,7 @@ async function processClaim(page, row, options = {}) {
   if (await isSearchTabVisible(page, "HIPAA Standard")) {
     logger.info("HIPAA Standard tab is available; selecting it as the highest-priority search.");
     if (isBluecarePayer(row)) {
-      return runBluecareHipaaDirectSearch(page, row, providerOrder);
+      return runBluecareHipaaDirectSearch(page, row, providerOrder, options);
     }
     return runHipaaProviderSearch(page, row, providerOrder, {
       projectId: options.projectId,
@@ -91,7 +91,7 @@ async function processClaim(page, row, options = {}) {
     }
 
     logger.warn("Bluecare Member search did not find a matching Service Date + Charges row. Falling back to Bluecare HIPAA direct-detail search.");
-    const hipaaResult = await runBluecareHipaaDirectSearch(page, row, providerOrder);
+    const hipaaResult = await runBluecareHipaaDirectSearch(page, row, providerOrder, options);
     if (hipaaResult.status !== "success") {
       const memberNote = memberResult.notes || "Bluecare Member search did not find a matching Service Date + Charges row.";
       const hipaaNote = hipaaResult.notes || "Bluecare HIPAA direct-detail search did not find a matching Service Date + Charges row.";
