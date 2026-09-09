@@ -19,6 +19,7 @@ export function getWaystarPayerProjectConfig(config: WaystarProjectConfig, payer
   const settings = { ...config.settings, ...payer.settings };
   return {
     ...payer,
+    ...(config.id === "minimax" ? { requireSubscriberLookup: true } : {}),
     ...(Object.keys(selectorFallbacks).length ? { selectorFallbacks } : {}),
     ...(Object.keys(outputMapping).length ? { outputMapping } : {}),
     ...(Object.keys(settings).length ? { settings } : {}),

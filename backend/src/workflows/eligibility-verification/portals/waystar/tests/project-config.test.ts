@@ -9,10 +9,13 @@ function file(name: string): File {
   return new File([new Uint8Array([1])], name);
 }
 
-test("Minimax Waystar configuration preserves all established payer defaults", () => {
+test("Minimax requires subscriber lookup for every payer while preserving payer identity", () => {
   const config = getWaystarProjectConfig("minimax");
   assert.equal(config.id, "minimax");
-  assert.deepEqual(getWaystarPayerProjectConfig(config, medicarePayer.id), {});
+  for (const payerId of [medicarePayer.id, "aetna", "av-med", "any-payer"]) {
+    assert.deepEqual(getWaystarPayerProjectConfig(config, payerId), { requireSubscriberLookup: true });
+  }
+  assert.equal(getWaystarPayerProjectConfig(getWaystarProjectConfig("medrevenue"), "medicare").requireSubscriberLookup, undefined);
   assert.equal(medicarePayer.portalPayerName, "Medicare A & B Eligibility (All States) (Z1073)");
 });
 

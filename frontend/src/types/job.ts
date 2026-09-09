@@ -6,6 +6,9 @@ export type JobProgressValue = {
   completed: number;
   total: number;
   currentRow?: number;
+  payerName?: string;
+  pendingRetries?: number;
+  stage?: string;
 };
 
 export type ErrorScreenshot = {
@@ -14,6 +17,7 @@ export type ErrorScreenshot = {
 };
 
 export type ScrapeJobEvent = {
+  pendingRetries?: number;
   type?: string;
   message?: string;
   completed?: number;

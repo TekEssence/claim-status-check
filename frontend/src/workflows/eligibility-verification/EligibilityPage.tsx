@@ -162,7 +162,7 @@ export function EligibilityPage() {
       setStatus(event.message);
     }
     if (event.type === "progress" && typeof event.completed === "number" && typeof event.total === "number") {
-      setProgress({ completed: event.completed, total: event.total, currentRow: event.currentRow });
+      setProgress({ completed: event.completed, total: event.total, currentRow: event.currentRow, payerName: event.payerName, pendingRetries: event.pendingRetries, stage: event.stage });
     }
     if (event.type === "error_screenshot" && typeof event.image === "string" && event.image) {
       setErrorScreenshots((current) => [...current, { index: typeof event.index === "number" ? event.index : -1, image: event.image! }]);
@@ -476,7 +476,7 @@ export function EligibilityPage() {
                   {portal.id === "noridian" ? <NoridianInputForm inputFile={inputFile} credentialFile={credentialFile} isRunning={isRunning} canStart={canStart && projectId === "medrevenue"} onInputFileChange={setInputFile} onCredentialFileChange={setCredentialFile} onSubmit={start} onCancel={cancel} /> : portal.id === "uhc" ? <UhcInputForm inputFile={inputFile} credentialFile={credentialFile} isRunning={isRunning} canStart={canStart && projectId === "minimax"} onInputFileChange={setInputFile} onCredentialFileChange={setCredentialFile} onSubmit={start} onCancel={cancel} /> : portal.id === "availity" ? <AvailityInputForm inputFile={inputFile} credentialFile={credentialFile} isRunning={isRunning} canStart={canStart && projectId === "minimax"} onInputFileChange={setInputFile} onCredentialFileChange={setCredentialFile} onSubmit={start} onCancel={cancel} /> : <WaystarInputForm inputFile={inputFile} credentialFile={credentialFile} isRunning={isRunning} canStart={canStart} onInputFileChange={setInputFile} onCredentialFileChange={setCredentialFile} onSubmit={start} onCancel={cancel} />}
                 </div>
                 {otpRequest ? <div className="mt-5 rounded-[1.4rem] border border-amber-200 bg-amber-50 p-5"><p className="font-semibold text-slate-950">{otpRequest.label}</p><p className="mt-1 text-sm text-slate-600">{otpRequest.message}</p><div className="mt-3 flex gap-3"><input value={otpValue} onChange={(event) => setOtpValue(event.target.value)} className="min-w-0 flex-1 rounded-xl border border-amber-300 bg-white px-3 py-2 text-sm" placeholder="Enter code" /><button type="button" onClick={submitOtp} disabled={!otpValue.trim()} className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">Submit code</button></div></div> : null}
-                <div className="mt-5"><WaystarResultView status={status} logs={logs} errorScreenshots={errorScreenshots} progress={progress} downloads={downloads} resultRows={resultRows} onDownload={downloadBase64File} /></div>
+                <div className="mt-5"><WaystarResultView isWaystar={portal.id === "waystar"} isRunning={isRunning} hasCompleted={hasCompleted} status={status} logs={logs} errorScreenshots={errorScreenshots} progress={progress} downloads={downloads} resultRows={resultRows} onDownload={downloadBase64File} /></div>
               </>
             )}
           </section>

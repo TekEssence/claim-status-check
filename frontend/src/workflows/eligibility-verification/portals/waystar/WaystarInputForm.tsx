@@ -37,7 +37,7 @@ export function WaystarInputForm(props: {
           {props.isRunning
             ? <LoaderCircle className="h-4 w-4 animate-spin" />
             : <Play className="h-4 w-4" />}
-          Start verification
+          {props.isRunning ? "Verification running…" : "Start verification"}
         </button>
         {props.isRunning && (
           <button

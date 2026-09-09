@@ -72,7 +72,16 @@ export async function buildWaystarOutputWorkbook(options: {
   const sheet = workbook.worksheets[0];
   if (!sheet) throw new Error("The eligibility workbook does not contain a worksheet.");
 
-  const outputColumns = BCBS_OUTPUT_COLUMNS;
+  const outputColumns = [
+    ...BCBS_OUTPUT_COLUMNS,
+    {
+      header: "error",
+      value: (_row: EligibilityInputRow | undefined, result: EligibilityResult | undefined, error: string | undefined) =>
+        error || (result?.coverageStatus === "error" || result?.coverageStatus === "unknown"
+          ? result.planStatus || "The payer response did not establish eligibility."
+          : ""),
+    },
+  ];
   const outputStartColumn = sheet.columnCount + 1;
   const headerRow = sheet.getRow(1);
   outputColumns.forEach((column, offset) => {
@@ -105,7 +114,7 @@ export async function buildWaystarOutputWorkbook(options: {
       const cell = worksheetRow.getCell(outputStartColumn + offset);
       cell.value = formatOutputValue(column.value(row, result, error)) as ExcelJS.CellValue;
 cell.alignment = { vertical: "top", wrapText: true };
-      if (outputColumns === BCBS_OUTPUT_COLUMNS) {
+      {
         cell.border = {
           top: { style: "thin", color: { argb: "FFD9E2F3" } },
           left: { style: "thin", color: { argb: "FFD9E2F3" } },
