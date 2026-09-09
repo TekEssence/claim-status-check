@@ -31,3 +31,31 @@ export async function detectLoginStatus(page: Page, timeoutMs: number): Promise<
 
   return { status: "unknown" };
 }
+
+export async function logoutIehp(page: Page, log?: (message: string) => Promise<void>): Promise<boolean> {
+  const logoutSelectors = [
+    "li[ng-click='logOut()']",
+    ".headerTopNav_signout",
+    "text=/Sign\\s*Out/i",
+    "text=/Logout/i",
+    "text=/Log\\s*Out/i",
+  ];
+
+  for (const selector of logoutSelectors) {
+    const logoutButton = page.locator(selector).first();
+    if (!(await logoutButton.isVisible().catch(() => false))) {
+      continue;
+    }
+
+    await log?.("IEHP chunk complete. Logging out before restarting browser.");
+    await logoutButton.click({ timeout: 5000 }).catch(async (error) => {
+      throw new Error(`IEHP logout click failed for selector ${selector}: ${error instanceof Error ? error.message : String(error)}`);
+    });
+    await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
+    await page.waitForTimeout(1000);
+    return true;
+  }
+
+  await log?.("IEHP logout control was not visible before chunk browser close.");
+  return false;
+}

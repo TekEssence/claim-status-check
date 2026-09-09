@@ -4,7 +4,7 @@ import type { ScraperContext } from "../../types";
 import { emitScrapeJobEvent } from "@/backend/src/jobs/job-store";
 import { processCoveredRaDownloads, extractCheckNumbersFromClaimDetailText } from "./covered-ra";
 import { processReferToRaDownloads } from "./refer-ra";
-import { detectLoginStatus } from "./auth";
+import { detectLoginStatus, logoutIehp } from "./auth";
 import { launchIehpBrowser } from "./browser";
 import { parseIehpClaimStatusInput } from "./input";
 import { navigateToClaimStatusWithRetry } from "./claim-status";
@@ -36,6 +36,7 @@ type StreamEvent = Record<string, unknown>;
 
 const IEHP_CHUNK_MAX_EXECUTION_TIME_MS = 4 * 60 * 1000;
 const IEHP_CHUNK_BATCH_SIZE = 10;
+const IEHP_MAX_CLAIM_RESULT_PAGES = Math.max(1, Number(process.env.IEHP_MAX_CLAIM_RESULT_PAGES || 10));
 
 export async function runIehpClaimStatusJob(jobId: string, formData: FormData, context?: ScraperContext): Promise<void> {
   const sendEvent = async (data: StreamEvent) => {
@@ -252,6 +253,54 @@ export async function runIehpClaimStatusJob(jobId: string, formData: FormData, c
                 return parseWebsiteMmDdYyyy(text);
               };
 
+              const getCurrentPageDosWindow = async () => {
+                const rows = page!.locator("tr.line-item");
+                const rowCount = await rows.count();
+                let oldestTime = Number.POSITIVE_INFINITY;
+                let newestTime = Number.NEGATIVE_INFINITY;
+                let parsedCount = 0;
+
+                for (let rowIdx = 0; rowIdx < rowCount; rowIdx++) {
+                  const rowDos = await extractDosFromRow(rows.nth(rowIdx), primaryDosColIndex);
+                  if (!rowDos) continue;
+                  const rowTime = rowDos.getTime();
+                  oldestTime = Math.min(oldestTime, rowTime);
+                  newestTime = Math.max(newestTime, rowTime);
+                  parsedCount++;
+                }
+
+                if (parsedCount === 0) {
+                  return null;
+                }
+
+                return {
+                  oldest: new Date(oldestTime),
+                  newest: new Date(newestTime),
+                  parsedCount,
+                  rowCount,
+                };
+              };
+
+              const evaluatePagePosition = (window: Awaited<ReturnType<typeof getCurrentPageDosWindow>>) => {
+                if (!window || sortDescending === null) {
+                  return "unknown" as const;
+                }
+
+                const targetTime = dosDate.getTime();
+                const oldestTime = window.oldest.getTime();
+                const newestTime = window.newest.getTime();
+
+                if (targetTime >= oldestTime && targetTime <= newestTime) {
+                  return "within-page-range" as const;
+                }
+
+                if (sortDescending) {
+                  return targetTime > newestTime ? "passed-target" as const : "before-target" as const;
+                }
+
+                return targetTime < oldestTime ? "passed-target" as const : "before-target" as const;
+              };
+
               // Find the column index of "Primary DOS" in the results table header FIRST
               // so we ONLY match that column and not the "Received" or other date columns.
               const headerCells = page.locator("tr.header-row th, thead tr th, tr:first-of-type th");
@@ -302,6 +351,11 @@ export async function runIehpClaimStatusJob(jobId: string, formData: FormData, c
               let selectedLatestReceivedRowOnly = false;
 
               while (true) {
+                if (pageNum > IEHP_MAX_CLAIM_RESULT_PAGES) {
+                  await log(`Row ${i + 1}: Reached IEHP claim result page scan limit (${IEHP_MAX_CLAIM_RESULT_PAGES}). Stopping search for this row.`);
+                  break;
+                }
+
                 let matchingRows = getMatchingRows();
                 let count = await matchingRows.count();
 
@@ -394,6 +448,36 @@ export async function runIehpClaimStatusJob(jobId: string, formData: FormData, c
                 let detailLevelMatchFound = false;
                 const currentPageRows = page.locator("tr.line-item");
                 const currentPageRowCount = await currentPageRows.count();
+                const currentPageDosWindow = await getCurrentPageDosWindow();
+                const currentPagePosition = evaluatePagePosition(currentPageDosWindow);
+
+                if (currentPageDosWindow && sortDescending !== null) {
+                  await log(
+                    `Row ${i + 1}: Page ${pageNum} Primary DOS range: ${formatMmDdYyyy(currentPageDosWindow.oldest)} - ${formatMmDdYyyy(currentPageDosWindow.newest)} (${currentPageDosWindow.parsedCount}/${currentPageDosWindow.rowCount} parsed).`,
+                  );
+                }
+
+                if (currentPagePosition === "passed-target") {
+                  await log(`Row ${i + 1}: Sort-aware early exit on page ${pageNum}; target DOS ${formatMmDdYyyy(dosDate)} is outside the remaining result pages.`);
+                  break;
+                }
+
+                if (currentPagePosition === "before-target") {
+                  const nextBtn = page.locator("li.pagination-next:not(.disabled) a").first();
+                  const hasNextPage = await nextBtn.count() > 0;
+                  if (!hasNextPage) break;
+                  if (pageNum >= IEHP_MAX_CLAIM_RESULT_PAGES) {
+                    await log(`Row ${i + 1}: Reached IEHP claim result page scan limit (${IEHP_MAX_CLAIM_RESULT_PAGES}). Stopping search for this row.`);
+                    break;
+                  }
+
+                  await log(`Row ${i + 1}: Page ${pageNum} DOS range is newer than target DOS ${formatMmDdYyyy(dosDate)}. Going to next page without expanding detail lines...`);
+                  await nextBtn.click();
+                  await page.locator('div[full-screen-ajax-loader] .full-screen-bg').waitFor({ state: "hidden", timeout: 30000 }).catch(() => {});
+                  await page.waitForLoadState("networkidle", { timeout: 15000 });
+                  pageNum++;
+                  continue;
+                }
 
                 /*
                 ###New Code -Start###
@@ -469,6 +553,11 @@ export async function runIehpClaimStatusJob(jobId: string, formData: FormData, c
                   break;
                 }
 
+                if (currentPagePosition === "within-page-range") {
+                  await log(`Row ${i + 1}: Sort-aware early exit on page ${pageNum}; target DOS should have been on this page but no exact match was found.`);
+                  break;
+                }
+
                 // No match on this page.
                 // Early-exit: only if sort order is known — if first row has passed our target, stop.
                 if (sortDescending !== null) {
@@ -489,6 +578,10 @@ export async function runIehpClaimStatusJob(jobId: string, formData: FormData, c
                 const nextBtn = page.locator("li.pagination-next:not(.disabled) a").first();
                 const hasNextPage = await nextBtn.count() > 0;
                 if (!hasNextPage) break;
+                if (pageNum >= IEHP_MAX_CLAIM_RESULT_PAGES) {
+                  await log(`Row ${i + 1}: Reached IEHP claim result page scan limit (${IEHP_MAX_CLAIM_RESULT_PAGES}). Stopping search for this row.`);
+                  break;
+                }
 
                 await log(`Row ${i + 1}: DOS not found on page ${pageNum}, going to next page...`);
                 await nextBtn.click();
@@ -525,6 +618,8 @@ export async function runIehpClaimStatusJob(jobId: string, formData: FormData, c
                   update: { BotClaimDetails: "No matching rows found for DOS.", BotClaimStatusCheck: "Failed", BotClaimStatusCheckError: msg }
                 });
                 await sendEvent({ type: "progress", completed: i + 1, total: claimRows.length });
+                processedInThisBatch++;
+                nextStartIndex = i + 1;
                 continue;
               }
 
@@ -623,6 +718,11 @@ export async function runIehpClaimStatusJob(jobId: string, formData: FormData, c
             nextStartIndex = i + 1;
           }
           } finally {
+            if (!cancelled && nextStartIndex < claimRows.length && page) {
+              await logoutIehp(page, log).catch(async (error) => {
+                await log(`IEHP logout before chunk restart failed; closing browser anyway. ${error instanceof Error ? error.message : String(error)}`);
+              });
+            }
             await closeAutomationResources({ browser, context: browserContext, page, log });
           }
 

@@ -78,6 +78,7 @@ export function WorkflowRunsPanel({
                   : 0;
                 const isActiveStatus = isLiveWorkflowStatus(job.status);
                 const hasOutput = hasExcelOutput(job);
+                const isSelected = selectedWorkflowRunId === job.jobId;
                 const statusClassName =
                   job.status === "completed"
                     ? "bg-emerald-50 text-emerald-700"
@@ -92,7 +93,7 @@ export function WorkflowRunsPanel({
                 return (
                   <tr
                     key={job.jobId}
-                    className={`border-b border-sky-100 last:border-0 ${selectedWorkflowRunId === job.jobId ? "bg-blue-50/65" : "hover:bg-sky-50/45"}`}
+                    className={`border-b border-sky-100 last:border-0 ${isSelected ? "bg-blue-50/85 ring-1 ring-inset ring-blue-200" : "hover:bg-sky-50/45"}`}
                   >
                     <td className="whitespace-nowrap px-3 py-3">
                       <button
@@ -134,9 +135,14 @@ export function WorkflowRunsPanel({
                         <button
                           type="button"
                           onClick={() => void selectWorkflowRun(job)}
-                          className="rounded-[0.75rem] border border-sky-100 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-sky-50"
+                          aria-pressed={isSelected}
+                          className={`rounded-[0.75rem] border px-3 py-2 text-xs font-semibold transition ${
+                            isSelected
+                              ? "border-blue-200 bg-blue-600 text-white shadow-sm"
+                              : "border-sky-100 bg-white text-slate-700 hover:bg-sky-50"
+                          }`}
                         >
-                          View
+                          {isSelected ? "Showing logs" : "Show logs"}
                         </button>
                         <button
                           type="button"
@@ -177,7 +183,13 @@ export function OperationsRunningJobsPanel({
   onRefresh: () => void | Promise<void>; onSelect: JobAction; onCancel: JobAction; onForceStop: JobAction;
 }) {
   if (!enabled) return null;
-  const operationsRunningJobs = jobs;
+  const operationsRunningJobs = [...jobs].sort((left, right) => {
+    const leftTime = Date.parse(left.createdAt || "");
+    const rightTime = Date.parse(right.createdAt || "");
+    const normalizedLeftTime = Number.isFinite(leftTime) ? leftTime : Number.MAX_SAFE_INTEGER;
+    const normalizedRightTime = Number.isFinite(rightTime) ? rightTime : Number.MAX_SAFE_INTEGER;
+    return normalizedLeftTime - normalizedRightTime || left.jobId.localeCompare(right.jobId);
+  });
   const operationsRunningJobsLoading = loading;
   const operationsRunningJobsError = error;
   const selectedWorkflowRunId = selectedJobId;
@@ -237,11 +249,12 @@ export function OperationsRunningJobsPanel({
                   ? Math.min(100, Math.round((job.currentCompleted / job.totalRows) * 100))
                   : 0;
                 const isActiveStatus = isLiveWorkflowStatus(job.status);
+                const isSelected = selectedWorkflowRunId === job.jobId;
 
                 return (
                   <tr
                     key={job.jobId}
-                    className={`border-b border-indigo-50 last:border-0 ${selectedWorkflowRunId === job.jobId ? "bg-indigo-50/45" : ""}`}
+                    className={`border-b border-indigo-50 last:border-0 ${isSelected ? "bg-indigo-50/85 ring-1 ring-inset ring-indigo-200" : ""}`}
                   >
                     <td className="whitespace-nowrap px-3 py-3">
                       <button
@@ -285,9 +298,14 @@ export function OperationsRunningJobsPanel({
                         <button
                           type="button"
                           onClick={() => void selectWorkflowRun(job)}
-                          className="rounded-[0.75rem] border border-indigo-100 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-indigo-50"
+                          aria-pressed={isSelected}
+                          className={`rounded-[0.75rem] border px-3 py-2 text-xs font-semibold transition ${
+                            isSelected
+                              ? "border-indigo-200 bg-indigo-600 text-white shadow-sm"
+                              : "border-indigo-100 bg-white text-slate-700 hover:bg-indigo-50"
+                          }`}
                         >
-                          View
+                          {isSelected ? "Showing logs" : "Show logs"}
                         </button>
                         <button
                           type="button"
@@ -444,4 +462,3 @@ export function OutputsPanel({
     </div>
   ;
 }
-

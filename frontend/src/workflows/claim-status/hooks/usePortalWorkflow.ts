@@ -17,13 +17,14 @@ export type StandardPortalJobOptions = {
 };
 
 export function usePortalWorkflow(p: {
-  setActiveJobId: Dispatch<SetStateAction<string>>;
+  setActiveJobId: (jobId: string) => void;
   setIsProcessing: Dispatch<SetStateAction<boolean>>;
   setLogs: Dispatch<SetStateAction<string[]>>;
   setProgress: Dispatch<SetStateAction<JobProgressValue | null>>;
   setErrorScreenshots: Dispatch<SetStateAction<ErrorScreenshot[]>>;
   setStatus: Dispatch<SetStateAction<string>>;
   refreshRuns: () => void;
+  shouldDisplayJob?: (jobId: string) => boolean;
 }) {
   async function runStandardPortalJob(options: StandardPortalJobOptions): Promise<void> {
     let hasError = false;
@@ -33,33 +34,44 @@ export function usePortalWorkflow(p: {
     const streamAbortController = new AbortController();
 
     const handleJobEvent = async (eventData: ScrapeJobEvent) => {
-      await options.onEvent?.(eventData);
+      const shouldDisplay = !p.shouldDisplayJob || p.shouldDisplayJob(subscribedJobId);
+      if (shouldDisplay) {
+        await options.onEvent?.(eventData);
+      }
       if (eventData.type === "log" && eventData.message) {
-        p.setLogs((previous) => [...previous, eventData.message ?? ""]);
+        if (shouldDisplay) p.setLogs((previous) => [...previous, eventData.message ?? ""]);
       } else if (eventData.type === "progress" && typeof eventData.completed === "number" && typeof eventData.total === "number") {
-        p.setProgress({ completed: eventData.completed, total: eventData.total, currentRow: eventData.currentRow });
-        if (options.progressMessage) p.setStatus(options.progressMessage(eventData.completed, eventData.total));
+        if (shouldDisplay) {
+          p.setProgress({ completed: eventData.completed, total: eventData.total, currentRow: eventData.currentRow });
+          if (options.progressMessage) p.setStatus(options.progressMessage(eventData.completed, eventData.total));
+        }
       } else if (eventData.type === "error_screenshot" && typeof eventData.index === "number" && eventData.image) {
-        p.setErrorScreenshots((previous) => [...previous, { index: eventData.index ?? -1, image: eventData.image ?? "" }]);
+        if (shouldDisplay) p.setErrorScreenshots((previous) => [...previous, { index: eventData.index ?? -1, image: eventData.image ?? "" }]);
       } else if (eventData.type === "file_download" && eventData.filename && eventData.base64) {
         const artifactKey = buildDownloadArtifactKey(eventData);
-        if (!hasDownloadedArtifact(subscribedJobId, artifactKey)) {
+        if (shouldDisplay && !hasDownloadedArtifact(subscribedJobId, artifactKey)) {
           downloadBase64File(eventData.filename, eventData.base64, eventData.mimeType || "application/octet-stream");
           rememberDownloadedArtifact(subscribedJobId, artifactKey);
           p.setStatus(`Downloaded ${eventData.filename}`);
         }
       } else if (eventData.type === "warning" && eventData.message) {
-        p.setLogs((previous) => [...previous, eventData.message ?? ""]);
-        p.setStatus(eventData.message);
+        if (shouldDisplay) {
+          p.setLogs((previous) => [...previous, eventData.message ?? ""]);
+          p.setStatus(eventData.message);
+        }
       } else if (eventData.type === "error" && eventData.message) {
         finalErrorMessage = eventData.message;
         hasError = true;
-        p.setLogs((previous) => [...previous, `ERROR: ${eventData.message}`]);
-        p.setStatus(`Error: ${eventData.message}`);
+        if (shouldDisplay) {
+          p.setLogs((previous) => [...previous, `ERROR: ${eventData.message}`]);
+          p.setStatus(`Error: ${eventData.message}`);
+        }
       } else if (eventData.type === "cancelled") {
         wasCancelled = true;
-        p.setLogs((previous) => [...previous, eventData.message || "Processing cancelled."]);
-        p.setStatus(eventData.message || "Processing cancelled.");
+        if (shouldDisplay) {
+          p.setLogs((previous) => [...previous, eventData.message || "Processing cancelled."]);
+          p.setStatus(eventData.message || "Processing cancelled.");
+        }
       }
     };
 
@@ -77,17 +89,23 @@ export function usePortalWorkflow(p: {
         onStreamError(error) {
           finalErrorMessage = getErrorMessage(error);
           hasError = true;
-          p.setLogs((previous) => [...previous, `STREAM ERROR: ${finalErrorMessage}`]);
-          p.setStatus(`Stream error: ${finalErrorMessage}`);
+          if (!p.shouldDisplayJob || p.shouldDisplayJob(subscribedJobId)) {
+            p.setLogs((previous) => [...previous, `STREAM ERROR: ${finalErrorMessage}`]);
+            p.setStatus(`Stream error: ${finalErrorMessage}`);
+          }
         },
       });
-      p.setStatus(wasCancelled
-        ? `${options.portalName} processing cancelled.`
-        : hasError
-          ? `${options.portalName} processing finished with errors${finalErrorMessage ? `: ${finalErrorMessage}` : "."}`
-          : `${options.portalName} processing completed.`);
+      if (!p.shouldDisplayJob || p.shouldDisplayJob(subscribedJobId)) {
+        p.setStatus(wasCancelled
+          ? `${options.portalName} processing cancelled.`
+          : hasError
+            ? `${options.portalName} processing finished with errors${finalErrorMessage ? `: ${finalErrorMessage}` : "."}`
+            : `${options.portalName} processing completed.`);
+      }
     } catch (error) {
-      p.setStatus(`Failed to process ${options.portalName} claims: ${getErrorMessage(error)}`);
+      if (!subscribedJobId || !p.shouldDisplayJob || p.shouldDisplayJob(subscribedJobId)) {
+        p.setStatus(`Failed to process ${options.portalName} claims: ${getErrorMessage(error)}`);
+      }
     } finally {
       options.onJobFinished?.();
       p.setIsProcessing(false);

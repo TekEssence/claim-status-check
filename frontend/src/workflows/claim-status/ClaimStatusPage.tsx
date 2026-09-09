@@ -1,7 +1,7 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
 import { usePathname, useRouter } from "next/navigation";
 import {
@@ -210,11 +210,34 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
   const workflowRunTrackingEnabled = Boolean(authUser);
   const canViewOperationsRunningJobs = hasFullWorkflowAccess(authUser);
   const selectedPortalUiMeta = effectivePortalId ? PORTAL_UI_META[effectivePortalId] : null;
+  const selectedWorkflowRunIdRef = useRef("");
+  useEffect(() => {
+    selectedWorkflowRunIdRef.current = selectedWorkflowRunId;
+  }, [selectedWorkflowRunId]);
+  const shouldDisplayWorkflowJob = (jobId: string) => {
+    const selectedJobId = selectedWorkflowRunIdRef.current;
+    return !selectedJobId || selectedJobId === jobId;
+  };
+  const setActiveAndSelectedJobId = (jobId: string) => {
+    if (jobId) {
+      selectedWorkflowRunIdRef.current = jobId;
+      setSelectedWorkflowRunId(jobId);
+    }
+    setActiveJobId(jobId);
+  };
+  const sortRunsByCreatedOrder = (jobs: ScrapeJobSummary[]) =>
+    [...jobs].sort((left, right) => {
+      const leftTime = Date.parse(left.createdAt || "");
+      const rightTime = Date.parse(right.createdAt || "");
+      const normalizedLeftTime = Number.isFinite(leftTime) ? leftTime : Number.MAX_SAFE_INTEGER;
+      const normalizedRightTime = Number.isFinite(rightTime) ? rightTime : Number.MAX_SAFE_INTEGER;
+      return normalizedLeftTime - normalizedRightTime || left.jobId.localeCompare(right.jobId);
+    });
   const visibleWorkflowRuns = useMemo(
     () =>
-      workflowRuns.filter((job) =>
+      sortRunsByCreatedOrder(workflowRuns.filter((job) =>
         isLiveWorkflowStatus(job.status),
-      ),
+      )),
     [workflowRuns],
   );
   const runningWorkflowRunCount = useMemo(
@@ -250,13 +273,14 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
   );
   const canStartAnotherRun = workflowRunTrackingEnabled || !isProcessing;
   const { runStandardPortalJob } = usePortalWorkflow({
-    setActiveJobId,
+    setActiveJobId: setActiveAndSelectedJobId,
     setIsProcessing,
     setLogs,
     setProgress,
     setErrorScreenshots,
     setStatus,
     refreshRuns: () => void refreshWorkflowRuns({ silent: true }),
+    shouldDisplayJob: shouldDisplayWorkflowJob,
   });
   const availity = useAvailityController({
     canStartAnotherRun,
@@ -691,7 +715,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
         setActiveView("portal-selection");
 
         if (currentJob.portalId === "blue-shield") {
-          setActiveJobId(currentJob.jobId);
+          setActiveAndSelectedJobId(currentJob.jobId);
           setPendingBlueShieldRestoreJob(currentJob);
           setSelectedPortalId("blue-shield");
           setIsProcessing(false);
@@ -701,7 +725,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
 
         setStatus(`Reconnected to ${currentJob.portalId.toUpperCase()} run in progress...`);
         setIsProcessing(true);
-        setActiveJobId(currentJob.jobId);
+        setActiveAndSelectedJobId(currentJob.jobId);
         setSelectedPortalId(currentJob.portalId as PortalId);
         navigateToPortalRoute(currentJob.portalId as PortalId, true);
         setActiveView("portal-selection");
@@ -801,6 +825,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     const synchronizeActiveJobProgress = async () => {
       const details = await getScrapeJobDetails(activeJobId).catch(() => null);
       if (cancelled || !details) return;
+      if (!shouldDisplayWorkflowJob(activeJobId)) return;
       if (details.totalRows > 0) {
         setProgress((previous) => {
           const previousCompleted = previous?.completed ?? 0;
@@ -1288,6 +1313,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
   }
 
   async function selectWorkflowRun(job: ScrapeJobSummary) {
+    selectedWorkflowRunIdRef.current = job.jobId;
     setSelectedWorkflowRunId(job.jobId);
     setSelectedPortalId(isPortalId(job.portalId) ? job.portalId : null);
     if (isPortalId(job.portalId)) {
@@ -1538,6 +1564,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
       const streamAbortController = new AbortController();
 
       const handleJobEvent = async (eventData: ScrapeJobEvent) => {
+        if (!shouldDisplayWorkflowJob(subscribedJobId)) return;
         if (eventData.type === "log" && eventData.message) {
           setLogs((prev) => [...prev, eventData.message ?? ""]);
         } else if (eventData.type === "progress" && typeof eventData.completed === "number" && typeof eventData.total === "number") {
@@ -1599,7 +1626,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
             formData.append("existingJobId", logicalJobId);
           }
           subscribedJobId = await startScrapeJob(formData);
-          setActiveJobId(subscribedJobId);
+          setActiveAndSelectedJobId(subscribedJobId);
           setIehpLoginFile(null);
           setIehpClaimFile(null);
           setClaimFileName("");
@@ -1626,16 +1653,22 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
       if (chunkHasError) {
         setIsProcessing(false);
       } else if (currentCompleted < totalRows) {
-        setStatus(`Auto-resuming from row ${currentCompleted + 1}...`);
+        if (shouldDisplayWorkflowJob(effectiveJobId)) {
+          setStatus(`Auto-resuming from row ${currentCompleted + 1}...`);
+        }
         await processChunk(currentCompleted, effectiveJobId, "start");
       } else {
         try {
           const filename = await downloadStoredJobOutputOnce(effectiveJobId);
-          setStatus(filename ? `IEHP processing completed. Download started for ${filename}.` : "IEHP processing completed.");
+          if (shouldDisplayWorkflowJob(effectiveJobId)) {
+            setStatus(filename ? `IEHP processing completed. Download started for ${filename}.` : "IEHP processing completed.");
+          }
           await clearStoredRunContext().catch(() => {});
         } catch (postError) {
           console.error("IEHP output download failed", postError);
-          setStatus(`IEHP processing completed, but automatic output download failed: ${getErrorMessage(postError)}`);
+          if (shouldDisplayWorkflowJob(effectiveJobId)) {
+            setStatus(`IEHP processing completed, but automatic output download failed: ${getErrorMessage(postError)}`);
+          }
         } finally {
           setIsProcessing(false);
           setActiveJobId("");
@@ -1649,7 +1682,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
 
   async function reconnectAerialRun(currentJob: CurrentScrapeJob) {
     setIsProcessing(true);
-    setActiveJobId(currentJob.jobId);
+    setActiveAndSelectedJobId(currentJob.jobId);
     setSelectedPortalId("aerial");
     setLogs([]);
     setErrorScreenshots(
@@ -1673,6 +1706,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
         jobId: currentJob.jobId,
         signal: streamAbortController.signal,
         onEvent: async (eventData) => {
+          if (!shouldDisplayWorkflowJob(currentJob.jobId)) return;
           if (eventData.type === "log" && eventData.message) {
             setLogs((prev) => [...prev, eventData.message ?? ""]);
           } else if (eventData.type === "progress" && typeof eventData.completed === "number" && typeof eventData.total === "number") {
@@ -1706,19 +1740,23 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
         onStreamError(error) {
           console.error("Aerial stream error:", error);
           finalErrorMessage = getErrorMessage(error);
-          setLogs((prev) => [...prev, `STREAM ERROR: ${finalErrorMessage}`]);
-          setStatus(`Stream error: ${finalErrorMessage}`);
+          if (shouldDisplayWorkflowJob(currentJob.jobId)) {
+            setLogs((prev) => [...prev, `STREAM ERROR: ${finalErrorMessage}`]);
+            setStatus(`Stream error: ${finalErrorMessage}`);
+          }
           hasError = true;
         },
       });
 
-      setStatus(
-        wasCancelled
-          ? "Aerial processing cancelled."
-          : hasError
-          ? `Aerial processing finished with errors${finalErrorMessage ? `: ${finalErrorMessage}` : "."}`
-          : "Aerial processing completed.",
-      );
+      if (shouldDisplayWorkflowJob(currentJob.jobId)) {
+        setStatus(
+          wasCancelled
+            ? "Aerial processing cancelled."
+            : hasError
+            ? `Aerial processing finished with errors${finalErrorMessage ? `: ${finalErrorMessage}` : "."}`
+            : "Aerial processing completed.",
+        );
+      }
     } finally {
       setIsProcessing(false);
       setActiveJobId("");
@@ -1727,7 +1765,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
 
   async function reconnectDownloadOnlyRun(currentJob: CurrentScrapeJob, portalId: PortalId, portalName: string) {
     setIsProcessing(true);
-    setActiveJobId(currentJob.jobId);
+    setActiveAndSelectedJobId(currentJob.jobId);
     setSelectedPortalId(portalId);
     setLogs(currentJob.logs ?? []);
     setErrorScreenshots(
@@ -1763,6 +1801,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
         jobId: currentJob.jobId,
         signal: streamAbortController.signal,
         onEvent: async (eventData) => {
+          if (!shouldDisplayWorkflowJob(currentJob.jobId)) return;
           if (eventData.type === "log" && eventData.message) {
             setLogs((prev) => [...prev, eventData.message ?? ""]);
           } else if (eventData.type === "progress" && typeof eventData.completed === "number" && typeof eventData.total === "number") {
@@ -1803,19 +1842,23 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
         onStreamError(error) {
           console.error(`${portalName} stream error:`, error);
           finalErrorMessage = getErrorMessage(error);
-          setLogs((prev) => [...prev, `STREAM ERROR: ${finalErrorMessage}`]);
-          setStatus(`Stream error: ${finalErrorMessage}`);
+          if (shouldDisplayWorkflowJob(currentJob.jobId)) {
+            setLogs((prev) => [...prev, `STREAM ERROR: ${finalErrorMessage}`]);
+            setStatus(`Stream error: ${finalErrorMessage}`);
+          }
           hasError = true;
         },
       });
 
-      setStatus(
-        wasCancelled
-          ? `${portalName} processing cancelled.`
-          : hasError
-          ? `${portalName} processing finished with errors${finalErrorMessage ? `: ${finalErrorMessage}` : "."}`
-          : `${portalName} processing completed.`,
-      );
+      if (shouldDisplayWorkflowJob(currentJob.jobId)) {
+        setStatus(
+          wasCancelled
+            ? `${portalName} processing cancelled.`
+            : hasError
+            ? `${portalName} processing finished with errors${finalErrorMessage ? `: ${finalErrorMessage}` : "."}`
+            : `${portalName} processing completed.`,
+        );
+      }
     } finally {
       setIsProcessing(false);
       setActiveJobId("");
@@ -1826,7 +1869,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
 
   async function reconnectBlueShieldRun(currentJob: CurrentScrapeJob) {
     setIsProcessing(true);
-    setActiveJobId(currentJob.jobId);
+    setActiveAndSelectedJobId(currentJob.jobId);
     setPendingBlueShieldRestoreJob(null);
     setSelectedPortalId("blue-shield");
     setBlueShieldJobId(currentJob.jobId);
@@ -1852,6 +1895,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
         jobId: currentJob.jobId,
         signal: streamAbortController.signal,
         onEvent: async (eventData) => {
+          if (!shouldDisplayWorkflowJob(currentJob.jobId)) return;
           if (eventData.type === "log" && eventData.message) {
             setLogs((prev) => [...prev, eventData.message ?? ""]);
           } else if (eventData.type === "progress" && typeof eventData.completed === "number" && typeof eventData.total === "number") {
@@ -1890,19 +1934,23 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
         onStreamError(error) {
           console.error("Blue Shield stream error:", error);
           finalErrorMessage = getErrorMessage(error);
-          setLogs((prev) => [...prev, `STREAM ERROR: ${finalErrorMessage}`]);
-          setStatus(`Stream error: ${finalErrorMessage}`);
+          if (shouldDisplayWorkflowJob(currentJob.jobId)) {
+            setLogs((prev) => [...prev, `STREAM ERROR: ${finalErrorMessage}`]);
+            setStatus(`Stream error: ${finalErrorMessage}`);
+          }
           hasError = true;
         },
       });
 
-      setStatus(
-        wasCancelled
-          ? "Blue Shield processing cancelled."
-          : hasError
-          ? `Blue Shield processing finished with errors${finalErrorMessage ? `: ${finalErrorMessage}` : "."}`
-          : "Blue Shield processing completed.",
-      );
+      if (shouldDisplayWorkflowJob(currentJob.jobId)) {
+        setStatus(
+          wasCancelled
+            ? "Blue Shield processing cancelled."
+            : hasError
+            ? `Blue Shield processing finished with errors${finalErrorMessage ? `: ${finalErrorMessage}` : "."}`
+            : "Blue Shield processing completed.",
+        );
+      }
     } finally {
       setIsProcessing(false);
       setActiveJobId("");
@@ -1911,7 +1959,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
 
   async function reconnectRegalRun(currentJob: CurrentScrapeJob) {
     setIsProcessing(true);
-    setActiveJobId(currentJob.jobId);
+    setActiveAndSelectedJobId(currentJob.jobId);
     setSelectedPortalId("regal");
     setRegalJobId(currentJob.jobId);
     setLogs(currentJob.logs ?? []);
@@ -1989,6 +2037,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
         jobId: currentJob.jobId,
         signal: streamAbortController.signal,
         onEvent: async (eventData) => {
+          if (!shouldDisplayWorkflowJob(currentJob.jobId)) return;
           await handleRegalJobEvent(eventData, currentJob.jobId, (message) => {
             finalErrorMessage = message;
             hasError = true;
@@ -2000,20 +2049,26 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
         onStreamError(error) {
           console.error("Regal stream error:", error);
           finalErrorMessage = getErrorMessage(error);
-          setLogs((prev) => [...prev, `STREAM ERROR: ${finalErrorMessage}`]);
-          setStatus(`Stream error: ${finalErrorMessage}`);
+          if (shouldDisplayWorkflowJob(currentJob.jobId)) {
+            setLogs((prev) => [...prev, `STREAM ERROR: ${finalErrorMessage}`]);
+            setStatus(`Stream error: ${finalErrorMessage}`);
+          }
           hasError = true;
         },
       });
-      downloadZip(`regal-diagnostics-${currentJob.jobId}.zip`, diagnosticFiles);
+      if (shouldDisplayWorkflowJob(currentJob.jobId)) {
+        downloadZip(`regal-diagnostics-${currentJob.jobId}.zip`, diagnosticFiles);
+      }
 
-      setStatus(
-        wasCancelled
-          ? "Regal processing cancelled."
-          : hasError
-          ? `Regal processing finished with errors${finalErrorMessage ? `: ${finalErrorMessage}` : "."}`
-          : "Regal processing completed.",
-      );
+      if (shouldDisplayWorkflowJob(currentJob.jobId)) {
+        setStatus(
+          wasCancelled
+            ? "Regal processing cancelled."
+            : hasError
+            ? `Regal processing finished with errors${finalErrorMessage ? `: ${finalErrorMessage}` : "."}`
+            : "Regal processing completed.",
+        );
+      }
     } finally {
       setIsProcessing(false);
       setActiveJobId("");
@@ -2022,7 +2077,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
 
   async function reconnectOptumProRun(currentJob: CurrentScrapeJob) {
     setIsProcessing(true);
-    setActiveJobId(currentJob.jobId);
+    setActiveAndSelectedJobId(currentJob.jobId);
     setSelectedPortalId("optum-pro");
     setOptumProJobId(currentJob.jobId);
     setOptumProStaleRunAvailable(false);
@@ -2047,6 +2102,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
         jobId: currentJob.jobId,
         signal: streamAbortController.signal,
         onEvent: async (eventData) => {
+          if (!shouldDisplayWorkflowJob(currentJob.jobId)) return;
           await handleOptumProJobEvent(eventData, currentJob.jobId, (message) => {
             finalErrorMessage = message;
             hasError = true;
@@ -2055,17 +2111,21 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
         onStreamError(error) {
           console.error("Optum Pro stream error:", error);
           finalErrorMessage = getErrorMessage(error);
-          setLogs((prev) => [...prev, `STREAM ERROR: ${finalErrorMessage}`]);
-          setStatus(`Stream error: ${finalErrorMessage}`);
+          if (shouldDisplayWorkflowJob(currentJob.jobId)) {
+            setLogs((prev) => [...prev, `STREAM ERROR: ${finalErrorMessage}`]);
+            setStatus(`Stream error: ${finalErrorMessage}`);
+          }
           hasError = true;
         },
       });
 
-      setStatus(
-        hasError
-          ? `Optum Pro processing finished with errors${finalErrorMessage ? `: ${finalErrorMessage}` : "."}`
-          : "Optum Pro processing completed.",
-      );
+      if (shouldDisplayWorkflowJob(currentJob.jobId)) {
+        setStatus(
+          hasError
+            ? `Optum Pro processing finished with errors${finalErrorMessage ? `: ${finalErrorMessage}` : "."}`
+            : "Optum Pro processing completed.",
+        );
+      }
     } finally {
       setIsProcessing(false);
       setActiveJobId("");
@@ -2279,6 +2339,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     const streamAbortController = new AbortController();
 
     const handleJobEvent = async (eventData: ScrapeJobEvent) => {
+      if (!shouldDisplayWorkflowJob(subscribedJobId)) return;
       if (eventData.type === "log" && eventData.message) {
         setLogs((prev) => [...prev, eventData.message ?? ""]);
       } else if (eventData.type === "progress" && typeof eventData.completed === "number" && typeof eventData.total === "number") {
@@ -2329,7 +2390,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     try {
       const jobId = await startScrapeJob(formData);
       subscribedJobId = jobId;
-      setActiveJobId(jobId);
+      setActiveAndSelectedJobId(jobId);
       setAvailityJobId(jobId);
       setAerialCredentialFile(null);
       setAerialInputFile(null);
@@ -2341,18 +2402,22 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
         onStreamError(error) {
           console.error("Aerial stream error:", error);
           finalErrorMessage = getErrorMessage(error);
-          setLogs((prev) => [...prev, `STREAM ERROR: ${finalErrorMessage}`]);
-          setStatus(`Stream error: ${finalErrorMessage}`);
+          if (shouldDisplayWorkflowJob(subscribedJobId)) {
+            setLogs((prev) => [...prev, `STREAM ERROR: ${finalErrorMessage}`]);
+            setStatus(`Stream error: ${finalErrorMessage}`);
+          }
           hasError = true;
         },
       });
-      setStatus(
-        wasCancelled
-          ? "Aerial processing cancelled."
-          : hasError
-          ? `Aerial processing finished with errors${finalErrorMessage ? `: ${finalErrorMessage}` : "."}`
-          : "Aerial processing completed.",
-      );
+      if (shouldDisplayWorkflowJob(subscribedJobId)) {
+        setStatus(
+          wasCancelled
+            ? "Aerial processing cancelled."
+            : hasError
+            ? `Aerial processing finished with errors${finalErrorMessage ? `: ${finalErrorMessage}` : "."}`
+            : "Aerial processing completed.",
+        );
+      }
     } catch (error) {
       setStatus(`Failed to process Aerial claims: ${getErrorMessage(error)}`);
     } finally {
@@ -2425,6 +2490,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     const streamAbortController = new AbortController();
 
     const handleJobEvent = async (eventData: ScrapeJobEvent) => {
+      if (!shouldDisplayWorkflowJob(subscribedJobId)) return;
       if (eventData.type === "log" && eventData.message) {
         setLogs((prev) => [...prev, eventData.message ?? ""]);
       } else if (eventData.type === "progress" && typeof eventData.completed === "number" && typeof eventData.total === "number") {
@@ -2465,7 +2531,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
       const jobId = await startScrapeJob(formData);
       subscribedJobId = jobId;
       setCignaJobId(jobId);
-      setActiveJobId(jobId);
+      setActiveAndSelectedJobId(jobId);
       setCignaCredentialFile(null);
       setCignaInputFile(null);
       void refreshWorkflowRuns({ silent: true });
@@ -2476,18 +2542,22 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
         onStreamError(error) {
           console.error("Cigna stream error:", error);
           finalErrorMessage = getErrorMessage(error);
-          setLogs((prev) => [...prev, `STREAM ERROR: ${finalErrorMessage}`]);
-          setStatus(`Stream error: ${finalErrorMessage}`);
+          if (shouldDisplayWorkflowJob(subscribedJobId)) {
+            setLogs((prev) => [...prev, `STREAM ERROR: ${finalErrorMessage}`]);
+            setStatus(`Stream error: ${finalErrorMessage}`);
+          }
           hasError = true;
         },
       });
-      setStatus(
-        wasCancelled
-          ? "Cigna processing cancelled."
-          : hasError
-            ? `Cigna processing finished with errors${finalErrorMessage ? `: ${finalErrorMessage}` : "."}`
-            : "Cigna processing completed.",
-      );
+      if (shouldDisplayWorkflowJob(subscribedJobId)) {
+        setStatus(
+          wasCancelled
+            ? "Cigna processing cancelled."
+            : hasError
+              ? `Cigna processing finished with errors${finalErrorMessage ? `: ${finalErrorMessage}` : "."}`
+              : "Cigna processing completed.",
+        );
+      }
     } catch (error) {
       setStatus(`Failed to process Cigna claims: ${getErrorMessage(error)}`);
     } finally {
@@ -2579,7 +2649,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     try {
       const jobId = await startScrapeJob(formData);
       subscribedJobId = jobId;
-      setActiveJobId(jobId);
+      setActiveAndSelectedJobId(jobId);
       if (isAllCare) {
         setAllCareCredentialFile(null);
         setAllCareInputFile(null);
@@ -2592,6 +2662,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
         jobId,
         signal: streamAbortController.signal,
         onEvent: async (eventData) => {
+          if (!shouldDisplayWorkflowJob(jobId)) return;
           if (eventData.type === "log" && eventData.message) {
             setLogs((prev) => [...prev, eventData.message ?? ""]);
             setStatus(eventData.message);
@@ -2618,10 +2689,14 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
         onStreamError(error) {
           hasError = true;
           finalErrorMessage = getErrorMessage(error);
-          setLogs((prev) => [...prev, `STREAM ERROR: ${finalErrorMessage}`]);
+          if (shouldDisplayWorkflowJob(jobId)) {
+            setLogs((prev) => [...prev, `STREAM ERROR: ${finalErrorMessage}`]);
+          }
         },
       });
-      setStatus(wasCancelled ? `${portalName} processing cancelled.` : hasError ? `${portalName} processing finished with errors${finalErrorMessage ? `: ${finalErrorMessage}` : "."}` : `${portalName} processing completed.`);
+      if (shouldDisplayWorkflowJob(jobId)) {
+        setStatus(wasCancelled ? `${portalName} processing cancelled.` : hasError ? `${portalName} processing finished with errors${finalErrorMessage ? `: ${finalErrorMessage}` : "."}` : `${portalName} processing completed.`);
+      }
     } catch (error) {
       setStatus(`Failed to process ${portalName} claims: ${getErrorMessage(error)}`);
     } finally {
@@ -2674,6 +2749,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     const streamAbortController = new AbortController();
 
     const handleJobEvent = async (eventData: ScrapeJobEvent) => {
+      if (!shouldDisplayWorkflowJob(subscribedJobId)) return;
       if (eventData.type === "log" && eventData.message) {
         setLogs((prev) => [...prev, eventData.message ?? ""]);
       } else if (eventData.type === "progress" && typeof eventData.completed === "number" && typeof eventData.total === "number") {
@@ -2714,7 +2790,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
       const jobId = await startScrapeJob(formData);
       subscribedJobId = jobId;
       setBlueShieldJobId(jobId);
-      setActiveJobId(jobId);
+      setActiveAndSelectedJobId(jobId);
       setBlueShieldCredentialFile(null);
       setBlueShieldInputFile(null);
       void refreshWorkflowRuns({ silent: true });
@@ -2725,24 +2801,28 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
         onStreamError(error) {
           console.error("Blue Shield stream error:", error);
           finalErrorMessage = getErrorMessage(error);
-          setLogs((prev) => [...prev, `STREAM ERROR: ${finalErrorMessage}`]);
-          setStatus(`Stream error: ${finalErrorMessage}`);
+          if (shouldDisplayWorkflowJob(subscribedJobId)) {
+            setLogs((prev) => [...prev, `STREAM ERROR: ${finalErrorMessage}`]);
+            setStatus(`Stream error: ${finalErrorMessage}`);
+          }
           hasError = true;
         },
       });
-      setStatus(
-        wasCancelled
-          ? "Blue Shield processing cancelled."
-          : hasError
-          ? `Blue Shield processing finished with errors${finalErrorMessage ? `: ${finalErrorMessage}` : "."}`
-          : "Blue Shield processing completed.",
-      );
+      if (shouldDisplayWorkflowJob(subscribedJobId)) {
+        setStatus(
+          wasCancelled
+            ? "Blue Shield processing cancelled."
+            : hasError
+            ? `Blue Shield processing finished with errors${finalErrorMessage ? `: ${finalErrorMessage}` : "."}`
+            : "Blue Shield processing completed.",
+        );
+      }
     } catch (error) {
       const errorMessage = getErrorMessage(error);
       const currentJob = await getCurrentScrapeJob().catch(() => null);
 
       if (currentJob?.portalId === "blue-shield" && (currentJob.status === "running" || currentJob.status === "waiting_resume")) {
-        setActiveJobId(currentJob.jobId);
+        setActiveAndSelectedJobId(currentJob.jobId);
         setPendingBlueShieldRestoreJob(currentJob);
         setSelectedPortalId("blue-shield");
         setStatus("A previous Blue Shield run is still active. Use the active-runs table to view or cancel that specific run.");
@@ -2805,7 +2885,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
       const jobId = await startScrapeJob(formData);
       setPendingRegalRestoreJob(null);
       setRegalJobId(jobId);
-      setActiveJobId(jobId);
+      setActiveAndSelectedJobId(jobId);
       setRegalLoginFile(null);
       setRegalClaimFile(null);
       void refreshWorkflowRuns({ silent: true });
@@ -2813,6 +2893,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
         jobId,
         signal: streamAbortController.signal,
         onEvent: async (eventData) => {
+          if (!shouldDisplayWorkflowJob(jobId)) return;
           await handleRegalJobEvent(eventData, jobId, (message) => {
             finalErrorMessage = message;
             hasError = true;
@@ -2824,19 +2905,23 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
         onStreamError(error) {
           console.error("Regal stream error:", error);
           finalErrorMessage = getErrorMessage(error);
-          setLogs((prev) => [...prev, `STREAM ERROR: ${finalErrorMessage}`]);
-          setStatus(`Stream error: ${finalErrorMessage}`);
+          if (shouldDisplayWorkflowJob(jobId)) {
+            setLogs((prev) => [...prev, `STREAM ERROR: ${finalErrorMessage}`]);
+            setStatus(`Stream error: ${finalErrorMessage}`);
+          }
           hasError = true;
         },
       });
-      downloadZip(`regal-diagnostics-${jobId}.zip`, diagnosticFiles);
-      setStatus(
-        wasCancelled
-          ? "Regal processing cancelled."
-          : hasError
-          ? `Regal processing finished with errors${finalErrorMessage ? `: ${finalErrorMessage}` : "."}`
-          : "Regal processing completed.",
-      );
+      if (shouldDisplayWorkflowJob(jobId)) {
+        downloadZip(`regal-diagnostics-${jobId}.zip`, diagnosticFiles);
+        setStatus(
+          wasCancelled
+            ? "Regal processing cancelled."
+            : hasError
+            ? `Regal processing finished with errors${finalErrorMessage ? `: ${finalErrorMessage}` : "."}`
+            : "Regal processing completed.",
+        );
+      }
     } catch (error) {
       setStatus(`Failed to process Regal claims: ${getErrorMessage(error)}`);
     } finally {
@@ -2905,7 +2990,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     try {
       const jobId = await startScrapeJob(formData);
       setOptumProJobId(jobId);
-      setActiveJobId(jobId);
+      setActiveAndSelectedJobId(jobId);
       setOptumProLoginFile(null);
       setOptumProInputFile(null);
       void refreshWorkflowRuns({ silent: true });
@@ -2913,6 +2998,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
         jobId,
         signal: streamAbortController.signal,
         onEvent: async (eventData) => {
+          if (!shouldDisplayWorkflowJob(jobId)) return;
           await handleOptumProJobEvent(eventData, jobId, (message) => {
             finalErrorMessage = message;
             hasError = true;
@@ -2921,16 +3007,20 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
         onStreamError(error) {
           console.error("Optum Pro stream error:", error);
           finalErrorMessage = getErrorMessage(error);
-          setLogs((prev) => [...prev, `STREAM ERROR: ${finalErrorMessage}`]);
-          setStatus(`Stream error: ${finalErrorMessage}`);
+          if (shouldDisplayWorkflowJob(jobId)) {
+            setLogs((prev) => [...prev, `STREAM ERROR: ${finalErrorMessage}`]);
+            setStatus(`Stream error: ${finalErrorMessage}`);
+          }
           hasError = true;
         },
       });
-      setStatus(
-        hasError
-          ? `Optum Pro processing finished with errors${finalErrorMessage ? `: ${finalErrorMessage}` : "."}`
-          : "Optum Pro processing completed.",
-      );
+      if (shouldDisplayWorkflowJob(jobId)) {
+        setStatus(
+          hasError
+            ? `Optum Pro processing finished with errors${finalErrorMessage ? `: ${finalErrorMessage}` : "."}`
+            : "Optum Pro processing completed.",
+        );
+      }
     } catch (error) {
       const existingJobId = getActiveScrapeJobErrorId(error);
       if (existingJobId) {

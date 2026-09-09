@@ -178,12 +178,9 @@ function normalizeJobDetails(job: Partial<ScrapeJobDetails>, logs: string[] = []
 
 function eventPayloadToLog(payload: unknown): string {
   if (!payload || typeof payload !== "object") return "";
-  const event = payload as { type?: unknown; message?: unknown; level?: unknown };
+  const event = payload as { message?: unknown };
   if (typeof event.message === "string" && event.message.trim()) {
     return event.message.trim();
-  }
-  if (typeof event.type === "string" && event.type.trim()) {
-    return event.type.replace(/_/g, " ");
   }
   return "";
 }
