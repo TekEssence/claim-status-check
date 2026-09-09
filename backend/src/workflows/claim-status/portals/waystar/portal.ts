@@ -3,6 +3,8 @@ import { extractTextFromPdf } from "../iehp/claims/pdf";
 import { loginToWaystar } from "../../../eligibility-verification/portals/waystar/portal";
 import type { WaystarCredentials } from "../../../eligibility-verification/portals/waystar/credentials";
 import { WAYSTAR_CLAIM_STATUS_SELECTORS } from "./selectors";
+import { ensureWaystarClaimAccount } from "./account";
+import { openWaystarClaimSearch } from "./navigation";
 import type { WaystarClaimExtraction, WaystarClaimInputRow, WaystarProcedureLine } from "./types";
 
 function normalizeText(value: string): string {
@@ -606,14 +608,6 @@ async function firstVisibleLocator(page: Page, selectors: readonly string[], tim
   return null;
 }
 
-async function clickFirstVisible(page: Page, selectors: readonly string[], timeout = 5000): Promise<boolean> {
-  const locator = await firstVisibleLocator(page, selectors, timeout);
-  if (!locator) return false;
-  await locator.click();
-  await page.waitForLoadState("networkidle").catch(() => {});
-  return true;
-}
-
 async function fillIfVisible(page: Page, selectors: readonly string[], value: string): Promise<boolean> {
   if (!value) return false;
   const locator = await firstVisibleLocator(page, selectors);
@@ -628,13 +622,8 @@ export async function loginToWaystarClaimStatus(page: Page, credentials: Waystar
 }
 
 export async function navigateToWaystarClaimSearch(page: Page): Promise<void> {
-  await clickFirstVisible(page, WAYSTAR_CLAIM_STATUS_SELECTORS.navigation.claimsProcessing, 15000).catch(() => false);
-  await clickFirstVisible(page, WAYSTAR_CLAIM_STATUS_SELECTORS.navigation.professionalClaims, 15000).catch(() => false);
-  await clickFirstVisible(page, WAYSTAR_CLAIM_STATUS_SELECTORS.navigation.claims, 15000).catch(() => false);
-  const opened = await clickFirstVisible(page, WAYSTAR_CLAIM_STATUS_SELECTORS.navigation.claimSearch, 20000).catch(() => false);
-  if (!opened) {
-    await page.locator("#headerSearchLink, text=/Claim Search/i").first().waitFor({ state: "visible", timeout: 20000 });
-  }
+  await ensureWaystarClaimAccount(page);
+  await openWaystarClaimSearch(page);
 }
 
 type WaystarMatchedRowCandidate = {

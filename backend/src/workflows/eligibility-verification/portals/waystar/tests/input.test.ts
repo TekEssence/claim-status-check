@@ -1,11 +1,34 @@
 ﻿import assert from "node:assert/strict";
 import test from "node:test";
 import * as XLSX from "xlsx";
+import { medRevenueWaystarConfig } from "../config/projects/medrevenue";
+import { minimaxWaystarConfig } from "../config/projects/minimax";
+import { normalizeWaystarDate } from "../dates";
 import {
   readWaystarEligibilityWorkbook,
   routeWaystarRowsByPayer,
   splitPatientName,
 } from "../input";
+
+test("MedRevenue uses each row's DOS instead of an earlier existing Plan Date column", () => {
+  const routing = routeWaystarRowsByPayer([
+    { "Primary Insurance Name": "Medicare", "Plan Date": "09/06/2026", DOS: "9/2/2026" },
+    { "Primary Insurance Name": "Medicare", "Plan Date": "09/06/2026", DOS: "9/3/2026" },
+  ], { projectConfig: medRevenueWaystarConfig });
+  assert.deepEqual(routing.batches[0].rows.map((row) => normalizeWaystarDate(row.dateOfService || "")), [
+    "09/02/2026", "09/03/2026",
+  ]);
+});
+
+test("DOS priority is limited to MedRevenue and preserves Minimax date selection", () => {
+  const rows = [{ "Primary Insurance Name": "Medicare", Date: "09/06/2026", DOS: "9/2/2026" }];
+  for (const projectConfig of [undefined, minimaxWaystarConfig]) {
+    const routing = routeWaystarRowsByPayer(rows, { projectConfig });
+    assert.equal(routing.batches[0].rows[0].dateOfService, "09/06/2026");
+  }
+  const medRevenue = routeWaystarRowsByPayer(rows, { projectConfig: medRevenueWaystarConfig });
+  assert.equal(medRevenue.batches[0].rows[0].dateOfService, "9/2/2026");
+});
 
 test("routes a mixed workbook to payer batches using Primary Insurance Name", () => {
   const routing = routeWaystarRowsByPayer([

@@ -1,4 +1,5 @@
 import * as XLSX from "xlsx";
+import { bcbsPpoPayer } from "./payers/bcbs-ppo";
 import { credentialProjectMatches, type EligibilityProjectId } from "../../projects";
 
 export type WaystarSecurityQuestion = {
@@ -94,6 +95,11 @@ export function findWaystarCredentialsForPayer(
       .some((candidate) => credentialPayer === candidate || credentialPayer.includes(candidate) || candidate.includes(credentialPayer));
   });
   if (exact) return exact;
+  // Blue Shield uses the same MedRevenue Waystar account as Blue Cross unless
+  // the login workbook explicitly supplies a dedicated Blue Shield account.
+  if (projectId === "medrevenue" && (payer.id === "blue-shield" || payer.id === "united-healthcare-all-states")) {
+    return findWaystarCredentialsForPayer(credentials, bcbsPpoPayer, projectId, options);
+  }
   if (payer.credentialProject && portalMatches.length > 0) return portalMatches[0];
 
   const unscoped = portalMatches.filter((entry) => !entry.payer);

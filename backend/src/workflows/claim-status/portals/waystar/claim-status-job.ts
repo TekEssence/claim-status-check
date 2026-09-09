@@ -593,6 +593,15 @@ export async function runWaystarClaimStatusJob(formData: FormData, context: Scra
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown Waystar automation error.";
+    addAudit(auditRows, 0, "run", "failed", message);
+    errorRows.push({
+      timestamp: nowIso(), inputRowId: 0, patientName: "", responsiblePayer: "", dos: "",
+      errorType: "run_failed", errorMessage: message,
+    });
+    await context.emit({ type: "error", message });
+    if (page && input.claimRows[0]) {
+      await captureWaystarDiagnostics(context, page, input.claimRows[0], "run-failed");
+    }
     try {
       const workbookBuffer = await createWaystarOutputWorkbookBuffer({
         outputRows,
@@ -603,7 +612,6 @@ export async function runWaystarClaimStatusJob(formData: FormData, context: Scra
     } catch {
       // Ignore partial workbook emission failures.
     }
-    await context.emit({ type: "error", message });
   } finally {
     await closeAutomationResources({ browser, context: browserContext, page, log: async () => {} });
     await context.emit({ type: "done" });

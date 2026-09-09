@@ -118,7 +118,7 @@ export function createWaystarRunner(): AutomationRunner<EligibilityRunInput> {
 
       try {
         payerBatches: for (const batch of routing.batches) {
-          const payer = getWaystarPayer(batch.payerId);
+          const payer = getWaystarPayer(batch.payerId, input.projectId);
           const payerProjectConfig = getWaystarPayerProjectConfig(projectConfig, payer.id);
           const credentials = findWaystarCredentialsForPayer(credentialProfiles, payer, input.projectId, {
             allowUnscopedCredentials: projectConfig.allowUnscopedCredentials,
@@ -216,6 +216,9 @@ export function createWaystarRunner(): AutomationRunner<EligibilityRunInput> {
                 if (input.projectId === "medrevenue" && payer.id === "medicare") {
                   result = applyMedRevenueMedicareResultMappings(result);
                 }
+                if (input.projectId === "medrevenue" && (payer.id === "bcbs-ppo" || payer.id === "blue-shield")) {
+                  result = applyMedRevenueBlueCrossResultMappings(result);
+                }
                 if (isRetryablePayerError(result)) {
                   const payerResponse = describePayerError(result);
                   await context.log({
@@ -245,6 +248,22 @@ export function createWaystarRunner(): AutomationRunner<EligibilityRunInput> {
                   if (input.projectId === "medrevenue" && payer.id === "medicare") {
                     result = applyMedRevenueMedicareResultMappings(result);
                   }
+                  if (input.projectId === "medrevenue" && (payer.id === "bcbs-ppo" || payer.id === "blue-shield")) {
+                    result = applyMedRevenueBlueCrossResultMappings(result);
+                  }
+                }
+                if (input.projectId === "medrevenue") {
+                  const services = payload.fullPayerResponse?.otherCoverageServiceTypes;
+                  if (services !== undefined) {
+                    result = { ...result, metadata: { ...result.metadata, medRevenueOutputServiceType: services.join("; ") } };
+                  }
+                }
+                if (input.projectId === "medrevenue" && ["umr", "aetna"].includes(payer.id) && !result.effectiveDate) {
+                  const label = payer.id === "umr" ? "Benefit Begin Date" : "Eligibility Begin Date";
+                  const section = payer.id === "umr" ? "Other Coverage Information" : "Subscriber Coverage Information";
+                  await context.log({ level: "warn", eventName: "eligibility_effective_date_missing", rowIndex: row.originalIndex,
+                    message: `${payer.name} row ${row.originalIndex}: response extraction could not read ${label}; Eff Date remains blank. Please retain this row's portal response for inspection.` });
+                  errorReportLines.push(`${payer.name} row ${row.originalIndex}: ${label} was not captured from ${section}; Eff Date is blank. ${payload.effectiveDateDiagnostic ?? ""}`);
                 }
                 results.set(row.originalIndex, result);
                 await context.emit({
@@ -305,7 +324,7 @@ export function createWaystarRunner(): AutomationRunner<EligibilityRunInput> {
                   }
                 }
                 const fieldRetries = fieldRetryCounts.get(row.originalIndex) ?? 0;
-                if (isWaystarInquiryFieldError(message) && fieldRetries < 1) {
+                if ((isWaystarInquiryFieldError(message) || (input.projectId === "medrevenue" && message.startsWith("Waystar payer changed or was not selected."))) && fieldRetries < 1) {
                   fieldRetryCounts.set(row.originalIndex, fieldRetries + 1);
                   await closeWaystarInquiryWindows(page);
                   batch.rows.push(row);
@@ -465,15 +484,40 @@ export function applyMedRevenueMedicareResultMappings(result: EligibilityResult)
   const prescriptionPayer = findResponseValue(prescriptionDrugCoverage, "Payer");
   const prescriptionBenefitDate = findResponseValue(prescriptionDrugCoverage, "Benefit Date");
   const prescriptionServiceType = findResponseValue(prescriptionDrugCoverage, "Service Type");
+  const alcoholismSection = findResponseBlockByTitle(response.sections, "Alcoholism");
+  const alcoholismMedicarePartBPlanDate = findResponseValue(alcoholismSection, "Plan Date");
 
   return {
     ...result,
     effectiveDate: eligibilityDate || result.effectiveDate,
+    planDate: alcoholismMedicarePartBPlanDate || result.planDate,
     otherInsurance: prescriptionPayer || result.otherInsurance,
     otherInsuranceEffectiveDate: prescriptionBenefitDate || result.otherInsuranceEffectiveDate,
     metadata: {
       ...(result.metadata ?? {}),
       ...(prescriptionServiceType ? { medRevenuePrescriptionDrugServiceType: prescriptionServiceType } : {}),
+    },
+  };
+}
+
+export function applyMedRevenueBlueCrossResultMappings(result: EligibilityResult): EligibilityResult {
+  const fullResponse = result.metadata?.fullPayerResponse;
+  if (!fullResponse || typeof fullResponse !== "object") return result;
+  const secondaryCoverage = (fullResponse as Record<string, unknown>).secondaryCoverageInformation;
+  const coverageDescription = findResponseValue(secondaryCoverage, "Coverage Description");
+  const cobDate = findResponseValue(secondaryCoverage, "COB Date");
+  const groupOrPolicyNumber = findResponseValue(secondaryCoverage, "Group or Policy Number");
+  const serviceType = findResponseValue(secondaryCoverage, "Service Type");
+
+  return {
+    ...result,
+    metadata: {
+      ...(result.metadata ?? {}),
+      ...(coverageDescription ? { medRevenueSecondaryCoverageDescription: coverageDescription } : {}),
+      ...(cobDate ? { medRevenueSecondaryCobDate: cobDate } : {}),
+      ...(groupOrPolicyNumber ? { medRevenueSecondaryGroupOrPolicyNumber: groupOrPolicyNumber } : {}),
+      ...(serviceType ? { medRevenueSecondaryServiceType: serviceType } : {}),
+      ...(serviceType ? { medRevenueOutputServiceType: serviceType } : {}),
     },
   };
 }
@@ -597,6 +641,9 @@ export function describeEligibilityExtraction(result: EligibilityResult): {
   extracted: string[];
   missing: string[];
 } {
+  if (result.payerId === "blue-shield") {
+    return describeEligibilityExtraction({ ...result, payerId: "bcbs-ppo" });
+  }
   if ((result.payerId === "medicare" || result.payerId === "amerigroup-wellpoint" || result.payerId === "bcbs-ppo" || result.payerId === "cigna-open-access-plus" || result.payerId === "baycare-plus-medicare-advantage" || result.payerId === "aetna" || result.payerId === "aetna-medicare-ppo" || result.payerId === "united-healthcare-all-states" || result.payerId === "aarp-medicare-complete" || result.payerId === "umr" || result.payerId === "humana-medicare-ppo" || result.payerId === "av-med")) {
     const fields = [
       { label: "Coverage Status", value: result.coverageStatus !== "unknown" && result.coverageStatus !== "error", required: true },

@@ -58,7 +58,7 @@ test("project input mappings route through the shared Medicare handler", () => {
 
 test("MedRevenue configuration does not enable unrelated Waystar payers", () => {
   const routing = routeWaystarRowsByPayer([
-    { "Payer Name": "Aetna", "Patient First Name": "Jane", "Patient Last Name": "Doe" },
+    { "Payer Name": "Humana Medicare PPO", "Patient First Name": "Jane", "Patient Last Name": "Doe" },
   ], { projectConfig: getWaystarProjectConfig("medrevenue") });
 
   assert.equal(routing.batches.length, 0);
@@ -73,7 +73,18 @@ test("MedRevenue config selects Blue Cross California without changing the regis
   assert.equal(blueCrossConfig.skipProviderHandling, true);
   assert.equal(blueCrossConfig.useDateOfServiceForPlanDates, true);
   assert.equal(blueCrossConfig.planDateToOptional, true);
+  assert.equal(blueCrossConfig.responsePlanDateSectionTitle, "Health Benefit Plan Coverage");
+  assert.equal(blueCrossConfig.extractSecondaryCoverage, true);
   assert.equal(blueCrossConfig.serviceTypeDirectValue, "30");
+});
+
+test("Blue Cross early DOS filling remains scoped to MedRevenue without changing Medicare", () => {
+  for (const projectId of ["minimax", "medrevenue"] as const) {
+    for (const payerId of ["medicare", "bcbs-ppo"]) {
+      const config = getWaystarPayerProjectConfig(getWaystarProjectConfig(projectId), payerId);
+      assert.equal(Boolean(config.fillPlanDatesBeforeServiceType), projectId === "medrevenue" && payerId === "bcbs-ppo");
+    }
+  }
 });
 
 test("MedRevenue routes Blue Cross only when Member ID starts alphabetically", () => {

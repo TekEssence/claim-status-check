@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import * as XLSX from "xlsx";
 import { findWaystarCredentialsForPayer, readWaystarCredentialProfiles, readWaystarCredentials } from "../credentials";
+import { medRevenueBlueShieldPayer } from "../payers/blue-shield";
+import { bcbsPpoPayer } from "../payers/bcbs-ppo";
 
 function workbookFile(options: {
   credentialsRows: Record<string, unknown>[];
@@ -20,6 +22,36 @@ function workbookFile(options: {
   const buffer = XLSX.write(workbook, { type: "buffer", bookType: "xlsx" });
   return new File([buffer], "credentials.xlsx");
 }
+
+test("MedRevenue Blue Shield reuses the Blue Cross login and its verification answers", async () => {
+  for (const project of ["MedRevenue", ""]) {
+    const profiles = await readWaystarCredentialProfiles(workbookFile({
+      credentialsRows: [
+        { Username: "minimax-user", Password: "test", Portal: "Waystar", Payer: "BCBS PPO", Project: "FL2" },
+        { Username: "cross-user", Password: "test", Portal: "Waystar", Payer: "BCBS PPO", Project: project },
+      ],
+      verificationRows: [{ Username: "cross-user", Question: "First Job", Answer: "Test answer" }],
+    }));
+    const options = { allowUnscopedCredentials: true };
+    const selected = findWaystarCredentialsForPayer(profiles, medRevenueBlueShieldPayer, "medrevenue", options);
+    assert.equal(selected?.username, "cross-user");
+    assert.equal(selected, findWaystarCredentialsForPayer(profiles, bcbsPpoPayer, "medrevenue", options));
+    assert.equal(selected?.verificationAnswers[0].answer, "Test answer");
+    assert.equal(findWaystarCredentialsForPayer(profiles, medRevenueBlueShieldPayer, "minimax", options), null);
+    assert.equal(findWaystarCredentialsForPayer(profiles, bcbsPpoPayer, "minimax", options)?.username, "minimax-user");
+    if (!project) assert.equal(findWaystarCredentialsForPayer(profiles, medRevenueBlueShieldPayer, "medrevenue"), null);
+  }
+});
+
+test("MedRevenue Blue Shield prefers its dedicated login and never borrows Minimax credentials", async () => {
+  const profiles = await readWaystarCredentialProfiles(workbookFile({ credentialsRows: [
+    { Username: "cross-user", Password: "test", Portal: "Waystar", Payer: "BCBS PPO", Project: "MedRevenue" },
+    { Username: "shield-user", Password: "test", Portal: "Waystar", Payer: "Blue Shield", Project: "MedRevenue" },
+    { Username: "minimax-user", Password: "test", Portal: "Waystar", Payer: "BCBS PPO", Project: "FL2" },
+  ] }));
+  assert.equal(findWaystarCredentialsForPayer(profiles, medRevenueBlueShieldPayer, "medrevenue")?.username, "shield-user");
+  assert.equal(findWaystarCredentialsForPayer([profiles[2]], medRevenueBlueShieldPayer, "medrevenue", { allowUnscopedCredentials: true }), null);
+});
 
 test("reads Waystar credentials and verification answers from workbook", async () => {
   const file = workbookFile({

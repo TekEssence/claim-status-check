@@ -4,6 +4,7 @@ import type {
   EligibilityPayerBatch,
 } from "../../types";
 import {
+  getWaystarPayer,
   matchWaystarPayer,
   matchWaystarPayerByPortalName,
 } from "./payer-registry";
@@ -179,7 +180,17 @@ export function routeWaystarRowsByPayer(
 ): WaystarWorkbookRouting {
   if (rows.length === 0) throw new Error("The eligibility workbook is empty.");
 
-  const payerHeader = findInsuranceHeader(
+  const headers = Object.keys(rows[0]);
+  const isMedRevenue = options.projectConfig?.id === "medrevenue";
+  // Mixed MedRevenue exports may also contain generic payer/patient ID columns.
+  // Prefer the primary coverage columns regardless of their spreadsheet order.
+  const primaryInsuranceHeader = isMedRevenue
+    ? findPreferredHeader(headers, ["primary insurance name", "primary insurance", "primary insurance payer", "primary insurance payer state"])
+    : undefined;
+  const memberIdHeader = isMedRevenue
+    ? findPreferredHeader(headers, MEMBER_ID_HEADER_ALIASES.filter((alias) => alias !== "id"))
+    : undefined;
+  const payerHeader = primaryInsuranceHeader ?? findInsuranceHeader(
     Object.keys(rows[0]),
     options.projectConfig?.inputColumnMappings?.insuranceName,
   );
@@ -195,10 +206,12 @@ export function routeWaystarRowsByPayer(
   rows.forEach((raw, index) => {
     const rowIndex = index + 2;
     const insuranceName = asText(raw[payerHeader]);
-    const memberId = findValue(raw, projectAliases(options.projectConfig, "memberId", MEMBER_ID_HEADER_ALIASES));
+    const memberId = memberIdHeader
+      ? asText(raw[memberIdHeader]) || undefined
+      : findValue(raw, projectAliases(options.projectConfig, "memberId", MEMBER_ID_HEADER_ALIASES));
     const projectPayerId = matchProjectPayerRoutingRule(insuranceName, memberId, options.projectConfig);
     const payer = projectPayerId
-      ? matchWaystarPayer(projectPayerId)
+      ? getWaystarPayer(projectPayerId, options.projectConfig?.id)
       : resolveWaystarPayer(insuranceName, options.payerMappings);
     if (!payer ||
       !isPayerEnabledForProject(payer.id, options.projectConfig) ||
@@ -218,7 +231,8 @@ export function routeWaystarRowsByPayer(
       patientLastName: parsedName.lastName,
       relationshipToSubscriber: findValue(raw, projectAliases(options.projectConfig, "relationshipToSubscriber", RELATIONSHIP_HEADER_ALIASES)),
       dateOfBirth: findValue(raw, projectAliases(options.projectConfig, "dateOfBirth", DATE_OF_BIRTH_HEADER_ALIASES)),
-      dateOfService: findValue(raw, projectAliases(options.projectConfig, "dateOfService", DATE_OF_SERVICE_HEADER_ALIASES)),
+      dateOfService: (options.projectConfig?.id === "medrevenue" ? findValue(raw, ["DOS"]) : undefined)
+        ?? findValue(raw, projectAliases(options.projectConfig, "dateOfService", DATE_OF_SERVICE_HEADER_ALIASES)),
       serviceType: findValue(raw, projectAliases(options.projectConfig, "serviceType", SERVICE_TYPE_HEADER_ALIASES)),
       raw,
     };
@@ -334,6 +348,14 @@ function findInsuranceHeader(headers: string[], projectAliases: readonly string[
     null;
 }
 
+function findPreferredHeader(headers: string[], aliases: readonly string[]): string | undefined {
+  for (const alias of aliases) {
+    const header = headers.find((candidate) => normalizeHeader(candidate) === normalizeHeader(alias));
+    if (header) return header;
+  }
+  return undefined;
+}
+
 function projectPayerMappings(projectConfig?: WaystarProjectConfig): WaystarPayerPortalMapping[] {
   return Object.entries(projectConfig?.payerNameMappings ?? {}).map(([inputInsurancePayerState, payerPortal]) => ({
     inputInsurancePayerState,
@@ -359,6 +381,36 @@ function matchProjectPayerRoutingRule(
   memberId: string | undefined,
   projectConfig?: WaystarProjectConfig,
 ): string | undefined {
+  if (projectConfig?.id === "medrevenue") {
+    const matchesName = (payerId: string) => projectConfig.payerRoutingRules?.some((rule) =>
+      rule.payerId === payerId && matchesProjectPayerRoutingRule(
+        { ...rule, memberIdPrefixAlternative: undefined, memberIdStartsWithAlphabetic: false },
+        insuranceName, memberId,
+      )
+    );
+    if (matchesName("blue-shield")) return "blue-shield";
+    for (const payerId of ["aetna", "umr", "cigna-open-access-plus"]) {
+      if (matchesName(payerId)) return payerId;
+    }
+    if ((memberId ?? "").trim().toUpperCase().startsWith("X")) {
+      // Named Aetna/UMR/Cigna above and Blue Cross take priority over the X fallback.
+      return matchesName("bcbs-ppo") ? "bcbs-ppo" : "blue-shield";
+    }
+    // Medicare member IDs can start with 9. Keep the named Medicare payer
+    // before the numeric-prefix fallback can redirect the row to UHC.
+    if (matchWaystarPayer(insuranceName)?.id === "medicare") return "medicare";
+  }
+  const preferredNameRule = projectConfig?.payerRoutingRules?.find((rule) =>
+    rule.preferInsuranceName && matchesProjectPayerRoutingRule(
+      { ...rule, memberIdPrefixAlternative: undefined }, insuranceName, memberId,
+    )
+  );
+  if (preferredNameRule) return preferredNameRule.payerId;
+  // Explicit member prefixes override conflicting insurance names.
+  const prefixRule = projectConfig?.payerRoutingRules?.find((rule) =>
+    rule.memberIdPrefixAlternative && (memberId ?? "").trim().toUpperCase().startsWith(rule.memberIdPrefixAlternative.toUpperCase())
+  );
+  if (prefixRule) return prefixRule.payerId;
   return projectConfig?.payerRoutingRules?.find((rule) =>
     matchesProjectPayerRoutingRule(rule, insuranceName, memberId)
   )?.payerId;
@@ -380,8 +432,10 @@ function matchesProjectPayerRoutingRule(
   memberId: string | undefined,
 ): boolean {
   const normalizedInsurance = normalizeHeader(insuranceName);
+  if (rule.memberIdPrefixAlternative && (memberId ?? "").trim().toUpperCase().startsWith(rule.memberIdPrefixAlternative.toUpperCase())) return true;
   const nameMatches = rule.insuranceNameAliases.some((alias) => {
     const normalizedAlias = normalizeHeader(alias);
+    if (rule.insuranceNameMatch === "contains") return ` ${normalizedInsurance} `.includes(` ${normalizedAlias} `);
     return normalizedInsurance === normalizedAlias || normalizedInsurance.startsWith(`${normalizedAlias} `);
   });
   if (!nameMatches) return false;

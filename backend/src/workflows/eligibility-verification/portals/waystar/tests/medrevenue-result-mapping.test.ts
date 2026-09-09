@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { applyMedRevenueMedicareResultMappings } from "../scraper";
+import { applyMedRevenueBlueCrossResultMappings, applyMedRevenueMedicareResultMappings } from "../scraper";
 import type { EligibilityResult } from "../../../types";
 
 test("maps MedRevenue Medicare response fields without changing shared parser fields", () => {
@@ -27,6 +27,18 @@ test("maps MedRevenue Medicare response fields without changing shared parser fi
             ],
           }],
         }],
+        sections: [{
+          title: "Alcoholism",
+          status: "Active Coverage",
+          groups: [{
+            title: "General",
+            rows: [
+              { label: "Coverage Description", value: "Medicare Part B" },
+              { label: "Plan Date", value: "05/01/2019" },
+              { label: "Payer Note", value: "0-BENEFICIARY INSURED DUE TO AGE OASI" },
+            ],
+          }],
+        }],
       },
     },
   };
@@ -34,10 +46,39 @@ test("maps MedRevenue Medicare response fields without changing shared parser fi
   const mapped = applyMedRevenueMedicareResultMappings(result);
   assert.equal(mapped.coverageStatus, "active");
   assert.equal(mapped.planStatus, "Active Coverage");
-  assert.equal(mapped.planDate, "09/04/2026 to 09/04/2026");
+  assert.equal(mapped.planDate, "05/01/2019");
   assert.equal(mapped.effectiveDate, "01/01/2026 to 12/31/2026");
   assert.equal(mapped.terminationDate, undefined);
   assert.equal(mapped.otherInsurance, "WELLCARE PRESCRIPTION INSURANCE, INC.");
   assert.equal(mapped.otherInsuranceEffectiveDate, "01/01/2023");
   assert.equal(mapped.metadata?.medRevenuePrescriptionDrugServiceType, "Pharmacy");
+});
+
+test("maps MedRevenue Blue Cross secondary coverage fields from its own card", () => {
+  const result: EligibilityResult = {
+    rowIndex: 2,
+    payerId: "bcbs-ppo",
+    coverageStatus: "active",
+    benefits: [],
+    metadata: {
+      fullPayerResponse: {
+        secondaryCoverageInformation: {
+          title: "SECONDARY BLUE ON BLUE INTRA",
+          rows: [
+            { label: "Coverage Description", value: "SECONDARY BLUE ON BLUE INTRA" },
+            { label: "COB Date", value: "04/02/2019" },
+            { label: "Group or Policy Number", value: "KZU27119127E" },
+            { label: "Service Type", value: "Health Benefit Plan Coverage" },
+          ],
+        },
+      },
+    },
+  };
+
+  const mapped = applyMedRevenueBlueCrossResultMappings(result);
+  assert.equal(mapped.metadata?.medRevenueSecondaryCoverageDescription, "SECONDARY BLUE ON BLUE INTRA");
+  assert.equal(mapped.metadata?.medRevenueSecondaryCobDate, "04/02/2019");
+  assert.equal(mapped.metadata?.medRevenueSecondaryGroupOrPolicyNumber, "KZU27119127E");
+  assert.equal(mapped.metadata?.medRevenueSecondaryServiceType, "Health Benefit Plan Coverage");
+  assert.equal(mapped.metadata?.medRevenueOutputServiceType, "Health Benefit Plan Coverage");
 });

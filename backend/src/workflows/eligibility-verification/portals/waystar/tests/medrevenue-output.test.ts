@@ -92,3 +92,58 @@ test("MedRevenue keeps the full Eligibility Date range in Eff Date only", async 
   assert.equal(rows[0]["Eff Date"], "08/14/2026 to 08/14/2026");
   assert.equal(rows[0]["End Date"], "-");
 });
+
+test("MedRevenue suppresses partial extracted values when the row status is error", async () => {
+  const output = await buildWaystarOutputWorkbook({
+    inputFile: inputFile(),
+    rows: new Map([[2, row]]),
+    results: new Map([[2, {
+      ...result,
+      coverageStatus: "error",
+      effectiveDate: "08/14/2026 to 08/14/2026",
+      planDate: "05/01/2019",
+    }]]),
+    errors: new Map([[2, "Subscriber Not Found"]]),
+    projectId: "medrevenue",
+  });
+  const workbook = XLSX.read(output, { type: "buffer" });
+  const rows = XLSX.utils.sheet_to_json<Record<string, string>>(
+    workbook.Sheets[workbook.SheetNames[0]], { defval: "" },
+  );
+
+  assert.equal(rows[0]["Coverage Status"], "error");
+  assert.equal(rows[0]["Eff Date"], "-");
+  assert.equal(rows[0]["Plan Date"], "-");
+  assert.equal(rows[0]["Other Ins"], "-");
+  assert.equal(rows[0]["Service Type"], "-");
+});
+
+test("MedRevenue Blue Cross adds three secondary columns and reuses Service Type", async () => {
+  const output = await buildWaystarOutputWorkbook({
+    inputFile: inputFile(),
+    rows: new Map([[2, row]]),
+    results: new Map([[2, {
+      ...result,
+      payerId: "bcbs-ppo",
+      metadata: {
+        medRevenueSecondaryCoverageDescription: "SECONDARY BLUE ON BLUE INTRA",
+        medRevenueSecondaryCobDate: "04/02/2019",
+        medRevenueSecondaryGroupOrPolicyNumber: "KZU27119127E",
+        medRevenueSecondaryServiceType: "Health Benefit Plan Coverage",
+        medRevenueOutputServiceType: "Health Benefit Plan Coverage",
+      },
+    }]]),
+    errors: new Map(),
+    projectId: "medrevenue",
+  });
+  const workbook = XLSX.read(output, { type: "buffer" });
+  const rows = XLSX.utils.sheet_to_json<Record<string, string>>(
+    workbook.Sheets[workbook.SheetNames[0]], { defval: "" },
+  );
+
+  assert.equal(rows[0]["Secondary Coverage Description"], "SECONDARY BLUE ON BLUE INTRA");
+  assert.equal(rows[0]["Secondary COB Date"], "04/02/2019");
+  assert.equal(rows[0]["Secondary Group or Policy Number"], "KZU27119127E");
+  assert.equal(rows[0]["Service Type"], "Health Benefit Plan Coverage");
+  assert.equal(Object.hasOwn(rows[0], "Secondary Service Type"), false);
+});
