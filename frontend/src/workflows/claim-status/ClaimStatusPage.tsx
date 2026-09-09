@@ -1001,7 +1001,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     let cancelled = false;
     const load = async () => {
       if (cancelled) return;
-      await loadWorkflowRunDetails(selectedRun);
+      await loadWorkflowRunDetails(selectedRun, { mergeLogs: true });
     };
 
     void load();
@@ -1299,10 +1299,22 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     setPendingBlueShieldRestoreJob(null);
   }
 
-  async function loadWorkflowRunDetails(job: ScrapeJobSummary) {
+  async function loadWorkflowRunDetails(job: ScrapeJobSummary, options?: { mergeLogs?: boolean }) {
     try {
       const details = await getScrapeJobDetails(job.jobId);
-      setLogs(details.logs);
+      if (options?.mergeLogs) {
+        setLogs((previous) => {
+          const merged = [...previous];
+          for (const logLine of details.logs) {
+            if (logLine && !merged.includes(logLine)) {
+              merged.push(logLine);
+            }
+          }
+          return merged;
+        });
+      } else {
+        setLogs(details.logs);
+      }
       setProgress(details.totalRows > 0 ? { completed: details.currentCompleted, total: details.totalRows } : null);
       setStatus(
         `${details.portalId.toUpperCase()} run ${formatShortJobId(details.jobId)} is ${details.status.replace(/_/g, " ")}.`,
@@ -1316,6 +1328,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     selectedWorkflowRunIdRef.current = job.jobId;
     setSelectedWorkflowRunId(job.jobId);
     setSelectedPortalId(isPortalId(job.portalId) ? job.portalId : null);
+    setLogs([]);
     if (isPortalId(job.portalId)) {
       navigateToPortalRoute(job.portalId);
     }
