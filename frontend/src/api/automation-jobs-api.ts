@@ -2,6 +2,9 @@ import { fetchEventSource } from "@microsoft/fetch-event-source";
 import type { ScrapeJobEvent } from "../types/job";
 import {
   cancelScrapeJob,
+  ActiveScrapeJobError,
+  getActiveScrapeJobErrorId,
+  getScrapeJobDetails,
   isAwsWorkflowMode,
   listScrapeJobs,
   startScrapeJob,
@@ -26,6 +29,12 @@ export type AutomationJobSummary = {
   metadata?: Record<string, unknown>;
 };
 
+export { getActiveScrapeJobErrorId };
+
+export async function getAutomationJobDetails(jobId: string) {
+  return getScrapeJobDetails(jobId);
+}
+
 type AutomationJobScope = Pick<AutomationJobSummary, "workflowId" | "portalId">;
 
 export async function startAutomationJob(formData: FormData): Promise<string> {
@@ -36,6 +45,9 @@ export async function startAutomationJob(formData: FormData): Promise<string> {
   const response = await fetch("/api/automation-jobs", { method: "POST", body: formData });
   const body = await response.json().catch(() => ({})) as { jobId?: string; error?: string };
   if (!response.ok || !body.jobId) {
+    if (response.status === 409 && body.jobId) {
+      throw new ActiveScrapeJobError(body.error || "An equivalent automation job is already active.", body.jobId);
+    }
     throw new Error(body.error || `Failed to start automation workflow: ${response.status}`);
   }
   return body.jobId;
@@ -53,39 +65,24 @@ export async function getCurrentAutomationJob(options: {
     const jobs = await listAutomationJobs(50);
     const job = jobs.find((candidate) =>
       matchesRequestedScope(candidate) &&
-      (candidate.status === "queued" || candidate.status === "running" || candidate.status === "waiting_otp")
+      (candidate.status === "queued" || candidate.status === "running" || candidate.status === "waiting_otp" || candidate.status === "cancelling")
     );
     return job ? { ...job, logs: [] as Array<{ message: string }> } : null;
   }
 
-  const response = await fetch("/api/automation-jobs/current");
-  if (response.status === 401) return null;
-  const body = await response.json().catch(() => ({})) as {
-    job?: {
-      jobId: string;
-      workflowId: string;
-      portalId: string;
-      payerId: string | null;
-      status: string;
-      currentCompleted: number;
-      totalItems: number;
-      logs: Array<{ message: string }>;
-      artifacts?: Array<{
-        id: number;
-        rowIndex: number | null;
-        artifactType: string;
-        filename: string;
-        mimeType: string;
-        pathOrKey: string;
-        createdAt: string;
-        contentBase64?: string;
-      }>;
-      metadata?: Record<string, unknown>;
-    } | null;
-    error?: string;
+  const jobs = await listAutomationJobs(50);
+  const summary = jobs.find((candidate) =>
+    matchesRequestedScope(candidate) &&
+    (candidate.status === "queued" || candidate.status === "running" || candidate.status === "waiting_otp" || candidate.status === "cancelling")
+  );
+  if (!summary) return null;
+  const details = await getAutomationJobDetails(summary.jobId);
+  return {
+    ...summary,
+    ...details,
+    totalItems: details.totalRows,
+    logs: details.logs.map((message) => ({ message })),
   };
-  if (!response.ok) throw new Error(body.error || "Unable to load the active automation workflow.");
-  return body.job && matchesRequestedScope(body.job) ? body.job : null;
 }
 
 export async function listAutomationJobs(limit = 25): Promise<AutomationJobSummary[]> {

@@ -15,6 +15,7 @@ import {
   appendAutomationJobArtifact,
   appendAutomationJobLog,
   createPersistentAutomationJob,
+  getActiveAutomationJobForUser,
   getAutomationJobForUser,
   updateAutomationJob,
 } from "@/lib/automation-jobs/db";
@@ -62,6 +63,11 @@ export async function POST(req: Request) {
     }
     const automationWorkflowId: AutomationWorkflowId = workflowId;
 
+    const activeJob = await getActiveAutomationJobForUser(session.userId);
+    if (activeJob && activeJob.workflowId === automationWorkflowId && activeJob.portalId === portalId) {
+      return Response.json({ error: `A ${automationWorkflowId}/${portalId} job is already active.`, jobId: activeJob.jobId }, { status: 409 });
+    }
+
     const runner = getAutomationRunner(automationWorkflowId, portalId, payerId);
     const input = runner.validateInput(formData);
     const job = createScrapeJob(undefined, automationWorkflowId);
@@ -81,8 +87,8 @@ export async function POST(req: Request) {
       createdByEmail: session.email,
       createdByName: session.email,
     });
-    await uploadEligibilityInputs(job.id, inputFile, credentialFile).catch((error) => {
-      console.error("Upload eligibility input files to S3 failed", error);
+    await uploadAutomationInputs(automationWorkflowId, job.id, inputFile, credentialFile).catch((error) => {
+      console.error(`Upload ${automationWorkflowId} input files to S3 failed`, error);
     });
 
     void runner.run(input, {
@@ -111,13 +117,13 @@ export async function POST(req: Request) {
         status: cancelled ? "cancelled" : "completed",
         currentCompleted: current?.currentCompleted ?? 0,
       }).catch(() => {});
-      scheduleTaskShutdownAfterWorkflow(cancelled ? "eligibility-verification:cancelled" : "eligibility-verification:completed");
+      scheduleTaskShutdownAfterWorkflow(`${automationWorkflowId}:${cancelled ? "cancelled" : "completed"}`);
     }).catch(async (error) => {
       const message = error instanceof Error ? error.message : "Automation workflow failed.";
       emitScrapeJobEvent(job.id, { type: "error", message });
       emitScrapeJobEvent(job.id, { type: "done" });
       await updateAutomationJob({ jobId: job.id, status: "failed" }).catch(() => {});
-      scheduleTaskShutdownAfterWorkflow("eligibility-verification:failed");
+      scheduleTaskShutdownAfterWorkflow(`${automationWorkflowId}:failed`);
     });
 
     return Response.json({ jobId: job.id, workflowId: automationWorkflowId, portalId, payerId, projectId });
@@ -177,11 +183,8 @@ export async function DELETE(req: Request) {
   if (!(await getAutomationJobForUser(jobId, session.userId))) {
     return Response.json({ error: "Run not found." }, { status: 404 });
   }
-  cancelScrapeJob(jobId, "Automation workflow cancellation requested.");
-  emitScrapeJobEvent(jobId, { type: "cancelled" });
-  emitScrapeJobEvent(jobId, { type: "done" });
-  await updateAutomationJob({ jobId, status: "cancelled" });
-  scheduleTaskShutdownAfterWorkflow("eligibility-verification:cancelled");
+  cancelScrapeJob(jobId, "Automation workflow cancellation requested.", { emitCancelled: false, emitDone: false });
+  await updateAutomationJob({ jobId, status: "cancelling" });
   return Response.json({ ok: true });
 }
 
@@ -208,7 +211,7 @@ async function persistEvent(jobId: string, event: Record<string, unknown>) {
     await updateAutomationJob({ jobId, status: "cancelled" }).catch(() => {});
   } else if (["error_screenshot", "debug_html", "file_download", "output_snapshot"].includes(String(event.type))) {
     const s3Key = await uploadWorkflowArtifact({
-      workflowId: "eligibility-verification",
+      workflowId: getScrapeJob(jobId)?.workflowId ?? "eligibility-verification",
       jobId,
       artifactType: String(event.type),
       filename: typeof event.filename === "string" ? event.filename : automationArtifactFilename(event),
@@ -231,7 +234,8 @@ async function persistEvent(jobId: string, event: Record<string, unknown>) {
   }
 }
 
-async function uploadEligibilityInputs(
+async function uploadAutomationInputs(
+  workflowId: AutomationWorkflowId,
   jobId: string,
   inputFile: FormDataEntryValue | null,
   credentialFile: FormDataEntryValue | null,
@@ -239,7 +243,7 @@ async function uploadEligibilityInputs(
   await Promise.all([
     inputFile instanceof File && inputFile.size > 0
       ? uploadWorkflowFile({
-          workflowId: "eligibility-verification",
+          workflowId,
           jobId,
           area: "input",
           file: inputFile,
@@ -248,7 +252,7 @@ async function uploadEligibilityInputs(
       : Promise.resolve(""),
     credentialFile instanceof File && credentialFile.size > 0
       ? uploadWorkflowFile({
-          workflowId: "eligibility-verification",
+          workflowId,
           jobId,
           area: "input",
           file: credentialFile,

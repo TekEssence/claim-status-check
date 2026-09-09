@@ -6,6 +6,8 @@ import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { ArrowLeft, ArrowRight, FileSpreadsheet, LoaderCircle, LogOut, ReceiptText } from "lucide-react";
 import {
   cancelAutomationJob,
+  getActiveScrapeJobErrorId,
+  getAutomationJobDetails,
   getCurrentAutomationJob,
   startAutomationJob,
   submitAutomationJobInput,
@@ -65,6 +67,7 @@ export function PaymentEobPage({ portalId: initialPortalId }: PaymentEobPageProp
   const [availityProject, setAvailityProject] = useState<"charm" | "medrevenue" | "">("");
   const [jobId, setJobId] = useState("");
   const [status, setStatus] = useState("");
+  const [jobStatus, setJobStatus] = useState("");
   const [progress, setProgress] = useState<JobProgressValue | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
   const [errors, setErrors] = useState<string[]>([]);
@@ -90,6 +93,7 @@ export function PaymentEobPage({ portalId: initialPortalId }: PaymentEobPageProp
     setAvailityProject("");
     setJobId("");
     setStatus("");
+    setJobStatus("");
     setProgress(null);
     setLogs([]);
     setErrors([]);
@@ -131,14 +135,14 @@ export function PaymentEobPage({ portalId: initialPortalId }: PaymentEobPageProp
       setErrors((current) => [...current, message]);
       setStatus(message);
       setIsRunning(false);
+      setJobStatus("failed");
     } else if (event.type === "cancelled") {
       setStatus(event.message || "Payment EOB job stopped.");
       setIsRunning(false);
       setIsStopping(false);
+      setJobStatus("cancelled");
     } else if (event.type === "done") {
-      setStatus((current) => current || "Payment EOB workflow shell completed.");
-      setIsRunning(false);
-      setIsStopping(false);
+      setStatus((current) => current || "Payment EOB workflow finished. Confirming final job status...");
     }
   }, []);
 
@@ -198,6 +202,7 @@ export function PaymentEobPage({ portalId: initialPortalId }: PaymentEobPageProp
       if (!job) return;
       setSelectedPortalId(job.portalId);
       setJobId(job.jobId);
+      setJobStatus(job.status);
       setLogs(job.logs.map((log) => log.message));
       setProgress(job.totalItems > 0 ? { completed: job.currentCompleted, total: job.totalItems } : null);
       setStatus("Reconnected to the active Payment EOB run.");
@@ -206,11 +211,39 @@ export function PaymentEobPage({ portalId: initialPortalId }: PaymentEobPageProp
     }).catch(() => {});
   }, [user, connect, initialPortalId]);
 
+  useEffect(() => {
+    if (!jobId || !isRunning) return;
+    let disposed = false;
+    const refreshStatus = async () => {
+      try {
+        const job = await getAutomationJobDetails(jobId);
+        if (disposed) return;
+        setJobStatus(job.status);
+        setProgress(job.totalRows > 0 ? { completed: job.currentCompleted, total: job.totalRows } : null);
+        if (job.logs.length > 0) setLogs(job.logs);
+        if (job.status === "cancelling") {
+          setIsStopping(true);
+          setStatus("Cancelling Payment EOB job after the current portal action...");
+        } else if (job.status === "cancelled" || job.status === "completed" || job.status === "failed") {
+          setIsRunning(false);
+          setIsStopping(false);
+          setStatus(job.status === "cancelled" ? "Payment EOB job cancelled." : job.status === "completed" ? "Payment EOB job completed." : job.errorMessage || "Payment EOB job failed.");
+        }
+      } catch {
+        // The live-event connection also retries. Keep the last known status.
+      }
+    };
+    void refreshStatus();
+    const timer = window.setInterval(() => void refreshStatus(), 3000);
+    return () => { disposed = true; window.clearInterval(timer); };
+  }, [jobId, isRunning]);
+
   async function start(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!selectedPortalId || !credentialFile || (requiresReferenceExcel && !referenceFile)) return;
 
     setIsRunning(true);
+    setJobStatus("queued");
     setStatus("Starting Payment EOB workflow...");
     setProgress(null);
     setLogs([]);
@@ -229,8 +262,18 @@ export function PaymentEobPage({ portalId: initialPortalId }: PaymentEobPageProp
       }
       const nextJobId = await startAutomationJob(formData);
       setJobId(nextJobId);
+      setJobStatus("running");
       connect(nextJobId);
     } catch (error) {
+      const existingJobId = getActiveScrapeJobErrorId(error);
+      if (existingJobId) {
+        setJobId(existingJobId);
+        setJobStatus("running");
+        setStatus("An equivalent Payment EOB job is already active. Reconnected to the existing run.");
+        setIsRunning(true);
+        connect(existingJobId);
+        return;
+      }
       const message = error instanceof Error ? error.message : "Unable to start Payment EOB workflow.";
       setErrors((current) => [...current, message]);
       setStatus(message);
@@ -244,8 +287,8 @@ export function PaymentEobPage({ portalId: initialPortalId }: PaymentEobPageProp
     setStatus("Stopping Payment EOB job...");
     try {
       await cancelAutomationJob(jobId);
-      setStatus("Payment EOB stop requested.");
-      setIsRunning(false);
+      setJobStatus("cancelling");
+      setStatus("Payment EOB cancellation requested. Waiting for the current portal action to finish...");
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unable to stop Payment EOB workflow.";
       setErrors((current) => [...current, message]);
@@ -371,10 +414,11 @@ export function PaymentEobPage({ portalId: initialPortalId }: PaymentEobPageProp
             <PaymentEobResultView
               jobId={jobId}
               status={status}
+              jobStatus={jobStatus}
               progress={progress}
               logs={logs}
               errors={errors}
-              canStop={Boolean(jobId && isRunning)}
+              canStop={Boolean(jobId && isRunning && jobStatus !== "cancelling")}
               isStopping={isStopping}
               otpRequest={otpRequest}
               otpValue={otpValue}

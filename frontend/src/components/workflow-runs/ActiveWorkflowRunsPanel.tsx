@@ -44,7 +44,7 @@ const WORKFLOW_LABELS: Record<string, string> = {
 };
 
 function isLiveStatus(status: string): boolean {
-  return status === "queued" || status === "running" || status === "waiting_otp";
+  return status === "queued" || status === "running" || status === "waiting_otp" || status === "cancelling";
 }
 
 function formatShortJobId(jobId: string): string {

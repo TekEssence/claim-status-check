@@ -364,6 +364,9 @@ async function runJopari(input: RunInput, context: AutomationContext): Promise<v
     const zip = await createStoredZipFromFolder(outputRoot, `JopariPaymentEobDownloads/${dateStamp()}/run-01`);
     const zipName = `JopariPaymentEobDownloads_${dateStamp()}_run-01.zip`;
     await context.emit(event(zipName, zip, "application/zip"));
+    if (context.isCancelled?.()) {
+      await context.emit({ type: "cancelled", message: "Jopari Payment EOB download cancelled. Partial outputs were saved." });
+    }
     await context.log({ level: "info", message: `Jopari workflow completed. ${audit.length} payment row(s) recorded in the audit Excel workbook.`, eventName: "jopari_complete" });
   } finally {
     await page.locator("#logout-link").click({ timeout: 5000 }).catch(() => {});
