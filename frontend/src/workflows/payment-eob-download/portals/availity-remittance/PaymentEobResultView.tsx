@@ -8,6 +8,7 @@ import type { JobProgressValue } from "../../../../types/job";
 type PaymentEobResultViewProps = {
   jobId: string;
   status: string;
+  jobStatus: string;
   progress: JobProgressValue | null;
   logs: string[];
   errors: string[];
@@ -23,6 +24,7 @@ type PaymentEobResultViewProps = {
 export function PaymentEobResultView({
   jobId,
   status,
+  jobStatus,
   progress,
   logs,
   errors,
@@ -40,6 +42,7 @@ export function PaymentEobResultView({
         <div>
           <p className="text-xs font-semibold uppercase text-slate-500">Job ID</p>
           <p className="mt-1 break-all text-sm font-medium text-slate-900">{jobId || "Not started"}</p>
+          {jobStatus ? <p className="mt-2 inline-flex rounded-full bg-blue-50 px-2.5 py-1 text-xs font-semibold capitalize text-blue-700">{jobStatus.replaceAll("_", " ")}</p> : null}
         </div>
         <button
           type="button"
@@ -47,7 +50,7 @@ export function PaymentEobResultView({
           disabled={!canStop || isStopping}
           className="rounded-md border border-red-200 bg-white px-3 py-2 text-sm font-semibold text-red-700 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:border-slate-200 disabled:text-slate-400"
         >
-          {isStopping ? "Stopping..." : "Stop"}
+          {isStopping ? "Cancelling..." : "Stop"}
         </button>
       </div>
 

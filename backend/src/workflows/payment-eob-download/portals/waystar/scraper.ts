@@ -39,6 +39,46 @@ function exactTextPattern(value: string): RegExp {
   return new RegExp(`^\\s*${value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+")}\\s*$`, "i");
 }
 
+async function visibleAccountNames(page: Page): Promise<string[]> {
+  const links = page.locator("#accountSearchChildModal a.change-account-link:visible");
+  const names: string[] = [];
+  for (let index = 0; index < await links.count(); index += 1) {
+    const name = (await links.nth(index).innerText().catch(() => "")).replace(/\s+/g, " ").trim();
+    if (name) names.push(name);
+  }
+  return names;
+}
+
+async function searchWaystarAccounts(page: Page, searchText: string): Promise<string[]> {
+  const input = page.locator("#accountSearchChildModal .header-account-search-input").first();
+  await input.waitFor({ state: "visible", timeout: 30000 });
+  await input.fill("");
+  await input.fill(searchText);
+  await page.locator("#accountSearchChildButton").click();
+
+  // The account list is populated asynchronously and is often rebuilt more
+  // than once in AWS. Require the visible result snapshot to remain unchanged
+  // before using it, rather than swallowing a fixed wait timeout.
+  const startedAt = Date.now();
+  await page.waitForTimeout(1000);
+  let previousSignature = "";
+  let stableChecks = 0;
+  const deadline = Date.now() + 45000;
+  while (Date.now() < deadline) {
+    const names = await visibleAccountNames(page);
+    const signature = names.join("\n");
+    if (signature === previousSignature) stableChecks += 1;
+    else {
+      previousSignature = signature;
+      stableChecks = 0;
+    }
+    const elapsedMs = Date.now() - startedAt;
+    if (stableChecks >= 2 && (names.length > 0 ? elapsedMs >= 3000 : elapsedMs >= 10000)) return names;
+    await page.waitForTimeout(500);
+  }
+  throw new Error(`Waystar account search for "${searchText}" did not finish loading within 45 seconds.`);
+}
+
 function chooseAccountMatch(accountNames: string[], searchText: string): { index: number; name: string } {
   const wanted = normalizedAccountText(searchText);
   const candidates = accountNames
@@ -66,34 +106,39 @@ function chooseAccountMatch(accountNames: string[], searchText: string): { index
 }
 
 async function selectAccount(page: Page, credentials: WaystarPaymentCredentials, context: AutomationContext): Promise<void> {
-  await context.log({ level: "info", message: `Checking Waystar account selection for ${credentials.account}.`, eventName: "waystar_payment_account_check" });
+  await context.log({ level: "info", message: `Checking Waystar account selection for client ${credentials.clientName} and mapped account ${credentials.account}.`, eventName: "waystar_payment_account_check" });
   const current = page.locator(".header-account-search-text").first();
   await current.waitFor({ state: "visible", timeout: 60000 });
   const currentValue = (await current.inputValue().catch(() => "")).trim();
-  if (currentValue.toLowerCase().includes(credentials.account.toLowerCase())) {
+  if (normalizedAccountText(currentValue).includes(normalizedAccountText(credentials.account))) {
     await context.log({ level: "info", message: `Waystar account ${currentValue} is already selected.`, eventName: "waystar_payment_account_selected" });
     return;
   }
 
   await page.locator("#hdrAcctChildSearchLnk").click();
-  const input = page.locator("#accountSearchChildModal .header-account-search-input").first();
-  await input.fill(credentials.account);
-  await page.locator("#accountSearchChildButton").click();
-  const results = page.locator("#accountSearchChildModal a.change-account-link");
-  await page.waitForFunction((searchText) => {
-    const wanted = String(searchText).trim().toLowerCase();
-    return [...document.querySelectorAll("#accountSearchChildModal a.change-account-link")]
-      .some((element) => (element.textContent ?? "").trim().toLowerCase().includes(wanted));
-  }, credentials.account, { timeout: 30000 }).catch(() => {});
+  const attempts: Array<{ searchText: string; results: string[] }> = [];
+  const searchTerms = [...new Set([credentials.clientName.trim(), credentials.account.trim()].filter(Boolean))];
+  let selectedName = "";
 
-  const visibleResults: Array<{ locator: Locator; name: string }> = [];
-  for (let index = 0; index < await results.count(); index += 1) {
-    const locator = results.nth(index);
-    if (!await locator.isVisible().catch(() => false)) continue;
-    visibleResults.push({ locator, name: (await locator.innerText()).trim() });
+  for (const searchText of searchTerms) {
+    await context.log({ level: "info", message: `Searching Waystar accounts using "${searchText}".`, eventName: "waystar_payment_account_search" });
+    const names = await searchWaystarAccounts(page, searchText);
+    attempts.push({ searchText, results: names });
+    await context.log({ level: "info", message: `Waystar account search "${searchText}" returned ${names.length} visible result(s).`, eventName: "waystar_payment_account_search_results" });
+    try {
+      selectedName = chooseAccountMatch(names, credentials.account).name;
+      break;
+    } catch {
+      // The client-code search may return no mapped account. Retry using the
+      // full mapped organization/account value before failing.
+    }
   }
-  const selected = chooseAccountMatch(visibleResults.map((result) => result.name), credentials.account);
-  const selectedName = selected.name;
+
+  if (!selectedName) {
+    const details = attempts.map((attempt) => `"${attempt.searchText}": ${attempt.results.length ? attempt.results.join("; ") : "no visible results"}`).join(" | ");
+    throw new Error(`No Waystar account matched client "${credentials.clientName}" or mapped account "${credentials.account}". Search results: ${details || "none"}.`);
+  }
+
   let clickError: unknown;
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     try {
@@ -104,11 +149,9 @@ async function selectAccount(page: Page, credentials: WaystarPaymentCredentials,
         .filter({ hasText: exactTextPattern(selectedName) })
         .first();
       await result.waitFor({ state: "visible", timeout: 10000 });
-      await page.waitForTimeout(500);
-      await Promise.all([
-        page.waitForLoadState("networkidle").catch(() => {}),
-        result.evaluate((element) => (element as HTMLElement).click()),
-      ]);
+      // Verify the selected account below instead of waiting for unrelated
+      // background requests to become idle.
+      await result.click();
       clickError = undefined;
       break;
     } catch (error) {
@@ -119,18 +162,36 @@ async function selectAccount(page: Page, credentials: WaystarPaymentCredentials,
   if (clickError) {
     throw new Error(`Unable to select Waystar account "${selectedName}" after the search results refreshed: ${clickError instanceof Error ? clickError.message : String(clickError)}`);
   }
-  await page.locator("#changeSuccess, #accountName").first().waitFor({ state: "visible", timeout: 30000 }).catch(() => {});
-  await context.log({ level: "info", message: `Waystar account selected: ${selected.name}.`, eventName: "waystar_payment_account_selected" });
+  await page.waitForFunction((expectedName) => {
+    const fields = [
+      document.querySelector<HTMLInputElement>(".header-account-search-text")?.value,
+      document.querySelector("#accountName")?.textContent,
+      document.querySelector("#changeSuccess")?.textContent,
+    ].map((value) => String(value || "").replace(/\s+/g, " ").trim().toLowerCase()).filter(Boolean);
+    const expected = String(expectedName).replace(/\s+/g, " ").trim().toLowerCase();
+    return fields.some((value) => value === expected || value.includes(expected));
+  }, selectedName, { timeout: 30000 }).catch(async () => {
+    const displayed = (await current.inputValue().catch(() => "")).trim();
+    throw new Error(`Waystar account click completed, but the selected account could not be verified. Expected "${selectedName}"; header showed "${displayed || "blank"}".`);
+  });
+  await page.locator("#accountSearchChildModal").waitFor({ state: "hidden", timeout: 30000 });
+  await context.log({ level: "info", message: `Waystar account selected and verified: ${selectedName}.`, eventName: "waystar_payment_account_selected" });
 }
 
 async function navigateToPayments(page: Page, context: AutomationContext): Promise<void> {
   await context.log({ level: "info", message: "Opening Claims Processing menu.", eventName: "waystar_payment_claims_menu" });
-  const claims = page.locator(".header-menu > a, a").filter({ hasText: /^\s*Claims Processing\s*$/i }).first();
+  await page.waitForLoadState("domcontentloaded");
+  const claims = page.locator("a:visible").filter({ hasText: /^\s*Claims Processing\s*$/i }).first();
   await claims.waitFor({ state: "visible", timeout: 30000 });
   await claims.hover();
   const claimsMenu = claims.locator("xpath=ancestor::*[contains(concat(' ', normalize-space(@class), ' '), ' header-menu ')][1]");
   const flyout = claimsMenu.locator(".header-flyout").first();
-  await flyout.waitFor({ state: "visible", timeout: 10000 });
+  const openedOnHover = await flyout.waitFor({ state: "visible", timeout: 1500 }).then(() => true).catch(() => false);
+  if (!openedOnHover) {
+    await context.log({ level: "info", message: "Claims Processing did not open on hover; clicking the menu.", eventName: "waystar_payment_claims_menu_click" });
+    await claims.click();
+    await flyout.waitFor({ state: "visible", timeout: 10000 });
+  }
   const remits = flyout.locator("a").filter({ hasText: /^\s*Remits\s*$/i }).first();
   await remits.waitFor({ state: "visible", timeout: 10000 });
   await remits.click();
@@ -669,6 +730,7 @@ async function runZeroPaymentsPhase(
   const outputRows: WaystarZeroPaymentOutputRow[] = [];
 
   for (let index = 0; index < records.length; index += 1) {
+    if (context.isCancelled?.()) break;
     const record = records[index];
     const outputRow: WaystarZeroPaymentOutputRow = {
       source: "Waystar",
@@ -790,10 +852,13 @@ async function runCashLogAndZeroPaymentsJob(credentials: WaystarPaymentCredentia
     page.setDefaultTimeout(30000);
     await context.log({ level: "info", message: "Opening Waystar and signing in.", eventName: "waystar_payment_login_start" });
     await loginToWaystar(page, credentials, { robustAdditionalAuthentication: true });
+    if (context.isCancelled?.()) return;
     await context.log({ level: "info", message: "Waystar authentication completed, including any security verification.", eventName: "waystar_payment_login_complete" });
     await selectAccount(page, credentials, context);
+    if (context.isCancelled?.()) return;
     await navigateToPayments(page, context);
     for (let index = 0; index < eligible.length; index += 1) {
+      if (context.isCancelled?.()) break;
       const input = eligible[index];
       const result = baseResult(input);
       if (!isUsableCheckNumber(input.checkNumber)) {
@@ -847,11 +912,13 @@ async function runCashLogAndZeroPaymentsJob(credentials: WaystarPaymentCredentia
       await context.log({ level: result.finalResult === "DOWNLOAD_SUCCESS" ? "info" : "warn", message: `${input.checkNumber}: ${result.finalResult}.`, eventName: "waystar_payment_eob_row_complete", rowIndex: input.rowNumber });
       await context.emit({ type: "progress", completed: index + 1, total: eligible.length });
     }
-    try {
-      zeroPaymentRows = await runZeroPaymentsPhase(page, credentials, zeroPaymentPdfFolder, context);
-      results.push(...zeroPaymentRows.map(zeroPaymentSearchResult));
-    } catch (error) {
-      await context.log({ level: "error", message: `Phase 2 zero-payment workflow failed: ${error instanceof Error ? error.message : String(error)}`, eventName: "waystar_zero_payments_failed" });
+    if (!context.isCancelled?.()) {
+      try {
+        zeroPaymentRows = await runZeroPaymentsPhase(page, credentials, zeroPaymentPdfFolder, context);
+        results.push(...zeroPaymentRows.map(zeroPaymentSearchResult));
+      } catch (error) {
+        await context.log({ level: "error", message: `Phase 2 zero-payment workflow failed: ${error instanceof Error ? error.message : String(error)}`, eventName: "waystar_zero_payments_failed" });
+      }
     }
   } finally {
     await browser?.browser?.close().catch(() => {});
@@ -865,6 +932,7 @@ async function runCashLogAndZeroPaymentsJob(credentials: WaystarPaymentCredentia
   const zip = await createStoredZipFromFolder(root, rootName);
   await context.emit({ type: "file_download", filename: `${rootName}.zip`, base64: zip.toString("base64"), mimeType: "application/zip" });
   await context.log({ level: "info", message: `Waystar output package ready: ${rootName}.zip.`, eventName: "waystar_payment_package_ready" });
+  if (context.isCancelled?.()) await context.emit({ type: "cancelled", message: "Waystar Payment EOB download cancelled. Partial outputs were saved." });
 }
 
 async function selectOptionByText(page: Page, selector: string, wantedText: string): Promise<void> {
@@ -918,6 +986,7 @@ async function runBulkPaymentPhase(
   const rows: WaystarBulkPaymentOutputRow[] = [];
 
   for (let index = 0; index < records.length; index += 1) {
+    if (context.isCancelled?.()) break;
     const record = records[index];
     const row: WaystarBulkPaymentOutputRow = {
       clientName: credentials.clientName,
@@ -971,10 +1040,12 @@ async function runBulkEobDownloadJob(credentials: WaystarPaymentCredentials, con
     page.setDefaultTimeout(30000);
     await context.log({ level: "info", message: "Opening Waystar and signing in for Bulk EOB Download.", eventName: "waystar_bulk_login_start" });
     await loginToWaystar(page, credentials, { robustAdditionalAuthentication: true });
+    if (context.isCancelled?.()) return;
     await selectAccount(page, credentials, context);
+    if (context.isCancelled?.()) return;
     await navigateToPayments(page, context);
     achRows = await runBulkPaymentPhase(page, credentials, "ACH", achFolder, context);
-    nonRows = await runBulkPaymentPhase(page, credentials, "NON", nonFolder, context);
+    if (!context.isCancelled?.()) nonRows = await runBulkPaymentPhase(page, credentials, "NON", nonFolder, context);
   } finally {
     await browser?.browser?.close().catch(() => {});
   }
@@ -983,6 +1054,7 @@ async function runBulkEobDownloadJob(credentials: WaystarPaymentCredentials, con
   const zip = await createStoredZipFromFolder(root, rootName);
   await context.emit({ type: "file_download", filename: `${rootName}.zip`, base64: zip.toString("base64"), mimeType: "application/zip" });
   await context.log({ level: "info", message: `Waystar Bulk EOB output package ready: ${rootName}.zip.`, eventName: "waystar_bulk_package_ready" });
+  if (context.isCancelled?.()) await context.emit({ type: "cancelled", message: "Waystar Bulk EOB download cancelled. Partial outputs were saved." });
 }
 
 export function createWaystarPaymentEobRunner(): AutomationRunner<PaymentEobRunInput> {
