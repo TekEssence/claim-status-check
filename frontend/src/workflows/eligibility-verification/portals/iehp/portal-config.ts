@@ -1,0 +1,1 @@
+export const iehpEligibilityFrontendPortalConfig = { id: "iehp", name: "IEHP", description: "MedRevenue IEHP eligibility verification.", supportedPayers: ["IEHP"], projects: ["medrevenue"] as const } as const;
