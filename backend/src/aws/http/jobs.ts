@@ -29,6 +29,19 @@ let s3Client: S3Client | null = null;
 let cloudWatchLogsClient: CloudWatchLogsClient | null = null;
 const activeJobStatuses = new Set(["queued", "running", "waiting_otp", "cancelling"]);
 
+type WorkflowArtifact = Awaited<ReturnType<typeof listArtifactsForJob>>[number];
+
+function toJobListArtifact(artifact: WorkflowArtifact) {
+  return {
+    id: artifact.id,
+    rowIndex: artifact.rowIndex,
+    artifactType: artifact.artifactType,
+    filename: artifact.filename,
+    mimeType: artifact.mimeType,
+    createdAt: artifact.createdAt,
+  };
+}
+
 function s3(): S3Client {
   if (!s3Client) s3Client = new S3Client({});
   return s3Client;
@@ -256,13 +269,24 @@ export async function listJobs(event: ApiEvent) {
         const artifacts = await listArtifactsForJob(job.jobId).catch(() => []);
         return {
           ...job,
-          artifacts,
+          artifacts: artifacts.map(toJobListArtifact),
           artifactCount: artifacts.length,
         };
       }),
     );
     return jsonResponse(200, { jobs: jobsWithArtifacts });
   } catch (error) {
+    console.error("List workflow jobs failed", {
+      message: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+      userId: (() => {
+        try {
+          return getAuthUserId(event);
+        } catch {
+          return "unknown";
+        }
+      })(),
+    });
     return jsonResponse(500, { error: error instanceof Error ? error.message : "Failed to list jobs." });
   }
 }

@@ -210,6 +210,8 @@
             args.environment.WORKER_TASK_DEFINITION_ARN = workerTask.nodes.taskDefinition.arn;
             args.environment.WORKER_CONTAINER_NAME = "worker";
             args.environment.WORKER_LOG_GROUP = $interpolate`/claim-status/${$app.stage}/worker`;
+            args.environment.COGNITO_CLIENT_ID = userPoolClient.id;
+            args.environment.COGNITO_USER_POOL_ID = userPool.id;
             args.environment.WORKER_SUBNET_IDS = $jsonStringify(workerTask.subnets);
             args.environment.WORKER_SECURITY_GROUP_IDS = $jsonStringify(workerTask.securityGroups);
             args.permissions ??= [];
@@ -252,6 +254,10 @@
     });
     const httpAuth = { jwt: { authorizer: httpAuthorizer.id } };
 
+    httpApi.route("POST /auth/login", "backend/src/aws/http/auth-login.handler");
+    httpApi.route("POST /auth/forgot-password/start", "backend/src/aws/http/auth-forgot-password-start.handler");
+    httpApi.route("POST /auth/forgot-password/confirm", "backend/src/aws/http/auth-forgot-password-confirm.handler");
+    httpApi.route("POST /auth/complete-new-password", "backend/src/aws/http/auth-complete-new-password.handler");
     httpApi.route("POST /jobs", "backend/src/aws/http/create-job.handler", { auth: httpAuth });
     httpApi.route("GET /jobs", "backend/src/aws/http/list-jobs.handler", { auth: httpAuth });
     httpApi.route("POST /jobs/{jobId}/confirm", "backend/src/aws/http/confirm-job.handler", { auth: httpAuth });
@@ -260,6 +266,31 @@
     httpApi.route("POST /jobs/{jobId}/cancel", "backend/src/aws/http/cancel-job.handler", { auth: httpAuth });
     httpApi.route("POST /jobs/{jobId}/force-stop", "backend/src/aws/http/force-stop-job.handler", { auth: httpAuth });
     httpApi.route("GET /jobs/{jobId}/download", "backend/src/aws/http/download-job.handler", { auth: httpAuth });
+
+    new sst.aws.Cron("StalledJobWatchdog", {
+      schedule: "rate(1 minute)",
+      function: {
+        handler: "backend/src/aws/cron/stalled-job-watchdog.handler",
+        memory: "128 MB",
+        timeout: "60 seconds",
+        environment: {
+          DATABASE_URL: databaseUrl,
+          DB_SSL: dbSsl,
+          WORKER_CLUSTER_ARN: cluster.id,
+          WORKER_TASK_DEFINITION_ARN: workerTask.nodes.taskDefinition.arn,
+          WORKER_CONTAINER_NAME: "worker",
+          WORKFLOW_STALL_TIMEOUT_MS: "1200000",
+          WORKFLOW_STALL_CANCEL_RETRY_DELAY_MS: "60000",
+          WORKFLOW_STALL_CANCEL_ATTEMPTS: "3",
+        },
+        permissions: [
+          {
+            actions: ["ecs:StopTask", "ecs:DescribeTasks"],
+            resources: ["*"],
+          },
+        ],
+      },
+    });
 
     webSocketApi.route("$connect", "backend/src/aws/ws/connect.handler");
     webSocketApi.route("$disconnect", "backend/src/aws/ws/disconnect.handler");

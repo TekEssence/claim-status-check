@@ -34,7 +34,18 @@ import {
   type CurrentScrapeJob,
   type ScrapeJobSummary,
 } from "../../api/scrape-jobs-api";
-import { clearCognitoAccessToken, getCognitoAccessToken, getCognitoUserProfile, isCognitoMode, redirectToCognitoLogin, redirectToCognitoLogout, storeCognitoTokenFromHash } from "../../api/cognito-auth";
+import {
+  clearCognitoAccessToken,
+  completeCognitoNewPassword,
+  confirmCognitoForgotPassword,
+  getCognitoAccessToken,
+  getCognitoUserProfile,
+  isCognitoMode,
+  loginWithCognitoEmail,
+  redirectToCognitoLogout,
+  startCognitoForgotPassword,
+  storeCognitoTokenFromHash,
+} from "../../api/cognito-auth";
 import { clearStoredRunContext, saveIehpLoginFile } from "../../lib/run-context-store";
 import type { ErrorScreenshot, JobProgressValue, ScrapeJobEvent } from "../../types/job";
 import { IehpInputForm } from "./portals/iehp/IehpInputForm";
@@ -117,10 +128,14 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
   const [authUsername, setAuthUsername] = useState("");
   const [authPassword, setAuthPassword] = useState("");
   const [authConfirmPassword, setAuthConfirmPassword] = useState("");
+  const [authVerificationCode, setAuthVerificationCode] = useState("");
   const [authError, setAuthError] = useState("");
   const [authStatus, setAuthStatus] = useState("");
   const [authSubmitting, setAuthSubmitting] = useState(false);
   const [forgotPasswordMode, setForgotPasswordMode] = useState(false);
+  const [forgotPasswordCodeSent, setForgotPasswordCodeSent] = useState(false);
+  const [cognitoNewPasswordSession, setCognitoNewPasswordSession] = useState("");
+  const [cognitoNewPasswordEmail, setCognitoNewPasswordEmail] = useState("");
   const [activeView, setActiveView] = useState<"portal-selection" | "manage-users" | "reset-password" | "outputs">("portal-selection");
   const [manageTab, setManageTab] = useState<"add" | "employees">("add");
   const [managedUsers, setManagedUsers] = useState<ManagedUser[]>([]);
@@ -616,7 +631,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     setOperationsRunningJobs([]);
     setOperationsRunningJobsError("");
     setIsProcessing(false);
-    redirectToCognitoLogin();
+    router.replace("/");
     return true;
   }
 
@@ -857,6 +872,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
       window.clearInterval(timer);
     };
   }, [activeJobId, isProcessing]);
+
   useEffect(() => {
     if (!authUser) {
       setDashboardStatsData({
@@ -1158,6 +1174,42 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     setAuthStatus("");
 
     try {
+      if (authUsesCognito) {
+        const result = await loginWithCognitoEmail(authUsername, authPassword);
+        if (result.challenge?.name === "NEW_PASSWORD_REQUIRED") {
+          setCognitoNewPasswordSession(result.challenge.session);
+          setCognitoNewPasswordEmail(result.challenge.email);
+          setSelectedPortalId(null);
+          setSettingsOpen(false);
+          setForgotPasswordMode(false);
+          setForgotPasswordCodeSent(false);
+          setAuthVerificationCode("");
+          setActiveView("reset-password");
+          setAuthStatus("Please set a new password before continuing.");
+          setAuthPassword("");
+          setAuthConfirmPassword("");
+          setSettingsPassword("");
+          setSettingsConfirmPassword("");
+          return;
+        }
+        if (result.challenge?.name) {
+          throw new Error(`${result.challenge.name} is required. This login challenge is not supported yet.`);
+        }
+
+        const nextUser = result.user ?? getCognitoUserProfile();
+        if (!nextUser) throw new Error("Login succeeded, but user details were missing.");
+        updateAuthUser({ ...nextUser, mustResetPassword: false });
+        setAuthUsername("");
+        setAuthPassword("");
+        setAuthConfirmPassword("");
+        setAuthVerificationCode("");
+        setForgotPasswordCodeSent(false);
+        setCognitoNewPasswordSession("");
+        setCognitoNewPasswordEmail("");
+        resetPortalSelection();
+        return;
+      }
+
       const response = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1197,6 +1249,24 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     setAuthStatus("");
 
     try {
+      if (authUsesCognito) {
+        if (!forgotPasswordCodeSent) {
+          await startCognitoForgotPassword(authUsername);
+          setForgotPasswordCodeSent(true);
+          setAuthStatus("Verification code sent to your email.");
+          return;
+        }
+
+        await confirmCognitoForgotPassword(authUsername, authVerificationCode, authPassword, authConfirmPassword);
+        setAuthStatus("Password updated successfully. Please login with the new password.");
+        setForgotPasswordMode(false);
+        setForgotPasswordCodeSent(false);
+        setAuthVerificationCode("");
+        setAuthPassword("");
+        setAuthConfirmPassword("");
+        return;
+      }
+
       const response = await fetch("/api/auth/reset-password", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1237,9 +1307,13 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     setAuthUsername("");
     setAuthPassword("");
     setAuthConfirmPassword("");
+    setAuthVerificationCode("");
     setAuthError("");
     setAuthStatus("");
     setForgotPasswordMode(false);
+    setForgotPasswordCodeSent(false);
+    setCognitoNewPasswordSession("");
+    setCognitoNewPasswordEmail("");
     setActiveView("portal-selection");
     setManagedUsers([]);
     setManageError("");
@@ -1425,6 +1499,24 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     setSettingsPasswordStatus("");
 
     try {
+      if (authUsesCognito && cognitoNewPasswordSession) {
+        const nextUser = await completeCognitoNewPassword(
+          cognitoNewPasswordEmail,
+          cognitoNewPasswordSession,
+          settingsPassword,
+          settingsConfirmPassword,
+        );
+        if (!nextUser) throw new Error("Password updated, but user details were missing.");
+        updateAuthUser({ ...nextUser, mustResetPassword: false });
+        setCognitoNewPasswordSession("");
+        setCognitoNewPasswordEmail("");
+        setSettingsPassword("");
+        setSettingsConfirmPassword("");
+        setSettingsPasswordStatus("Password updated successfully.");
+        setActiveView("portal-selection");
+        return;
+      }
+
       const response = await fetch("/api/auth/change-password", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -3151,27 +3243,35 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
         authUsername={authUsername}
         authPassword={authPassword}
         authConfirmPassword={authConfirmPassword}
+        authVerificationCode={authVerificationCode}
+        forgotPasswordCodeSent={forgotPasswordCodeSent}
+        authUsesCognito={authUsesCognito}
         authError={authError}
         authStatus={authStatus}
         authSubmitting={authSubmitting}
         setAuthUsername={setAuthUsername}
         setAuthPassword={setAuthPassword}
         setAuthConfirmPassword={setAuthConfirmPassword}
+        setAuthVerificationCode={setAuthVerificationCode}
         onAuthSubmit={onAuthSubmit}
         onForgotPasswordSubmit={onForgotPasswordSubmit}
         onShowForgotPassword={() => {
           setForgotPasswordMode(true);
+          setForgotPasswordCodeSent(false);
           setAuthError("");
           setAuthStatus("");
           setAuthPassword("");
           setAuthConfirmPassword("");
+          setAuthVerificationCode("");
         }}
         onBackToLogin={() => {
           setForgotPasswordMode(false);
+          setForgotPasswordCodeSent(false);
           setAuthError("");
           setAuthStatus("");
           setAuthPassword("");
           setAuthConfirmPassword("");
+          setAuthVerificationCode("");
         }}
       />
     );

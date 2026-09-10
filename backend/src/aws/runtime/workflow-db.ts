@@ -115,6 +115,30 @@ export async function listRunningWorkflowJobs(limit = 50) {
   );
 }
 
+export async function listWatchdogWorkflowJobs(limit = 100) {
+  const safeLimit = Math.max(1, Math.min(limit, 500));
+  return runDbWithRetry((db) =>
+    db
+      .select()
+      .from(workflowJobs)
+      .where(or(eq(workflowJobs.status, "queued"), eq(workflowJobs.status, "running"), eq(workflowJobs.status, "cancelling")))
+      .orderBy(asc(workflowJobs.updatedAt))
+      .limit(safeLimit),
+  );
+}
+
+export async function updateWorkflowJobMetadata(jobId: string, metadata: Record<string, unknown>) {
+  await runDbWithRetry((db) =>
+    db
+      .update(workflowJobs)
+      .set({
+        metadata,
+        updatedAt: new Date().toISOString(),
+      })
+      .where(eq(workflowJobs.jobId, jobId)),
+  );
+}
+
 export async function updateWorkflowJob(params: {
   jobId: string;
   status?: AwsWorkflowJobStatus;

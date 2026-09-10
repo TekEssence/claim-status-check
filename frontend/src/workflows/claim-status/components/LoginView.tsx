@@ -1,23 +1,30 @@
 import Image from "next/image";
-import type { Dispatch, FormEventHandler, SetStateAction } from "react";
+import { Eye, EyeOff } from "lucide-react";
+import { useState, type Dispatch, type FormEventHandler, type SetStateAction } from "react";
 import claimStatusHeroImage from "../../../Assets/ChatGPT Image Jun 30, 2026, 12_47_57 PM.png";
 
 export function LoginView({
   isProtectedRoute, forgotPasswordMode, authUsername, authPassword,
-  authConfirmPassword, authError, authStatus, authSubmitting,
+  authConfirmPassword, authVerificationCode, forgotPasswordCodeSent, authUsesCognito,
+  authError, authStatus, authSubmitting,
   setAuthUsername, setAuthPassword, setAuthConfirmPassword,
-  onAuthSubmit, onForgotPasswordSubmit, onShowForgotPassword, onBackToLogin,
+  setAuthVerificationCode, onAuthSubmit, onForgotPasswordSubmit, onShowForgotPassword, onBackToLogin,
 }: {
   isProtectedRoute: boolean; forgotPasswordMode: boolean; authUsername: string;
-  authPassword: string; authConfirmPassword: string; authError: string;
+  authPassword: string; authConfirmPassword: string; authVerificationCode: string;
+  forgotPasswordCodeSent: boolean; authUsesCognito: boolean; authError: string;
   authStatus: string; authSubmitting: boolean;
   setAuthUsername: Dispatch<SetStateAction<string>>;
   setAuthPassword: Dispatch<SetStateAction<string>>;
   setAuthConfirmPassword: Dispatch<SetStateAction<string>>;
+  setAuthVerificationCode: Dispatch<SetStateAction<string>>;
   onAuthSubmit: FormEventHandler<HTMLFormElement>;
   onForgotPasswordSubmit: FormEventHandler<HTMLFormElement>;
   onShowForgotPassword: () => void; onBackToLogin: () => void;
 }) {
+  const [showPassword, setShowPassword] = useState(false);
+  const loginLabel = authUsesCognito ? "Email" : "Username";
+  const loginAutoComplete = authUsesCognito ? "email" : "username";
 if (isProtectedRoute) {
       return (
         <main className="flex min-h-screen items-center justify-center bg-[radial-gradient(circle_at_top_left,_rgba(255,255,255,0.98)_0%,_rgba(240,246,255,0.98)_44%,_rgba(227,238,255,0.95)_100%)] px-4 text-slate-900">
@@ -39,45 +46,66 @@ if (isProtectedRoute) {
               <form className="mt-6 space-y-4" onSubmit={onForgotPasswordSubmit}>
                 <div>
                   <label className="mb-2 block text-xs font-semibold uppercase tracking-[0.18em] text-slate-500" htmlFor="authUsername">
-                    Username
+                    {loginLabel}
                   </label>
                   <input
                     id="authUsername"
-                    type="text"
-                    autoComplete="username"
+                    type={authUsesCognito ? "email" : "text"}
+                    autoComplete={loginAutoComplete}
                     value={authUsername}
                     onChange={(event) => setAuthUsername(event.target.value)}
                     className="block w-full rounded-2xl border border-blue-100 bg-white px-4 py-3 text-sm text-slate-900 shadow-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100/70"
                   />
                 </div>
 
-                <div>
+                {authUsesCognito && forgotPasswordCodeSent && (
+                  <div>
+                    <label className="mb-2 block text-xs font-semibold uppercase tracking-[0.18em] text-slate-500" htmlFor="authVerificationCode">
+                      Verification Code
+                    </label>
+                    <input
+                      id="authVerificationCode"
+                      type="text"
+                      autoComplete="one-time-code"
+                      value={authVerificationCode}
+                      onChange={(event) => setAuthVerificationCode(event.target.value)}
+                      className="block w-full rounded-2xl border border-blue-100 bg-white px-4 py-3 text-sm text-slate-900 shadow-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100/70"
+                    />
+                  </div>
+                )}
+
+                {(!authUsesCognito || forgotPasswordCodeSent) && <div>
                   <label className="mb-2 block text-xs font-semibold uppercase tracking-[0.18em] text-slate-500" htmlFor="authPassword">
                     New Password
                   </label>
-                  <input
-                    id="authPassword"
-                    type="password"
-                    autoComplete="new-password"
-                    value={authPassword}
-                    onChange={(event) => setAuthPassword(event.target.value)}
-                    className="block w-full rounded-2xl border border-blue-100 bg-white px-4 py-3 text-sm text-slate-900 shadow-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100/70"
-                  />
-                </div>
+                  <div className="flex items-center rounded-2xl border border-blue-100 bg-white px-4 shadow-sm focus-within:border-blue-500 focus-within:ring-4 focus-within:ring-blue-100/70">
+                    <input
+                      id="authPassword"
+                      type={showPassword ? "text" : "password"}
+                      autoComplete="new-password"
+                      value={authPassword}
+                      onChange={(event) => setAuthPassword(event.target.value)}
+                      className="block min-w-0 flex-1 bg-transparent py-3 text-sm text-slate-900 outline-none"
+                    />
+                    <button type="button" onClick={() => setShowPassword((value) => !value)} className="text-slate-400 hover:text-blue-600" aria-label={showPassword ? "Hide password" : "Show password"}>
+                      {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </button>
+                  </div>
+                </div>}
 
-                <div>
+                {(!authUsesCognito || forgotPasswordCodeSent) && <div>
                   <label className="mb-2 block text-xs font-semibold uppercase tracking-[0.18em] text-slate-500" htmlFor="authConfirmPassword">
                     Confirm Password
                   </label>
                   <input
                     id="authConfirmPassword"
-                    type="password"
+                    type={showPassword ? "text" : "password"}
                     autoComplete="new-password"
                     value={authConfirmPassword}
                     onChange={(event) => setAuthConfirmPassword(event.target.value)}
                     className="block w-full rounded-2xl border border-blue-100 bg-white px-4 py-3 text-sm text-slate-900 shadow-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100/70"
                   />
-                </div>
+                </div>}
 
                 {authError && (
                   <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700 shadow-sm">
@@ -96,7 +124,7 @@ if (isProtectedRoute) {
                   disabled={authSubmitting}
                   className="w-full rounded-2xl bg-[linear-gradient(135deg,#2563eb,#1d4ed8_55%,#0ea5e9)] px-5 py-3 text-sm font-semibold text-white shadow-[0_18px_35px_rgba(37,99,235,0.32)] disabled:cursor-not-allowed disabled:bg-slate-400"
                 >
-                  {authSubmitting ? "Please wait..." : "Update Password"}
+                  {authSubmitting ? "Please wait..." : authUsesCognito && !forgotPasswordCodeSent ? "Send Verification Code" : "Update Password"}
                 </button>
 
                 <button
@@ -122,12 +150,12 @@ if (isProtectedRoute) {
 
               <form className="absolute inset-0" onSubmit={onAuthSubmit}>
                 <label className="sr-only" htmlFor="authUsername">
-                  Username
+                  {loginLabel}
                 </label>
                 <input
                   id="authUsername"
-                  type="text"
-                  autoComplete="off"
+                  type={authUsesCognito ? "email" : "text"}
+                  autoComplete={loginAutoComplete}
                   value={authUsername}
                   onChange={(event) => setAuthUsername(event.target.value)}
                   className="absolute right-[9.65%] top-[43.45%] h-[4.7%] w-[34.3%] rounded-[14px] border-none bg-transparent px-[10.5%] text-[clamp(0.95rem,1vw,1.05rem)] font-medium text-slate-800 outline-none placeholder-transparent focus:bg-white/6"
@@ -138,12 +166,21 @@ if (isProtectedRoute) {
                 </label>
                 <input
                   id="authPassword"
-                  type="password"
+                  type={showPassword ? "text" : "password"}
                   autoComplete="off"
                   value={authPassword}
                   onChange={(event) => setAuthPassword(event.target.value)}
                   className="absolute right-[9.65%] top-[59.25%] h-[4.7%] w-[34.3%] rounded-[14px] border-none bg-transparent px-[10.5%] text-[clamp(0.95rem,1vw,1.05rem)] font-medium text-slate-800 outline-none placeholder-transparent focus:bg-white/6"
                 />
+
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((value) => !value)}
+                  className="absolute right-[10.4%] top-[59.85%] h-[3.4%] w-[2.2%] text-slate-500 transition hover:text-blue-600"
+                  aria-label={showPassword ? "Hide password" : "Show password"}
+                >
+                  {showPassword ? <EyeOff className="h-full w-full" /> : <Eye className="h-full w-full" />}
+                </button>
 
                 <label className="absolute right-[31.9%] top-[69.05%] flex items-center gap-2 text-[clamp(0.82rem,0.86vw,0.92rem)] text-transparent">
                   <input className="h-5 w-5 cursor-pointer opacity-0" type="checkbox" defaultChecked aria-label="Remember me" />
@@ -188,12 +225,12 @@ if (isProtectedRoute) {
                 <form className="mt-6 space-y-4" onSubmit={onAuthSubmit}>
                   <div>
                     <label className="mb-2 block text-sm font-semibold text-slate-700" htmlFor="authUsernameMobile">
-                      Username
+                      {loginLabel}
                     </label>
                     <input
                       id="authUsernameMobile"
-                      type="text"
-                      autoComplete="off"
+                      type={authUsesCognito ? "email" : "text"}
+                      autoComplete={loginAutoComplete}
                       value={authUsername}
                       onChange={(event) => setAuthUsername(event.target.value)}
                       className="block h-12 w-full rounded-2xl border border-blue-100 bg-white px-4 text-sm text-slate-900 shadow-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100/70"
@@ -204,14 +241,19 @@ if (isProtectedRoute) {
                     <label className="mb-2 block text-sm font-semibold text-slate-700" htmlFor="authPasswordMobile">
                       Password
                     </label>
-                    <input
-                      id="authPasswordMobile"
-                      type="password"
-                      autoComplete="off"
-                      value={authPassword}
-                      onChange={(event) => setAuthPassword(event.target.value)}
-                      className="block h-12 w-full rounded-2xl border border-blue-100 bg-white px-4 text-sm text-slate-900 shadow-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100/70"
-                    />
+                    <div className="flex h-12 items-center rounded-2xl border border-blue-100 bg-white px-4 shadow-sm focus-within:border-blue-500 focus-within:ring-4 focus-within:ring-blue-100/70">
+                      <input
+                        id="authPasswordMobile"
+                        type={showPassword ? "text" : "password"}
+                        autoComplete="off"
+                        value={authPassword}
+                        onChange={(event) => setAuthPassword(event.target.value)}
+                        className="block min-w-0 flex-1 bg-transparent text-sm text-slate-900 outline-none"
+                      />
+                      <button type="button" onClick={() => setShowPassword((value) => !value)} className="text-slate-400 hover:text-blue-600" aria-label={showPassword ? "Hide password" : "Show password"}>
+                        {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </button>
+                    </div>
                   </div>
 
                   <div className="flex items-center justify-between gap-4 text-sm">

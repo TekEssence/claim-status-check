@@ -24,6 +24,23 @@ type CognitoJwtPayload = {
   role?: string;
 };
 
+type CognitoTokens = {
+  accessToken: string;
+  idToken: string;
+  refreshToken?: string;
+};
+
+type CognitoChallenge = {
+  name: string;
+  session: string;
+  email: string;
+};
+
+export type CognitoPasswordLoginResult = {
+  user: CognitoUserProfile | null;
+  challenge?: CognitoChallenge;
+};
+
 function decodeJwtPayload(token: string): CognitoJwtPayload | null {
   try {
     const payload = token.split(".")[1];
@@ -127,6 +144,73 @@ export function clearCognitoAccessToken(): void {
   window.localStorage.removeItem(TOKEN_KEY);
   window.sessionStorage.removeItem(ID_TOKEN_KEY);
   window.localStorage.removeItem(ID_TOKEN_KEY);
+}
+
+export function storeCognitoTokens(tokens: CognitoTokens, remember = false): void {
+  if (typeof window === "undefined") return;
+  const storage = remember ? window.localStorage : window.sessionStorage;
+  storage.setItem(TOKEN_KEY, tokens.accessToken);
+  storage.setItem(ID_TOKEN_KEY, tokens.idToken);
+  if (remember && tokens.refreshToken) {
+    storage.setItem("cognito_refresh_token", tokens.refreshToken);
+  }
+}
+
+function cognitoApiUrl(path: string): string {
+  const base = process.env.NEXT_PUBLIC_WORKFLOW_API_URL?.replace(/\/+$/, "") || "";
+  if (!base) return path;
+  return `${base}${path}`;
+}
+
+async function parseAuthResponse(response: Response) {
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data.error || "Authentication request failed.");
+  }
+  return data;
+}
+
+export async function loginWithCognitoEmail(email: string, password: string, remember = false): Promise<CognitoPasswordLoginResult> {
+  const response = await fetch(cognitoApiUrl("/auth/login"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password }),
+  });
+  const data = await parseAuthResponse(response) as { tokens?: CognitoTokens; challenge?: CognitoChallenge };
+  if (data.challenge) return { user: null, challenge: data.challenge };
+  if (!data.tokens) throw new Error("Login failed. Cognito tokens were missing.");
+  storeCognitoTokens(data.tokens, remember);
+  return { user: getCognitoUserProfile() };
+}
+
+export async function startCognitoForgotPassword(email: string): Promise<void> {
+  const response = await fetch(cognitoApiUrl("/auth/forgot-password/start"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email }),
+  });
+  await parseAuthResponse(response);
+}
+
+export async function confirmCognitoForgotPassword(email: string, code: string, password: string, confirmPassword: string): Promise<void> {
+  const response = await fetch(cognitoApiUrl("/auth/forgot-password/confirm"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, code, password, confirmPassword }),
+  });
+  await parseAuthResponse(response);
+}
+
+export async function completeCognitoNewPassword(email: string, session: string, password: string, confirmPassword: string, remember = false): Promise<CognitoUserProfile | null> {
+  const response = await fetch(cognitoApiUrl("/auth/complete-new-password"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, session, password, confirmPassword }),
+  });
+  const data = await parseAuthResponse(response) as { tokens?: CognitoTokens };
+  if (!data.tokens) throw new Error("Password setup failed. Cognito tokens were missing.");
+  storeCognitoTokens(data.tokens, remember);
+  return getCognitoUserProfile();
 }
 
 export function storeCognitoTokenFromHash(): boolean {

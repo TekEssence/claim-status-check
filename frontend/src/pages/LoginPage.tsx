@@ -14,7 +14,14 @@ import {
   Stethoscope,
   User,
 } from "lucide-react";
-import { consumeCognitoReturnPath, isCognitoMode, redirectToCognitoForgotPassword, redirectToCognitoLogin, storeCognitoTokenFromHash } from "../api/cognito-auth";
+import {
+  confirmCognitoForgotPassword,
+  consumeCognitoReturnPath,
+  isCognitoMode,
+  loginWithCognitoEmail,
+  startCognitoForgotPassword,
+  storeCognitoTokenFromHash,
+} from "../api/cognito-auth";
 
 const reveal = {
   hidden: { opacity: 0, y: 24 },
@@ -35,6 +42,10 @@ export function LoginPage() {
   const [rememberMe, setRememberMe] = useState(true);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [verificationCode, setVerificationCode] = useState("");
+  const [forgotPasswordMode, setForgotPasswordMode] = useState(false);
+  const [forgotPasswordCodeSent, setForgotPasswordCodeSent] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [authError, setAuthError] = useState("");
   const cognitoMode = isCognitoMode();
@@ -74,15 +85,41 @@ export function LoginPage() {
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (cognitoMode) {
-      redirectToCognitoLogin();
-      return;
-    }
 
     setSubmitting(true);
     setAuthError("");
 
     try {
+      if (cognitoMode) {
+        if (forgotPasswordMode) {
+          if (!forgotPasswordCodeSent) {
+            await startCognitoForgotPassword(username);
+            setForgotPasswordCodeSent(true);
+            setAuthError("");
+            return;
+          }
+
+          await confirmCognitoForgotPassword(username, verificationCode, password, confirmPassword);
+          setForgotPasswordMode(false);
+          setForgotPasswordCodeSent(false);
+          setVerificationCode("");
+          setPassword("");
+          setConfirmPassword("");
+          return;
+        }
+
+        const result = await loginWithCognitoEmail(username, password, rememberMe);
+        if (result.challenge?.name === "NEW_PASSWORD_REQUIRED") {
+          throw new Error("Temporary password accepted. Please open Claim Status and set a new password.");
+        }
+        if (result.challenge?.name) {
+          throw new Error(`${result.challenge.name} is required. This login challenge is not supported on this page yet.`);
+        }
+        router.push("/portal");
+        router.refresh();
+        return;
+      }
+
       const response = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -242,7 +279,7 @@ export function LoginPage() {
                 Welcome Back
               </h2>
               <p className="mt-2 text-sm text-slate-600 sm:text-base">
-                {cognitoMode ? "Use your Opus account to continue" : "Sign in to your account to continue"}
+                {forgotPasswordMode ? "Reset your password with your email code" : "Sign in to your account to continue"}
               </p>
             </motion.div>
 
@@ -254,43 +291,63 @@ export function LoginPage() {
               onSubmit={onSubmit}
               className="mt-6 space-y-4"
             >
-              {!cognitoMode && (
-                <>
-                  <InputField
-                    label="Username"
-                    placeholder="Enter your username"
-                    type="text"
-                    value={username}
-                    onChange={setUsername}
-                    icon={<User className="h-5 w-5" strokeWidth={2.1} />}
-                  />
+              <InputField
+                label={cognitoMode ? "Email" : "Username"}
+                placeholder={cognitoMode ? "Enter your email" : "Enter your username"}
+                type={cognitoMode ? "email" : "text"}
+                value={username}
+                onChange={setUsername}
+                icon={<User className="h-5 w-5" strokeWidth={2.1} />}
+              />
 
-                  <InputField
-                    label="Password"
-                    placeholder="Enter your password"
-                    type={showPassword ? "text" : "password"}
-                    value={password}
-                    onChange={setPassword}
-                    icon={<Lock className="h-5 w-5" strokeWidth={2.1} />}
-                    trailing={
-                      <button
-                        type="button"
-                        onClick={() => setShowPassword((value) => !value)}
-                        className="text-slate-400 transition hover:text-[#2563EB]"
-                        aria-label={showPassword ? "Hide password" : "Show password"}
-                      >
-                        {showPassword ? (
-                          <EyeOff className="h-5 w-5" strokeWidth={2.1} />
-                        ) : (
-                          <Eye className="h-5 w-5" strokeWidth={2.1} />
-                        )}
-                      </button>
-                    }
-                  />
-                </>
+              {forgotPasswordMode && forgotPasswordCodeSent && (
+                <InputField
+                  label="Verification Code"
+                  placeholder="Enter the code from email"
+                  type="text"
+                  value={verificationCode}
+                  onChange={setVerificationCode}
+                  icon={<ShieldCheck className="h-5 w-5" strokeWidth={2.1} />}
+                />
               )}
 
-              {!cognitoMode ? (
+              {(!forgotPasswordMode || forgotPasswordCodeSent) && (
+                <InputField
+                  label={forgotPasswordMode ? "New Password" : "Password"}
+                  placeholder={forgotPasswordMode ? "Enter your new password" : "Enter your password"}
+                  type={showPassword ? "text" : "password"}
+                  value={password}
+                  onChange={setPassword}
+                  icon={<Lock className="h-5 w-5" strokeWidth={2.1} />}
+                  trailing={
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword((value) => !value)}
+                      className="text-slate-400 transition hover:text-[#2563EB]"
+                      aria-label={showPassword ? "Hide password" : "Show password"}
+                    >
+                      {showPassword ? (
+                        <EyeOff className="h-5 w-5" strokeWidth={2.1} />
+                      ) : (
+                        <Eye className="h-5 w-5" strokeWidth={2.1} />
+                      )}
+                    </button>
+                  }
+                />
+              )}
+
+              {forgotPasswordMode && forgotPasswordCodeSent && (
+                <InputField
+                  label="Confirm Password"
+                  placeholder="Confirm your new password"
+                  type={showPassword ? "text" : "password"}
+                  value={confirmPassword}
+                  onChange={setConfirmPassword}
+                  icon={<Lock className="h-5 w-5" strokeWidth={2.1} />}
+                />
+              )}
+
+              {!forgotPasswordMode ? (
                 <div className="flex flex-col gap-4 text-sm text-slate-700 sm:flex-row sm:items-center sm:justify-between sm:text-base">
                   <label className="inline-flex cursor-pointer items-center gap-3 font-medium">
                     <button
@@ -312,15 +369,34 @@ export function LoginPage() {
 
                   <button
                     type="button"
+                    onClick={() => {
+                      setForgotPasswordMode(true);
+                      setForgotPasswordCodeSent(false);
+                      setPassword("");
+                      setConfirmPassword("");
+                      setVerificationCode("");
+                      setAuthError("");
+                    }}
                     className="font-medium text-[#2563EB] transition hover:text-blue-700"
                   >
                     Forgot password?
                   </button>
                 </div>
               ) : (
-                <div className="rounded-[1rem] border border-sky-100 bg-sky-50/80 px-4 py-3 text-sm leading-6 text-slate-600">
-                  Passwords, MFA, and password reset are handled by Amazon Cognito.
-                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setForgotPasswordMode(false);
+                    setForgotPasswordCodeSent(false);
+                    setVerificationCode("");
+                    setPassword("");
+                    setConfirmPassword("");
+                    setAuthError("");
+                  }}
+                  className="w-full text-center text-sm font-semibold text-[#2563EB] transition hover:text-blue-700"
+                >
+                  Back to login
+                </button>
               )}
 
               {authError && (
@@ -337,18 +413,9 @@ export function LoginPage() {
                 className="flex h-12 w-full items-center justify-center gap-3 rounded-[1rem] bg-[linear-gradient(90deg,#1f8bff_0%,#2563eb_44%,#2347ef_100%)] text-base font-semibold text-white shadow-[0_18px_40px_rgba(37,99,235,0.28)] transition hover:shadow-[0_22px_46px_rgba(37,99,235,0.35)]"
               >
                 <Lock className="h-5 w-5" strokeWidth={2.15} />
-                {cognitoMode ? "Continue with Opus Account" : submitting ? "Signing In..." : "Sign In"}
+                {submitting ? "Please wait..." : forgotPasswordMode ? (forgotPasswordCodeSent ? "Update Password" : "Send Verification Code") : "Sign In"}
                 <ArrowRight className="h-5 w-5" strokeWidth={2.15} />
               </motion.button>
-              {cognitoMode && (
-                <button
-                  type="button"
-                  onClick={redirectToCognitoForgotPassword}
-                  className="w-full text-center text-sm font-semibold text-[#2563EB] transition hover:text-blue-700"
-                >
-                  Forgot password?
-                </button>
-              )}
             </motion.form>
 
             <motion.div
