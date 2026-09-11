@@ -6,6 +6,7 @@ import { getJobDataPath } from "@/backend/src/core/storage";
 import type { ScraperContext } from "../../types";
 import { launchKaiserBrowser } from "./browser";
 import { kaiserConfig } from "./config";
+import { matchKaiserName, selectKaiserCandidate, type SelectionCandidate } from "./selection";
 import { extractCptFromServiceText, normalizeCptCode, parseKaiserInput, readKaiserInputWorkbook, type KaiserInputRow } from "./input";
 import { createKaiserOutputWorkbookBuffer, type KaiserAuditRow, type KaiserOutputRow, type KaiserWorkbookState } from "./workbook";
 
@@ -150,56 +151,6 @@ function dateRangeForDos(dos: string): { fromDate: string; toDate: string } {
 
 function normalizeSearchValue(value: string): string {
   return value.replace(/\s+/g, "").trim().toUpperCase();
-}
-
-function normalizePatientName(value: string): string {
-  return value
-    .toLowerCase()
-    .replace(/[^\p{L}\p{N}\s]/gu, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function patientNameTokens(value: string): string[] {
-  const noNicknames = value.replace(/"[^"]*"/g, " ");
-  return normalizePatientName(noNicknames)
-    .split(" ")
-    .map((token) => token.trim())
-    .filter(Boolean)
-    .sort();
-}
-
-const NAME_SUFFIX_TOKENS = new Set(["jr", "sr", "ii", "iii", "iv", "v"]);
-
-function isIgnorableNameToken(token: string): boolean {
-  // Single-letter tokens are middle initials; these plus generational suffixes are the parts
-  // that inconsistently appear (or don't) between the Excel input and the Kaiser portal, e.g.
-  // Excel "Cade Jr, Richard D" vs portal "Cade, Richard Jr." Ignore them for matching purposes.
-  return token.length <= 1 || NAME_SUFFIX_TOKENS.has(token);
-}
-
-function coreNameTokens(tokens: string[]): string[] {
-  return tokens.filter((token) => !isIgnorableNameToken(token));
-}
-
-function patientNamesMatch(portalName: string, excelName: string): boolean {
-  const portalTokens = patientNameTokens(portalName);
-  const excelTokens = patientNameTokens(excelName);
-  if (!portalTokens.length || !excelTokens.length) return false;
-
-  // Exact token match (original behavior) still takes priority.
-  if (excelTokens.every((token) => portalTokens.includes(token))) return true;
-
-  // Relaxed match: compare only the core name tokens (first/last name etc.), ignoring middle
-  // initials and generational suffixes that may appear in only one of the two sources. Both
-  // sides' core tokens must match each other fully, so a genuine different name still fails.
-  const portalCore = coreNameTokens(portalTokens);
-  const excelCore = coreNameTokens(excelTokens);
-  if (!portalCore.length || !excelCore.length) return false;
-  return (
-    excelCore.every((token) => portalCore.includes(token)) &&
-    portalCore.every((token) => excelCore.includes(token))
-  );
 }
 
 function normalizeDateValue(value: string): string {
@@ -1222,11 +1173,11 @@ async function findMatchingSearchRows(rows: ClaimSearchRow[], inputRow: KaiserIn
     const rowPatient = getCell(row.cells, ["Member Name", "Patient Name"]);
     const normalizedRowDos = normalizeDateValue(rowDos);
     const dosMatches = normalizedRowDos === expectedDos;
-    const patientMatchesRow = Boolean(expectedPatient) && patientNamesMatch(rowPatient, expectedPatient);
+    const patientMatchesRow = Boolean(expectedPatient) && matchKaiserName(rowPatient, expectedPatient, inputRow.memberId) !== "review";
 
     await context.log({
       level: "info",
-      message: `TRACE 15: Patient Name and DOS comparison performed for claim ${maskValue(row.claimNumber)}: portal_patient="${rowPatient || "(blank)"}", portal_dos="${rowDos || "(blank)"}", expected_patient="${expectedPatient || "(blank)"}", expected_dos="${inputRow.dos}", dos_match=${dosMatches ? "yes" : "no"}, patient_match=${patientMatchesRow ? "yes" : "no"}.`,
+      message: `TRACE 15: Patient Name and DOS comparison performed for claim ${maskValue(row.claimNumber)}: portal_patient="${rowPatient || "(blank)"}", portal_dos="${rowDos || "(blank)"}", expected_patient="${expectedPatient || "(blank)"}", expected_dos="${inputRow.dos}", dos_match=${dosMatches ? "yes" : "no"}, patient_match=${patientMatchesRow ? "yes" : "no"}, method=${matchKaiserName(rowPatient, expectedPatient, inputRow.memberId)}.`,
       rowIndex: inputRow.inputRowId,
     });
 
@@ -1302,7 +1253,7 @@ async function openClaimDetail(page: Page, resultRow: ClaimSearchRow, inputRow: 
       const rowPatient = cleanText(await cells.nth(8).innerText({ timeout: 1000 }).catch(() => ""));
       const sameClaim = claimText.includes(resultRow.claimNumber);
       const sameDos = normalizeDateValue(rowDos) === normalizeDateValue(inputRow.dos);
-      const samePatient = !inputRow.patientName.trim() || patientNamesMatch(rowPatient, inputRow.patientName);
+      const samePatient = !inputRow.patientName.trim() || matchKaiserName(rowPatient, inputRow.patientName, inputRow.memberId) !== "review";
       if (!sameClaim || !sameDos || !samePatient) continue;
 
       const claimLink = firstCell.locator("a");
@@ -1950,8 +1901,8 @@ async function processRow(page: Page, inputRow: KaiserInputRow, state: KaiserWor
   const matchedRows = await findMatchingSearchRows(searchRows, inputRow, context);
   if (!matchedRows.length) {
     await context.log({ level: "warn", message: "No matching patient/DOS row.", rowIndex: inputRow.inputRowId });
-    state.outputRows.push(baseOutputRow(inputRow, "No claim row matched Patient Name and DOS", "No claim row matched Patient Name and DOS"));
-    addAudit(state, inputRow, "search", "completed", "No claim row matched Patient Name and DOS");
+    state.outputRows.push(baseOutputRow(inputRow, "Review required", "Patient name/DOS could not be confirmed"));
+    addAudit(state, inputRow, "search", "review", "Patient name/DOS could not be confirmed");
     return;
   }
   if (matchedRows.length > 1) {
@@ -1962,6 +1913,7 @@ async function processRow(page: Page, inputRow: KaiserInputRow, state: KaiserWor
     });
   }
 
+  const verifiedCandidates: Array<SelectionCandidate & { details: ClaimDetails; service: ServiceLine }> = [];
   for (const resultRow of matchedRows) {
     await context.log({ level: "info", message: `TRACE 16: Matching row selected: ${maskValue(resultRow.claimNumber)}.`, rowIndex: inputRow.inputRowId });
     await context.log({ level: "info", message: `Matching claim row found: ${resultRow.claimNumber}.`, rowIndex: inputRow.inputRowId });
@@ -2005,10 +1957,30 @@ async function processRow(page: Page, inputRow: KaiserInputRow, state: KaiserWor
         await context.log({ level: "info", message: `Matching service denial description: ${denialDescription.text || "(none)"}.`, rowIndex: inputRow.inputRowId });
         await context.log({ level: "info", message: `Matching service denial source: ${denialDescription.source || "(none)"}.`, rowIndex: inputRow.inputRowId });
         await context.log({ level: "info", message: "TRACE 22: Matching service extracted.", rowIndex: inputRow.inputRowId });
-        state.outputRows.push(outputRowFromClaim(inputRow, details, matchingService));
-        addAudit(state, inputRow, "detail", "completed", `Matched claim ${resultRow.claimNumber} and CPT ${inputRow.cptCode}.`);
-        detailProcessingResult = "Success";
-        return;
+        const sameCptServices = details.services.filter(service => serviceCodeFromText(service.service) === normalizeCptCode(inputRow.cptCode));
+        if (sameCptServices.length !== 1) {
+          const reason = "Review required: multiple service lines match the input CPT";
+          state.outputRows.push(baseOutputRow(inputRow, "Review required", reason));
+          addAudit(state, inputRow, "selection", "review", reason);
+          return;
+        }
+        verifiedCandidates.push({
+          claimNumber: resultRow.claimNumber,
+          receivedDate: getCell(resultRow.cells, ["Clm Rcv Dt"]),
+          status: getCell(resultRow.cells, ["Status"]),
+          providerNpi: getCell(resultRow.cells, ["Provider NPI"]),
+          vendorTaxId: getCell(resultRow.cells, ["Vendor Tax ID"]),
+          provider: getCell(resultRow.cells, ["Provider"]),
+          vendor: getCell(resultRow.cells, ["Vendor"]),
+          patient: getCell(resultRow.cells, ["Member Name"]),
+          dos: getCell(resultRow.cells, ["Svc Frm Dt"]),
+          cpt: normalizeCptCode(inputRow.cptCode),
+          details,
+          service: matchingService,
+        });
+        await context.log({ level: "info", message: `Selection candidate ${maskValue(resultRow.claimNumber)}: received=${getCell(resultRow.cells, ["Clm Rcv Dt"])}, status=${getCell(resultRow.cells, ["Status"])}, CPT verified.`, rowIndex: inputRow.inputRowId });
+        detailProcessingResult = "CPT verified; collecting candidates for selection";
+        continue;
       }
       detailProcessingResult = "CPT not found in Services";
       await context.log({ level: "warn", message: `No matching CPT service row in claim ${resultRow.claimNumber}.`, rowIndex: inputRow.inputRowId });
@@ -2024,6 +1996,20 @@ async function processRow(page: Page, inputRow: KaiserInputRow, state: KaiserWor
         await goBackToSearch(page, context, inputRow.inputRowId);
       }
     }
+  }
+
+  if (verifiedCandidates.length) {
+    const decision = selectKaiserCandidate(verifiedCandidates);
+    await context.log({ level: decision.selected ? "info" : "warn", message: `Kaiser selection: ${decision.reason}${decision.selected ? `; claim=${maskValue(decision.selected.claimNumber)}` : ""}.`, rowIndex: inputRow.inputRowId });
+    if (decision.selected) {
+      const output = outputRowFromClaim(inputRow, decision.selected.details, decision.selected.service);
+      output.botMessage = `${output.botMessage} Selection: ${decision.reason}.`;
+      state.outputRows.push(output);
+    } else {
+      state.outputRows.push(baseOutputRow(inputRow, "Review required", decision.reason));
+    }
+    addAudit(state, inputRow, "selection", decision.selected ? "completed" : "review", `${decision.reason}; candidates=${verifiedCandidates.map(candidate => `${candidate.claimNumber} (${candidate.receivedDate}, ${candidate.status})`).join(", ")}${decision.selected ? `; selected=${decision.selected.claimNumber}` : ""}`);
+    return;
   }
 
   state.outputRows.push(baseOutputRow(inputRow, "CPT not found in Services", `CPT not found in Services: ${inputRow.cptCode}.`));
