@@ -1,3 +1,4 @@
+import { paymentFilename, paymentMode, paymentField } from "../../filename";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -26,6 +27,7 @@ type RunInput = {
 
 type EchoPortalRecord = PaymentEobPortalRecord & {
   productionDate: string;
+  paymentDate?: string;
   rowIndex: number;
   documentPreference: "835" | "EPP";
 };
@@ -214,6 +216,9 @@ async function readVisiblePortalRows(page: Page): Promise<EchoPortalRecord[]> {
     const row = rows.nth(index);
     const cells = row.locator("td[role='gridcell'], td");
     if ((await cells.count()) < 8) continue;
+    const headers = await row.locator('xpath=ancestor::*[contains(concat(" ", normalize-space(@class), " "), " k-grid ")][1]').locator("thead th").allTextContents();
+    const values = await cells.allTextContents();
+    const paymentFields = Object.fromEntries(headers.map((header, position) => [header.trim(), values[position]?.trim() || ""]));
     const tin = (await cells.nth(1).innerText().catch(() => "")).trim();
     const productionDate = (await cells.nth(2).innerText().catch(() => "")).trim();
     const checkNumber = normalizeCheckNumber(await cells.nth(3).innerText().catch(() => ""));
@@ -229,7 +234,7 @@ async function readVisiblePortalRows(page: Page): Promise<EchoPortalRecord[]> {
       payee: tin,
       receivedByAvaility: "",
       amount: (await cells.nth(5).innerText().catch(() => "")).trim(),
-      raw: { tin, productionDate },
+      raw: { ...paymentFields, tin, productionDate },
     });
   }
 
@@ -262,7 +267,7 @@ async function saveBlobFromPopup(popup: Page, outputPath: string): Promise<void>
   await fs.writeFile(outputPath, Buffer.from(payload, "base64"));
 }
 
-async function downloadEchoDocument(page: Page, record: EchoPortalRecord, outputFolder: string): Promise<string> {
+async function downloadEchoDocument(page: Page, record: EchoPortalRecord, outputFolder: string, group?: string): Promise<string> {
   const rows = page.locator("tr.k-master-row").filter({ has: page.locator("button.ANSI835, button.epp, button.eppViewed") });
   const row = rows.nth(record.rowIndex);
   await row.scrollIntoViewIfNeeded({ timeout: 10000 }).catch(() => {});
@@ -275,13 +280,14 @@ async function downloadEchoDocument(page: Page, record: EchoPortalRecord, output
   await button.click({ timeout: 30000 });
   const result = await Promise.race([downloadPromise, popupPromise]);
   const defaultExtension = record.documentPreference === "835" ? ".835" : ".pdf";
-  const filename = `${safeFilePart(record.checkNumber)}_${dateFilePart(record.productionDate)}_${record.documentPreference}${defaultExtension}`;
+  const naming = { group, payer: record.payer, mode: record.modeOfPayment || paymentMode(record.raw), amount: record.amount, number: record.checkNumber, date: paymentField(record.raw, ["Payment Date", "Check Date", "Check/EFT Date"]) || record.paymentDate };
+  const filename = await paymentFilename(outputFolder, naming, defaultExtension);
   const outputPath = path.join(outputFolder, filename);
 
   if (result && "saveAs" in result) {
     const suggestedExtension = path.extname(result.suggestedFilename());
     const finalFilename = suggestedExtension && suggestedExtension !== defaultExtension
-      ? `${safeFilePart(record.checkNumber)}_${dateFilePart(record.productionDate)}_${record.documentPreference}${suggestedExtension}`
+      ? await paymentFilename(outputFolder, naming, suggestedExtension)
       : filename;
     await result.saveAs(path.join(outputFolder, finalFilename));
     return finalFilename;
@@ -369,7 +375,7 @@ export async function runEchoRemittanceJob(input: RunInput, context: AutomationC
           message: `Downloading Echo ${record.documentPreference} document for ECHO Draft Number ${record.checkNumber}.`,
           eventName: "payment_eob_echo_document_download",
         });
-        const filename = await downloadEchoDocument(page, record, outputDocumentFolder);
+        const filename = await downloadEchoDocument(page, { ...record, paymentDate: input.referenceRows?.find(row => row.checkNumber.trim() === record.checkNumber.trim())?.checkDate, modeOfPayment: paymentMode(record.raw) || input.referenceRows?.find(row => row.checkNumber.trim() === record.checkNumber.trim())?.modeOfPayment }, outputDocumentFolder, input.credentials.clientName);
         comparisonRows.push({
           checkNumber: record.checkNumber,
           checkDate: record.productionDate,

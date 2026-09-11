@@ -37,6 +37,8 @@ export type PaymentEobReferenceRow = {
 };
 
 export type PaymentEobPortalRecord = {
+  group?: string;
+  modeOfPayment?: string;
   checkNumber: string;
   checkDate: string;
   payer: string;

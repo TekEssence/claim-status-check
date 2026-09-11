@@ -89,11 +89,6 @@ function findValue(row: Record<string, unknown>, aliases: string[]): string {
   return "";
 }
 
-function normalizeUrl(value: string): string {
-  if (!value) return "";
-  return value.startsWith("http") ? value : `https://${value}`;
-}
-
 function normalizeMemberId(value: string): string {
   return value.replace(/\s+/g, "").trim();
 }
@@ -135,7 +130,8 @@ function loadCredentialsFromWorkbook(buffer: ArrayBuffer): KaiserCredentials | n
 
   const rows = XLSX.utils.sheet_to_json(sheet, { raw: false, defval: "" }) as Record<string, unknown>[];
   for (const row of rows) {
-    const loginUrl = normalizeUrl(findValue(row, ["URL", "Url", "Login URL", "Kaiser URL"])) || kaiserConfig.defaultLoginUrl;
+    // Always start a fresh portal flow instead of reusing a workbook authorization URL.
+    const loginUrl = kaiserConfig.defaultLoginUrl;
     const username = findValue(row, ["User ID", "Userid", "Username", "User Name", "pf.username"]);
     const password = findValue(row, ["Password", "pf.pass"]);
     if (loginUrl && username && password) {

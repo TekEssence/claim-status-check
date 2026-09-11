@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { Browser, Frame, Locator, Page } from "playwright-core";
+import type { Browser, Locator, Page } from "playwright-core";
 import { closeAutomationResources } from "@/backend/src/core/runtime-config";
 import { getJobDataPath } from "@/backend/src/core/storage";
 import type { ScraperContext } from "../../types";
@@ -320,18 +320,23 @@ function addAudit(state: KaiserWorkbookState, inputRow: KaiserInputRow | null, s
 async function findVisibleLocator(page: Page, selector: string, timeout = 1500): Promise<Locator | null> {
   const deadline = Date.now() + timeout;
   while (Date.now() < deadline) {
-    const candidates: Array<Page | Frame> = [page, ...page.frames()];
-    for (const candidate of candidates) {
-      const remaining = deadline - Date.now();
-      if (remaining <= 0) return null;
-      const locator = candidate.locator(selector).first();
+    // Check every frame on each pass. Sequential waits can exhaust a short
+    // timeout on the main frame before the portal's content frame is visited.
+    const matches = await Promise.all(page.frames().map(async (frame) => {
       try {
-        await locator.waitFor({ state: "visible", timeout: Math.min(remaining, 120) });
-        return locator;
+        const locators = await frame.locator(selector).all();
+        for (const locator of locators) {
+          if (await locator.isVisible()) return locator;
+        }
       } catch {
-        // Try the next frame without multiplying the total timeout.
+        // A redirect can detach a frame while we inspect it.
       }
-    }
+      return null;
+    }));
+    const visible = matches.find((locator) => locator !== null);
+    if (visible) return visible;
+    const remaining = deadline - Date.now();
+    if (remaining > 0) await page.waitForTimeout(Math.min(remaining, 100));
   }
   return null;
 }
@@ -407,16 +412,10 @@ async function acceptLoginMessageIfPresent(page: Page, context: ScraperContext, 
   if (!messageVisible) return false;
 
   await context.log({ level: "info", message: "Kaiser login message page detected. Accepting and continuing." });
-  const accepted = await clickIfVisible(page, kaiserConfig.selectors.loginMessageAccept, 5000);
-  if (!accepted) {
-    throw new Error("Kaiser login message page appeared, but the Accept button was not clickable.");
-  }
-
-  await page.waitForLoadState("domcontentloaded", { timeout: 30000 }).catch(() => {});
-  await page.waitForTimeout(1200);
-  if (await isKaiserLoginMessageVisible(page)) {
-    throw new Error("Kaiser login message page remained visible after clicking Accept.");
-  }
+  const accept = await findVisibleLocator(page, kaiserConfig.selectors.loginMessageAccept, 5000);
+  if (!accept) throw new Error("Kaiser login message appeared, but the Accept button was not visible.");
+  await accept.click({ timeout: 10000 });
+  await waitForKaiserLoginOutcome(page, false);
   await context.log({ level: "info", message: "Kaiser login message accepted." });
   return true;
 }
@@ -450,40 +449,93 @@ async function captureDiagnostics(context: ScraperContext, page: Page, inputRow:
   }
 }
 
+function safeKaiserLoginUrl(raw: string): string {
+  try {
+    const url = new URL(raw);
+    return `${url.origin}${url.pathname}`;
+  } catch {
+    return "[invalid URL]";
+  }
+}
+
+class KaiserSignedOffError extends Error {}
+
+async function waitForKaiserLoginOutcome(page: Page, allowMessage: boolean): Promise<void> {
+  const deadline = Date.now() + 60000;
+  while (Date.now() < deadline) {
+    const body = await visibleBodyText(page);
+    if (/forbidden|access denied|an error has been reported/i.test(body)) {
+      throw new Error(`Kaiser rejected sign on at ${safeKaiserLoginUrl(page.url())}. See sanitized login redirect logs.`);
+    }
+    if (/invalid (?:username|password|credentials)|incorrect (?:username|password)|authentication failed/i.test(body)) {
+      throw new Error("Kaiser reported a credential error; no automatic resubmission was attempted.");
+    }
+    if (/you have signed off|session.*(?:expired|ended)/i.test(body) ||
+        /\/(?:bye_msg\.asp|logout\.htm)(?:[?#]|$)/i.test(page.url()) ||
+        await findVisibleLocator(page, "a:has-text('Sign on again')", 150)) {
+      throw new KaiserSignedOffError("Kaiser signed off during login.");
+    }
+    if (allowMessage && await isKaiserLoginMessageVisible(page)) return;
+    if (await findVisibleLocator(page, `${kaiserConfig.selectors.claimSearchCard}, ${kaiserConfig.selectors.claimsTopNav}`, 300)) return;
+    if (/\/cs\/common\/epic_main\.asp(?:[?#]|$)/i.test(page.url()) &&
+        await findVisibleLocator(page, "text=Welcome to Kaiser Permanente Southern California Affiliate Link", 300)) return;
+    const warning = await findVisibleLocator(page, kaiserConfig.selectors.fontDialogOk, 150);
+    if (warning) await warning.click({ timeout: 5000 });
+    await page.waitForTimeout(300);
+  }
+  throw new Error(`Kaiser sign on did not reach the expected portal page within 60 seconds (${safeKaiserLoginUrl(page.url())}).`);
+}
+
 async function login(page: Page, input: Awaited<ReturnType<typeof parseKaiserInput>>, context: ScraperContext): Promise<void> {
-  await context.log({ level: "info", message: "Opening Kaiser EpicLink sign on page." });
-  await page.goto(input.credentials.loginUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
-
-  for (let attempt = 1; attempt <= 2; attempt++) {
-    await context.log({ level: "info", message: `Typing Kaiser credentials${attempt > 1 ? ` after signed-off retry ${attempt}` : ""}.` });
-    await typeVisibleLikeHuman(page, kaiserConfig.selectors.username, input.credentials.username, 80);
-    await typeVisibleLikeHuman(page, kaiserConfig.selectors.password, input.credentials.password, 80);
-    await context.log({ level: "info", message: "Submitting Kaiser sign on form." });
-    await Promise.all([
-      page.waitForLoadState("domcontentloaded", { timeout: 30000 }).catch(() => {}),
-      clickIfVisible(page, kaiserConfig.selectors.submit, 3000),
-    ]);
-    await page.waitForTimeout(1500);
-
-    const signedOffAgain = await clickIfVisible(page, "a:has-text('Sign on again')", 700);
-    if (!signedOffAgain) break;
-
-    await context.log({ level: "warn", message: "Kaiser showed signed-off page after login. Clicking Sign on again and retrying login." });
-    await page.waitForLoadState("domcontentloaded", { timeout: 30000 }).catch(() => {});
-    await findVisibleLocator(page, kaiserConfig.selectors.username, 15000);
+  const onResponse = (response: import("playwright-core").Response) => {
+    const request = response.request();
+    if (!request.isNavigationRequest() || request.frame() !== page.mainFrame()) return;
+    void context.log({ level: "info", message: `Kaiser login navigation: HTTP ${response.status()} ${safeKaiserLoginUrl(response.url())}` }).catch(() => {});
+  };
+  page.on("response", onResponse);
+  try {
+    const loginUrl = new URL(input.credentials.loginUrl);
+    if (/\/pa\/oidc\/cb\/?$/i.test(loginUrl.pathname) || loginUrl.searchParams.has("code")) {
+      throw new Error("Kaiser login URL must be the original portal entry URL, not an authentication callback. Correct the workbook URL.");
+    }
+    await context.log({ level: "info", message: `Opening Kaiser sign on: ${safeKaiserLoginUrl(input.credentials.loginUrl)}` });
+    await page.goto(input.credentials.loginUrl, { waitUntil: "load", timeout: 60000 });
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        const username = await findVisibleLocator(page, kaiserConfig.selectors.username, 15000);
+        const password = await findVisibleLocator(page, kaiserConfig.selectors.password, 15000);
+        if (!username || !password) throw new Error("Kaiser sign-on form did not become ready.");
+        await context.log({ level: "info", message: "Typing Kaiser credentials." });
+        await typeVisibleLikeHuman(page, kaiserConfig.selectors.username, input.credentials.username, 80);
+        await typeVisibleLikeHuman(page, kaiserConfig.selectors.password, input.credentials.password, 80);
+        await password.press("Tab");
+        if (await username.inputValue() !== input.credentials.username || await password.inputValue() !== input.credentials.password) {
+          throw new Error("Kaiser login fields did not retain the supplied credentials; sign on was not submitted.");
+        }
+        const submit = await findVisibleLocator(page, kaiserConfig.selectors.submit, 10000);
+        if (!submit) throw new Error("Kaiser Sign on button was not visible.");
+        await context.log({ level: "info", message: "Submitting Kaiser sign on once and waiting for the authentication outcome." });
+        await submit.click({ timeout: 15000 });
+        await waitForKaiserLoginOutcome(page, true);
+        if (await isKaiserLoginMessageVisible(page)) {
+          await acceptLoginMessageIfPresent(page, context, 8000);
+        }
+        await waitForKaiserLoginOutcome(page, false);
+        await context.log({ level: "info", message: "Kaiser login completed; portal navigation is visible." });
+        return;
+      } catch (error) {
+        if (!(error instanceof KaiserSignedOffError)) throw error;
+        if (attempt === 2) throw new Error("Kaiser signed off again after the single Sign on again retry.");
+        const signOnAgain = await findVisibleLocator(page, "a:has-text('Sign on again')", 15000);
+        if (!signOnAgain) throw new Error("Kaiser signed off, but no Sign on again link appeared within 15 seconds.");
+        await context.log({ level: "warn", message: "Kaiser signed off. Clicking Sign on again and waiting for a fresh login form (one retry)." });
+        await signOnAgain.click({ timeout: 10000 });
+        await page.waitForLoadState("load", { timeout: 30000 });
+      }
+    }
+  } finally {
+    page.off("response", onResponse);
   }
-
-  const stillOnLogin = await findVisibleLocator(page, kaiserConfig.selectors.password, 1000);
-  if (stillOnLogin) {
-    throw new Error("Kaiser login failed or did not leave the sign on page.");
-  }
-
-  await context.log({ level: "info", message: "Checking for optional Kaiser browser warning popup." });
-  if (await clickIfVisible(page, kaiserConfig.selectors.fontDialogOk, 600)) {
-    await context.log({ level: "info", message: "Kaiser browser warning popup closed." });
-  }
-  await acceptLoginMessageIfPresent(page, context, 8000);
-  await context.log({ level: "info", message: "Kaiser login completed." });
 }
 
 async function openClaimSearch(page: Page, context: ScraperContext): Promise<void> {

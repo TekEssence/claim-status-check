@@ -83,7 +83,7 @@ export async function readZelisCredentials(file: File): Promise<PaymentEobCreden
       totpSecret,
       lookbackDays: 30,
       project: resolveZelisProcess(findValue(row, ["Project", "Project Name", "Project Code", "Process"])),
-      clientName: findValue(row, ["Client", "Client Name", "Client Code"]),
+      clientName: findValue(row, ["Client", "Client Name", "Client Code", "Group", "Group Name"]),
     };
   }
 

@@ -17,7 +17,7 @@ test("creates the exact Payment Tracker columns and numeric currency amount", as
   await workbook.xlsx.load(buffer as never);
   const worksheet = workbook.getWorksheet("Payment Tracker");
   assert.ok(worksheet);
-  assert.deepEqual(worksheet.getRow(1).values, [undefined, "Source", "ERA Downloaded Date", "Payer Name", "Payee Name", "Check/EFT #", "Check / EFT Date", "Check Amount"]);
+  assert.deepEqual(Array.from(worksheet.getRow(1).values as unknown[]), [undefined, "Source", "ERA Downloaded Date", "Payer Name", "Payee Name", "Check/EFT #", "Check / EFT Date", "Check Amount"]);
   assert.equal(worksheet.getCell("E2").text, "0900562787");
   assert.equal(worksheet.getCell("G2").value, 1835.54);
   assert.equal(worksheet.getCell("G2").numFmt, "$#,##0.00");
@@ -29,5 +29,5 @@ test("keeps comparison_result.xlsx columns unchanged", async () => {
   await workbook.xlsx.load(buffer as never);
   const worksheet = workbook.getWorksheet("Comparison Result");
   assert.ok(worksheet);
-  assert.deepEqual(worksheet.getRow(1).values, [undefined, "Check/EFT Number", "Check Date", "Comparison", "Search Result", "PDF Status", "Filename", "Message"]);
+  assert.deepEqual(Array.from(worksheet.getRow(1).values as unknown[]), [undefined, "Check/EFT Number", "Check Date", "Comparison", "Search Result", "PDF Status", "Filename", "Message"]);
 });
