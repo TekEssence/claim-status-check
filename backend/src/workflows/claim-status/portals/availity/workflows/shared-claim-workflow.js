@@ -15,6 +15,7 @@ const {
   waitForClaimDetailPage
 } = require("../pages/claim-detail.page");
 const { renderClaimSummary, renderFailedSummary } = require("../services/summary-renderer");
+const { buildMatchDetails, buildReturnedRowsSummary } = require("../services/match-details");
 
 function normalizeIdentifier(value) {
   return String(value || "").replace(/[^a-z0-9]/gi, "").toUpperCase();
@@ -37,16 +38,6 @@ function patientFirstLast(value) {
   }
   const parts = beforeComma.split(" ").filter(Boolean);
   return { first: parts[0] || "", last: parts.length > 1 ? parts[parts.length - 1] : "" };
-}
-
-function buildReturnedRowsSummary(resultRows) {
-  if (!resultRows.length) {
-    return "No parsed result rows were available.";
-  }
-
-  return resultRows.slice(0, 5).map((result, index) => {
-    return `returned row ${index + 1}: service_date=${result.serviceDate || "blank"}, billed=${result.billedAmount || "blank"}, patient_id=${result.patientId || "blank"}, patient_name=${result.patientName || "blank"}, finalized_date=${result.finalizedDate || "blank"}, claim=${result.claimNumber || "blank"}, status=${result.status.display || "blank"}`;
-  }).join("; ");
 }
 
 function evaluatePatientIdentity(result, rowData) {
@@ -246,6 +237,14 @@ async function processParsedSearchResults(page, row, provider, resultSummary, so
     ? identityCheckedRows
     : identityCheckedRows.filter((result) => !requirePatientIdentity || result.patientIdentityMatched);
   logger.info(`Matched ${matchedRows.length} ${sourceTab} result row(s) by Service Date + Charges${requirePatientIdentity ? " + Patient ID/Patient Name" : ""}`);
+  const matchDetails = buildMatchDetails({
+    sourceTab,
+    provider,
+    rowData: row.data,
+    resultRows,
+    matchedRows,
+    matchLabel: `Service Date + Charges${requirePatientIdentity ? " + Patient ID/Patient Name" : ""}`,
+  });
   if (matchedRows.length === 0) {
     logger.warn(`No ${sourceTab} rows matched input after parsing. Check result-row parse logs above if values look different in portal.`);
   }
@@ -272,6 +271,7 @@ async function processParsedSearchResults(page, row, provider, resultSummary, so
       matchCount: 0,
       provider,
       sourceTab,
+      matchDetails,
       notes: mismatchReason
     };
   }
@@ -292,6 +292,7 @@ async function processParsedSearchResults(page, row, provider, resultSummary, so
       matchCount: matchedRows.length,
       provider,
       sourceTab,
+      matchDetails,
       notes: latestSelection.notes
     };
   }
@@ -324,6 +325,7 @@ async function processParsedSearchResults(page, row, provider, resultSummary, so
     matchCount: matchedRows.length,
     provider,
     sourceTab,
+    matchDetails,
     notes: notes.join("; ")
   };
 }

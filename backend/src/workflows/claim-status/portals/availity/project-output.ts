@@ -27,6 +27,9 @@ type WorkflowResult = {
   sourceTab?: string;
   matchCount?: number;
   notes?: string;
+  selectedOrganization?: string;
+  providerMode?: string;
+  matchDetails?: string;
   details?: ClaimDetail[];
 };
 
@@ -130,6 +133,15 @@ function applyCommonBotFields(outputRow: AvailityOutputRow, result: WorkflowResu
   outputRow.bot_match_count = String(result.matchCount ?? "");
   outputRow.bot_overall_result = result.status || "";
   outputRow.bot_notes = result.notes || "";
+  if (result.selectedOrganization || result.providerMode) {
+    outputRow["Availity Selection"] = [
+      result.selectedOrganization ? `Organization: ${result.selectedOrganization}` : "",
+      result.providerMode ? `Provider Mode: ${result.providerMode}` : "",
+    ].filter(Boolean).join("; ");
+  }
+  if (result.matchDetails) {
+    outputRow["Availity Match Details"] = result.matchDetails;
+  }
 }
 
 function normalizePatientName(value: unknown): string {

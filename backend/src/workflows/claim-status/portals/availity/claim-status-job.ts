@@ -7,7 +7,7 @@ import type { ScraperContext } from "../../types";
 import { launchAvailityBrowser } from "./browser";
 import { isRunnableAvailityPayerName, parseAvailityInput, readAvailityPayerMapping, unsupportedAvailityPayerMessage } from "./input";
 import { createAvailityOutputWorkbookBuffer } from "./output-writer";
-import { getMatchingPolicy, getMfaConfigForProject, getProviderOrderForRow, getRequiredFieldsForProject, getSelectionRuleProviderMode, getSelectionRuleProviderOrder, getTabPriorityForProject, readAvailityProviderMapping, resolvePortalSelections } from "./project-config";
+import { getMatchingPolicy, getMfaConfigForProject, getProviderOrderForRow, getRequiredFieldsForProject, getSelectionRuleProviderMode, getSelectionRuleProviderOrder, getTabPriorityForRow, readAvailityProviderMapping, resolvePortalSelections } from "./project-config";
 import type { AvailityPortalSelections } from "./config/projects";
 import { applyProjectOutputStrategy } from "./project-output";
 import type { AvailityAuditRow, AvailityErrorRow, AvailityInputRow, AvailityOutputRow, AvailityProviderMapping } from "./types";
@@ -89,6 +89,13 @@ function markFailure(outputRow: AvailityOutputRow, message: string, result = "fa
   outputRow.bot_updated_claim_status = renderFailedSummary(message);
   outputRow.bot_updated_time = nowIso();
   outputRow.bot_overall_result = result;
+  outputRow.bot_notes = notes || message;
+}
+
+function markSkipped(outputRow: AvailityOutputRow, message: string, notes = ""): void {
+  outputRow.bot_updated_claim_status = `SKIPPED - ${message}`;
+  outputRow.bot_updated_time = nowIso();
+  outputRow.bot_overall_result = "skipped";
   outputRow.bot_notes = notes || message;
 }
 
@@ -426,7 +433,7 @@ async function processValidRow(
     providerOrder,
     providerMode,
     matchingPolicy,
-    tabPriority: getTabPriorityForProject(options.projectId),
+    tabPriority: getTabPriorityForRow(options.projectId, row, selections.payer, options.login),
   });
 }
 
@@ -524,7 +531,7 @@ export async function runAvailityClaimStatusJob(formData: FormData, context: Scr
         };
         inputSheetRows.push(buildInputAuditRow(row, validation));
         await log(`Availity row ${row.input_row_id}/${input.inputRows.length} skipped: ${message}`);
-        markFailure(outputRow, message, "failed");
+        markSkipped(outputRow, message);
         outputRows.push(outputRow);
         addError(errorRows, runId, row, {
           failure_stage: "unsupported_payer",
@@ -542,8 +549,10 @@ export async function runAvailityClaimStatusJob(formData: FormData, context: Scr
       await context.emit(rowProgressEvent(row, currentRunnableRow, runnableTotal, "started"));
       let validation: { isValid: boolean; validation_status: string; validation_message: string; mappedPayerName: string };
       let portalSelections: AvailityPortalSelections = { payer: "" };
+      let providerModeForRow = "";
       try {
         portalSelections = resolvePortalSelections(input.projectId, row, payerMapping, input.credentials.username);
+        providerModeForRow = getSelectionRuleProviderMode(input.projectId, row, portalSelections.payer, input.credentials.username) || "";
         validation = validateRow(
           row,
           payerMapping,
@@ -562,18 +571,22 @@ export async function runAvailityClaimStatusJob(formData: FormData, context: Scr
         };
       }
       inputSheetRows.push(buildInputAuditRow(row, validation));
+      outputRow["Availity Selection"] = [
+        portalSelections.organization ? `Organization: ${portalSelections.organization}` : "",
+        providerModeForRow ? `Provider Mode: ${providerModeForRow}` : "",
+      ].filter(Boolean).join("; ");
       await log(`Availity row ${row.input_row_id}/${input.inputRows.length}: ${row.data["Payer Name"] || "Unknown payer"}.`);
 
       if (!validation.isValid) {
-        await log(`Availity row ${row.input_row_id} validation failed: ${validation.validation_message}`);
-        markFailure(outputRow, validation.validation_message);
+        await log(`Availity row ${row.input_row_id} skipped: ${validation.validation_message}`);
+        markSkipped(outputRow, validation.validation_message);
         outputRows.push(outputRow);
         addError(errorRows, runId, row, {
           failure_stage: "validation",
           failure_reason: validation.validation_message,
           current_url: safePageUrl(session.page),
         });
-        addAudit(auditRows, runId, row, "validation", "failed", validation.validation_message, startedAt);
+        addAudit(auditRows, runId, row, "validation", "skipped", validation.validation_message, startedAt);
         completedRunnableRows += 1;
         await context.emit({ type: "progress", completed: completedRunnableRows, total: runnableTotal });
         await emitOutputSnapshot(completedRunnableRows);
@@ -595,6 +608,8 @@ export async function runAvailityClaimStatusJob(formData: FormData, context: Scr
           if (rowRecoveryNotes.length) {
             result.notes = [result.notes, ...rowRecoveryNotes].filter(Boolean).join("; ");
           }
+          result.selectedOrganization = portalSelections.organization || "";
+          result.providerMode = providerModeForRow;
           const projectOutputRows = applyProjectOutputStrategy({
             projectId: input.projectId,
             row,

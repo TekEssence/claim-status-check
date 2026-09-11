@@ -514,6 +514,22 @@ export function getSelectionRuleProviderMode(
   return rule?.use.providerMode || (rule?.use.providerName ? "groupNameOnly" : undefined);
 }
 
-export function getTabPriorityForProject(projectId: string): AvailityTabId[] {
-  return getAvailityProjectConfig(projectId).tabPriority || [];
+export function getTabPriorityForRow(
+  projectId: string,
+  row: AvailityInputRow,
+  portalPayerName: string,
+  login = "",
+): AvailityTabId[] {
+  const config = getAvailityProjectConfig(projectId);
+  const practice = findRowValue(row, ["Group", "Practice", "Organization Group"]);
+  const inputPayerName = findRowValue(row, ["Portal Payer Name", "Payer Name"]);
+  const state = getPortalStateForRow(projectId, row) || "";
+  const rule = findBestSelectionRule(config.selectionRules || [], {
+    practice,
+    payer: portalPayerName,
+    inputPayerName,
+    login,
+    state,
+  });
+  return rule?.use.tabPriority || config.tabPriority || [];
 }

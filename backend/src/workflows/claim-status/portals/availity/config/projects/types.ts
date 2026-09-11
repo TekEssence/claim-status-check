@@ -65,6 +65,7 @@ export type AvailitySelectionRule = {
     organization?: string;
     providerName?: string;
     providerMode?: AvailityProviderSelectionMode;
+    tabPriority?: AvailityTabId[];
   };
 };
 

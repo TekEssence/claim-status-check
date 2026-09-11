@@ -4,9 +4,7 @@ const logger = require("../utils/logger");
 const { humanDelay, withRetry } = require("../utils/browser");
 const { getClaimStatusFrame } = require("./navigation.page");
 const { submitCharmSearchWithProvider } = require("./charm-provider-search.page");
-const { PROVIDERS } = require("./claim-status-member.page");
-const { waitForSearchResultsToSettle, normalizeDateText, throwIfVisibleFieldValidation } = require("./results.page");
-const { renderFailedSummary } = require("../services/summary-renderer");
+const { normalizeDateText, throwIfVisibleFieldValidation } = require("./results.page");
 const { normalizeStatus } = require("../services/status-normalizer");
 
 const SERVICE_DATE_SELECTORS = {
@@ -327,56 +325,6 @@ async function readServiceDateResultRows(page) {
   return results;
 }
 
-async function processServiceDateProviderLoop(page, row, options = {}) {
-  const payerLabel = options.payerLabel || "Availity";
-  const providerOrder = Array.isArray(options.providerOrder) && options.providerOrder.length
-    ? options.providerOrder
-    : PROVIDERS;
-
-  let lastProviderFailure = "";
-  for (const provider of providerOrder) {
-    await searchServiceDatesWithProvider(page, provider, row.data, {
-      ...options,
-      payerLabel
-    });
-
-    logger.info(`Waiting up to 5 seconds for ${provider} ${payerLabel} Service Dates results to settle`);
-    const resultSummary = await waitForSearchResultsToSettle(page, 5000);
-    logger.info(
-      `${payerLabel} Service Dates provider ${provider} result summary: heading="${resultSummary.headingText || "not found"}", total=${resultSummary.total ?? "unknown"}, rows=${resultSummary.resultRowCount ?? "unknown"}, no_results_message=${resultSummary.noResultsMessageVisible}, alert="${resultSummary.portalAlertMessage || ""}"`
-    );
-
-    const resultRows = await readServiceDateResultRows(page);
-    if (resultSummary.hasPortalAlert && resultRows.length === 0) {
-      logger.warn(`${payerLabel} Service Dates provider ${provider} returned portal alert without claim rows: ${resultSummary.portalAlertMessage}`);
-      lastProviderFailure = `Provider ${provider}: ${resultSummary.portalAlertMessage}`;
-      continue;
-    }
-
-    if (resultRows.length === 0) {
-      logger.warn(`${payerLabel} Service Dates provider ${provider} returned no claim rows. Trying next provider if available.`);
-      lastProviderFailure = `Provider ${provider}: no claim rows returned.`;
-      continue;
-    }
-
-    return options.processResults(page, row, provider, resultSummary, {
-      ...options,
-      resultRows
-    });
-  }
-
-  return {
-    status: "failed",
-    summaries: [renderFailedSummary(lastProviderFailure || `Claim not found in ${payerLabel} Service Dates tab for matching Service Date, Charges, and Member ID.`)],
-    matchCount: 0,
-    provider: providerOrder.join(", "),
-    sourceTab: "Service Dates",
-    notes: lastProviderFailure
-      ? `Searched ${payerLabel} Service Dates providers: ${providerOrder.join(", ")}. Last provider failure: ${lastProviderFailure}`
-      : `Searched ${payerLabel} Service Dates providers: ${providerOrder.join(", ")}. No matching Service Date + Charges + Member ID found.`
-  };
-}
-
 module.exports = {
   SERVICE_DATE_SELECTORS,
   fillServiceDateSearchForm,
@@ -384,7 +332,6 @@ module.exports = {
   normalizeMemberId,
   normalizePatientName,
   normalizePatientNameWithoutInitial,
-  processServiceDateProviderLoop,
   readServiceDateResultRows,
   searchServiceDatesWithProvider,
   selectServiceDateProvider,

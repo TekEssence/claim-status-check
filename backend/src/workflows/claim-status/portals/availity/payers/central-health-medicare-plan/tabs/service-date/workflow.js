@@ -1,6 +1,7 @@
 "use strict";
 
 const logger = require("../../../../utils/logger");
+const { createServiceDateWorkflow } = require("../../../../workflows/service-date-workflow");
 const { humanDelay, withRetry } = require("../../../../utils/browser");
 const { getClaimStatusFrame } = require("../../../../pages/navigation.page");
 const { submitCharmSearchAfterProviderDropdown, trySubmitCharmSearchWithoutProviderDropdown } = require("../../../../pages/charm-provider-search.page");
@@ -11,6 +12,7 @@ const {
 const { PROVIDERS } = require("../../../../pages/claim-status-member.page");
 const { waitForSearchResultsToSettle, normalizeMoney, normalizeDateText, throwIfVisibleFieldValidation } = require("../../../../pages/results.page");
 const { renderClaimSummary, renderFailedSummary } = require("../../../../services/summary-renderer");
+const { buildMatchDetails } = require("../../../../services/match-details");
 const { normalizeStatus } = require("../../../../services/status-normalizer");
 const { extractBracketedPatientId } = require("../../../../services/patient-identity");
 const {
@@ -474,156 +476,6 @@ async function extractCentralHealthMedicarePlanMatchedRow(page, matchedRow, sour
   };
 }
 
-async function processCentralHealthMedicarePlanServiceDateResults(page, row, provider, resultSummary, options = {}) {
-  const sourceTab = "Service Dates";
-  const resultRows = await getCentralHealthMedicarePlanServiceDateRows(page);
-  const inputDate = normalizeDateText(row.data["Service Date"]);
-  const inputCharge = normalizeMoney(row.data.Charges);
-  const matchingPolicy = options.matchingPolicy || {};
-  const shouldMatchBilledAmount = matchingPolicy.matchBilledAmount !== false;
-  const inputMemberId = hasUsableValue(row.data["Subscriber No"]) ? normalizeMemberId(row.data["Subscriber No"]) : "";
-  const inputPatientName = hasUsableValue(row.data["Patient Name"]) ? normalizePatientName(row.data["Patient Name"]) : "";
-  const inputPatientId = normalizeMemberId(row.data["Patient ID"]) || extractBracketedPatientId(row.data["Patient Name"]);
-  const inputPatientNameWithoutInitial = hasUsableValue(row.data["Patient Name"]) ? normalizePatientNameWithoutInitial(row.data["Patient Name"]) : "";
-  const shouldMatchMemberId = matchingPolicy.memberIdMode !== "disabled"
-    && (matchingPolicy.memberIdMode !== "whenPresent" || Boolean(inputMemberId));
-  const shouldMatchPatientId = Boolean(matchingPolicy.patientIdFallback && inputPatientId);
-  const shouldMatchPatientName = Boolean(matchingPolicy.patientNameFallback && !inputMemberId && inputPatientName);
-  let matchLabel = shouldMatchMemberId
-    ? `${shouldMatchBilledAmount ? "Service Date + Billed Amount" : "Service Date"} + Member ID`
-    : shouldMatchPatientId
-      ? `${shouldMatchBilledAmount ? "Service Date + Billed Amount" : "Service Date"} + Patient ID`
-    : shouldMatchPatientName
-      ? `${shouldMatchBilledAmount ? "Service Date + Billed Amount" : "Service Date"} + Patient Name`
-      : shouldMatchBilledAmount ? "Service Date + Billed Amount" : "Service Date";
-
-  resultRows.forEach((result) => {
-    logger.info(
-      `Parsed Central Health Medicare Plan Service Dates row ${result.index + 1}: service_date="${result.serviceDate}", billed="${result.billedAmount}", normalized_billed="${normalizeMoney(result.billedAmount)}", member_id="${result.memberId}", patient_name="${result.patientName}", finalized_date="${result.finalizedDate}", claim="${result.claimNumber}", status="${result.status.display}"`
-    );
-  });
-
-  let matchedRows = resultRows.filter((result) => {
-    return result.serviceDate === inputDate
-      && (!shouldMatchBilledAmount || normalizeMoney(result.billedAmount) === inputCharge)
-      && (!shouldMatchMemberId || normalizeMemberId(result.memberId) === inputMemberId)
-      && (!shouldMatchPatientId || (normalizeMemberId(result.patientId) || extractBracketedPatientId(result.patientName)) === inputPatientId)
-      && (!shouldMatchPatientName || normalizePatientName(result.patientName) === inputPatientName);
-  });
-
-  if (matchedRows.length === 0 && matchingPolicy.patientIdFallback && inputPatientId) {
-    logger.info("No Service Dates rows matched Member ID. Applying configured bracketed Patient ID fallback.");
-    matchedRows = resultRows.filter((result) => {
-      return result.serviceDate === inputDate
-        && (!shouldMatchBilledAmount || normalizeMoney(result.billedAmount) === inputCharge)
-        && (normalizeMemberId(result.patientId) || extractBracketedPatientId(result.patientName)) === inputPatientId;
-    });
-    matchLabel = `${shouldMatchBilledAmount ? "Service Date + Billed Amount" : "Service Date"} + Patient ID`;
-  }
-
-  if (matchedRows.length === 0 && matchingPolicy.patientNameFallback && inputMemberId && inputPatientName) {
-    logger.info("No Central Health Medicare Plan Service Dates rows matched Member ID. Applying configured Patient Name fallback.");
-    matchedRows = resultRows.filter((result) => {
-      return result.serviceDate === inputDate
-        && (!shouldMatchBilledAmount || normalizeMoney(result.billedAmount) === inputCharge)
-        && normalizePatientName(result.patientName) === inputPatientName;
-    });
-    matchLabel = `${shouldMatchBilledAmount ? "Service Date + Billed Amount" : "Service Date"} + Patient Name`;
-  }
-
-  if (matchedRows.length === 0 && matchingPolicy.patientNameWithoutInitialFallback && inputPatientNameWithoutInitial) {
-    logger.info("No Central Health Medicare Plan Service Dates rows matched exact Patient Name. Applying configured trailing-initial fallback.");
-    matchedRows = resultRows.filter((result) => {
-      return result.serviceDate === inputDate
-        && (!shouldMatchBilledAmount || normalizeMoney(result.billedAmount) === inputCharge)
-        && normalizePatientNameWithoutInitial(result.patientName) === inputPatientNameWithoutInitial;
-    });
-    matchLabel = `${shouldMatchBilledAmount ? "Service Date + Billed Amount" : "Service Date"} + Patient Name without initial`;
-  }
-
-  logger.info(`Matched ${matchedRows.length} Central Health Medicare Plan Service Dates result row(s) by ${matchLabel}`);
-
-  if (matchedRows.length === 0) {
-    const returnedCount = resultSummary.total ?? (resultRows.length || "unknown");
-    const dateMatchedRows = resultRows.filter((result) => result.serviceDate === inputDate);
-    const billedMatchedRows = shouldMatchBilledAmount
-      ? dateMatchedRows.filter((result) => normalizeMoney(result.billedAmount) === inputCharge)
-      : dateMatchedRows;
-    const mismatchDetail = !dateMatchedRows.length
-      ? `Service Date mismatch for input ${row.data["Service Date"] || "blank"}.`
-      : shouldMatchBilledAmount && !billedMatchedRows.length
-        ? `Billed Amount mismatch for input Charges ${row.data.Charges || "blank"}.`
-        : matchingPolicy.reportCombinedMemberPatientMismatch && inputMemberId && inputPatientName
-          ? `Member ID and Patient Name mismatch for input Member ID ${row.data["Subscriber No"] || "blank"} and Patient Name ${row.data["Patient Name"] || "blank"}.`
-          : matchLabel.includes("Member ID")
-            ? `Member ID mismatch for input ${row.data["Subscriber No"] || "blank"}.`
-            : matchLabel.includes("Patient Name")
-              ? `Patient Name mismatch for input ${row.data["Patient Name"] || "blank"}.`
-              : `No matching ${sourceTab} row found.`;
-    const mismatchReason = [
-      `Portal returned ${returnedCount} rows in ${sourceTab} for provider ${provider}. ${mismatchDetail}`,
-      resultSummary.portalAlertMessage
-    ].filter(Boolean).join("\n");
-    return {
-      status: "failed",
-      summaries: [renderFailedSummary(mismatchReason)],
-      matchCount: 0,
-      provider,
-      sourceTab,
-      notes: mismatchReason
-    };
-  }
-
-  const selection = selectCentralHealthMedicarePlanMatchedRows(matchedRows, sourceTab);
-  if (selection.notes) {
-    logger.info(selection.notes);
-  }
-
-  if (!selection.selectedRows.length) {
-    return {
-      status: "failed",
-      summaries: [renderFailedSummary(selection.notes)],
-      matchCount: matchedRows.length,
-      provider,
-      sourceTab,
-      notes: selection.notes
-    };
-  }
-
-  const summaries = [];
-  const details = [];
-  for (let index = 0; index < selection.selectedRows.length; index += 1) {
-    const matchedRow = selection.selectedRows[index];
-    const extracted = await extractCentralHealthMedicarePlanMatchedRow(page, matchedRow, sourceTab);
-    const summaryContext = {
-      ...extracted,
-      payerName: row.data["Payer Name"] || "",
-      patientName: matchedRow.patientName || "",
-      matchMethod: matchLabel,
-      serviceDate: matchedRow.serviceDate || "",
-      finalizedDate: matchedRow.finalizedDate || "",
-      claimNumber: extracted.claimNumber || matchedRow.claimNumber || "",
-      claimStatus: extracted.claimStatus || matchedRow.status.display || ""
-    };
-    details.push(summaryContext);
-    summaries.push(renderClaimSummary(summaryContext));
-
-    if (extracted.type !== "unsupported") {
-      await returnToResults(page);
-    }
-  }
-
-  return {
-    status: "success",
-    summaries: [summaries.join("\n\n")],
-    details,
-    matchCount: matchedRows.length,
-    provider,
-    sourceTab,
-    notes: [resultSummary.portalAlertMessage, selection.notes].filter(Boolean).join("\n")
-  };
-}
-
 async function searchCentralHealthMedicarePlanServiceDatesWithProvider(page, providerName, rowData, options = {}) {
   logger.info(`Central Health Medicare Plan Service Dates provider attempt: ${providerName}`);
   await selectServiceDateTab(page);
@@ -653,51 +505,11 @@ async function searchCentralHealthMedicarePlanServiceDatesWithProvider(page, pro
   await submitServiceDateSearch(page);
 }
 
-async function processClaim(page, row, options = {}) {
-  logger.info("Using Central Health Medicare Plan workflow: Service Dates tab only.");
-  const providerOrder = Array.isArray(options.providerOrder) && options.providerOrder.length
-    ? options.providerOrder
-    : PROVIDERS;
-
-  let lastProviderFailure = "";
-  for (const provider of providerOrder) {
-    await searchCentralHealthMedicarePlanServiceDatesWithProvider(page, provider, row.data, options);
-
-    logger.info(`Waiting up to 5 seconds for ${provider} Central Health Medicare Plan Service Dates results to settle`);
-    const resultSummary = await waitForSearchResultsToSettle(page, 5000);
-    logger.info(
-      `Central Health Medicare Plan Service Dates provider ${provider} result summary: heading="${resultSummary.headingText || "not found"}", total=${resultSummary.total ?? "unknown"}, rows=${resultSummary.resultRowCount ?? "unknown"}, no_results_message=${resultSummary.noResultsMessageVisible}, alert="${resultSummary.portalAlertMessage || ""}"`
-    );
-
-    const resultRows = await getCentralHealthMedicarePlanServiceDateRows(page);
-    if (resultSummary.hasPortalAlert && resultRows.length === 0) {
-      logger.warn(`Central Health Medicare Plan Service Dates provider ${provider} returned portal alert without claim rows: ${resultSummary.portalAlertMessage}`);
-      lastProviderFailure = `Provider ${provider}: ${resultSummary.portalAlertMessage}`;
-      continue;
-    }
-
-    if (resultRows.length === 0) {
-      logger.warn(`Central Health Medicare Plan Service Dates provider ${provider} returned no claim rows. Trying next provider if available.`);
-      lastProviderFailure = `Provider ${provider}: no claim rows returned.`;
-      continue;
-    }
-
-    return processCentralHealthMedicarePlanServiceDateResults(page, row, provider, resultSummary, options);
-  }
-
-  return {
-    status: "failed",
-    summaries: [renderFailedSummary(lastProviderFailure || "Claim not found in Central Health Medicare Plan Service Dates tab for matching Service Date, Charges, and Member ID.")],
-    matchCount: 0,
-    provider: providerOrder.join(", "),
-    sourceTab: "Service Dates",
-    notes: lastProviderFailure
-      ? `Searched Central Health Medicare Plan Service Dates providers: ${providerOrder.join(", ")}. Last provider failure: ${lastProviderFailure}`
-      : `Searched Central Health Medicare Plan Service Dates providers: ${providerOrder.join(", ")}. No matching Service Date + Charges + Member ID found.`
-  };
-}
-
-module.exports = {
+module.exports = createServiceDateWorkflow({
   name: "central-health-medicare-plan",
-  processClaim
-};
+  payerLabel: "Central Health Medicare Plan",
+  searchWithProvider: searchCentralHealthMedicarePlanServiceDatesWithProvider,
+  readResultRows: getCentralHealthMedicarePlanServiceDateRows,
+  selectMatchedRows: selectCentralHealthMedicarePlanMatchedRows,
+  extractMatchedRow: extractCentralHealthMedicarePlanMatchedRow,
+});
