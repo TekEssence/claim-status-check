@@ -3,13 +3,16 @@
 const logger = require("../utils/logger");
 const { humanDelay, withRetry } = require("../utils/browser");
 const { getClaimStatusFrame } = require("./navigation.page");
-const { submitCharmSearchWithProvider } = require("./charm-provider-search.page");
+const {
+  clearProviderStateForTaxIdFallback,
+  hasInputProviderIdentifiers,
+  verifyProviderNpiMatches,
+} = require("./provider-identifiers.page");
 const { normalizeDateText, throwIfVisibleFieldValidation } = require("./results.page");
 const { normalizeStatus } = require("../services/status-normalizer");
 
 const SERVICE_DATE_SELECTORS = {
   serviceDateTab: "button[role='tab']:has-text('Service Dates'), a[role='button']:has-text('Service Dates')",
-  providerNpiRadio: "input[name='providerIdentifier'][value='npi']",
   providerNpi: "input#providerNpi[name='providerNpi']",
   searchButton: "button#submit-byServiceDates[type='submit']",
   searchResultsHeading: "h5:has-text('Search Results')",
@@ -35,6 +38,22 @@ function normalizePatientNameWithoutInitial(value) {
   return normalizePatientName(cleaned.replace(/\b[A-Z]\.?$/i, ""));
 }
 
+function digitsOnly(value) {
+  return String(value || "").replace(/\D/g, "");
+}
+
+function extractProviderTaxId(providerText) {
+  const parts = String(providerText || "")
+    .split(/\s+-\s+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  return parts.reverse().find((part) => /^\d{9}$/.test(part)) || "";
+}
+
+function getInputProviderTaxId(rowData = {}) {
+  return digitsOnly(rowData["Provider Tax ID"] || rowData["Tax ID"] || rowData["Provider TIN"]);
+}
+
 async function selectAutocompleteOption(scope, inputLocator, value) {
   await inputLocator.click({ force: true });
   await inputLocator.press(process.platform === "darwin" ? "Meta+A" : "Control+A").catch(() => {});
@@ -57,6 +76,116 @@ async function selectAutocompleteOption(scope, inputLocator, value) {
   throw new Error(`No Availity dropdown option was found for "${value}".`);
 }
 
+async function getServiceDateProviderInput(frame) {
+  const providerLabel = frame.getByText("Select a Provider", { exact: true }).first();
+  return providerLabel.locator("xpath=ancestor::*[self::div or self::label][1]/following::input[@role='combobox'][1]");
+}
+
+async function clearServiceDateProviderInput(frame) {
+  const providerInput = await getServiceDateProviderInput(frame);
+  if (!await providerInput.isVisible({ timeout: 1500 }).catch(() => false)) {
+    return;
+  }
+
+  await providerInput.click({ force: true }).catch(() => {});
+  await providerInput.press(process.platform === "darwin" ? "Meta+A" : "Control+A").catch(() => {});
+  await providerInput.press("Backspace").catch(() => {});
+}
+
+async function fillServiceDateProviderTaxId(frame, taxId, options = {}) {
+  const payerLabel = options.payerLabel || "Availity";
+  if (!taxId) {
+    throw new Error(`${payerLabel} provider Tax ID could not be extracted from selected provider value.`);
+  }
+
+  const taxIdInput = frame.locator("input#providerTaxId").first();
+  await taxIdInput.waitFor({ state: "visible", timeout: 10000 });
+  await taxIdInput.click({ force: true });
+  await taxIdInput.press(process.platform === "darwin" ? "Meta+A" : "Control+A").catch(() => {});
+  await taxIdInput.press("Backspace").catch(() => {});
+  await taxIdInput.pressSequentially(taxId, { delay: 60 });
+  await humanDelay(400, 800);
+
+  const exactOption = frame.getByText(taxId, { exact: true }).last();
+  let exactOptionVisible = await exactOption.isVisible({ timeout: 2000 }).catch(() => false);
+  if (!exactOptionVisible) {
+    await humanDelay(900, 1200);
+    exactOptionVisible = await exactOption.isVisible({ timeout: 2000 }).catch(() => false);
+  }
+
+  if (exactOptionVisible) {
+    await exactOption.click();
+  } else if (options.requireExactTaxIdOption !== false) {
+    throw new Error(`Provider Tax ID dropdown has no exact option for "${taxId}".`);
+  }
+
+  await frame.waitForFunction(
+    (expectedTaxId) => {
+      const input = document.querySelector("input#providerTaxId");
+      return input && input.value && input.value.trim() === expectedTaxId;
+    },
+    taxId,
+    { timeout: 5000 }
+  );
+}
+
+async function selectServiceDateProviderWithTaxId(page, providerName, rowData = {}, options = {}) {
+  const payerLabel = options.payerLabel || "Availity";
+  await withRetry(
+    `Selecting ${payerLabel} provider ${providerName}`,
+    async () => {
+      const frame = await getClaimStatusFrame(page);
+      const providerInput = await getServiceDateProviderInput(frame);
+      await providerInput.waitFor({ state: "visible", timeout: 15000 });
+      await selectAutocompleteOption(frame, providerInput, providerName);
+
+      const selectedProviderText = await providerInput.inputValue({ timeout: 3000 }).catch(() => providerName);
+      await verifyProviderNpiMatches(frame, providerName, { context: `${payerLabel} Service Dates`, logger: options.logger || logger });
+      const providerTaxId = extractProviderTaxId(selectedProviderText || providerName) || getInputProviderTaxId(rowData);
+      (options.logger || logger).info(`${payerLabel} provider Tax ID extracted as "${providerTaxId || "blank"}" from provider value "${selectedProviderText || providerName}".`);
+      await fillServiceDateProviderTaxId(frame, providerTaxId, options);
+    },
+    { retries: 2, retryDelayMs: 1200 }
+  );
+}
+
+async function selectServiceDateProviderOrFillTaxId(page, providerName, rowData = {}, options = {}) {
+  const payerLabel = options.payerLabel || "Availity";
+  const groupNameOnly = options.projectId === "charm" && options.providerMode === "groupNameOnly";
+  const inputProviderTaxId = getInputProviderTaxId(rowData);
+  const providerAsTaxId = inputProviderTaxId && digitsOnly(providerName) === inputProviderTaxId ? inputProviderTaxId : "";
+  if (providerAsTaxId && !groupNameOnly) {
+    (options.logger || logger).info(`${payerLabel} provider identifier "${providerName}" is a Tax ID. Filling Provider Tax ID directly.`);
+    const frame = await clearProviderStateForTaxIdFallback(page, { context: `${payerLabel} Service Dates Tax ID fallback`, logger: options.logger || logger });
+    await fillServiceDateProviderTaxId(frame, providerAsTaxId, options);
+    return;
+  }
+
+  try {
+    await selectServiceDateProviderWithTaxId(page, providerName, rowData, options);
+    return;
+  } catch (error) {
+    if (groupNameOnly) {
+      throw error;
+    }
+    const taxId = inputProviderTaxId;
+    if (!taxId && options.allowInputIdentifiersWhenProviderUnavailable && hasInputProviderIdentifiers(rowData)) {
+      (options.logger || logger).warn(`Provider "${providerName}" was not available. Continuing with direct input provider identifiers.`);
+      const frame = await getClaimStatusFrame(page);
+      await clearServiceDateProviderInput(frame);
+      await clearProviderStateForTaxIdFallback(page, { context: `${payerLabel} Service Dates Tax ID fallback`, logger: options.logger || logger });
+      return;
+    }
+    if (!taxId) {
+      throw error;
+    }
+
+    (options.logger || logger).warn(`${payerLabel} provider dropdown did not select "${providerName}". Filling Provider Tax ID "${taxId}" directly.`);
+    const frame = await clearProviderStateForTaxIdFallback(page, { context: `${payerLabel} Service Dates Tax ID fallback`, logger: options.logger || logger });
+    await fillServiceDateProviderTaxId(frame, taxId, options);
+  }
+}
+
 async function selectServiceDateTab(page, payerLabel = "Availity") {
   await withRetry(
     `Selecting ${payerLabel} Service Dates tab`,
@@ -71,36 +200,32 @@ async function selectServiceDateTab(page, payerLabel = "Availity") {
   );
 }
 
-async function selectServiceDateProvider(page, providerName, payerLabel = "Availity") {
+async function selectServiceDateRequestedStatus(page, requestedStatus, payerLabel = "Availity") {
   await withRetry(
-    `Selecting ${payerLabel} provider ${providerName}`,
+    `Selecting ${payerLabel} Requested Status ${requestedStatus}`,
     async () => {
       const frame = await getClaimStatusFrame(page);
-      const providerLabel = frame.getByText("Select a Provider", { exact: true }).first();
-      const providerInput = providerLabel.locator("xpath=ancestor::*[self::div or self::label][1]/following::input[@role='combobox'][1]");
-      await providerInput.waitFor({ state: "visible", timeout: 15000 });
-      await selectAutocompleteOption(frame, providerInput, providerName);
+      const requestedStatusInput = frame.locator("input#requestedStatus").first();
+      await requestedStatusInput.waitFor({ state: "visible", timeout: 10000 });
 
-      const npiRadio = frame.locator(SERVICE_DATE_SELECTORS.providerNpiRadio).first();
-      if (await npiRadio.isVisible({ timeout: 3000 }).catch(() => false)) {
-        const isChecked = await npiRadio.isChecked({ timeout: 500 }).catch(() => false);
-        if (!isChecked) {
-          await npiRadio.setChecked(true, { force: true }).catch(async () => {
-            await frame.getByText("Provider NPI", { exact: true }).click({ force: true });
-          });
-        }
+      const currentValue = await requestedStatusInput.inputValue({ timeout: 2000 }).catch(() => "");
+      if (currentValue.trim().toUpperCase() === String(requestedStatus || "").trim().toUpperCase()) {
+        logger.info(`${payerLabel} Requested Status is already ${requestedStatus}.`);
+        return;
       }
 
+      await selectAutocompleteOption(frame, requestedStatusInput, requestedStatus);
       await frame.waitForFunction(
-        () => {
-          const input = document.querySelector("input#providerNpi[name='providerNpi']");
-          return input && input.value && input.value.trim().length > 0;
+        (expectedStatus) => {
+          const input = document.querySelector("input#requestedStatus");
+          return input && input.value && input.value.trim().toUpperCase() === expectedStatus;
         },
-        null,
-        { timeout: 10000 }
+        String(requestedStatus || "").trim().toUpperCase(),
+        { timeout: 5000 }
       );
+      logger.info(`${payerLabel} Requested Status selected as ${requestedStatus}.`);
     },
-    { retries: 2, retryDelayMs: 1200 }
+    { retries: 1, retryDelayMs: 1000 }
   );
 }
 
@@ -236,26 +361,6 @@ async function submitServiceDateSearch(page, payerLabel = "Availity") {
   );
 }
 
-async function searchServiceDatesWithProvider(page, providerName, rowData, options = {}) {
-  const payerLabel = options.payerLabel || "Availity";
-  logger.info(`${payerLabel} Service Dates provider attempt: ${providerName}`);
-  await selectServiceDateTab(page, payerLabel);
-  const selectProvider = (targetPage, targetProviderName) => selectServiceDateProvider(targetPage, targetProviderName, payerLabel);
-  const submitSearch = (targetPage) => submitServiceDateSearch(targetPage, payerLabel);
-  if (await submitCharmSearchWithProvider(page, providerName, rowData, {
-    projectId: options.projectId,
-    context: `Charm ${payerLabel} Service Dates`,
-    logger,
-    providerMode: options.providerMode,
-    selectProvider,
-    fillSearchForm: fillServiceDateSearchForm,
-    submitSearch,
-  })) return;
-  await selectProvider(page, providerName);
-  await fillServiceDateSearchForm(page, rowData);
-  await submitSearch(page);
-}
-
 async function readColumnHeaders(frame) {
   const headers = await frame.locator("thead th").evaluateAll((nodes) => nodes.map((node) => node.textContent || "")).catch(() => []);
   return headers.map((header) => header.replace(/\s+/g, " ").trim().toLowerCase());
@@ -327,14 +432,27 @@ async function readServiceDateResultRows(page) {
 
 module.exports = {
   SERVICE_DATE_SELECTORS,
+  cellByAnyHeader,
+  cellByHeader,
+  clearServiceDateProviderInput,
+  digitsOnly,
+  extractProviderTaxId,
+  fillDateByLabel,
+  fillServiceDateProviderTaxId,
   fillServiceDateSearchForm,
+  getInputProviderTaxId,
+  getServiceDateProviderInput,
   hasUsableValue,
   normalizeMemberId,
   normalizePatientName,
   normalizePatientNameWithoutInitial,
+  parseDateValue,
+  readColumnHeaders,
   readServiceDateResultRows,
-  searchServiceDatesWithProvider,
-  selectServiceDateProvider,
+  selectAutocompleteOption,
+  selectServiceDateProviderOrFillTaxId,
+  selectServiceDateProviderWithTaxId,
+  selectServiceDateRequestedStatus,
   selectServiceDateTab,
   submitServiceDateSearch
 };

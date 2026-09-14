@@ -3,15 +3,21 @@
 const logger = require("../utils/logger");
 const { PROVIDERS } = require("../pages/claim-status-member.page");
 const {
+  fillServiceDateSearchForm,
   hasUsableValue,
   normalizeMemberId,
   normalizePatientName,
   normalizePatientNameWithoutInitial,
   readServiceDateResultRows,
-  searchServiceDatesWithProvider,
+  selectServiceDateProviderOrFillTaxId,
+  selectServiceDateRequestedStatus,
+  selectServiceDateTab,
+  submitServiceDateSearch,
 } = require("../pages/service-dates.page");
+const { submitCharmSearchAfterProviderDropdown, trySubmitCharmSearchWithoutProviderDropdown } = require("../pages/charm-provider-search.page");
+const { fillInputProviderIdentifiers } = require("../pages/provider-identifiers.page");
 const { normalizeMoney, normalizeDateText, waitForSearchResultsToSettle } = require("../pages/results.page");
-const { returnToResults } = require("../pages/claim-detail.page");
+const { extractInProcess, returnToResults, waitForClaimDetailPage } = require("../pages/claim-detail.page");
 const { renderClaimSummary, renderFailedSummary } = require("../services/summary-renderer");
 const { buildMatchDetails } = require("../services/match-details");
 const { extractBracketedPatientId } = require("../services/patient-identity");
@@ -37,6 +43,57 @@ function selectLatestFinalizedMatchedRows(matchedRows, sourceTab, matchLabel) {
   return {
     selectedRows: [selectedRow],
     notes: `${matchedRows.length} ${sourceTab} rows matched ${matchLabel}. Selected latest finalized date ${selectedRow.finalizedDate} for claim ${selectedRow.claimNumber || "blank"}.`,
+  };
+}
+
+function createServiceDateDetailExtractor(definition) {
+  const payerLabel = definition.payerLabel || "Availity";
+  const paidExtractor = definition.extractPaid;
+  const deniedExtractor = definition.extractDenied;
+  const inProcessExtractor = definition.extractInProcess || extractInProcess;
+
+  return async function extractServiceDateMatchedRow(page, matchedRow) {
+    logger.info(
+      `Preparing to extract ${payerLabel} matched row: claim="${matchedRow.claimNumber}", status="${matchedRow.status.display}", service_date="${matchedRow.serviceDate}", billed="${matchedRow.billedAmount}", member_id="${matchedRow.memberId}"`
+    );
+
+    if (matchedRow.status.type === "unsupported") {
+      return {
+        type: "unsupported",
+        claimNumber: matchedRow.claimNumber,
+        claimStatus: matchedRow.status.display,
+      };
+    }
+
+    await matchedRow.row.click();
+    logger.info(`Clicked ${payerLabel} matched result row for claim ${matchedRow.claimNumber}. Waiting for detail page.`);
+    await page.waitForLoadState("domcontentloaded").catch(() => {});
+    await waitForClaimDetailPage(page);
+    logger.success(`${payerLabel} detail page loaded for claim ${matchedRow.claimNumber}`);
+
+    if (matchedRow.status.type === "in_process") {
+      const extracted = await inProcessExtractor(page, matchedRow.status.display);
+      extracted.claimNumber = extracted.claimNumber || matchedRow.claimNumber;
+      return extracted;
+    }
+
+    if (matchedRow.status.type === "paid" && typeof paidExtractor === "function") {
+      const extracted = await paidExtractor(page, matchedRow.status.display);
+      extracted.claimNumber = extracted.claimNumber || matchedRow.claimNumber;
+      return extracted;
+    }
+
+    if (matchedRow.status.type === "denied" && typeof deniedExtractor === "function") {
+      const extracted = await deniedExtractor(page, matchedRow.status.display);
+      extracted.claimNumber = extracted.claimNumber || matchedRow.claimNumber;
+      return extracted;
+    }
+
+    return {
+      type: "unsupported",
+      claimNumber: matchedRow.claimNumber,
+      claimStatus: matchedRow.status.display,
+    };
   };
 }
 
@@ -249,7 +306,7 @@ async function runServiceDateProviderSearch(page, row, options = {}) {
   const providerOrder = Array.isArray(options.providerOrder) && options.providerOrder.length
     ? options.providerOrder
     : PROVIDERS;
-  const searchWithProvider = options.searchWithProvider || searchServiceDatesWithProvider;
+  const searchWithProvider = options.searchWithProvider || createServiceDateProviderSearch(options);
   const readResultRows = options.readResultRows || readServiceDateResultRows;
 
   let lastProviderFailure = "";
@@ -293,12 +350,74 @@ async function runServiceDateProviderSearch(page, row, options = {}) {
   };
 }
 
+function createServiceDateProviderSearch(definition = {}) {
+  const payerLabel = definition.payerLabel || "Availity";
+  const baseFillSearchForm = definition.fillSearchForm || fillServiceDateSearchForm;
+  const submitSearch = (targetPage) => submitServiceDateSearch(targetPage, payerLabel);
+
+  async function fillSearchForm(targetPage, rowData) {
+    await baseFillSearchForm(targetPage, rowData);
+    if (definition.requestedStatusValue) {
+      await selectServiceDateRequestedStatus(targetPage, definition.requestedStatusValue, payerLabel);
+    }
+  }
+
+  return async function searchServiceDateProvider(page, providerName, rowData, options = {}) {
+    logger.info(`${payerLabel} Service Dates provider attempt: ${providerName}`);
+    await selectServiceDateTab(page, payerLabel);
+
+    const charmContext = `Charm ${payerLabel} Service Dates`;
+    if (await trySubmitCharmSearchWithoutProviderDropdown(page, rowData, {
+      projectId: options.projectId,
+      context: charmContext,
+      logger,
+      providerMode: options.providerMode,
+      fillSearchForm,
+      submitSearch,
+    })) return;
+
+    if (options.projectId === "charm" && options.providerMode === "none") {
+      throw new Error(`${charmContext} providerMode "none" skips Select a Provider, but required provider fields could not be filled directly from claim data.`);
+    }
+
+    await selectServiceDateProviderOrFillTaxId(page, providerName, rowData, {
+      ...options,
+      ...(definition.providerSelectionOptions || {}),
+      payerLabel,
+      logger,
+    });
+
+    if (await submitCharmSearchAfterProviderDropdown(page, rowData, {
+      projectId: options.projectId,
+      context: charmContext,
+      logger,
+      providerMode: options.providerMode,
+      providerDropdownSelected: true,
+      fillSearchForm,
+      submitSearch,
+    })) return;
+
+    if (definition.fillNonCharmInputProviderIdentifiers && options.projectId !== "charm") {
+      await fillInputProviderIdentifiers(page, rowData, {
+        charmRequiredOnly: false,
+        logger,
+      });
+    }
+
+    await fillSearchForm(page, rowData);
+    await submitSearch(page);
+  };
+}
+
 function createServiceDateWorkflow(definition) {
+  const searchWithProvider = definition.searchWithProvider || createServiceDateProviderSearch(definition);
+
   async function processClaim(page, row, options = {}) {
     logger.info(`Using ${definition.payerLabel} workflow: Service Dates tab only.`);
     return runServiceDateProviderSearch(page, row, {
       ...options,
       ...definition,
+      searchWithProvider,
     });
   }
 
@@ -309,6 +428,8 @@ function createServiceDateWorkflow(definition) {
 }
 
 module.exports = {
+  createServiceDateDetailExtractor,
+  createServiceDateProviderSearch,
   createServiceDateWorkflow,
   processServiceDateResults,
   runServiceDateProviderSearch,
