@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import Image from "next/image";
 import { motion } from "framer-motion";
@@ -34,6 +34,8 @@ import { UhcInputForm } from "./portals/uhc/UhcInputForm";
 import { getCognitoAccessToken, isCognitoMode, redirectToCognitoLogin, redirectToCognitoLogout, storeCognitoTokenFromHash } from "../../api/cognito-auth";
 import { ActiveWorkflowRunsPanel } from "../../components/workflow-runs/ActiveWorkflowRunsPanel";
 import { WorkflowOutputsPanel } from "../../components/workflow-runs/WorkflowOutputsPanel";
+import { HealthNetInputForm } from "./portals/healthnet/HealthNetInputForm";
+import { MediCalInputForm } from "./portals/medi-cal/MediCalInputForm";
 import { IehpInputForm } from "./portals/iehp/IehpInputForm";
 import { TriZettoInputForm } from "./portals/trizetto/TriZettoInputForm";
 import { NoridianInputForm } from "./portals/noridian/NoridianInputForm";
@@ -59,8 +61,8 @@ const eligibilityProjects = [
   },
   {
     id: "medrevenue",
-    name: "MedRevenue",
-    description: "Runs Medicare eligibility verification through the isolated Noridian workflow.",
+    name: "MedRevenu",
+    description: "Runs eligibility verification through the selected MedRevenu portal.",
     configured: true,
   },
 ] as const;
@@ -173,7 +175,7 @@ export function EligibilityPage() {
       setOtpRequest({ inputName: event.inputName, label: event.label || "Verification code", message: event.message || "Enter the verification code." });
       setStatus(event.message || "Enter the verification code.");
     }
-    if ((event.type === "eligibility_availity_result" || event.type === "eligibility_uhc_result" || event.type === "eligibility_waystar_result" || event.type === "eligibility_iehp_result" || event.type === "eligibility_trizetto_result" || event.type === "eligibility_noridian_result") && event.update) {
+    if ((event.type === "eligibility_availity_result" || event.type === "eligibility_uhc_result" || event.type === "eligibility_waystar_result" || event.type === "eligibility_healthnet_result" || event.type === "eligibility_medical_result" || event.type === "eligibility_iehp_result" || event.type === "eligibility_trizetto_result" || event.type === "eligibility_noridian_result") && event.update) {
       const result = Object.fromEntries(
         Object.entries(event.update).map(([key, value]) => [key, value == null ? "" : String(value)]),
       );
@@ -295,7 +297,7 @@ export function EligibilityPage() {
       await submitAutomationJobInput({ jobId, inputName: otpRequest.inputName, value: otpValue.trim() });
       setOtpRequest(null);
       setOtpValue("");
-      setStatus(portal?.id === "trizetto" ? "TriZetto verification code submitted." : "Noridian verification code submitted.");
+      setStatus(portal?.id === "healthnet" ? "Health Net verification code submitted." : portal?.id === "trizetto" ? "TriZetto verification code submitted." : "Noridian verification code submitted.");
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Unable to submit the verification code.");
     }
@@ -400,9 +402,9 @@ export function EligibilityPage() {
                   <div className="mt-6 flex items-end justify-between gap-4">
                     <div>
                       <p className="text-[0.7rem] font-semibold uppercase tracking-[0.22em] text-sky-600">Portal Selection</p>
-                      <h2 className="mt-2 text-xl font-semibold text-slate-950">{projectId === "minimax" ? "Minimax" : "MedRevenue"} portals</h2>
+                      <h2 className="mt-2 text-xl font-semibold text-slate-950">{projectId === "minimax" ? "Minimax" : "MedRevenu"} portals</h2>
                     </div>
-                    <span className="rounded-full bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700">Project: {projectId === "minimax" ? "Minimax" : "MedRevenue"}</span>
+                    <span className="rounded-full bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700">Project: {projectId === "minimax" ? "Minimax" : "MedRevenu"}</span>
                   </div>
                   <div className="mt-6 grid gap-4 md:grid-cols-2">
                     {getEligibilityPortalsForProject(projectId).map((item) => (
@@ -475,7 +477,7 @@ export function EligibilityPage() {
                       })}
                     </div>
                   </div>
-                  {portal.id === "iehp" ? <IehpInputForm inputFile={inputFile} credentialFile={credentialFile} isRunning={isRunning} canStart={canStart && projectId === "medrevenue"} onInputFileChange={setInputFile} onCredentialFileChange={setCredentialFile} onSubmit={start} onCancel={cancel} /> : portal.id === "trizetto" ? <TriZettoInputForm inputFile={inputFile} credentialFile={credentialFile} isRunning={isRunning} canStart={canStart && projectId === "medrevenue"} onInputFileChange={setInputFile} onCredentialFileChange={setCredentialFile} onSubmit={start} onCancel={cancel} /> : portal.id === "noridian" ? <NoridianInputForm inputFile={inputFile} credentialFile={credentialFile} isRunning={isRunning} canStart={canStart && projectId === "medrevenue"} onInputFileChange={setInputFile} onCredentialFileChange={setCredentialFile} onSubmit={start} onCancel={cancel} /> : portal.id === "uhc" ? <UhcInputForm inputFile={inputFile} credentialFile={credentialFile} isRunning={isRunning} canStart={canStart && projectId === "minimax"} onInputFileChange={setInputFile} onCredentialFileChange={setCredentialFile} onSubmit={start} onCancel={cancel} /> : portal.id === "availity" ? <AvailityInputForm inputFile={inputFile} credentialFile={credentialFile} isRunning={isRunning} canStart={canStart && projectId === "minimax"} onInputFileChange={setInputFile} onCredentialFileChange={setCredentialFile} onSubmit={start} onCancel={cancel} /> : <WaystarInputForm inputFile={inputFile} credentialFile={credentialFile} isRunning={isRunning} canStart={canStart} onInputFileChange={setInputFile} onCredentialFileChange={setCredentialFile} onSubmit={start} onCancel={cancel} />}
+                  {portal.id === "medical" ? <MediCalInputForm inputFile={inputFile} credentialFile={credentialFile} isRunning={isRunning} canStart={canStart && projectId === "medrevenue"} onInputFileChange={setInputFile} onCredentialFileChange={setCredentialFile} onSubmit={start} onCancel={cancel} /> : portal.id === "healthnet" ? <HealthNetInputForm inputFile={inputFile} credentialFile={credentialFile} isRunning={isRunning} canStart={canStart && projectId === "medrevenue"} onInputFileChange={setInputFile} onCredentialFileChange={setCredentialFile} onSubmit={start} onCancel={cancel} /> : portal.id === "iehp" ? <IehpInputForm inputFile={inputFile} credentialFile={credentialFile} isRunning={isRunning} canStart={canStart && projectId === "medrevenue"} onInputFileChange={setInputFile} onCredentialFileChange={setCredentialFile} onSubmit={start} onCancel={cancel} /> : portal.id === "trizetto" ? <TriZettoInputForm inputFile={inputFile} credentialFile={credentialFile} isRunning={isRunning} canStart={canStart && projectId === "medrevenue"} onInputFileChange={setInputFile} onCredentialFileChange={setCredentialFile} onSubmit={start} onCancel={cancel} /> : portal.id === "noridian" ? <NoridianInputForm inputFile={inputFile} credentialFile={credentialFile} isRunning={isRunning} canStart={canStart && projectId === "medrevenue"} onInputFileChange={setInputFile} onCredentialFileChange={setCredentialFile} onSubmit={start} onCancel={cancel} /> : portal.id === "uhc" ? <UhcInputForm inputFile={inputFile} credentialFile={credentialFile} isRunning={isRunning} canStart={canStart && projectId === "minimax"} onInputFileChange={setInputFile} onCredentialFileChange={setCredentialFile} onSubmit={start} onCancel={cancel} /> : portal.id === "availity" ? <AvailityInputForm projectId={projectId} inputFile={inputFile} credentialFile={credentialFile} isRunning={isRunning} canStart={canStart} onInputFileChange={setInputFile} onCredentialFileChange={setCredentialFile} onSubmit={start} onCancel={cancel} /> : <WaystarInputForm inputFile={inputFile} credentialFile={credentialFile} isRunning={isRunning} canStart={canStart} onInputFileChange={setInputFile} onCredentialFileChange={setCredentialFile} onSubmit={start} onCancel={cancel} />}
                 </div>
                 {otpRequest ? <div className="mt-5 rounded-[1.4rem] border border-amber-200 bg-amber-50 p-5"><p className="font-semibold text-slate-950">{otpRequest.label}</p><p className="mt-1 text-sm text-slate-600">{otpRequest.message}</p><div className="mt-3 flex gap-3"><input value={otpValue} onChange={(event) => setOtpValue(event.target.value)} className="min-w-0 flex-1 rounded-xl border border-amber-300 bg-white px-3 py-2 text-sm" placeholder="Enter code" /><button type="button" onClick={submitOtp} disabled={!otpValue.trim()} className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">Submit code</button></div></div> : null}
                 <div className="mt-5"><WaystarResultView isWaystar={portal.id === "waystar"} isRunning={isRunning} hasCompleted={hasCompleted} status={status} logs={logs} errorScreenshots={errorScreenshots} progress={progress} downloads={downloads} resultRows={resultRows} onDownload={downloadBase64File} /></div>

@@ -21,7 +21,7 @@ export function TriZettoInputForm(props: Props) {
       </div>
       <div className="grid gap-4 lg:grid-cols-2">
         <PortalUploadCard mode="file" accept=".xlsx,.xls" acceptedFormats=".xlsx, .xls" description="Upload the TriZetto login workbook containing Username, Password, and Link (login URL)." fileName={props.credentialFile?.name} icon={KeyRound} inputId="trizettoEligibilityCredentials" onFileSelect={props.onCredentialFileChange} sizeHint="25 MB" title="Upload TriZetto Login File" />
-        <PortalUploadCard mode="file" accept=".xlsx,.xls" acceptedFormats=".xlsx, .xls" description="Upload the MedRevenue eligibility workbook containing Primary Insurance Name, Primary Insurance ID#, Patient Name, DOB, and DOS." fileName={props.inputFile?.name} icon={FileSpreadsheet} inputId="trizettoEligibilityInput" onFileSelect={props.onInputFileChange} sizeHint="25 MB" title="Upload Eligibility File" />
+        <PortalUploadCard mode="file" accept=".xlsx,.xls" acceptedFormats=".xlsx, .xls" description="Upload the MedRevenu eligibility workbook containing Primary Insurance Name, Primary Insurance ID#, Patient Name, DOB, and DOS." fileName={props.inputFile?.name} icon={FileSpreadsheet} inputId="trizettoEligibilityInput" onFileSelect={props.onInputFileChange} sizeHint="25 MB" title="Upload Eligibility File" />
       </div>
       <div className="flex flex-wrap gap-3">
         <button type="submit" disabled={!props.canStart} className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50">

@@ -71,6 +71,7 @@ export function isRetryableDbError(error: unknown): boolean {
     "cannot use a pool after calling end on the pool",
     "cannot use a pool after calling end",
     "connection timeout",
+    "timeout exceeded when trying to connect",
     "connection terminated",
     "terminating connection",
     "query read timeout",

@@ -44,7 +44,7 @@ function summarizeLaunchError(error: unknown): string {
   return firstLine.length > 500 ? `${firstLine.slice(0, 500)}...` : firstLine;
 }
 
-async function launchLocalBrowser(headless: boolean): Promise<Browser> {
+async function launchLocalBrowser(headless: boolean, extraArgs: string[] = []): Promise<Browser> {
   const executablePath = String(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || "").trim();
   const browserChannel = String(process.env.AUTOMATION_BROWSER_CHANNEL || "").trim();
   const attempts: Array<{ label: string; options: LaunchOptions }> = [];
@@ -72,6 +72,7 @@ async function launchLocalBrowser(headless: boolean): Promise<Browser> {
   const failures: string[] = [];
 
   for (const attempt of attempts) {
+    attempt.options.args = [...(attempt.options.args ?? []), ...extraArgs];
     const key = JSON.stringify(attempt.options);
     if (seen.has(key)) continue;
     seen.add(key);
@@ -89,12 +90,12 @@ async function launchLocalBrowser(headless: boolean): Promise<Browser> {
   );
 }
 
-export async function launchAutomationBrowser(options: { headless?: boolean } = {}): Promise<BrowserLaunchResult> {
+export async function launchAutomationBrowser(options: { headless?: boolean; extraArgs?: string[] } = {}): Promise<BrowserLaunchResult> {
   const runtimeConfig = getAutomationRuntimeConfig();
   const headless = options.headless ?? runtimeConfig.headless;
   if (runtimeConfig.environment === "vercel") {
     const browser = await playwright.launch({
-      args: [...chromium.args, ...AUTOMATION_LAUNCH_ARGS],
+      args: [...chromium.args, ...AUTOMATION_LAUNCH_ARGS, ...(options.extraArgs ?? [])],
       executablePath: await chromium.executablePath(),
       headless: true,
     });
@@ -110,7 +111,7 @@ export async function launchAutomationBrowser(options: { headless?: boolean } = 
     return { browser, context };
   }
 
-  const browser = await launchLocalBrowser(headless);
+  const browser = await launchLocalBrowser(headless, options.extraArgs);
   const context = await browser.newContext({
     acceptDownloads: true,
     viewport: DESKTOP_VIEWPORT,

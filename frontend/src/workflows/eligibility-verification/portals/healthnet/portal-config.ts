@@ -1,0 +1,1 @@
+export const healthnetEligibilityFrontendPortalConfig = { id: "healthnet", name: "Health Net", description: "MedRevenu Health Net eligibility verification with text message verification.", supportedPayers: ["Health Net"], projects: ["medrevenue"] as const } as const;

@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { runDbWithRetry } from "@/db";
 import {
   automationJobArtifacts,
@@ -275,4 +275,27 @@ export async function updateAutomationJob(params: {
       })
       .where(eq(automationJobs.jobId, params.jobId)),
   );
+}
+
+// List polling needs summaries only; never hydrate every job's logs/artifacts.
+export async function listAutomationJobSummariesForUser(userId: string, limit = 25) {
+  const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(Math.trunc(limit), 100)) : 25;
+  return runDbWithRetry((db) => db.select({
+    jobId: automationJobs.jobId,
+    workflowId: automationJobs.workflowId,
+    portalId: automationJobs.portalId,
+    payerId: automationJobs.payerId,
+    status: automationJobs.status,
+    currentCompleted: automationJobs.currentCompleted,
+    totalItems: automationJobs.totalItems,
+    primaryInputFileName: automationJobs.primaryInputFileName,
+    credentialFileName: automationJobs.credentialFileName,
+    createdAt: automationJobs.createdAt,
+    updatedAt: automationJobs.updatedAt,
+    finishedAt: automationJobs.finishedAt,
+    artifactCount: sql<number>`(select count(*) from ${automationJobArtifacts} where ${automationJobArtifacts.jobId} = ${automationJobs.jobId})`.mapWith(Number),
+  }).from(automationJobs)
+    .where(eq(automationJobs.userId, userId))
+    .orderBy(desc(automationJobs.updatedAt))
+    .limit(safeLimit));
 }

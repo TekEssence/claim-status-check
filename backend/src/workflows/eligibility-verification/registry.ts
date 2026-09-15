@@ -1,3 +1,5 @@
+import { createMediCalEligibilityRunner } from "./portals/medi-cal/scraper";
+import { createHealthNetEligibilityRunner } from "./portals/healthnet/scraper";
 import { createIehpEligibilityRunner } from "./portals/iehp/scraper";
 import { UnknownPortalError } from "../../core/errors";
 import type { AutomationRunner } from "../types";
@@ -12,6 +14,8 @@ export const eligibilityPortalRegistry = {
   uhc: createUhcEligibilityRunner,
   waystar: createWaystarRunner,
   noridian: createNoridianEligibilityRunner,
+  medical: createMediCalEligibilityRunner,
+  healthnet: createHealthNetEligibilityRunner,
   iehp: createIehpEligibilityRunner,
   trizetto: createTriZettoEligibilityRunner,
 } satisfies Record<string, (payerId?: string) => AutomationRunner>;
