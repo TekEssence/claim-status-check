@@ -224,7 +224,7 @@ export function LoginPage() {
   }
 
   return (
-    <main className="relative h-screen overflow-hidden bg-[#f3f8ff] text-slate-950">
+    <main className="relative h-screen overflow-y-auto overflow-x-hidden bg-[#f3f8ff] text-slate-950 lg:overflow-hidden">
       <div className="pointer-events-none absolute inset-0 overflow-hidden">
         <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,_rgba(255,255,255,0.96)_0%,_rgba(239,246,255,0.96)_42%,_rgba(226,237,255,0.94)_100%)]" />
         <div className="absolute -top-24 right-[-10rem] h-[24rem] w-[24rem] rounded-full bg-[radial-gradient(circle,_rgba(37,99,235,0.92)_0%,_rgba(59,130,246,0.6)_38%,_rgba(59,130,246,0)_70%)] blur-xl" />
@@ -232,7 +232,7 @@ export function LoginPage() {
         <div className="absolute left-[-5rem] top-[22%] h-[14rem] w-[14rem] rounded-full bg-[radial-gradient(circle,_rgba(220,242,255,0.92)_0%,_rgba(220,242,255,0)_72%)]" />
       </div>
 
-      <div className="relative mx-auto flex h-screen max-w-[1600px] flex-col lg:flex-row">
+      <div className="relative mx-auto flex min-h-screen max-w-[1600px] flex-col lg:h-screen lg:flex-row">
         <section className="relative flex w-full flex-col px-6 pb-4 pt-4 sm:px-8 md:px-10 lg:w-[54%] lg:px-12 lg:pb-6 lg:pt-5 xl:px-16">
           <DecorativeMedicalLayer />
 
@@ -337,7 +337,7 @@ export function LoginPage() {
             initial={{ opacity: 0, x: 28, y: 18, scale: 0.985 }}
             animate={{ opacity: 1, x: 0, y: 0, scale: 1 }}
             transition={{ duration: 0.78, ease: [0.22, 1, 0.36, 1] }}
-            className="relative w-full max-w-[30rem] rounded-[1.8rem] border border-white/70 bg-white/78 p-5 shadow-[0_28px_80px_rgba(84,114,164,0.18)] backdrop-blur-2xl sm:p-6 lg:rounded-[2rem] lg:p-7 [@media(max-height:820px)]:max-w-[28rem] [@media(max-height:820px)]:p-5"
+            className="relative w-full max-w-[30rem] rounded-[1.8rem] border border-white/70 bg-white/78 p-5 shadow-[0_28px_80px_rgba(84,114,164,0.18)] backdrop-blur-2xl sm:p-6 lg:rounded-[2rem] lg:p-7 [@media(max-height:900px)]:max-w-[28rem] [@media(max-height:900px)]:p-5"
           >
             <div className="absolute inset-x-12 top-0 h-px bg-[linear-gradient(90deg,transparent,rgba(37,99,235,0.2),transparent)]" />
 
@@ -346,9 +346,9 @@ export function LoginPage() {
               animate="visible"
               variants={reveal}
               custom={0.12}
-              className="mx-auto flex h-20 w-20 items-center justify-center rounded-full bg-[radial-gradient(circle_at_30%_30%,rgba(255,255,255,0.98),rgba(226,239,255,0.95)_72%)] text-[#2552c8] shadow-[inset_0_1px_1px_rgba(255,255,255,0.9),0_18px_42px_rgba(117,149,196,0.16)] sm:h-24 sm:w-24"
+              className="mx-auto flex h-20 w-20 items-center justify-center rounded-full bg-[radial-gradient(circle_at_30%_30%,rgba(255,255,255,0.98),rgba(226,239,255,0.95)_72%)] text-[#2552c8] shadow-[inset_0_1px_1px_rgba(255,255,255,0.9),0_18px_42px_rgba(117,149,196,0.16)] sm:h-24 sm:w-24 [@media(max-height:900px)]:h-14 [@media(max-height:900px)]:w-14"
             >
-              <Stethoscope className="h-10 w-10 sm:h-12 sm:w-12" strokeWidth={1.9} />
+              <Stethoscope className="h-10 w-10 sm:h-12 sm:w-12 [@media(max-height:900px)]:h-7 [@media(max-height:900px)]:w-7" strokeWidth={1.9} />
             </motion.div>
 
             <motion.div
@@ -356,12 +356,12 @@ export function LoginPage() {
               animate="visible"
               variants={reveal}
               custom={0.18}
-              className="mt-3 text-center"
+              className="mt-3 text-center [@media(max-height:900px)]:mt-2"
             >
-              <h2 className="text-[1.8rem] font-bold tracking-[-0.05em] text-slate-950 sm:text-[2.15rem]">
+              <h2 className="text-[1.8rem] font-bold tracking-[-0.05em] text-slate-950 sm:text-[2.15rem] [@media(max-height:900px)]:text-[1.55rem]">
                 Welcome Back
               </h2>
-              <p className="mt-2 text-sm text-slate-600 sm:text-base">
+              <p className="mt-2 text-sm text-slate-600 sm:text-base [@media(max-height:900px)]:mt-1 [@media(max-height:900px)]:text-xs">
                 {signupMode
                   ? signupCodeSent
                     ? "Confirm your account with your email code"
@@ -378,7 +378,7 @@ export function LoginPage() {
               variants={reveal}
               custom={0.24}
               onSubmit={onSubmit}
-              className="mt-6 space-y-4"
+              className="mt-6 space-y-4 [@media(max-height:900px)]:mt-4 [@media(max-height:900px)]:space-y-3"
             >
               <InputField
                 label="Email"
@@ -522,7 +522,7 @@ export function LoginPage() {
                 whileTap={{ scale: 0.99 }}
                 type="submit"
                 disabled={submitting}
-                className="flex h-12 w-full items-center justify-center gap-3 rounded-[1rem] bg-[linear-gradient(90deg,#1f8bff_0%,#2563eb_44%,#2347ef_100%)] text-base font-semibold text-white shadow-[0_18px_40px_rgba(37,99,235,0.28)] transition hover:shadow-[0_22px_46px_rgba(37,99,235,0.35)]"
+                className="flex h-12 w-full items-center justify-center gap-3 rounded-[1rem] bg-[linear-gradient(90deg,#1f8bff_0%,#2563eb_44%,#2347ef_100%)] text-base font-semibold text-white shadow-[0_18px_40px_rgba(37,99,235,0.28)] transition hover:shadow-[0_22px_46px_rgba(37,99,235,0.35)] [@media(max-height:900px)]:h-10 [@media(max-height:900px)]:rounded-[0.85rem] [@media(max-height:900px)]:text-sm"
               >
                 <Lock className="h-5 w-5" strokeWidth={2.15} />
                 {submitting
@@ -563,7 +563,7 @@ export function LoginPage() {
               animate="visible"
               variants={reveal}
               custom={0.3}
-              className="mt-5 rounded-[1.2rem] border border-sky-100 bg-[linear-gradient(180deg,rgba(243,248,255,0.95)_0%,rgba(233,242,255,0.92)_100%)] p-3.5 shadow-[0_14px_30px_rgba(128,153,189,0.12)] [@media(max-height:820px)]:hidden"
+              className="mt-5 rounded-[1.2rem] border border-sky-100 bg-[linear-gradient(180deg,rgba(243,248,255,0.95)_0%,rgba(233,242,255,0.92)_100%)] p-3.5 shadow-[0_14px_30px_rgba(128,153,189,0.12)] [@media(max-height:900px)]:hidden"
             >
               <div className="flex items-start gap-4">
                 <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-[linear-gradient(180deg,#e2fbf7_0%,#c4f1e8_100%)] text-emerald-600">
@@ -583,7 +583,7 @@ export function LoginPage() {
               animate="visible"
               variants={reveal}
               custom={0.34}
-              className="mt-5 text-center text-xs text-slate-500 sm:text-sm"
+              className="mt-5 text-center text-xs text-slate-500 sm:text-sm [@media(max-height:900px)]:mt-3 [@media(max-height:900px)]:text-[0.68rem]"
             >
               Copyright 2026 Claim Status Portal. All rights reserved.
             </motion.p>
@@ -597,9 +597,9 @@ export function LoginPage() {
 function PasswordRequirements({ password }: { password: string }) {
   const missing = new Set(validatePasswordPolicy(password));
   return (
-    <div className="rounded-[1rem] border border-sky-100 bg-sky-50/70 px-4 py-3 text-sm text-slate-700">
+    <div className="rounded-[1rem] border border-sky-100 bg-sky-50/70 px-4 py-3 text-sm text-slate-700 [@media(max-height:900px)]:py-2 [@media(max-height:900px)]:text-xs">
       <p className="font-semibold text-slate-900">Password requirements</p>
-      <ul className="mt-2 space-y-1">
+      <ul className="mt-2 space-y-1 [@media(max-height:900px)]:mt-1 [@media(max-height:900px)]:space-y-0.5">
         {PASSWORD_POLICY_REQUIREMENTS.map((requirement) => (
           <li
             key={requirement}
@@ -618,7 +618,7 @@ function AuthModeLink({ onClick }: { onClick: () => void }) {
     <button
       type="button"
       onClick={onClick}
-      className="w-full text-center text-sm font-semibold text-[#2563EB] transition hover:text-blue-700"
+      className="w-full text-center text-sm font-semibold text-[#2563EB] transition hover:text-blue-700 [@media(max-height:900px)]:text-xs"
     >
       Back to login
     </button>
@@ -644,17 +644,17 @@ function InputField({
 }) {
   return (
     <label className="block">
-      <span className="mb-3 block text-[0.98rem] font-semibold text-slate-900">
+      <span className="mb-3 block text-[0.98rem] font-semibold text-slate-900 [@media(max-height:900px)]:mb-2 [@media(max-height:900px)]:text-sm">
         {label}
       </span>
-      <div className="flex h-14 items-center gap-3 rounded-[1rem] border border-[#d5e3f4] bg-white/92 px-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.7),0_10px_28px_rgba(187,203,226,0.08)] transition duration-200 hover:border-[#bfd3ee] focus-within:border-[#93c5fd] focus-within:shadow-[0_0_0_4px_rgba(37,99,235,0.08)]">
+      <div className="flex h-14 items-center gap-3 rounded-[1rem] border border-[#d5e3f4] bg-white/92 px-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.7),0_10px_28px_rgba(187,203,226,0.08)] transition duration-200 hover:border-[#bfd3ee] focus-within:border-[#93c5fd] focus-within:shadow-[0_0_0_4px_rgba(37,99,235,0.08)] [@media(max-height:900px)]:h-11 [@media(max-height:900px)]:rounded-[0.85rem]">
         <span className="text-slate-500">{icon}</span>
         <input
           type={type}
           placeholder={placeholder}
           value={value}
           onChange={(event) => onChange(event.target.value)}
-          className="h-full flex-1 bg-transparent text-[1rem] text-slate-800 outline-none placeholder:text-slate-400"
+          className="h-full flex-1 bg-transparent text-[1rem] text-slate-800 outline-none placeholder:text-slate-400 [@media(max-height:900px)]:text-sm"
         />
         {trailing}
       </div>
