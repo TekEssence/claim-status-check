@@ -2,6 +2,7 @@ import Image from "next/image";
 import { Eye, EyeOff } from "lucide-react";
 import { useState, type Dispatch, type FormEventHandler, type SetStateAction } from "react";
 import claimStatusHeroImage from "../../../Assets/ChatGPT Image Jun 30, 2026, 12_47_57 PM.png";
+import { PASSWORD_POLICY_REQUIREMENTS, validatePasswordPolicy } from "@/lib/auth/password-policy";
 
 export function LoginView({
   isProtectedRoute, forgotPasswordMode, authUsername, authPassword,
@@ -92,6 +93,8 @@ if (isProtectedRoute) {
                     </button>
                   </div>
                 </div>}
+
+                {(!authUsesCognito || forgotPasswordCodeSent) && <PasswordRequirements password={authPassword} />}
 
                 {(!authUsesCognito || forgotPasswordCodeSent) && <div>
                   <label className="mb-2 block text-xs font-semibold uppercase tracking-[0.18em] text-slate-500" htmlFor="authConfirmPassword">
@@ -296,4 +299,23 @@ if (isProtectedRoute) {
         )}
       </main>
     );
+}
+
+function PasswordRequirements({ password }: { password: string }) {
+  const missing = new Set(validatePasswordPolicy(password));
+  return (
+    <div className="rounded-2xl border border-blue-100 bg-blue-50/70 px-4 py-3 text-xs text-slate-600">
+      <p className="font-semibold uppercase tracking-[0.16em] text-slate-500">Password requirements</p>
+      <ul className="mt-2 space-y-1">
+        {PASSWORD_POLICY_REQUIREMENTS.map((requirement) => (
+          <li
+            key={requirement}
+            className={password && !missing.has(requirement) ? "text-emerald-700" : "text-slate-600"}
+          >
+            {requirement}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
 }

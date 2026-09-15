@@ -10,13 +10,13 @@ export async function POST(req: Request) {
   try {
     const body = await req.json();
     if (typeof body.username !== "string" || typeof body.password !== "string") {
-      return Response.json({ error: "Username and password are required." }, { status: 400 });
+      return Response.json({ error: "Email and password are required." }, { status: 400 });
     }
 
     const normalizedLogin = body.username.trim();
     const normalizedPassword = body.password;
     if (!normalizedLogin || !normalizedPassword) {
-      return Response.json({ error: "Username and password are required." }, { status: 400 });
+      return Response.json({ error: "Email and password are required." }, { status: 400 });
     }
 
     const attemptBetterAuthLogin = async (mode: "username" | "email") => {

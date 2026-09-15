@@ -201,6 +201,25 @@ export async function confirmCognitoForgotPassword(email: string, code: string, 
   await parseAuthResponse(response);
 }
 
+export async function startCognitoSignUp(email: string, username: string, password: string, confirmPassword: string): Promise<{ userConfirmed: boolean }> {
+  const response = await fetch(cognitoApiUrl("/auth/signup/start"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, username, password, confirmPassword }),
+  });
+  const data = await parseAuthResponse(response) as { userConfirmed?: boolean };
+  return { userConfirmed: Boolean(data.userConfirmed) };
+}
+
+export async function confirmCognitoSignUp(email: string, code: string): Promise<void> {
+  const response = await fetch(cognitoApiUrl("/auth/signup/confirm"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, code }),
+  });
+  await parseAuthResponse(response);
+}
+
 export async function completeCognitoNewPassword(email: string, session: string, password: string, confirmPassword: string, remember = false): Promise<CognitoUserProfile | null> {
   const response = await fetch(cognitoApiUrl("/auth/complete-new-password"), {
     method: "POST",

@@ -51,7 +51,7 @@ function parseUserIdSequence(userId: string): number | null {
 function mapAuthUser(row: AuthUserRow): AuthUser {
   return {
     userId: row.legacyUserId || row.id,
-    username: row.username || row.email,
+    username: row.displayUsername || row.username || row.email,
     email: row.email,
     role: normalizeRole(row.role),
     mustResetPassword: row.mustResetPassword,
@@ -222,10 +222,20 @@ export async function listManagedUsers(): Promise<ManagedUser[]> {
   }));
 }
 
-export async function createManagedUser(email: string, temporaryPassword: string): Promise<AuthUser> {
-  const normalizedEmail = email.trim().toLowerCase();
+function normalizeSignupUsername(username: string): string {
+  return username.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+async function createUserWithPassword(params: {
+  email: string;
+  username: string;
+  password: string;
+  mustResetPassword: boolean;
+}): Promise<AuthUser> {
+  const normalizedEmail = params.email.trim().toLowerCase();
+  const normalizedUsername = normalizeSignupUsername(params.username);
   const userId = await generateNextUserId();
-  const passwordHash = await hashPassword(temporaryPassword);
+  const passwordHash = await hashPassword(params.password);
   const now = new Date();
 
   const rows = await runDbWithRetry(async (db) => {
@@ -234,13 +244,13 @@ export async function createManagedUser(email: string, temporaryPassword: string
       .values({
         id: userId,
         legacyUserId: userId,
-        name: normalizedEmail,
+        name: params.username.trim() || normalizedEmail,
         email: normalizedEmail,
         emailVerified: true,
-        username: normalizedEmail,
-        displayUsername: normalizedEmail,
+        username: normalizedUsername || normalizedEmail,
+        displayUsername: params.username.trim() || normalizedEmail,
         role: "USER",
-        mustResetPassword: true,
+        mustResetPassword: params.mustResetPassword,
         isActive: true,
         createdAt: now,
         updatedAt: now,
@@ -261,6 +271,24 @@ export async function createManagedUser(email: string, temporaryPassword: string
   });
 
   return mapAuthUser(rows[0]);
+}
+
+export async function createManagedUser(email: string, temporaryPassword: string): Promise<AuthUser> {
+  return createUserWithPassword({
+    email,
+    username: email,
+    password: temporaryPassword,
+    mustResetPassword: true,
+  });
+}
+
+export async function createSignupUser(email: string, username: string, password: string): Promise<AuthUser> {
+  return createUserWithPassword({
+    email,
+    username,
+    password,
+    mustResetPassword: false,
+  });
 }
 
 export async function updateManagedUserEmail(userId: string, email: string): Promise<void> {

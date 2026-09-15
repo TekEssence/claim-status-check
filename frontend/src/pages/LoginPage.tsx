@@ -15,13 +15,16 @@ import {
   User,
 } from "lucide-react";
 import {
+  confirmCognitoSignUp,
   confirmCognitoForgotPassword,
   consumeCognitoReturnPath,
   isCognitoMode,
   loginWithCognitoEmail,
+  startCognitoSignUp,
   startCognitoForgotPassword,
   storeCognitoTokenFromHash,
 } from "../api/cognito-auth";
+import { PASSWORD_POLICY_REQUIREMENTS, validatePasswordPolicy } from "@/lib/auth/password-policy";
 
 const reveal = {
   hidden: { opacity: 0, y: 24 },
@@ -41,13 +44,17 @@ export function LoginPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(true);
   const [username, setUsername] = useState("");
+  const [displayUsername, setDisplayUsername] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [verificationCode, setVerificationCode] = useState("");
+  const [signupMode, setSignupMode] = useState(false);
+  const [signupCodeSent, setSignupCodeSent] = useState(false);
   const [forgotPasswordMode, setForgotPasswordMode] = useState(false);
   const [forgotPasswordCodeSent, setForgotPasswordCodeSent] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [authError, setAuthError] = useState("");
+  const [authMessage, setAuthMessage] = useState("");
   const cognitoMode = isCognitoMode();
 
   useEffect(() => {
@@ -88,9 +95,41 @@ export function LoginPage() {
 
     setSubmitting(true);
     setAuthError("");
+    setAuthMessage("");
 
     try {
       if (cognitoMode) {
+        if (signupMode) {
+          if (!signupCodeSent) {
+            const missing = validatePasswordPolicy(password);
+            if (missing.length) {
+              throw new Error(`Password does not meet the required policy: ${missing.join(", ")}.`);
+            }
+            const signupResult = await startCognitoSignUp(username, displayUsername, password, confirmPassword);
+            if (signupResult.userConfirmed) {
+              setSignupMode(false);
+              setPassword("");
+              setConfirmPassword("");
+              setAuthMessage("Account created. You can sign in now.");
+              return;
+            }
+            setSignupCodeSent(true);
+            setPassword("");
+            setConfirmPassword("");
+            setAuthError("");
+            return;
+          }
+
+          await confirmCognitoSignUp(username, verificationCode);
+          setSignupMode(false);
+          setSignupCodeSent(false);
+          setVerificationCode("");
+          setPassword("");
+          setConfirmPassword("");
+          setAuthMessage("Account confirmed. You can sign in now.");
+          return;
+        }
+
         if (forgotPasswordMode) {
           if (!forgotPasswordCodeSent) {
             await startCognitoForgotPassword(username);
@@ -117,6 +156,50 @@ export function LoginPage() {
         }
         router.push("/portal");
         router.refresh();
+        return;
+      }
+
+      if (forgotPasswordMode) {
+        const missing = validatePasswordPolicy(password);
+        if (missing.length) {
+          throw new Error(`Password does not meet the required policy: ${missing.join(", ")}.`);
+        }
+
+        const response = await fetch("/api/auth/reset-password", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ username, password, confirmPassword }),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(data.error || "Reset password failed.");
+        }
+        setForgotPasswordMode(false);
+        setPassword("");
+        setConfirmPassword("");
+        setAuthMessage("Password updated. You can sign in now.");
+        return;
+      }
+
+      if (signupMode) {
+        const missing = validatePasswordPolicy(password);
+        if (missing.length) {
+          throw new Error(`Password does not meet the required policy: ${missing.join(", ")}.`);
+        }
+
+        const response = await fetch("/api/auth/signup", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: username, username: displayUsername, password, confirmPassword }),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(data.error || "Signup failed.");
+        }
+        setSignupMode(false);
+        setPassword("");
+        setConfirmPassword("");
+        setAuthMessage("Account created. You can sign in now.");
         return;
       }
 
@@ -279,7 +362,13 @@ export function LoginPage() {
                 Welcome Back
               </h2>
               <p className="mt-2 text-sm text-slate-600 sm:text-base">
-                {forgotPasswordMode ? "Reset your password with your email code" : "Sign in to your account to continue"}
+                {signupMode
+                  ? signupCodeSent
+                    ? "Confirm your account with your email code"
+                    : "Create your account with email verification"
+                  : forgotPasswordMode
+                    ? "Reset your password with your email code"
+                    : "Sign in to your account to continue"}
               </p>
             </motion.div>
 
@@ -292,15 +381,26 @@ export function LoginPage() {
               className="mt-6 space-y-4"
             >
               <InputField
-                label={cognitoMode ? "Email" : "Username"}
-                placeholder={cognitoMode ? "Enter your email" : "Enter your username"}
-                type={cognitoMode ? "email" : "text"}
+                label="Email"
+                placeholder="Enter your email"
+                type="email"
                 value={username}
                 onChange={setUsername}
                 icon={<User className="h-5 w-5" strokeWidth={2.1} />}
               />
 
-              {forgotPasswordMode && forgotPasswordCodeSent && (
+              {signupMode && !signupCodeSent && (
+                <InputField
+                  label="Username"
+                  placeholder="Enter a unique display username"
+                  type="text"
+                  value={displayUsername}
+                  onChange={setDisplayUsername}
+                  icon={<User className="h-5 w-5" strokeWidth={2.1} />}
+                />
+              )}
+
+              {((forgotPasswordMode && forgotPasswordCodeSent) || (signupMode && signupCodeSent)) && (
                 <InputField
                   label="Verification Code"
                   placeholder="Enter the code from email"
@@ -311,7 +411,7 @@ export function LoginPage() {
                 />
               )}
 
-              {(!forgotPasswordMode || forgotPasswordCodeSent) && (
+              {(!forgotPasswordMode || forgotPasswordCodeSent) && (!signupMode || !signupCodeSent) && (
                 <InputField
                   label={forgotPasswordMode ? "New Password" : "Password"}
                   placeholder={forgotPasswordMode ? "Enter your new password" : "Enter your password"}
@@ -336,7 +436,11 @@ export function LoginPage() {
                 />
               )}
 
-              {forgotPasswordMode && forgotPasswordCodeSent && (
+              {((forgotPasswordMode && forgotPasswordCodeSent) || (signupMode && !signupCodeSent)) && (
+                <PasswordRequirements password={password} />
+              )}
+
+              {((forgotPasswordMode && forgotPasswordCodeSent) || (signupMode && !signupCodeSent)) && (
                 <InputField
                   label="Confirm Password"
                   placeholder="Confirm your new password"
@@ -347,7 +451,7 @@ export function LoginPage() {
                 />
               )}
 
-              {!forgotPasswordMode ? (
+              {!forgotPasswordMode && !signupMode ? (
                 <div className="flex flex-col gap-4 text-sm text-slate-700 sm:flex-row sm:items-center sm:justify-between sm:text-base">
                   <label className="inline-flex cursor-pointer items-center gap-3 font-medium">
                     <button
@@ -371,11 +475,14 @@ export function LoginPage() {
                     type="button"
                     onClick={() => {
                       setForgotPasswordMode(true);
+                      setSignupMode(false);
+                      setSignupCodeSent(false);
                       setForgotPasswordCodeSent(false);
                       setPassword("");
                       setConfirmPassword("");
                       setVerificationCode("");
                       setAuthError("");
+                      setAuthMessage("");
                     }}
                     className="font-medium text-[#2563EB] transition hover:text-blue-700"
                   >
@@ -383,25 +490,30 @@ export function LoginPage() {
                   </button>
                 </div>
               ) : (
-                <button
-                  type="button"
+                <AuthModeLink
                   onClick={() => {
+                    setSignupMode(false);
+                    setSignupCodeSent(false);
                     setForgotPasswordMode(false);
                     setForgotPasswordCodeSent(false);
                     setVerificationCode("");
                     setPassword("");
                     setConfirmPassword("");
                     setAuthError("");
+                    setAuthMessage("");
                   }}
-                  className="w-full text-center text-sm font-semibold text-[#2563EB] transition hover:text-blue-700"
-                >
-                  Back to login
-                </button>
+                />
               )}
 
               {authError && (
                 <div className="rounded-[1rem] border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">
                   {authError}
+                </div>
+              )}
+
+              {authMessage && (
+                <div className="rounded-[1rem] border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-700">
+                  {authMessage}
                 </div>
               )}
 
@@ -413,9 +525,37 @@ export function LoginPage() {
                 className="flex h-12 w-full items-center justify-center gap-3 rounded-[1rem] bg-[linear-gradient(90deg,#1f8bff_0%,#2563eb_44%,#2347ef_100%)] text-base font-semibold text-white shadow-[0_18px_40px_rgba(37,99,235,0.28)] transition hover:shadow-[0_22px_46px_rgba(37,99,235,0.35)]"
               >
                 <Lock className="h-5 w-5" strokeWidth={2.15} />
-                {submitting ? "Please wait..." : forgotPasswordMode ? (forgotPasswordCodeSent ? "Update Password" : "Send Verification Code") : "Sign In"}
+                {submitting
+                  ? "Please wait..."
+                  : signupMode
+                    ? signupCodeSent
+                      ? "Confirm Account"
+                      : "Create Account"
+                    : forgotPasswordMode
+                      ? (forgotPasswordCodeSent ? "Update Password" : "Send Verification Code")
+                      : "Sign In"}
                 <ArrowRight className="h-5 w-5" strokeWidth={2.15} />
               </motion.button>
+
+              {!forgotPasswordMode && !signupMode && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSignupMode(true);
+                    setSignupCodeSent(false);
+                    setForgotPasswordMode(false);
+                    setForgotPasswordCodeSent(false);
+                    setVerificationCode("");
+                    setPassword("");
+                    setConfirmPassword("");
+                    setAuthError("");
+                    setAuthMessage("");
+                  }}
+                  className="w-full text-center text-sm font-semibold text-[#2563EB] transition hover:text-blue-700"
+                >
+                  Create account
+                </button>
+              )}
             </motion.form>
 
             <motion.div
@@ -451,6 +591,37 @@ export function LoginPage() {
         </section>
       </div>
     </main>
+  );
+}
+
+function PasswordRequirements({ password }: { password: string }) {
+  const missing = new Set(validatePasswordPolicy(password));
+  return (
+    <div className="rounded-[1rem] border border-sky-100 bg-sky-50/70 px-4 py-3 text-sm text-slate-700">
+      <p className="font-semibold text-slate-900">Password requirements</p>
+      <ul className="mt-2 space-y-1">
+        {PASSWORD_POLICY_REQUIREMENTS.map((requirement) => (
+          <li
+            key={requirement}
+            className={password && !missing.has(requirement) ? "text-emerald-700" : "text-slate-600"}
+          >
+            {requirement}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function AuthModeLink({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="w-full text-center text-sm font-semibold text-[#2563EB] transition hover:text-blue-700"
+    >
+      Back to login
+    </button>
   );
 }
 

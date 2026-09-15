@@ -1,4 +1,5 @@
 import { jsonResponse, parseJsonBody, type ApiEvent } from "../runtime/http";
+import { passwordPolicyErrorMessage } from "../../../../lib/auth/password-policy";
 
 type CognitoError = {
   __type?: string;
@@ -20,6 +21,11 @@ type CognitoAuthResponse = {
   Session?: string;
 };
 
+type CognitoSignUpResponse = {
+  UserConfirmed?: boolean;
+  UserSub?: string;
+};
+
 function required(name: string): string {
   const value = process.env[name]?.trim();
   if (!value) throw new Error(`${name} must be configured.`);
@@ -32,6 +38,10 @@ function normalizeEmail(value: unknown): string {
 
 function normalizePassword(value: unknown): string {
   return typeof value === "string" ? value : "";
+}
+
+function normalizeDisplayUsername(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
 }
 
 function cognitoEndpoint(): string {
@@ -149,6 +159,10 @@ export async function confirmForgotPassword(event: ApiEvent) {
     if (password !== body.confirmPassword) {
       return jsonResponse(400, { error: "Password and confirm password must match." });
     }
+    const policyError = passwordPolicyErrorMessage(password);
+    if (policyError) {
+      return jsonResponse(400, { error: policyError });
+    }
 
     await callCognito("ConfirmForgotPassword", {
       ClientId: required("COGNITO_CLIENT_ID"),
@@ -174,6 +188,10 @@ export async function completeNewPassword(event: ApiEvent) {
     if (password !== body.confirmPassword) {
       return jsonResponse(400, { error: "Password and confirm password must match." });
     }
+    const policyError = passwordPolicyErrorMessage(password);
+    if (policyError) {
+      return jsonResponse(400, { error: policyError });
+    }
 
     const response = await callCognito<CognitoAuthResponse>("RespondToAuthChallenge", {
       ClientId: required("COGNITO_CLIENT_ID"),
@@ -187,5 +205,58 @@ export async function completeNewPassword(event: ApiEvent) {
     return jsonResponse(200, { tokens: tokenResponse(response.AuthenticationResult) });
   } catch (error) {
     return jsonResponse(400, { error: error instanceof Error ? error.message : "Unable to complete password setup." });
+  }
+}
+
+export async function startSignUp(event: ApiEvent) {
+  try {
+    const body = parseJsonBody<{ email?: unknown; username?: unknown; password?: unknown; confirmPassword?: unknown }>(event);
+    const email = normalizeEmail(body.email).toLowerCase();
+    const username = normalizeDisplayUsername(body.username);
+    const password = normalizePassword(body.password);
+    if (!email || !email.includes("@") || !username || !password) {
+      return jsonResponse(400, { error: "Email, username, and password are required." });
+    }
+    if (password !== body.confirmPassword) {
+      return jsonResponse(400, { error: "Password and confirm password must match." });
+    }
+    const policyError = passwordPolicyErrorMessage(password);
+    if (policyError) {
+      return jsonResponse(400, { error: policyError });
+    }
+
+    const response = await callCognito<CognitoSignUpResponse>("SignUp", {
+      ClientId: required("COGNITO_CLIENT_ID"),
+      Username: email,
+      Password: password,
+      UserAttributes: [
+        { Name: "email", Value: email },
+        { Name: "name", Value: username },
+        { Name: "preferred_username", Value: username },
+      ],
+    });
+    return jsonResponse(200, { ok: true, userConfirmed: Boolean(response.UserConfirmed), userSub: response.UserSub || "" });
+  } catch (error) {
+    return jsonResponse(400, { error: error instanceof Error ? error.message : "Unable to create account." });
+  }
+}
+
+export async function confirmSignUp(event: ApiEvent) {
+  try {
+    const body = parseJsonBody<{ email?: unknown; code?: unknown }>(event);
+    const email = normalizeEmail(body.email).toLowerCase();
+    const code = typeof body.code === "string" ? body.code.trim() : "";
+    if (!email || !email.includes("@") || !code) {
+      return jsonResponse(400, { error: "Email and verification code are required." });
+    }
+
+    await callCognito("ConfirmSignUp", {
+      ClientId: required("COGNITO_CLIENT_ID"),
+      Username: email,
+      ConfirmationCode: code,
+    });
+    return jsonResponse(200, { ok: true });
+  } catch (error) {
+    return jsonResponse(400, { error: error instanceof Error ? error.message : "Unable to confirm account." });
   }
 }

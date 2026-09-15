@@ -255,6 +255,8 @@
     const httpAuth = { jwt: { authorizer: httpAuthorizer.id } };
 
     httpApi.route("POST /auth/login", "backend/src/aws/http/auth-login.handler");
+    httpApi.route("POST /auth/signup/start", "backend/src/aws/http/auth-signup-start.handler");
+    httpApi.route("POST /auth/signup/confirm", "backend/src/aws/http/auth-signup-confirm.handler");
     httpApi.route("POST /auth/forgot-password/start", "backend/src/aws/http/auth-forgot-password-start.handler");
     httpApi.route("POST /auth/forgot-password/confirm", "backend/src/aws/http/auth-forgot-password-confirm.handler");
     httpApi.route("POST /auth/complete-new-password", "backend/src/aws/http/auth-complete-new-password.handler");

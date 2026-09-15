@@ -22,6 +22,7 @@ const rootDirs = [
 
 const extraSourcePaths = [
   "backend/src/workflows/claim-status/portals/iehp/claims",
+  "lib/auth/password-policy.ts",
 ];
 
 function shouldSkip(sourcePath) {
