@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { getScrapeJob } from "@/backend/src/jobs/job-store";
 import { getSessionFromCookies } from "@/lib/auth/session";
 import { getScrapeJobById, getScrapeJobByIdForUser, isScrapeJobDbConnectionError } from "@/lib/scrape-jobs/db";
 
@@ -26,6 +27,15 @@ export async function GET(req: Request) {
     }
 
     const artifacts = [...job.artifacts].reverse();
+    const snapshot = [...(getScrapeJob(jobId)?.events ?? [])].reverse().map(event => event.data).find(event =>
+      (event.type === 'output_snapshot' || event.type === 'file_download') &&
+      typeof event.filename === 'string' && /\.xlsx?$/i.test(event.filename) && typeof event.base64 === 'string');
+    if (snapshot) {
+      return new Response(Buffer.from(String(snapshot.base64), 'base64'), { headers: {
+        'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'Content-Disposition': `attachment; filename="${String(snapshot.filename).replace(/["\r\n]/g, '')}"`,
+      } });
+    }
     const artifact = artifacts.find((candidate) =>
       candidate.artifactType === "output_snapshot" &&
       candidate.pathOrKey &&

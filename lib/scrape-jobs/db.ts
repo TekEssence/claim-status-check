@@ -233,12 +233,8 @@ export async function listScrapeJobsForUser(userId: string, limit = 25): Promise
         .limit(safeLimit),
   );
 
-  return Promise.all(
-    rows.map(async (row) => {
-      const artifacts = await getScrapeJobArtifacts(row.jobId);
-      return mapPersistentScrapeJob(row, [], artifacts);
-    }),
-  );
+  const artifacts = await getScrapeJobArtifactsForJobs(rows.map((row) => row.jobId));
+  return rows.map((row) => mapPersistentScrapeJob(row, [], artifacts.get(row.jobId) ?? []));
 }
 
 export async function listRunningScrapeJobs(limit = 50): Promise<PersistentScrapeJob[]> {
@@ -252,12 +248,8 @@ export async function listRunningScrapeJobs(limit = 50): Promise<PersistentScrap
       .limit(safeLimit),
   );
 
-  return Promise.all(
-    rows.map(async (row) => {
-      const artifacts = await getScrapeJobArtifacts(row.jobId);
-      return mapPersistentScrapeJob(row, [], artifacts);
-    }),
-  );
+  const artifacts = await getScrapeJobArtifactsForJobs(rows.map((row) => row.jobId));
+  return rows.map((row) => mapPersistentScrapeJob(row, [], artifacts.get(row.jobId) ?? []));
 }
 
 async function getScrapeJobLogs(jobId: string): Promise<string[]> {
@@ -272,24 +264,32 @@ async function getScrapeJobLogs(jobId: string): Promise<string[]> {
 }
 
 async function getScrapeJobArtifacts(jobId: string): Promise<PersistentScrapeJobArtifact[]> {
+  return (await getScrapeJobArtifactsForJobs([jobId])).get(jobId) ?? [];
+}
+
+async function getScrapeJobArtifactsForJobs(jobIds: string[]): Promise<Map<string, PersistentScrapeJobArtifact[]>> {
+  const grouped = new Map<string, PersistentScrapeJobArtifact[]>();
+  if (!jobIds.length) return grouped;
   const rows = await runDbWithRetry((db) =>
-    db
-      .select()
-      .from(automationJobArtifacts)
-      .where(eq(automationJobArtifacts.jobId, jobId))
+    db.select({
+      id: automationJobArtifacts.id,
+      jobId: automationJobArtifacts.jobId,
+      rowIndex: automationJobArtifacts.rowIndex,
+      artifactType: automationJobArtifacts.artifactType,
+      filename: automationJobArtifacts.filename,
+      mimeType: automationJobArtifacts.mimeType,
+      pathOrKey: automationJobArtifacts.pathOrKey,
+      createdAt: automationJobArtifacts.createdAt,
+    }).from(automationJobArtifacts)
+      .where(inArray(automationJobArtifacts.jobId, jobIds))
       .orderBy(asc(automationJobArtifacts.id)),
   );
-
-  return rows.map((row) => ({
-    id: row.id,
-    jobId: row.jobId,
-    rowIndex: row.rowIndex,
-    artifactType: row.artifactType,
-    filename: row.filename ?? "",
-    mimeType: row.mimeType ?? "",
-    pathOrKey: row.pathOrKey ?? "",
-    createdAt: row.createdAt,
-  }));
+  for (const row of rows) {
+    const artifacts = grouped.get(row.jobId) ?? [];
+    artifacts.push({ ...row, filename: row.filename ?? "", mimeType: row.mimeType ?? "", pathOrKey: row.pathOrKey ?? "" });
+    grouped.set(row.jobId, artifacts);
+  }
+  return grouped;
 }
 
 export async function appendScrapeJobLog(jobId: string, message: string): Promise<void> {

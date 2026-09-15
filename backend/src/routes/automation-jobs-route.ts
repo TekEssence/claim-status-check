@@ -119,10 +119,11 @@ export async function POST(req: Request) {
       }).catch(() => {});
       scheduleTaskShutdownAfterWorkflow(`${automationWorkflowId}:${cancelled ? "cancelled" : "completed"}`);
     }).catch(async (error) => {
+      const cancelled = getScrapeJob(job.id)?.cancelRequested === true;
       const message = error instanceof Error ? error.message : "Automation workflow failed.";
-      emitScrapeJobEvent(job.id, { type: "error", message });
+      emitScrapeJobEvent(job.id, { type: cancelled ? "cancelled" : "error", message: cancelled ? "Automation workflow cancelled." : message });
       emitScrapeJobEvent(job.id, { type: "done" });
-      await updateAutomationJob({ jobId: job.id, status: "failed" }).catch(() => {});
+      await updateAutomationJob({ jobId: job.id, status: cancelled ? "cancelled" : "failed" }).catch(() => {});
       scheduleTaskShutdownAfterWorkflow(`${automationWorkflowId}:failed`);
     });
 
@@ -180,11 +181,13 @@ export async function DELETE(req: Request) {
   if (!session) return Response.json({ error: "Authentication required." }, { status: 401 });
   const jobId = new URL(req.url).searchParams.get("jobId")?.trim();
   if (!jobId) return Response.json({ error: "Missing jobId." }, { status: 400 });
-  if (!(await getAutomationJobForUser(jobId, session.userId))) {
+  const ownedJob = await getAutomationJobForUser(jobId, session.userId);
+  if (!ownedJob) {
     return Response.json({ error: "Run not found." }, { status: 404 });
   }
-  cancelScrapeJob(jobId, "Automation workflow cancellation requested.", { emitCancelled: false, emitDone: false });
-  await updateAutomationJob({ jobId, status: "cancelling" });
+  if (["completed", "failed", "cancelled"].includes(ownedJob.status)) return Response.json({ ok: true });
+  const active = cancelScrapeJob(jobId, "Automation workflow cancellation requested.", { emitCancelled: false, emitDone: false });
+  await updateAutomationJob({ jobId, status: active ? "cancelling" : "cancelled" });
   return Response.json({ ok: true });
 }
 

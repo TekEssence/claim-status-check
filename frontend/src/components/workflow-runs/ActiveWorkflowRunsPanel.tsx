@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { listScrapeJobs, type ScrapeJobSummary } from "../../api/scrape-jobs-api";
+import { cancelScrapeJob, getScrapeJobDownload, listScrapeJobs, type ScrapeJobSummary } from "../../api/scrape-jobs-api";
+import { cancelAutomationJob } from "../../api/automation-jobs-api";
 
 type WorkflowRun = {
   jobId: string;
@@ -45,7 +46,7 @@ const WORKFLOW_LABELS: Record<string, string> = {
 };
 
 function isLiveStatus(status: string): boolean {
-  return status === "queued" || status === "running" || status === "waiting_otp" || status === "cancelling";
+  return status === "queued" || status === "running" || status === "waiting_otp" || status === "waiting_resume" || status === "cancelling";
 }
 
 function formatShortJobId(jobId: string): string {
@@ -95,6 +96,28 @@ export function ActiveWorkflowRunsPanel({
   const [runs, setRuns] = useState<WorkflowRun[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [busy, setBusy] = useState<Record<string, boolean>>({});
+  async function act(run: WorkflowRun, action: 'cancel' | 'download') {
+    const key = `${run.jobId}:${action}`;
+    setBusy(previous => ({ ...previous, [key]: true }));
+    setError('');
+    try {
+      if (action === 'cancel') {
+        await (run.workflowId === 'claim-status' ? cancelScrapeJob : cancelAutomationJob)(run.jobId);
+        await refresh({ silent: true });
+      } else {
+        const output = await getScrapeJobDownload(run.jobId);
+        const link = document.createElement('a');
+        link.href = output.downloadUrl;
+        link.download = output.filename;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        if (output.downloadUrl.startsWith('blob:')) setTimeout(() => URL.revokeObjectURL(output.downloadUrl), 1000);
+      }
+    } catch (caught) { setError(caught instanceof Error ? caught.message : 'Run action failed.'); }
+    finally { setBusy(previous => ({ ...previous, [key]: false })); }
+  }
 
   async function refresh(options?: { silent?: boolean }) {
     if (!options?.silent) {
@@ -103,7 +126,7 @@ export function ActiveWorkflowRunsPanel({
     }
 
     try {
-      const claimJobs = await listScrapeJobs(50).catch(() => [] as ScrapeJobSummary[]);
+      const claimJobs = await listScrapeJobs(50);
 
       setRuns(
         claimJobs
@@ -155,9 +178,10 @@ export function ActiveWorkflowRunsPanel({
 
       {error ? (
         <div className="rounded-[1rem] border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-700">
-          Failed to load active runs: {error}
+          {error}
         </div>
-      ) : visibleRuns.length === 0 ? (
+      ) : null}
+      {visibleRuns.length === 0 ? (
         <div className="rounded-[1rem] border border-dashed border-sky-200 bg-sky-50/60 px-4 py-5 text-center text-sm text-slate-500">
           No active runs found.
         </div>
@@ -174,6 +198,7 @@ export function ActiveWorkflowRunsPanel({
                 <th className="min-w-[12rem] px-3 py-3 font-semibold">Progress</th>
                 <th className="whitespace-nowrap px-3 py-3 font-semibold">Created</th>
                 <th className="whitespace-nowrap px-3 py-3 font-semibold">Updated</th>
+                <th className="whitespace-nowrap px-3 py-3 font-semibold">Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -207,6 +232,10 @@ export function ActiveWorkflowRunsPanel({
                     </td>
                     <td className="whitespace-nowrap px-3 py-3 text-xs text-slate-500">{formatRunTimestamp(run.createdAt)}</td>
                     <td className="whitespace-nowrap px-3 py-3 text-xs text-slate-500">{formatRunTimestamp(run.updatedAt)}</td>
+                    <td className="whitespace-nowrap px-3 py-3">
+                      <button type="button" disabled={busy[`${run.jobId}:download`]} onClick={() => void act(run, 'download')} className="mr-2 rounded-lg border px-3 py-2 text-xs text-blue-700 disabled:opacity-50">{busy[`${run.jobId}:download`] ? 'Downloading…' : 'Partial output'}</button>
+                      <button type="button" disabled={busy[`${run.jobId}:cancel`]} onClick={() => void act(run, 'cancel')} className="rounded-lg border px-3 py-2 text-xs text-red-700 disabled:opacity-50">{busy[`${run.jobId}:cancel`] ? 'Cancelling…' : 'Cancel'}</button>
+                    </td>
                   </tr>
                 );
               })}

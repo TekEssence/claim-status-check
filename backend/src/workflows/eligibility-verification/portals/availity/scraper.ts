@@ -15,6 +15,8 @@ import {
 } from "./input-routing";
 import { getAvailityEligibilityPayer } from "./payers/registry";
 import { parseEligibilityProjectId, scopeEligibilityInputFile } from "../../projects";
+import { getAvailityProjectConfig } from "./config/projects";
+import { runAvailityMemberSearch } from "./medrevenue/runner";
 
 function requireFile(formData: FormData, key: string, label: string): File {
   const value = formData.get(key);
@@ -93,7 +95,6 @@ export function createAvailityEligibilityRunner(): AutomationRunner<EligibilityR
     validateInput(input) {
       if (!(input instanceof FormData)) throw new Error("Availity eligibility input must be multipart form data.");
       const projectId = parseEligibilityProjectId(input.get("projectId"));
-      if (projectId !== "minimax") throw new Error("Availity eligibility is currently configured only for Minimax.");
       return {
         inputFile: requireFile(input, "inputFile", "Eligibility input file"),
         credentialFile: requireFile(input, "credentialFile", "Availity login file"),
@@ -101,6 +102,10 @@ export function createAvailityEligibilityRunner(): AutomationRunner<EligibilityR
       };
     },
     async run(input, context) {
+      const projectConfig = getAvailityProjectConfig(input.projectId);
+      if (projectConfig.inquiryMode === "member-search") {
+        return runAvailityMemberSearch(input, context, projectConfig);
+      }
       const scopedInputFile = await scopeEligibilityInputFile(input.inputFile, input.projectId);
       const batches = await readAvailityEligibilityInputPayers(scopedInputFile);
       const credentialProfiles = await readAvailityEligibilityCredentialProfiles(input.credentialFile, input.projectId);

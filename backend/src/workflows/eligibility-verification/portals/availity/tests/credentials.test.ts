@@ -16,6 +16,18 @@ async function credentialFile(rows: string[][], headers = ["Project", "Portal", 
   return new File([buffer], "credentials.xlsx");
 }
 
+test("Medrevenu accepts manual OTP credentials while Minimax still requires a secret", async () => {
+  const headers = ["Project", "Portal", "Payer", "URL", "User Name", "Password"];
+  const row = ["Medrevenu", "Availity", "\u00a0Molina", "https://example.test/login", "test-user", "test-password"];
+  const manual = await readAvailityEligibilityCredentialProfiles(await credentialFile([row], headers), "medrevenue");
+  assert.equal(manual[0].totpSecret, "");
+  await assert.rejects(readAvailityEligibilityCredentialProfiles(await credentialFile([["TPM", ...row.slice(1)]], headers), "minimax"), /Missing Minimax\/TPM/);
+  const profiles = await readAvailityEligibilityCredentialProfiles(await credentialFile([[...row, "test-secret"]], [...headers, "Secret Key"]), "medrevenue");
+  assert.equal(profiles[0].payer, "Molina");
+  assert.equal(profiles[0].username, "test-user");
+  await assert.rejects(readAvailityEligibilityCredentialProfiles(await credentialFile([row], headers), "minimax"), /Missing Minimax\/TPM/);
+});
+
 test("reads shared Availity credentials without requiring a payer column", async () => {
   const file = await credentialFile(
     [["TPM", "Availity", "availity.com", "user", "password", "secret"]],

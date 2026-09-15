@@ -3,5 +3,5 @@ export const availityEligibilityFrontendPortalConfig = {
   name: "Availity",
   description: "Eligibility verification through the Availity portal.",
   supportedPayers: ["BCBS", "Van Lang IPA", "Amerigroup", "Wellpoint"],
-  projects: ["minimax"] as const,
+  projects: ["minimax", "medrevenue"] as const,
 } as const;

@@ -47,6 +47,7 @@ export async function readAvailityEligibilityCredentialProfiles(
   });
 
   const profiles: AvailityEligibilityCredentials[] = [];
+  const medRevenueMissingFields: string[] = [];
   for (let rowNumber = 2; rowNumber <= worksheet.rowCount; rowNumber += 1) {
     const worksheetRow = worksheet.getRow(rowNumber);
     const row: Record<string, string> = {};
@@ -68,7 +69,16 @@ export async function readAvailityEligibilityCredentialProfiles(
     const successUrlFragment = findValue(row, ["Success URL Fragment", "SUCCESS_URL_FRAGMENT"]);
     const payer = findValue(row, ["Payer", "Payer Name", "Insurance", "Insurance Name"]);
 
-    if (rawLoginUrl && username && password && totpSecret) {
+    if (projectId === "medrevenue") {
+      const missing = [
+        !rawLoginUrl && "URL / Link",
+        !username && "User Name / Username",
+        !password && "Password",
+      ].filter(Boolean);
+      if (missing.length) medRevenueMissingFields.push(`row ${rowNumber}: ${missing.join(", ")}`);
+    }
+
+    if (rawLoginUrl && username && password && (totpSecret || projectId === "medrevenue")) {
       profiles.push({
         payer: payer || undefined,
         loginUrl: rawLoginUrl.startsWith("http") ? rawLoginUrl : `https://${rawLoginUrl}`,
@@ -81,6 +91,9 @@ export async function readAvailityEligibilityCredentialProfiles(
   }
 
   if (profiles.length) return profiles;
+  if (projectId === "medrevenue" && medRevenueMissingFields.length) {
+    throw new Error(`MedRevenue Availity project and portal matched, but the login workbook is missing ${medRevenueMissingFields.join("; ")}.`);
+  }
   throw new Error(
     `Missing ${projectId === "minimax" ? "Minimax/TPM" : "MedRevenue"} Availity login details. The credential workbook Project column must match the selected project.`,
   );

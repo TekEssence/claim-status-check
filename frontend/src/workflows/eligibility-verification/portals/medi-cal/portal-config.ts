@@ -1,0 +1,1 @@
+export const medicalEligibilityFrontendPortalConfig = { id: "medical", name: "Medi-Cal", description: "MedRevenue Medi-Cal eligibility verification.", supportedPayers: ["Medi-Cal"], projects: ["medrevenue"] as const } as const;

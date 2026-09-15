@@ -3,6 +3,7 @@ import { PortalUploadCard } from "@/frontend/src/components/portal-workflow/Port
 import { FileSpreadsheet, KeyRound, LoaderCircle, Play, Square } from "lucide-react";
 
 type Props = {
+  projectId?: "minimax" | "medrevenue";
   inputFile: File | null;
   credentialFile: File | null;
   isRunning: boolean;
@@ -18,7 +19,7 @@ export function AvailityInputForm(props: Props) {
     <form onSubmit={props.onSubmit} className="space-y-5">
 
       <div className="grid gap-4 lg:grid-cols-2">
-        <PortalUploadCard mode="file" accept=".xlsx,.xls" acceptedFormats=".xlsx, .xls" description="Upload credentials whose Project matches the selected project, with Portal Availity, Link, Username, Password, and Secret Key." fileName={props.credentialFile?.name} icon={KeyRound} inputId="availityEligibilityCredentials" onFileSelect={props.onCredentialFileChange} sizeHint="25 MB" title="Upload Availity Login File" />
+        <PortalUploadCard mode="file" accept=".xlsx,.xls" acceptedFormats=".xlsx, .xls" description={props.projectId === "medrevenue" ? "Upload Project, Portal, Payer, URL, User Name, and Password. Enter the verification code here when prompted. Secret Key is optional for automatic authenticator codes." : "Upload credentials whose Project matches the selected project, with Portal Availity, Link, Username, Password, and Secret Key."} fileName={props.credentialFile?.name} icon={KeyRound} inputId="availityEligibilityCredentials" onFileSelect={props.onCredentialFileChange} sizeHint="25 MB" title="Upload Availity Login File" />
         <PortalUploadCard mode="file" accept=".xlsx,.xls" acceptedFormats=".xlsx, .xls" description="Upload the member eligibility workbook containing the payer name used for automatic routing." fileName={props.inputFile?.name} icon={FileSpreadsheet} inputId="availityEligibilityInput" onFileSelect={props.onInputFileChange} sizeHint="25 MB" title="Upload Eligibility File" />
       </div>
       <div className="flex flex-wrap gap-3">
