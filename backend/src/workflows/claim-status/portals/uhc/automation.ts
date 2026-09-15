@@ -52,6 +52,7 @@ const SEL = {
 
   // Step 3b — Authenticator Code page
   STEP3_SMS_INPUT: 'input#otpBox',
+  STEP3_SMS_PAGE: '#rbaViaTextMsg, input#otpBox, [data-testid="otpBox"]',
 
   STEP3_SMS_CONTINUE: 'button#continuebtn',
 
@@ -122,6 +123,13 @@ export interface ProviderOptions {
 
 export type ProviderSelection = {
   corporateTaxIdOwner?: string;
+  careProvider?: string;
+};
+
+export type UhcProviderMapping = {
+  group: string;
+  corporateTaxIdOwner?: string;
+  taxIdNumber?: string;
   careProvider?: string;
 };
 
@@ -362,7 +370,7 @@ async function buildInProgressFieldsFromResultRow(
     BotBilledAmount: billedAmount,
     BotProcessedDate: processedDate,
     BotClaimDetails: claimDetails,
-    BotClaimResult: `DOS ${serviceDate} Claim processed on ${processedDate} is in progress by UHC on Claim # ${claimNumber}.${noteText}`,
+    BotClaimResult: `DOS ${serviceDate} Claim In Process from ${processedDate} by UHC under Claim # ${claimNumber}.${noteText}`,
   };
 }
 
@@ -574,15 +582,46 @@ function joinClaimResultSections(sections: string[]): string {
   return sections.map(section => section.trim()).filter(Boolean).join(CLAIM_RESULT_SECTION_SEPARATOR);
 }
 
+function moneyEquals(left: number, right: number): boolean {
+  return Math.abs(left - right) < 0.01;
+}
+
 function formatCheckAmounts(paymentRows: Array<{ amount: string }>, fallbackAmount: string, linePaidTotal: number): string {
-  const rows = paymentRows.length > 0 ? paymentRows : [{ amount: fallbackAmount }];
-  return rows
+  if (paymentRows.length === 0) return 'N/A';
+  return paymentRows
     .map(row => {
       const amount = row.amount || fallbackAmount;
-      const bulkStatus = linePaidTotal > parseMoney(amount) ? 'Not Bulk' : 'Bulk';
+      const checkAmount = parseMoney(amount);
+      const bulkStatus = moneyEquals(linePaidTotal, checkAmount) ? 'Not Bulk' : 'Bulk';
       return `${formatMoney(amount)} (${bulkStatus})`;
     })
     .join(' + ');
+}
+
+function checkNumberForPaymentRows(paymentRows: Array<{ number: string }>): string {
+  return paymentRows.length > 0 ? uniqueJoin(paymentRows.map(row => row.number), 'N/A') : 'N/A';
+}
+
+function checkDateForPaymentRows(
+  processedDate: string,
+  availableProcessedDates: string[],
+  paymentRows: Array<{ issueDate: string }>,
+  fallback: string,
+): string {
+  return paymentRows.length > 0 ? checkDateForProcessedDate(processedDate, availableProcessedDates, paymentRows, fallback) : 'N/A';
+}
+
+function hasDeniedDetails(lineItems: any[], denialText: string | undefined): boolean {
+  if ((denialText || '').trim() && denialText !== 'Service denied') return true;
+  return lineItems.some(item =>
+    (Array.isArray(item.carcs) && item.carcs.length > 0) ||
+    (Array.isArray(item.remarks) && item.remarks.length > 0) ||
+    (Array.isArray(item.remits) && item.remits.length > 0)
+  );
+}
+
+function isInProcessClaimStatus(status: string | undefined): boolean {
+  return /\bin\s*pro(cess|gress)\b/i.test(status || '');
 }
 
 function normalizeOptionText(value: string | undefined): string {
@@ -600,7 +639,37 @@ function compactProviderOptionText(value: string | undefined): string {
 
 function extractProviderOptionId(value: string | undefined): string {
   const match = (value || '').match(/\d{4,}/);
-  return match?.[1] || '';
+  return match?.[0] || '';
+}
+
+function normalizeMappingText(value: string | undefined): string {
+  return (value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+function extractMappingNumber(value: string | undefined): string {
+  return (value || '').match(/\d{4,}/)?.[0] || '';
+}
+
+function getClaimGroup(claim: ClaimRow): string {
+  return String(
+    claim.group ??
+    claim.Group ??
+    claim['Group'] ??
+    claim['Group Name'] ??
+    claim['Medical Group'] ??
+    claim['Medical Group Name'] ??
+    '',
+  ).trim();
+}
+
+function findProviderMappingForGroup(group: string, mappings: UhcProviderMapping[]): UhcProviderMapping | null {
+  const normalizedGroup = normalizeMappingText(group);
+  const groupNumber = extractMappingNumber(group);
+  if (!normalizedGroup && !groupNumber) return null;
+
+  return mappings.find(mapping => normalizeMappingText(mapping.group) === normalizedGroup) ??
+    mappings.find(mapping => Boolean(groupNumber) && extractMappingNumber(mapping.group) === groupNumber) ??
+    null;
 }
 
 function formatMedRevenuDenialReason(lineItems: any[], fallback: string | undefined): string {
@@ -762,12 +831,13 @@ async function saveProviderDrawerIfChanged(page: Page, log: (msg: string) => Pro
 
 async function configureProviderSelection(
   page: Page,
-  options: { corporateTaxIdOwner?: string; careProvider?: string },
+  options: { corporateTaxIdOwner?: string; taxIdNumber?: string; careProvider?: string },
   log: (msg: string) => Promise<void>
 ) {
   const corporateTaxIdOwner = (options.corporateTaxIdOwner || '').trim();
+  const taxIdNumber = (options.taxIdNumber || '').trim();
   const careProvider = (options.careProvider || '').trim();
-  if (!corporateTaxIdOwner && !careProvider) {
+  if (!corporateTaxIdOwner && !taxIdNumber && !careProvider) {
     return;
   }
 
@@ -782,8 +852,20 @@ async function configureProviderSelection(
   }
 
   if (careProvider) {
-    await expandProviderDrawerSection(page, 'Care Provider', log);
-    await selectProviderDrawerRow(page, 'care-provider-table-row', 'Care Provider', careProvider, log);
+    try {
+      await expandProviderDrawerSection(page, 'Care Provider', log);
+      await selectProviderDrawerRow(page, 'care-provider-table-row', 'Care Provider', careProvider, log);
+    } catch (error) {
+      if (!taxIdNumber) throw error;
+      await log(`  Care Provider was not available after Corporate Tax ID owner selection. Trying Tax ID number ${taxIdNumber}.`);
+      await expandProviderDrawerSection(page, 'Tax ID number', log);
+      await selectProviderDrawerRow(page, 'tax-id-number-table-row', 'Tax ID number', taxIdNumber, log);
+      await expandProviderDrawerSection(page, 'Care Provider', log);
+      await selectProviderDrawerRow(page, 'care-provider-table-row', 'Care Provider', careProvider, log);
+    }
+  } else if (taxIdNumber) {
+    await expandProviderDrawerSection(page, 'Tax ID number', log);
+    await selectProviderDrawerRow(page, 'tax-id-number-table-row', 'Tax ID number', taxIdNumber, log);
   }
 
   const didSave = await saveProviderDrawerIfChanged(page, log);
@@ -1018,6 +1100,11 @@ async function clickWithRetry(
 ): Promise<void> {
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
+      if (appearsSel && await page.locator(appearsSel).first().isVisible().catch(() => false)) {
+        await log(`  ✅  ${label} already confirmed (${appearsSel} is visible).`);
+        return;
+      }
+
       const btn = page.locator(selector).first();
       await btn.waitFor({ state: 'visible', timeout: 5_000 });
       await btn.scrollIntoViewIfNeeded().catch(() => {});
@@ -1041,11 +1128,19 @@ async function clickWithRetry(
         return; // success
       } catch {
         // element still present — might just be slow navigation; don't fail yet
+        if (appearsSel && await page.locator(appearsSel).first().isVisible().catch(() => false)) {
+          await log(`  ✅  ${label} click confirmed (${appearsSel} appeared after wait).`);
+          return;
+        }
         if (attempt < maxAttempts) {
           await log(`  ⏳  ${label} still visible after ${retryDelayMs}ms — retrying (${attempt}/${maxAttempts})...`);
         }
       }
     } catch (err) {
+      if (appearsSel && await page.locator(appearsSel).first().isVisible().catch(() => false)) {
+        await log(`  ✅  ${label} click confirmed (${appearsSel} appeared after click error).`);
+        return;
+      }
       if (attempt === maxAttempts) throw err;
       await log(`  ⚠️  ${label} click failed (attempt ${attempt}): ${err}. Retrying...`);
       await page.waitForTimeout(retryDelayMs);
@@ -1362,10 +1457,14 @@ async function login(
         maxAttempts: 3,
         retryDelayMs: 2000,
         disappearsSel: methodButton,
-        appearsSel: isMedRevenuStep3 ? SEL.STEP3_SMS_INPUT : SEL.STEP3_CODE_INPUT,
+        appearsSel: isMedRevenuStep3 ? SEL.STEP3_SMS_PAGE : SEL.STEP3_CODE_INPUT,
       },
       log
     );
+    if (isMedRevenuStep3) {
+      await log('  Waiting 10 seconds for SMS OTP page to finish loading after Via Text Message click...');
+      await page.waitForTimeout(10_000);
+    }
     await log(`  Step 3a complete (${isMedRevenuStep3 ? 'Text Message' : 'Microsoft Authenticator'} selected).`);
   } catch {
     await failWithDiagnostics(
@@ -1649,8 +1748,52 @@ function isMemberFoundNoClaimFoundMessage(message: string): boolean {
 }
 
 // ── Fill and submit claim search form ─────────────────────────────────────────
+function normalizeUhcInputDate(value: unknown, options: { allowHistoricalSerial?: boolean } = {}): string {
+  if (value instanceof Date) {
+    const month = String(value.getUTCMonth() + 1).padStart(2, '0');
+    const day = String(value.getUTCDate()).padStart(2, '0');
+    return `${month}/${day}/${value.getUTCFullYear()}`;
+  }
+
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    if (!options.allowHistoricalSerial && value < 30_000) return '';
+    const epoch = Date.UTC(1899, 11, 30);
+    const date = new Date(epoch + value * 24 * 60 * 60 * 1000);
+    const month = String(date.getUTCMonth() + 1).padStart(2, '0');
+    const day = String(date.getUTCDate()).padStart(2, '0');
+    return `${month}/${day}/${date.getUTCFullYear()}`;
+  }
+
+  const text = String(value ?? '').trim();
+  if (!text) return '';
+
+  const serial = Number(text);
+  if (/^\d+(\.\d+)?$/.test(text) && Number.isFinite(serial)) {
+    return normalizeUhcInputDate(serial, options);
+  }
+
+  const match = text.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{2}|\d{4})$/);
+  if (!match) return '';
+
+  const month = Number(match[1]);
+  const day = Number(match[2]);
+  const year = match[3].length === 2 ? 2000 + Number(match[3]) : Number(match[3]);
+  if (month < 1 || month > 12 || day < 1 || day > 31 || year < 2000 || year > 2100) return '';
+
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) return '';
+
+  return `${String(month).padStart(2, '0')}/${String(day).padStart(2, '0')}/${year}`;
+}
+
 async function searchClaim(page: Page, claim: ClaimRow, searchMode: 'memberId' | 'name', clientType: string, sendEvent: SendEvent) {
   const log = (msg: string) => sendEvent({ type: 'log', message: msg });
+  const serviceDate = normalizeUhcInputDate(claim.serviceDate);
+  const patientDOB = normalizeUhcInputDate(claim.patientDOB, { allowHistoricalSerial: true });
+
+  if (!serviceDate) {
+    throw new Error(`Missing or invalid DOS "${String(claim.serviceDate ?? '')}". Use the DOS column in m/d/yyyy or mm/dd/yyyy format.`);
+  }
 
   // Close Claims & Payments dropdown if it is open/expanded and blocking UI
   await closeNavDropdownIfOpen(page, log);
@@ -1680,26 +1823,26 @@ async function searchClaim(page: Page, claim: ClaimRow, searchMode: 'memberId' |
   const dobInput = page.locator(SEL.DOB).first();
   if (await dobInput.isVisible().catch(() => false)) {
     await dobInput.fill('');
-    await dobInput.fill(claim.patientDOB);
+    await dobInput.fill(patientDOB);
   } else if (!isMedRevenu) {
     await page.fill(SEL.DOB, '');
-    await page.fill(SEL.DOB, claim.patientDOB);
+    await page.fill(SEL.DOB, patientDOB);
   }
 
   try { await page.check(SEL.DATE_CUSTOM, { timeout: 2_000 }); } catch { /* already set */ }
 
   await page.fill(SEL.FIRST_SVC_DATE, '');
-  await page.fill(SEL.FIRST_SVC_DATE, claim.serviceDate);
+  await page.fill(SEL.FIRST_SVC_DATE, serviceDate);
   await page.fill(SEL.LAST_SVC_DATE, '');
-  await page.fill(SEL.LAST_SVC_DATE, claim.serviceDate);
+  await page.fill(SEL.LAST_SVC_DATE, serviceDate);
 
   if (isMedRevenu || searchMode === 'name') {
     await log(isMedRevenu
-      ? `  🔍  Search: Subscriber=${claim.subscriberNo} | Name="${claim.patientName || ''}" | Date=${claim.serviceDate}`
-      : `  🔍  Search: Name="${claim.patientName || ''}" | DOB=${claim.patientDOB} | Date=${claim.serviceDate}`
+      ? `  🔍  Search: Subscriber=${claim.subscriberNo} | Name="${claim.patientName || ''}" | Date=${serviceDate}`
+      : `  🔍  Search: Name="${claim.patientName || ''}" | DOB=${patientDOB} | Date=${serviceDate}`
     );
   } else {
-    await log(`  🔍  Search: Subscriber=${claim.subscriberNo} | DOB=${claim.patientDOB} | Date=${claim.serviceDate}`);
+    await log(`  🔍  Search: Subscriber=${claim.subscriberNo} | DOB=${patientDOB} | Date=${serviceDate}`);
   }
 
   try {
@@ -2284,7 +2427,7 @@ function buildUhcBotFieldsFromScrapedData(
   const adjudicationLineItems = isMedRevenu ? medRevenuLineItems : lineItems;
 
   if (scrapedData['claim-in-process'] === 'true' && paymentRows.length === 0 && !hasLineAdjudicationDetails(adjudicationLineItems)) {
-    fields.BotClaimResult = `DOS ${serviceDate} Claim received on ${claimReceivedDate} is in process by ${payerName} on Claim # ${claimNumber}.`;
+    fields.BotClaimResult = `DOS ${serviceDate} Claim In Process from ${firstNonEmpty(processedDate, claimReceivedDate, 'N/A')} by ${payerName} under Claim # ${claimNumber}.`;
     return fields;
   }
 
@@ -2303,12 +2446,18 @@ function buildUhcBotFieldsFromScrapedData(
       const groupProcessedDate = group.processedDate || processedDate;
       const groupPaymentRows = paymentRowsForProcessedDate(groupProcessedDate, paymentMappingProcessedDates, paymentRows);
       const groupCheckAmountText = formatCheckAmounts(groupPaymentRows, paymentAmount, groupLinePaidTotal);
-      const groupCheckNumber = uniqueJoin(groupPaymentRows.map(row => row.number), checkNumber);
-      const groupCheckDate = checkDateForProcessedDate(groupProcessedDate, paymentMappingProcessedDates, paymentRows, checkDateFallback);
+      const groupCheckNumber = checkNumberForPaymentRows(groupPaymentRows);
+      const groupCheckDate = checkDateForPaymentRows(groupProcessedDate, paymentMappingProcessedDates, groupPaymentRows, checkDateFallback);
       if (groupLinePaidTotal > 0) {
-        return `DOS ${serviceDate}: Checked IEHP portal Claim Received on ${claimReceivedDate} and Processed on ${groupProcessedDate}. Paid on ${groupCheckDate} paid amount ${groupPaidAmountText} EFT/Check # ${groupCheckNumber}. Check Amount: ${groupCheckAmountText}. Claim #: ${claimNumber}`;
+        return `DOS ${serviceDate}: Checked UHC portal Claim Received on ${claimReceivedDate} and Processed on ${groupProcessedDate}. Paid on ${groupCheckDate} paid amount ${groupPaidAmountText} EFT/Check # ${groupCheckNumber}. Check Amount: ${groupCheckAmountText}. Claim #: ${claimNumber}`;
       }
-      return `DOS ${serviceDate}: Checked IEHP portal Claim Received on ${claimReceivedDate} and Processed on ${groupProcessedDate}. Denied on ${groupCheckDate} denial reason ${groupDenialReasonText} EFT/Check # ${groupCheckNumber}. Check Amount: ${groupCheckAmountText}. Claim #: ${claimNumber}`;
+      if (!hasDeniedDetails(groupDeniedLineItems, groupDenialReasonText)) {
+        if (isInProcessClaimStatus(fields.BotClaimStatus)) {
+          return `DOS ${serviceDate} Claim In Process from ${groupProcessedDate} by ${payerName} under Claim # ${claimNumber}.`;
+        }
+        return `DOS ${serviceDate}: Checked UHC portal Claim Received on ${claimReceivedDate} and Processed on ${groupProcessedDate}. Claim #: ${claimNumber}`;
+      }
+      return `DOS ${serviceDate}: Checked UHC portal Claim Received on ${claimReceivedDate} and Processed on ${groupProcessedDate}. Denied on ${groupCheckDate} denial reason ${groupDenialReasonText} EFT/Check # ${groupCheckNumber}. Check Amount: ${groupCheckAmountText}. Claim #: ${claimNumber}`;
     }));
     return fields;
   }
@@ -2322,12 +2471,16 @@ function buildUhcBotFieldsFromScrapedData(
     const groupProcessedDate = group.processedDate || processedDate;
     const groupPaymentRows = paymentRowsForProcessedDate(groupProcessedDate, paymentMappingProcessedDates, paymentRows);
     const groupCheckAmountText = formatCheckAmounts(groupPaymentRows, paymentAmount, effectivePaidTotal);
-    const groupCheckNumber = uniqueJoin(groupPaymentRows.map(row => row.number), checkNumber);
-    const groupCheckDate = checkDateForProcessedDate(groupProcessedDate, paymentMappingProcessedDates, paymentRows, checkDateFallback);
+    const groupCheckNumber = checkNumberForPaymentRows(groupPaymentRows);
+    const groupCheckDate = checkDateForPaymentRows(groupProcessedDate, paymentMappingProcessedDates, groupPaymentRows, checkDateFallback);
     if (effectivePaidTotal > 0) {
       claimResultParts.push(`DOS ${serviceDate} Claim processed by ${payerName} on ${groupProcessedDate} under Claim # ${claimNumber}. Payment issued via Check/EFT # ${groupCheckNumber} dated ${groupCheckDate}. Check Amount: ${groupCheckAmountText}.${groupResponsibilityText}`);
+    } else if (hasDeniedDetails(group.lineItems, fields.BotDenialDescription || fields.BotDenialReasonCode)) {
+      claimResultParts.push(`DOS ${serviceDate} Claim processed by ${payerName} on ${groupProcessedDate} under Claim # ${claimNumber}. Claim is Denied under Check #: ${groupCheckNumber} dated ${groupCheckDate}. Check Amount: ${groupCheckAmountText}.`);
+    } else if (isInProcessClaimStatus(fields.BotClaimStatus)) {
+      claimResultParts.push(`DOS ${serviceDate} Claim In Process from ${groupProcessedDate} by ${payerName} under Claim # ${claimNumber}.`);
     } else {
-      claimResultParts.push(`DOS ${serviceDate} Claim processed by ${payerName} on ${groupProcessedDate} under Claim # ${claimNumber}. Claim is Denied under Check #: ${groupCheckNumber} dated ${groupCheckDate}.`);
+      claimResultParts.push(`DOS ${serviceDate} Claim processed by ${payerName} on ${groupProcessedDate} under Claim # ${claimNumber}.`);
     }
     const serviceLineNotes = buildServiceLineNotes(group.lineItems, [groupCheckNumber, scrapedData['payment-number'] || '', fields.BotCheckEFTNumber || ''], false);
     if (serviceLineNotes.length > 0) {
@@ -2802,7 +2955,7 @@ async function findMatchingClaim(
       const isInProcess = scrapedData['claim-in-process'] === 'true' && paymentRows.length === 0 && !hasLineAdjudicationDetails(adjudicationLineItems);
 
       if (isInProcess) {
-        fields.BotClaimResult = `DOS ${serviceDate} Claim received on ${claimReceivedDate} is in process by ${payerName} on Claim # ${claimNumber}.`;
+        fields.BotClaimResult = `DOS ${serviceDate} Claim In Process from ${firstNonEmpty(processedDate, claimReceivedDate, 'N/A')} by ${payerName} under Claim # ${claimNumber}.`;
         allScrapedFields.push(fields);
         await log(`  ℹ️  Scraped details for claim #${m + 1} (${fields.BotClaimNumber}): length ${fields.BotClaimDetails.length}`);
         await appendDualPlanClaimFieldsIfPresent({
@@ -2836,14 +2989,21 @@ async function findMatchingClaim(
           const groupProcessedDate = group.processedDate || processedDate;
           const groupPaymentRows = paymentRowsForProcessedDate(groupProcessedDate, lineProcessedDates, paymentRows);
           const groupCheckAmountText = formatCheckAmounts(groupPaymentRows, paymentAmount, groupLinePaidTotal);
-          const groupCheckNumber = uniqueJoin(groupPaymentRows.map(row => row.number), checkNumber);
-          const groupCheckDate = checkDateForProcessedDate(groupProcessedDate, lineProcessedDates, paymentRows, checkDateFallback);
+          const groupCheckNumber = checkNumberForPaymentRows(groupPaymentRows);
+          const groupCheckDate = checkDateForPaymentRows(groupProcessedDate, lineProcessedDates, groupPaymentRows, checkDateFallback);
 
           if (groupLinePaidTotal > 0) {
-            return `DOS ${serviceDate}: Checked IEHP portal Claim Received on ${claimReceivedDate} and Processed on ${groupProcessedDate}. Paid on ${groupCheckDate} paid amount ${groupPaidAmountText} EFT/Check # ${groupCheckNumber}. Check Amount: ${groupCheckAmountText}. Claim #: ${claimNumber}`;
+            return `DOS ${serviceDate}: Checked UHC portal Claim Received on ${claimReceivedDate} and Processed on ${groupProcessedDate}. Paid on ${groupCheckDate} paid amount ${groupPaidAmountText} EFT/Check # ${groupCheckNumber}. Check Amount: ${groupCheckAmountText}. Claim #: ${claimNumber}`;
           }
 
-          return `DOS ${serviceDate}: Checked IEHP portal Claim Received on ${claimReceivedDate} and Processed on ${groupProcessedDate}. Denied on ${groupCheckDate} denial reason ${groupDenialReasonText} EFT/Check # ${groupCheckNumber}. Check Amount: ${groupCheckAmountText}. Claim #: ${claimNumber}`;
+          if (!hasDeniedDetails(groupDeniedLineItems, groupDenialReasonText)) {
+            if (isInProcessClaimStatus(fields.BotClaimStatus)) {
+              return `DOS ${serviceDate} Claim In Process from ${groupProcessedDate} by ${payerName} under Claim # ${claimNumber}.`;
+            }
+            return `DOS ${serviceDate}: Checked UHC portal Claim Received on ${claimReceivedDate} and Processed on ${groupProcessedDate}. Claim #: ${claimNumber}`;
+          }
+
+          return `DOS ${serviceDate}: Checked UHC portal Claim Received on ${claimReceivedDate} and Processed on ${groupProcessedDate}. Denied on ${groupCheckDate} denial reason ${groupDenialReasonText} EFT/Check # ${groupCheckNumber}. Check Amount: ${groupCheckAmountText}. Claim #: ${claimNumber}`;
         }));
         allScrapedFields.push(fields);
         await log(`  ℹ️  Scraped details for claim #${m + 1} (${fields.BotClaimNumber}): length ${fields.BotClaimDetails.length}`);
@@ -2869,13 +3029,17 @@ async function findMatchingClaim(
         const groupProcessedDate = group.processedDate || processedDate;
         const groupPaymentRows = paymentRowsForProcessedDate(groupProcessedDate, lineProcessedDates, paymentRows);
         const groupCheckAmountText = formatCheckAmounts(groupPaymentRows, paymentAmount, effectivePaidTotal);
-        const groupCheckNumber = uniqueJoin(groupPaymentRows.map(row => row.number), checkNumber);
-        const groupCheckDate = checkDateForProcessedDate(groupProcessedDate, lineProcessedDates, paymentRows, checkDateFallback);
+        const groupCheckNumber = checkNumberForPaymentRows(groupPaymentRows);
+        const groupCheckDate = checkDateForPaymentRows(groupProcessedDate, lineProcessedDates, groupPaymentRows, checkDateFallback);
 
         if (effectivePaidTotal > 0) {
           groupClaimResultParts.push(`DOS ${serviceDate} Claim processed by ${payerName} on ${groupProcessedDate} under Claim # ${claimNumber}. Payment issued via Check/EFT # ${groupCheckNumber} dated ${groupCheckDate}. Check Amount: ${groupCheckAmountText}.${groupResponsibilityText}`);
+        } else if (hasDeniedDetails(group.lineItems, fields.BotDenialDescription || fields.BotDenialReasonCode)) {
+          groupClaimResultParts.push(`DOS ${serviceDate} Claim processed by ${payerName} on ${groupProcessedDate} under Claim # ${claimNumber}. Claim is Denied under Check #: ${groupCheckNumber} dated ${groupCheckDate}. Check Amount: ${groupCheckAmountText}.`);
+        } else if (isInProcessClaimStatus(fields.BotClaimStatus)) {
+          groupClaimResultParts.push(`DOS ${serviceDate} Claim In Process from ${groupProcessedDate} by ${payerName} under Claim # ${claimNumber}.`);
         } else {
-          groupClaimResultParts.push(`DOS ${serviceDate} Claim processed by ${payerName} on ${groupProcessedDate} under Claim # ${claimNumber}. Claim is Denied under Check #: ${groupCheckNumber} dated ${groupCheckDate}.`);
+          groupClaimResultParts.push(`DOS ${serviceDate} Claim processed by ${payerName} on ${groupProcessedDate} under Claim # ${claimNumber}.`);
         }
 
         const serviceLineNotes = buildServiceLineNotes(group.lineItems, [groupCheckNumber, scrapedData['payment-number'] || '', fields.BotCheckEFTNumber || ''], false);
@@ -2944,8 +3108,9 @@ async function processRow(
   sendEvent: SendEvent
 ): Promise<BotFields> {
   const log = (msg: string) => sendEvent({ type: 'log', message: msg });
+  const targetServiceDate = normalizeUhcInputDate(claim.serviceDate) || String(claim.serviceDate ?? '').trim();
 
-  await log(`\n📄 Row ${rowNum}/${total} — Subscriber: ${claim.subscriberNo} | DOB: ${claim.patientDOB} | Date: ${claim.serviceDate}`);
+  await log(`\n📄 Row ${rowNum}/${total} — Subscriber: ${claim.subscriberNo} | DOB: ${claim.patientDOB} | Date: ${targetServiceDate}`);
 
   try {
     let searchMode: 'memberId' | 'name' = 'memberId';
@@ -2954,13 +3119,13 @@ async function processRow(
       await navigateToClaimSearch(page, sendEvent);
     }
     await searchClaim(page, claim, searchMode, clientType, sendEvent);
-    let match = await findMatchingClaim(page, claim, claim.serviceDate, searchMode, clientType, attempt, sendEvent);
+    let match = await findMatchingClaim(page, claim, targetServiceDate, searchMode, clientType, attempt, sendEvent);
 
     if (match && 'dosNotFound' in match) {
-      const message = `DOS not found for ${claim.serviceDate}. ${match.dosNotFound}`;
-      await log(`  ❌  Row ${rowNum}: DOS not found — ${claim.serviceDate}`);
+      const message = `DOS not found for ${targetServiceDate}. ${match.dosNotFound}`;
+      await log(`  ❌  Row ${rowNum}: DOS not found — ${targetServiceDate}`);
       return {
-        BotClaimResult: `DOS ${claim.serviceDate}: DOS not found.`,
+        BotClaimResult: `DOS ${targetServiceDate}: DOS not found.`,
         BotStatus: 'Error',
         BotStatusError: message,
         BotUpdateTime: new Date().toISOString(),
@@ -2992,12 +3157,12 @@ async function processRow(
         }
 
         await searchClaim(page, claim, searchMode, clientType, sendEvent);
-        match = await findMatchingClaim(page, claim, claim.serviceDate, searchMode, clientType, attempt, sendEvent);
+        match = await findMatchingClaim(page, claim, targetServiceDate, searchMode, clientType, attempt, sendEvent);
         if (match && 'dosNotFound' in match) {
-          const message = `DOS not found for ${claim.serviceDate}. ${match.dosNotFound}`;
-          await log(`  ❌  Row ${rowNum}: DOS not found — ${claim.serviceDate}`);
+          const message = `DOS not found for ${targetServiceDate}. ${match.dosNotFound}`;
+          await log(`  ❌  Row ${rowNum}: DOS not found — ${targetServiceDate}`);
           return {
-            BotClaimResult: `DOS ${claim.serviceDate}: DOS not found.`,
+            BotClaimResult: `DOS ${targetServiceDate}: DOS not found.`,
             BotStatus: 'Error',
             BotStatusError: message,
             BotUpdateTime: new Date().toISOString(),
@@ -3025,7 +3190,7 @@ async function processRow(
     if (!match) {
       const botFields: BotFields = {
         BotStatus:      'Skipped',
-        BotStatusError: `No claim found for Subscriber ${claim.subscriberNo} / Name ${claim.patientName || ''} on ${claim.serviceDate}`,
+        BotStatusError: `No claim found for Subscriber ${claim.subscriberNo} / Name ${claim.patientName || ''} on ${targetServiceDate}`,
         BotUpdateTime:  new Date().toISOString(),
       };
       await log(`  ⏭️  Row ${rowNum}: Skipped — no match.`);
@@ -3111,6 +3276,7 @@ export interface AutomationOptions {
   clientType?: string;
   corporateTaxIdOwner?: string;
   careProvider?: string;
+  providerMappings?: UhcProviderMapping[];
   providerOptionsOnly?: boolean;
   onProviderOptions?: (options: ProviderOptions) => void | Promise<void>;
   requestOtp?: () => Promise<string>;
@@ -3132,6 +3298,7 @@ export async function runAutomation(opts: AutomationOptions): Promise<void> {
     clientType     = 'minimax',
     corporateTaxIdOwner = '',
     careProvider   = '',
+    providerMappings = [],
     providerOptionsOnly = false,
     onProviderOptions,
     requestOtp,
@@ -3164,6 +3331,7 @@ export async function runAutomation(opts: AutomationOptions): Promise<void> {
   let context: BrowserContext | null = null;
   let page: Page | null = null;
   let activeCorporateTaxIdOwner = corporateTaxIdOwner;
+  let activeTaxIdNumber = '';
   let activeCareProvider = careProvider;
 
   try {
@@ -3293,6 +3461,7 @@ export async function runAutomation(opts: AutomationOptions): Promise<void> {
       await login(page, username, password, baseUrl, diagnosticRowIndex, attempt, clientType, requestOtp, sendEvent);
       await configureProviderSelection(page, {
         corporateTaxIdOwner: activeCorporateTaxIdOwner,
+        taxIdNumber: activeTaxIdNumber,
         careProvider: activeCareProvider,
       }, log);
       await navigateToClaimSearch(page, sendEvent);
@@ -3308,7 +3477,9 @@ export async function runAutomation(opts: AutomationOptions): Promise<void> {
       return;
     }
 
-    if (requestProviderSelection) {
+    if (providerMappings.length > 0) {
+      await log(`Loaded ${providerMappings.length} UHC provider mapping row(s). Provider selection will follow claim Group values.`);
+    } else if (requestProviderSelection) {
       const corporateTaxIdOwners = await scrapeCorporateTaxIdOwners(page, log);
       const corporateSelection = await requestProviderSelection({ corporateTaxIdOwners, careProviders: [] }, 'corporate');
       const selectedCorporateTaxIdOwner = corporateSelection.corporateTaxIdOwner || corporateTaxIdOwner;
@@ -3330,57 +3501,84 @@ export async function runAutomation(opts: AutomationOptions): Promise<void> {
     } else {
       await configureProviderSelection(page, { corporateTaxIdOwner, careProvider }, log);
     }
-    await navigateToClaimSearch(page, sendEvent);
+    const orderedClaims = providerMappings.length > 0
+      ? [...claims].sort((left, right) => getClaimGroup(left).localeCompare(getClaimGroup(right), undefined, { numeric: true, sensitivity: 'base' }))
+      : claims;
 
-    await log(`\n📊 Processing ${claims.length} rows. Starting from index ${startIndex}. Batch size: ${batchSize}.`);
-    await sendEvent({ type: 'progress', completed: startIndex, total: claims.length });
+    await log(`\nProcessing ${orderedClaims.length} rows. Starting from index ${startIndex}. Batch size: ${batchSize}.`);
+    await sendEvent({ type: 'progress', completed: startIndex, total: orderedClaims.length });
 
     let processedInBatch = 0;
     let i = startIndex;
+    let currentMappedGroupKey = '';
 
-    for (; i < claims.length; i++) {
+    for (; i < orderedClaims.length; i++) {
       if (processedInBatch >= batchSize) {
-        await log(`⏸️  Batch complete (${processedInBatch} rows). Auto-resuming from row ${i + 1}...`);
+        await log(`Batch complete (${processedInBatch} rows). Auto-resuming from row ${i + 1}...`);
         break;
+      }
+
+      const claim = orderedClaims[i];
+      const claimGroup = getClaimGroup(claim);
+      const claimGroupKey = normalizeMappingText(claimGroup) || extractMappingNumber(claimGroup);
+      if (providerMappings.length > 0 && claimGroupKey !== currentMappedGroupKey) {
+        const mapping = findProviderMappingForGroup(claimGroup, providerMappings);
+        if (!mapping) {
+          throw new Error(`No UHC provider mapping found for claim Group "${claimGroup}". Update public/provider-mappings/uhc-provider-mappings.xlsx.`);
+        }
+
+        activeCorporateTaxIdOwner = mapping.corporateTaxIdOwner || '';
+        activeTaxIdNumber = mapping.taxIdNumber || '';
+        activeCareProvider = mapping.careProvider || '';
+        await log(`Selecting UHC provider mapping for Group "${claimGroup}".`);
+        await configureProviderSelection(page, {
+          corporateTaxIdOwner: activeCorporateTaxIdOwner,
+          taxIdNumber: activeTaxIdNumber,
+          careProvider: activeCareProvider,
+        }, log);
+        await navigateToClaimSearch(page, sendEvent);
+        currentMappedGroupKey = claimGroupKey;
+      } else if (processedInBatch === 0) {
+        await navigateToClaimSearch(page, sendEvent);
       }
 
       let fields: BotFields;
       try {
-        fields = await processRow(page, claims[i], i, i + 1, claims.length, clientType, attempt, sendEvent);
+        fields = await processRow(page, claim, i, i + 1, orderedClaims.length, clientType, attempt, sendEvent);
       } catch (err) {
         if (isUhcSessionRecoveryError(err)) {
           await log(`  UHC returned a temporary system error. Re-opening browser and retrying row ${i + 1} once...`);
-          page = await restartSessionAndReturnToSearch(err.message, claims[i].rowIndex ?? i + 2);
+          page = await restartSessionAndReturnToSearch(err.message, claim.rowIndex ?? i + 2);
         } else if (isUhcRowRetryableError(err)) {
           await log(`  UHC retryable row condition: ${err.message}. Re-searching row ${i + 1} once...`);
           await navigateToClaimSearch(page, sendEvent).catch(async (navErr) => {
             await log(`  Could not return to claim search before retry: ${navErr}. Re-opening browser session...`);
-            page = await restartSessionAndReturnToSearch(err.message, claims[i].rowIndex ?? i + 2);
+            page = await restartSessionAndReturnToSearch(err.message, claim.rowIndex ?? i + 2);
           });
         } else {
           throw err;
         }
-        fields = await processRow(page, claims[i], i, i + 1, claims.length, clientType, attempt, sendEvent);
+        fields = await processRow(page, claim, i, i + 1, orderedClaims.length, clientType, attempt, sendEvent);
       }
 
-      await log(`  ℹ️  Sending row_update for row ${claims[i].rowIndex}: keys=[${Object.keys(fields).join(', ')}]`);
+      await log(`  Sending row_update for row ${claim.rowIndex}: keys=[${Object.keys(fields).join(', ')}]`);
       if (fields.BotClaimDetails) {
-        await log(`  ℹ️  Sending BotClaimDetails: length ${fields.BotClaimDetails.length}`);
+        await log(`  Sending BotClaimDetails: length ${fields.BotClaimDetails.length}`);
       } else {
-        await log(`  ⚠️  Sending BotClaimDetails: EMPTY OR UNDEFINED`);
+        await log(`  Sending BotClaimDetails: EMPTY OR UNDEFINED`);
       }
 
       await sendEvent({
         type:     'row_update',
-        index:    i,           // 0-based for workbook lookup
-        rowIndex: claims[i].rowIndex, // 1-based Excel row
+        index:    i,
+        rowIndex: claim.rowIndex,
         update:   fields,
       });
 
       await sendEvent({
         type:      'progress',
         completed: i + 1,
-        total:     claims.length,
+        total:     orderedClaims.length,
       });
 
       processedInBatch++;

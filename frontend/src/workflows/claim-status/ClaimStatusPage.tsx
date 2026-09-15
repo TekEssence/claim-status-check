@@ -326,10 +326,10 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     canDownloadOutput: canDownloadAvailityOutput,
   } = availity;
   const {
-    uhcLoginFile, setUhcLoginFile, uhcClaimFileHandle, uhcClaimFileName,
+    uhcLoginFile, setUhcLoginFile, uhcClaimFile,
     uhcGroupId, setUhcGroupId, uhcBrowserType, setUhcBrowserType, uhcJobId, setUhcJobId,
     uhcOtpRequest, setUhcOtpRequest, uhcOtpValue, setUhcOtpValue, uhcProviderPrompt, setUhcProviderPrompt,
-    canSubmitUhc, selectUhcClaimFile, submitUhcOtp, submitUhcProviderSelection, submitUhc,
+    canSubmitUhc, handleUhcClaimFileChange, submitUhcOtp, submitUhcProviderSelection, submitUhc,
   } = useUhcController({
     canStartAnotherRun,
     resetRunState,
@@ -464,8 +464,8 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
 
     if (effectivePortalId === "uhc") {
       return {
-        claimFileLabel: uhcClaimFileName,
-        claimReady: Boolean(uhcClaimFileHandle),
+        claimFileLabel: uhcClaimFile?.name ?? "",
+        claimReady: Boolean(uhcClaimFile),
         loginFileLabel: uhcLoginFile?.name ?? "",
         loginReady: Boolean(uhcLoginFile),
       };
@@ -575,8 +575,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     physiciansInputFile,
     regalClaimFile,
     regalLoginFile,
-    uhcClaimFileHandle,
-    uhcClaimFileName,
+    uhcClaimFile,
     uhcLoginFile,
     waystarInputFile,
     waystarLoginFile,
@@ -3496,12 +3495,12 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
 <UhcInputForm
                       browserType={uhcBrowserType}
                       canSubmit={canSubmitUhc}
-                      claimFileName={uhcClaimFileName}
+                      claimFileName={uhcClaimFile?.name ?? ""}
                       groupId={uhcGroupId}
                       isProcessing={blockPortalFormForProcessing}
                       loginFileName={uhcLoginFile?.name ?? ""}
                       onBrowserTypeChange={setUhcBrowserType}
-                      onClaimFileSelect={selectUhcClaimFile}
+                      onClaimFileChange={handleUhcClaimFileChange}
                       onGroupChange={setUhcGroupId}
                       onLoginFileChange={setUhcLoginFile}
                       onSubmit={submitUhc}

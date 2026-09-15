@@ -1,7 +1,7 @@
 import { waitForScrapeJobInput } from "@/backend/src/jobs/job-store";
 import type { ScraperContext } from "../../types";
 import { readLoginExcel } from "./excel";
-import { runAutomation, type ProviderSelection, type SseEvent } from "./automation";
+import { runAutomation, type ProviderSelection, type SseEvent, type UhcProviderMapping } from "./automation";
 
 function getRequiredFile(formData: FormData, key: string): File {
   const value = formData.get(key);
@@ -36,6 +36,28 @@ function parseProviderSelection(value: string, stage: "corporate" | "care"): Pro
   }
 }
 
+function parseProviderMappings(value: string): UhcProviderMapping[] {
+  if (!value.trim()) return [];
+  const parsed = JSON.parse(value);
+  if (!Array.isArray(parsed)) {
+    throw new Error("providerMappings must be a JSON array.");
+  }
+
+  return parsed.map((row, index) => {
+    const source = row && typeof row === "object" ? row as Record<string, unknown> : {};
+    const mapping = {
+      group: typeof source.group === "string" ? source.group.trim() : "",
+      corporateTaxIdOwner: typeof source.corporateTaxIdOwner === "string" ? source.corporateTaxIdOwner.trim() : "",
+      taxIdNumber: typeof source.taxIdNumber === "string" ? source.taxIdNumber.trim() : "",
+      careProvider: typeof source.careProvider === "string" ? source.careProvider.trim() : "",
+    };
+    if (!mapping.group) {
+      throw new Error(`providerMappings row ${index + 1} is missing Group.`);
+    }
+    return mapping;
+  });
+}
+
 export async function runUhcClaimStatusJob(formData: FormData, context: ScraperContext): Promise<void> {
   const loginExcel = getRequiredFile(formData, "loginExcel");
   const claimRowsJson = getRequiredString(formData, "claimRows");
@@ -49,6 +71,7 @@ export async function runUhcClaimStatusJob(formData: FormData, context: ScraperC
   const attempt = Number(getOptionalString(formData, "attempt", "1"));
   const browserType = getOptionalString(formData, "browserType", "chrome");
   const clientType = getOptionalString(formData, "clientType", "minimax");
+  const providerMappings = parseProviderMappings(getOptionalString(formData, "providerMappings", ""));
 
   const sendEvent = async (event: SseEvent) => {
     await context.emit(event as unknown as Record<string, unknown>);
@@ -56,7 +79,7 @@ export async function runUhcClaimStatusJob(formData: FormData, context: ScraperC
 
   await context.log({
     level: "info",
-    message: `UHC input loaded: ${claims.length} row(s). Group: ${clientType}.`,
+    message: `UHC input loaded: ${claims.length} row(s). Group: ${clientType}. Provider mappings: ${providerMappings.length}.`,
   });
 
   await runAutomation({
@@ -67,6 +90,7 @@ export async function runUhcClaimStatusJob(formData: FormData, context: ScraperC
     startIndex: Number.isFinite(startIndex) && startIndex >= 0 ? startIndex : 0,
     browserType,
     clientType,
+    providerMappings,
     requestOtp: async () => {
       const inputName = `uhc_otp_${crypto.randomUUID()}`;
       await context.emit({

@@ -2,6 +2,7 @@ import type ExcelJS from "exceljs";
 
 export type UhcClaimRow = {
   rowIndex: number;
+  group: string;
   subscriberNo: string;
   patientDOB: string;
   serviceDate: string;
@@ -56,7 +57,7 @@ function parseMoneyValue(value: unknown): number | null {
   return isAccountingNegative || isLeadingNegative ? -amount : amount;
 }
 
-function normalizeDateValue(value: unknown): string {
+function normalizeDateValue(value: unknown, options: { allowHistoricalSerial?: boolean } = {}): string {
   if (value === null || value === undefined || value === "") return "";
   if (value instanceof Date) {
     const month = String(value.getUTCMonth() + 1).padStart(2, "0");
@@ -64,6 +65,7 @@ function normalizeDateValue(value: unknown): string {
     return `${month}/${day}/${value.getUTCFullYear()}`;
   }
   if (typeof value === "number" && Number.isFinite(value)) {
+    if (!options.allowHistoricalSerial && value < 30_000) return String(value).trim();
     const epoch = Date.UTC(1899, 11, 30);
     const date = new Date(epoch + value * 24 * 60 * 60 * 1000);
     const month = String(date.getUTCMonth() + 1).padStart(2, "0");
@@ -71,7 +73,7 @@ function normalizeDateValue(value: unknown): string {
     return `${month}/${day}/${date.getUTCFullYear()}`;
   }
   if (typeof value === "object" && "text" in value) {
-    return normalizeDateValue((value as { text?: unknown }).text);
+    return normalizeDateValue((value as { text?: unknown }).text, options);
   }
   return String(value).trim();
 }
@@ -87,6 +89,19 @@ function findColumn(headerRow: ExcelJS.Row, aliases: string[]): number {
     if (found) return;
     const normalized = normalizeHeader(cellText(cell.value));
     if (normalizedAliases.some((alias) => normalized === alias || normalized.includes(alias))) {
+      found = colNum;
+    }
+  });
+  return found;
+}
+
+function findExactColumn(headerRow: ExcelJS.Row, aliases: string[]): number {
+  const normalizedAliases = new Set(aliases.map(normalizeHeader));
+  let found = 0;
+  headerRow.eachCell((cell, colNum) => {
+    if (found) return;
+    const normalized = normalizeHeader(cellText(cell.value));
+    if (normalizedAliases.has(normalized)) {
       found = colNum;
     }
   });
@@ -118,6 +133,13 @@ export function parseUhcClaimRows(
   options: { requirePatientDob?: boolean } = {},
 ): UhcClaimRow[] {
   const headerRow = worksheet.getRow(1);
+  const groupCol = findColumn(headerRow, [
+    "group",
+    "group name",
+    "medical group",
+    "medical group name",
+    "provider group",
+  ]);
   const subscriberCol = findColumn(headerRow, [
     "subscriber no",
     "subscriber number",
@@ -145,7 +167,7 @@ export function parseUhcClaimRows(
     "birth date",
     "birth",
   ]);
-  const serviceDateCol = findColumn(headerRow, [
+  const serviceDateCol = findExactColumn(headerRow, ["dos"]) || findColumn(headerRow, [
     "service date",
     "date of service",
     "dos",
@@ -160,24 +182,29 @@ export function parseUhcClaimRows(
   const firstNameCol = findColumn(headerRow, ["first name", "patient first name", "member first name", "subscriber first name"]);
   const lastNameCol = findColumn(headerRow, ["last name", "patient last name", "member last name", "subscriber last name"]);
 
-  if (!subscriberCol || !serviceDateCol) {
+  if (!groupCol || !subscriberCol || !serviceDateCol) {
     throw new Error(
       options.requirePatientDob
-        ? 'Missing required columns. Minimax UHC requires subscriber/member id and service date columns.'
-        : 'Missing required columns. MedRevenu UHC requires subscriber/member id and service date columns.',
+        ? 'Missing required columns. Minimax UHC requires Group, subscriber/member id, and service date columns.'
+        : 'Missing required columns. MedRevenu UHC requires Group, subscriber/member id, and service date columns.',
     );
   }
 
   const rows: UhcClaimRow[] = [];
   worksheet.eachRow((row, rowNumber) => {
     if (rowNumber === 1) return;
+    const group = cellText(row.getCell(groupCol).value);
     const subscriberNo = cellText(row.getCell(subscriberCol).value);
     if (!subscriberNo) return;
+    if (!group) {
+      throw new Error(`UHC claim row ${rowNumber} is missing required Group value.`);
+    }
     const source: UhcClaimRow = {
       rowIndex: rowNumber,
+      group,
       subscriberNo,
-      patientDOB: dobCol ? normalizeDateValue(row.getCell(dobCol).value) : "",
-      serviceDate: normalizeDateValue(row.getCell(serviceDateCol).value),
+      patientDOB: dobCol ? normalizeDateValue(row.getCell(dobCol).value, { allowHistoricalSerial: true }) : "",
+      serviceDate: normalizeDateValue(row.getCell(serviceDateCol).value, { allowHistoricalSerial: false }),
       patientName: patientCol ? cellText(row.getCell(patientCol).value) : "",
       patientFirstName: firstNameCol ? cellText(row.getCell(firstNameCol).value) : "",
       patientLastName: lastNameCol ? cellText(row.getCell(lastNameCol).value) : "",
@@ -240,7 +267,7 @@ export function postProcessUhcWorksheet(worksheet: ExcelJS.Worksheet): void {
     "policy id",
     "policy number",
   ]);
-  const serviceDateCol = findColumn(headerRow, [
+  const serviceDateCol = findExactColumn(headerRow, ["dos"]) || findColumn(headerRow, [
     "service date",
     "date of service",
     "dos",
