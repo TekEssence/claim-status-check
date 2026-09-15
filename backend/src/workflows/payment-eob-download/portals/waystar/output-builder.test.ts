@@ -16,7 +16,7 @@ test("Waystar search results use the required column order", async () => {
   const output = await buildWaystarSearchResults([result]);
   await workbook.xlsx.load(output.buffer.slice(output.byteOffset, output.byteOffset + output.byteLength) as ArrayBuffer);
   const sheet = workbook.worksheets[0];
-  assert.deepEqual(sheet.getRow(1).values, [undefined, "Phase", "Client Name", "Input Check Number", "Input Batch Total Amount", "Search Result",
+  assert.deepEqual(Array.from(sheet.getRow(1).values as unknown[]), [undefined, "Phase", "Client Name", "Input Check Number", "Input Batch Total Amount", "Search Result",
     "Portal Payment #", "Portal Payment Amount", "Portal Payment Date", "Portal Payer", "Portal Type", "Amount Match", "PDF Status",
     "PDF File Name", "Archive Status", "Final Result", "Error"]);
   assert.equal(sheet.getRow(2).getCell(9).value, "Payer A");
@@ -30,7 +30,7 @@ test("Waystar control output preserves rows and updates only successful payments
   const output = await buildWaystarControlLog(headers, [row], new Map([[2, result]]));
   await workbook.xlsx.load(output.buffer.slice(output.byteOffset, output.byteOffset + output.byteLength) as ArrayBuffer);
   const values = workbook.worksheets[0].getRow(2).values;
-  assert.deepEqual(values, [undefined, "Clinic A", "00123.pdf", "Web", "ACH", "00123", "08/27/2026", "$10.00", "original"]);
+  assert.deepEqual(Array.from(values as unknown[]), [undefined, "Clinic A", "00123.pdf", "Web", "ACH", "00123", "08/27/2026", "$10.00", "original"]);
 });
 
 test("Waystar zero-payment output uses the requested columns", async () => {
@@ -48,9 +48,9 @@ test("Waystar zero-payment output uses the requested columns", async () => {
   }]);
   await workbook.xlsx.load(output.buffer.slice(output.byteOffset, output.byteOffset + output.byteLength) as ArrayBuffer);
   const sheet = workbook.worksheets[0];
-  assert.deepEqual(sheet.getRow(1).values, [undefined, "Source", "Mode of Payment", "Check Number", "Deposit Date / Payment Posting Date", "Batch Total Amount",
+  assert.deepEqual(Array.from(sheet.getRow(1).values as unknown[]), [undefined, "Source", "Mode of Payment", "Check Number", "Deposit Date / Payment Posting Date", "Batch Total Amount",
     "PDF File Name", "Download Status", "Archive Status", "Error"]);
-  assert.deepEqual(sheet.getRow(2).values, [undefined, "Waystar", "NON", "NO-PAY-1", "08/28/2026", "$0.00",
+  assert.deepEqual(Array.from(sheet.getRow(2).values as unknown[]), [undefined, "Waystar", "NON", "NO-PAY-1", "08/28/2026", "$0.00",
     "NO-PAY-1_08_28_2026.pdf", "DOWNLOAD_SUCCESS", "ARCHIVED_SUCCESS", ""]);
 });
 
@@ -71,7 +71,7 @@ test("Waystar bulk output creates a phase-specific workbook", async () => {
   await workbook.xlsx.load(output.buffer.slice(output.byteOffset, output.byteOffset + output.byteLength) as ArrayBuffer);
   const sheet = workbook.worksheets[0];
   assert.equal(sheet.name, "ACH Payments");
-  assert.deepEqual(sheet.getRow(1).values, [undefined, "Client Name", "Payment Type", "Payment Number", "Payment Amount", "Payment Date", "Payer",
+  assert.deepEqual(Array.from(sheet.getRow(1).values as unknown[]), [undefined, "Client Name", "Payment Type", "Payment Number", "Payment Amount", "Payment Date", "Payer",
     "PDF File Name", "Download Status", "Archive Status", "Error"]);
   assert.equal(sheet.getRow(2).getCell(3).value, "83561562");
 });

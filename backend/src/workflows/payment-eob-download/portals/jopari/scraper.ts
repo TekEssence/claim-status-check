@@ -1,3 +1,4 @@
+import { paymentFilename } from "../../filename";
 import fs from "node:fs/promises";
 import path from "node:path";
 import * as XLSX from "xlsx";
@@ -307,7 +308,7 @@ async function exportPayments(page: Page, outputRoot: string, lookbackDays: numb
   return { rows, exportName };
 }
 
-async function searchAndDownloadPdf(page: Page, row: ExportRow, pdfFolder: string): Promise<string | null> {
+async function searchAndDownloadPdf(page: Page, row: ExportRow, pdfFolder: string, group?: string): Promise<string | null> {
   const useBatch = normalizeJopariIdentifier(row.eftCheckNumber) === "0";
   const checkInput = page.locator("#srchEfteft");
   const batchInput = page.locator("#srchEftbatchId, input[name='batchId']").first();
@@ -325,7 +326,7 @@ async function searchAndDownloadPdf(page: Page, row: ExportRow, pdfFolder: strin
   if (!response.ok()) throw new Error(`Jopari EOB PDF returned HTTP ${response.status()}.`);
   const pdf = Buffer.from(await response.body());
   if (pdf.subarray(0, 5).toString() !== "%PDF-") throw new Error("Jopari EOB response was not a PDF.");
-  const filename = `${safe(row.eftCheckNumber || row.batchId)}_${safe(row.payDate.replace(/\//g, "-"))}.pdf`;
+  const filename = await paymentFilename(pdfFolder, { group, payer: row.payer, mode: row.paymentMethod, amount: row.paidAmount, number: row.eftCheckNumber || row.batchId, date: row.payDate });
   await fs.writeFile(path.join(pdfFolder, filename), pdf);
   await popup.close().catch(() => {});
   return filename;
@@ -352,7 +353,7 @@ async function runJopari(input: RunInput, context: AutomationContext): Promise<v
       const row = unique[index];
       if (context.isCancelled?.()) break;
       try {
-        const filename = await searchAndDownloadPdf(page, row, pdfFolder);
+        const filename = await searchAndDownloadPdf(page, row, pdfFolder, input.credentials.clientName);
         audit.push({ ...row, comparison: "Unique", searchResult: filename ? "Found" : "Not found", downloadStatus: filename ? "Downloaded" : "Not downloaded", filename: filename ?? "", message: filename ? "EOB PDF downloaded." : "No matching Jopari payment row or image was found." });
       } catch (error) {
         audit.push({ ...row, comparison: "Unique", searchResult: "Error", downloadStatus: "Error", filename: "", message: error instanceof Error ? error.message : String(error) });

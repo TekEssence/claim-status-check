@@ -79,6 +79,7 @@ export async function readEchoRemittanceCredentials(file: File): Promise<Payment
 
     return {
       loginUrl: normalizeLoginUrl(findValue(row, ["Link", "URL", "Login URL", "Portal Link"])),
+      clientName: findValue(row, ["Client Name", "Client", "Client Code", "Group", "Group Name"]),
       username,
       password,
       totpSecret,

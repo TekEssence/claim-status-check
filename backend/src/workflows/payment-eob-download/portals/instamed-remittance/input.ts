@@ -71,6 +71,7 @@ export async function readInstamedRemittanceCredentials(file: File): Promise<Pay
 
     return {
       loginUrl: normalizeLoginUrl(findValue(row, ["Link", "URL", "Login URL", "Portal Link"])),
+      clientName: findValue(row, ["Client Name", "Client", "Client Code", "Group", "Group Name"]),
       username,
       password,
       corporateId,

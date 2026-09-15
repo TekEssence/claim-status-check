@@ -1,3 +1,4 @@
+import { paymentFilename, paymentMode } from "../../filename";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright-core";
@@ -289,17 +290,14 @@ async function openSummary(page: Page): Promise<void> {
   await page.getByText("Payment Remittance Response", { exact: true }).waitFor({ state: "visible", timeout: 60000 });
 }
 
-async function downloadEdiFromSummary(page: Page, outputFolder: string, record: PaymentEobPortalRecord): Promise<string> {
+async function downloadEdiFromSummary(page: Page, outputFolder: string, record: PaymentEobPortalRecord, group?: string): Promise<string> {
   await page.locator("a,button").filter({ hasText: /^EDI$/i }).first().click({ timeout: 30000 });
   const downloadPromise = page.waitForEvent("download", { timeout: 90000 });
   await page.locator("a,button").filter({ hasText: /^Download$/i }).last().click({ timeout: 30000 });
   const download = await downloadPromise;
   const suggested = download.suggestedFilename();
   const extension = path.extname(suggested) || ".txt";
-  const paymentDatePart = dateFilePart(record.checkDate);
-  const filename = paymentDatePart
-    ? `${safeFilePart(record.checkNumber)}_${paymentDatePart}${extension}`
-    : `${safeFilePart(record.checkNumber)}${extension}`;
+  const filename = await paymentFilename(outputFolder, { group, payer: record.payer, mode: record.modeOfPayment || paymentMode(record.raw), amount: record.amount, number: record.checkNumber, date: record.checkDate }, extension);
   await download.saveAs(path.join(outputFolder, filename));
   await page.locator("a,button").filter({ hasText: /^Close$/i }).first().click({ timeout: 10000 }).catch(async () => {
     await page.keyboard.press("Escape").catch(() => {});
@@ -379,7 +377,7 @@ export async function runInstamedRemittanceJob(input: RunInput, context: Automat
           });
         } else {
           await openSummary(page);
-          const filename = await downloadEdiFromSummary(page, outputEdiFolder, record);
+          const filename = await downloadEdiFromSummary(page, outputEdiFolder, { ...record, modeOfPayment: paymentMode(record.raw) || input.referenceRows?.find(row => normalizeCheckNumber(row.checkNumber) === normalizeCheckNumber(record.checkNumber))?.modeOfPayment }, input.credentials.clientName);
           comparisonRows.push({
             checkNumber: record.checkNumber,
             checkDate: record.checkDate,

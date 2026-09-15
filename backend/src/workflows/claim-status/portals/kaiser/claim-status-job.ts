@@ -1,11 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { Browser, Frame, Locator, Page } from "playwright-core";
+import type { Browser, Locator, Page } from "playwright-core";
 import { closeAutomationResources } from "@/backend/src/core/runtime-config";
 import { getJobDataPath } from "@/backend/src/core/storage";
 import type { ScraperContext } from "../../types";
 import { launchKaiserBrowser } from "./browser";
 import { kaiserConfig } from "./config";
+import { candidateStagesByReceivedDateAndStatus, matchKaiserName, selectKaiserCandidate, serviceDatesMatch, type SelectionCandidate } from "./selection";
 import { extractCptFromServiceText, normalizeCptCode, parseKaiserInput, readKaiserInputWorkbook, type KaiserInputRow } from "./input";
 import { createKaiserOutputWorkbookBuffer, type KaiserAuditRow, type KaiserOutputRow, type KaiserWorkbookState } from "./workbook";
 
@@ -152,56 +153,6 @@ function normalizeSearchValue(value: string): string {
   return value.replace(/\s+/g, "").trim().toUpperCase();
 }
 
-function normalizePatientName(value: string): string {
-  return value
-    .toLowerCase()
-    .replace(/[^\p{L}\p{N}\s]/gu, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function patientNameTokens(value: string): string[] {
-  const noNicknames = value.replace(/"[^"]*"/g, " ");
-  return normalizePatientName(noNicknames)
-    .split(" ")
-    .map((token) => token.trim())
-    .filter(Boolean)
-    .sort();
-}
-
-const NAME_SUFFIX_TOKENS = new Set(["jr", "sr", "ii", "iii", "iv", "v"]);
-
-function isIgnorableNameToken(token: string): boolean {
-  // Single-letter tokens are middle initials; these plus generational suffixes are the parts
-  // that inconsistently appear (or don't) between the Excel input and the Kaiser portal, e.g.
-  // Excel "Cade Jr, Richard D" vs portal "Cade, Richard Jr." Ignore them for matching purposes.
-  return token.length <= 1 || NAME_SUFFIX_TOKENS.has(token);
-}
-
-function coreNameTokens(tokens: string[]): string[] {
-  return tokens.filter((token) => !isIgnorableNameToken(token));
-}
-
-function patientNamesMatch(portalName: string, excelName: string): boolean {
-  const portalTokens = patientNameTokens(portalName);
-  const excelTokens = patientNameTokens(excelName);
-  if (!portalTokens.length || !excelTokens.length) return false;
-
-  // Exact token match (original behavior) still takes priority.
-  if (excelTokens.every((token) => portalTokens.includes(token))) return true;
-
-  // Relaxed match: compare only the core name tokens (first/last name etc.), ignoring middle
-  // initials and generational suffixes that may appear in only one of the two sources. Both
-  // sides' core tokens must match each other fully, so a genuine different name still fails.
-  const portalCore = coreNameTokens(portalTokens);
-  const excelCore = coreNameTokens(excelTokens);
-  if (!portalCore.length || !excelCore.length) return false;
-  return (
-    excelCore.every((token) => portalCore.includes(token)) &&
-    portalCore.every((token) => excelCore.includes(token))
-  );
-}
-
 function normalizeDateValue(value: string): string {
   const text = value.trim();
   const match = text.match(/^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{2,4})$/);
@@ -212,6 +163,14 @@ function normalizeDateValue(value: string): string {
   const year = rawYear < 100 ? 2000 + rawYear : rawYear;
   if (!month || !day || !year) return text;
   return `${year.toString().padStart(4, "0")}-${month.toString().padStart(2, "0")}-${day.toString().padStart(2, "0")}`;
+}
+
+function stagedSearchRowsByReceivedDateAndStatus(rows: ClaimSearchRow[]): ClaimSearchRow[][] {
+  return candidateStagesByReceivedDateAndStatus(rows.map((row) => ({
+    row,
+    receivedDate: getCell(row.cells, ["Clm Rcv Dt"]),
+    status: getCell(row.cells, ["Status"]),
+  }))).map((stage) => stage.map((item) => item.row));
 }
 
 function getCell(cells: Record<string, string>, names: string[]): string {
@@ -320,18 +279,23 @@ function addAudit(state: KaiserWorkbookState, inputRow: KaiserInputRow | null, s
 async function findVisibleLocator(page: Page, selector: string, timeout = 1500): Promise<Locator | null> {
   const deadline = Date.now() + timeout;
   while (Date.now() < deadline) {
-    const candidates: Array<Page | Frame> = [page, ...page.frames()];
-    for (const candidate of candidates) {
-      const remaining = deadline - Date.now();
-      if (remaining <= 0) return null;
-      const locator = candidate.locator(selector).first();
+    // Check every frame on each pass. Sequential waits can exhaust a short
+    // timeout on the main frame before the portal's content frame is visited.
+    const matches = await Promise.all(page.frames().map(async (frame) => {
       try {
-        await locator.waitFor({ state: "visible", timeout: Math.min(remaining, 120) });
-        return locator;
+        const locators = await frame.locator(selector).all();
+        for (const locator of locators) {
+          if (await locator.isVisible()) return locator;
+        }
       } catch {
-        // Try the next frame without multiplying the total timeout.
+        // A redirect can detach a frame while we inspect it.
       }
-    }
+      return null;
+    }));
+    const visible = matches.find((locator) => locator !== null);
+    if (visible) return visible;
+    const remaining = deadline - Date.now();
+    if (remaining > 0) await page.waitForTimeout(Math.min(remaining, 100));
   }
   return null;
 }
@@ -407,16 +371,10 @@ async function acceptLoginMessageIfPresent(page: Page, context: ScraperContext, 
   if (!messageVisible) return false;
 
   await context.log({ level: "info", message: "Kaiser login message page detected. Accepting and continuing." });
-  const accepted = await clickIfVisible(page, kaiserConfig.selectors.loginMessageAccept, 5000);
-  if (!accepted) {
-    throw new Error("Kaiser login message page appeared, but the Accept button was not clickable.");
-  }
-
-  await page.waitForLoadState("domcontentloaded", { timeout: 30000 }).catch(() => {});
-  await page.waitForTimeout(1200);
-  if (await isKaiserLoginMessageVisible(page)) {
-    throw new Error("Kaiser login message page remained visible after clicking Accept.");
-  }
+  const accept = await findVisibleLocator(page, kaiserConfig.selectors.loginMessageAccept, 5000);
+  if (!accept) throw new Error("Kaiser login message appeared, but the Accept button was not visible.");
+  await accept.click({ timeout: 10000 });
+  await waitForKaiserLoginOutcome(page, false);
   await context.log({ level: "info", message: "Kaiser login message accepted." });
   return true;
 }
@@ -450,40 +408,93 @@ async function captureDiagnostics(context: ScraperContext, page: Page, inputRow:
   }
 }
 
+function safeKaiserLoginUrl(raw: string): string {
+  try {
+    const url = new URL(raw);
+    return `${url.origin}${url.pathname}`;
+  } catch {
+    return "[invalid URL]";
+  }
+}
+
+class KaiserSignedOffError extends Error {}
+
+async function waitForKaiserLoginOutcome(page: Page, allowMessage: boolean): Promise<void> {
+  const deadline = Date.now() + 60000;
+  while (Date.now() < deadline) {
+    const body = await visibleBodyText(page);
+    if (/forbidden|access denied|an error has been reported/i.test(body)) {
+      throw new Error(`Kaiser rejected sign on at ${safeKaiserLoginUrl(page.url())}. See sanitized login redirect logs.`);
+    }
+    if (/invalid (?:username|password|credentials)|incorrect (?:username|password)|authentication failed/i.test(body)) {
+      throw new Error("Kaiser reported a credential error; no automatic resubmission was attempted.");
+    }
+    if (/you have signed off|session.*(?:expired|ended)/i.test(body) ||
+        /\/(?:bye_msg\.asp|logout\.htm)(?:[?#]|$)/i.test(page.url()) ||
+        await findVisibleLocator(page, "a:has-text('Sign on again')", 150)) {
+      throw new KaiserSignedOffError("Kaiser signed off during login.");
+    }
+    if (allowMessage && await isKaiserLoginMessageVisible(page)) return;
+    if (await findVisibleLocator(page, `${kaiserConfig.selectors.claimSearchCard}, ${kaiserConfig.selectors.claimsTopNav}`, 300)) return;
+    if (/\/cs\/common\/epic_main\.asp(?:[?#]|$)/i.test(page.url()) &&
+        await findVisibleLocator(page, "text=Welcome to Kaiser Permanente Southern California Affiliate Link", 300)) return;
+    const warning = await findVisibleLocator(page, kaiserConfig.selectors.fontDialogOk, 150);
+    if (warning) await warning.click({ timeout: 5000 });
+    await page.waitForTimeout(300);
+  }
+  throw new Error(`Kaiser sign on did not reach the expected portal page within 60 seconds (${safeKaiserLoginUrl(page.url())}).`);
+}
+
 async function login(page: Page, input: Awaited<ReturnType<typeof parseKaiserInput>>, context: ScraperContext): Promise<void> {
-  await context.log({ level: "info", message: "Opening Kaiser EpicLink sign on page." });
-  await page.goto(input.credentials.loginUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
-
-  for (let attempt = 1; attempt <= 2; attempt++) {
-    await context.log({ level: "info", message: `Typing Kaiser credentials${attempt > 1 ? ` after signed-off retry ${attempt}` : ""}.` });
-    await typeVisibleLikeHuman(page, kaiserConfig.selectors.username, input.credentials.username, 80);
-    await typeVisibleLikeHuman(page, kaiserConfig.selectors.password, input.credentials.password, 80);
-    await context.log({ level: "info", message: "Submitting Kaiser sign on form." });
-    await Promise.all([
-      page.waitForLoadState("domcontentloaded", { timeout: 30000 }).catch(() => {}),
-      clickIfVisible(page, kaiserConfig.selectors.submit, 3000),
-    ]);
-    await page.waitForTimeout(1500);
-
-    const signedOffAgain = await clickIfVisible(page, "a:has-text('Sign on again')", 700);
-    if (!signedOffAgain) break;
-
-    await context.log({ level: "warn", message: "Kaiser showed signed-off page after login. Clicking Sign on again and retrying login." });
-    await page.waitForLoadState("domcontentloaded", { timeout: 30000 }).catch(() => {});
-    await findVisibleLocator(page, kaiserConfig.selectors.username, 15000);
+  const onResponse = (response: import("playwright-core").Response) => {
+    const request = response.request();
+    if (!request.isNavigationRequest() || request.frame() !== page.mainFrame()) return;
+    void context.log({ level: "info", message: `Kaiser login navigation: HTTP ${response.status()} ${safeKaiserLoginUrl(response.url())}` }).catch(() => {});
+  };
+  page.on("response", onResponse);
+  try {
+    const loginUrl = new URL(input.credentials.loginUrl);
+    if (/\/pa\/oidc\/cb\/?$/i.test(loginUrl.pathname) || loginUrl.searchParams.has("code")) {
+      throw new Error("Kaiser login URL must be the original portal entry URL, not an authentication callback. Correct the workbook URL.");
+    }
+    await context.log({ level: "info", message: `Opening Kaiser sign on: ${safeKaiserLoginUrl(input.credentials.loginUrl)}` });
+    await page.goto(input.credentials.loginUrl, { waitUntil: "load", timeout: 60000 });
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        const username = await findVisibleLocator(page, kaiserConfig.selectors.username, 15000);
+        const password = await findVisibleLocator(page, kaiserConfig.selectors.password, 15000);
+        if (!username || !password) throw new Error("Kaiser sign-on form did not become ready.");
+        await context.log({ level: "info", message: "Typing Kaiser credentials." });
+        await typeVisibleLikeHuman(page, kaiserConfig.selectors.username, input.credentials.username, 80);
+        await typeVisibleLikeHuman(page, kaiserConfig.selectors.password, input.credentials.password, 80);
+        await password.press("Tab");
+        if (await username.inputValue() !== input.credentials.username || await password.inputValue() !== input.credentials.password) {
+          throw new Error("Kaiser login fields did not retain the supplied credentials; sign on was not submitted.");
+        }
+        const submit = await findVisibleLocator(page, kaiserConfig.selectors.submit, 10000);
+        if (!submit) throw new Error("Kaiser Sign on button was not visible.");
+        await context.log({ level: "info", message: "Submitting Kaiser sign on once and waiting for the authentication outcome." });
+        await submit.click({ timeout: 15000 });
+        await waitForKaiserLoginOutcome(page, true);
+        if (await isKaiserLoginMessageVisible(page)) {
+          await acceptLoginMessageIfPresent(page, context, 8000);
+        }
+        await waitForKaiserLoginOutcome(page, false);
+        await context.log({ level: "info", message: "Kaiser login completed; portal navigation is visible." });
+        return;
+      } catch (error) {
+        if (!(error instanceof KaiserSignedOffError)) throw error;
+        if (attempt === 2) throw new Error("Kaiser signed off again after the single Sign on again retry.");
+        const signOnAgain = await findVisibleLocator(page, "a:has-text('Sign on again')", 15000);
+        if (!signOnAgain) throw new Error("Kaiser signed off, but no Sign on again link appeared within 15 seconds.");
+        await context.log({ level: "warn", message: "Kaiser signed off. Clicking Sign on again and waiting for a fresh login form (one retry)." });
+        await signOnAgain.click({ timeout: 10000 });
+        await page.waitForLoadState("load", { timeout: 30000 });
+      }
+    }
+  } finally {
+    page.off("response", onResponse);
   }
-
-  const stillOnLogin = await findVisibleLocator(page, kaiserConfig.selectors.password, 1000);
-  if (stillOnLogin) {
-    throw new Error("Kaiser login failed or did not leave the sign on page.");
-  }
-
-  await context.log({ level: "info", message: "Checking for optional Kaiser browser warning popup." });
-  if (await clickIfVisible(page, kaiserConfig.selectors.fontDialogOk, 600)) {
-    await context.log({ level: "info", message: "Kaiser browser warning popup closed." });
-  }
-  await acceptLoginMessageIfPresent(page, context, 8000);
-  await context.log({ level: "info", message: "Kaiser login completed." });
 }
 
 async function openClaimSearch(page: Page, context: ScraperContext): Promise<void> {
@@ -919,6 +930,7 @@ async function fillDateAndCommit(page: Page, selector: string, value: string, la
       message: label === "From Date" ? "TRACE 4: From Date filled." : "TRACE 7: To Date filled.",
       rowIndex,
     });
+    const typed = await locator.inputValue({ timeout: 1000 }).catch(() => "");
     await page.waitForTimeout(350);
     await locator.press("Enter").catch(() => {});
     await context.log({
@@ -926,6 +938,11 @@ async function fillDateAndCommit(page: Page, selector: string, value: string, la
       message: label === "From Date" ? "TRACE 5: From Date Enter pressed." : "TRACE 8: To Date Enter pressed.",
       rowIndex,
     });
+    if (label === "To Date" && normalizeDateValue(typed) === expected) {
+      await page.mouse.click(20, 20).catch(() => {});
+      await context.log({ level: "info", message: `Kaiser ${label} accepted: ${value}.`, rowIndex });
+      return;
+    }
     await page.waitForTimeout(350);
     await locator.evaluate((element) => (element as HTMLInputElement).blur()).catch(() => {});
     if (label === "From Date") {
@@ -1170,11 +1187,11 @@ async function findMatchingSearchRows(rows: ClaimSearchRow[], inputRow: KaiserIn
     const rowPatient = getCell(row.cells, ["Member Name", "Patient Name"]);
     const normalizedRowDos = normalizeDateValue(rowDos);
     const dosMatches = normalizedRowDos === expectedDos;
-    const patientMatchesRow = Boolean(expectedPatient) && patientNamesMatch(rowPatient, expectedPatient);
+    const patientMatchesRow = Boolean(expectedPatient) && matchKaiserName(rowPatient, expectedPatient, inputRow.memberId) !== "review";
 
     await context.log({
       level: "info",
-      message: `TRACE 15: Patient Name and DOS comparison performed for claim ${maskValue(row.claimNumber)}: portal_patient="${rowPatient || "(blank)"}", portal_dos="${rowDos || "(blank)"}", expected_patient="${expectedPatient || "(blank)"}", expected_dos="${inputRow.dos}", dos_match=${dosMatches ? "yes" : "no"}, patient_match=${patientMatchesRow ? "yes" : "no"}.`,
+      message: `TRACE 15: Patient Name and DOS comparison performed for claim ${maskValue(row.claimNumber)}: portal_patient="${rowPatient || "(blank)"}", portal_dos="${rowDos || "(blank)"}", expected_patient="${expectedPatient || "(blank)"}", expected_dos="${inputRow.dos}", dos_match=${dosMatches ? "yes" : "no"}, patient_match=${patientMatchesRow ? "yes" : "no"}, method=${matchKaiserName(rowPatient, expectedPatient, inputRow.memberId)}.`,
       rowIndex: inputRow.inputRowId,
     });
 
@@ -1250,7 +1267,7 @@ async function openClaimDetail(page: Page, resultRow: ClaimSearchRow, inputRow: 
       const rowPatient = cleanText(await cells.nth(8).innerText({ timeout: 1000 }).catch(() => ""));
       const sameClaim = claimText.includes(resultRow.claimNumber);
       const sameDos = normalizeDateValue(rowDos) === normalizeDateValue(inputRow.dos);
-      const samePatient = !inputRow.patientName.trim() || patientNamesMatch(rowPatient, inputRow.patientName);
+      const samePatient = !inputRow.patientName.trim() || matchKaiserName(rowPatient, inputRow.patientName, inputRow.memberId) !== "review";
       if (!sameClaim || !sameDos || !samePatient) continue;
 
       const claimLink = firstCell.locator("a");
@@ -1657,11 +1674,15 @@ async function extractClaimDetailsOnce(
       }
 
       const bodyText = text(document.body);
-      const statusMatch = bodyText.match(/Status\s+(Approved|Denied|Pending|In Process|Processed|Rejected)/i);
+      const statusMatch = bodyText.match(/Status\s+(In Progress|In Process|Paid|Approved|Denied|Pending|Processed|Rejected)/i);
       const totalPaymentMatch = bodyText.match(/Total Payment:\s*\$?([0-9,.]+)/i);
       const paymentSection = findSection("Payment");
       const paymentRow = firstDataRowAfterHeader(paymentSection, ["Check/EFT", "Date", "Amount"]);
-      const paymentCells = paymentRow.filter((value) => value.trim() && value !== "&nbsp;");
+      const paymentCells = paymentRow.map((value) => value === "&nbsp;" ? "" : value.trim());
+      const populatedPaymentCells = paymentCells.filter(Boolean);
+      const paymentDate = populatedPaymentCells.find((value) => /^\d{1,2}[\/.-]\d{1,2}[\/.-]\d{2,4}$/.test(value)) || "";
+      const paymentAmount = populatedPaymentCells.find((value) => /^\$?\d[\d,]*\.\d{2}$/.test(value)) || "";
+      const checkEft = populatedPaymentCells.find((value) => value !== paymentDate && value !== paymentAmount) || "";
 
       const serviceResult = serviceTableResult();
       const serviceRows = serviceResult.rows;
@@ -1728,9 +1749,9 @@ async function extractClaimDetailsOnce(
         frameUrl: window.location.href,
         claimNumber: args.fallbackClaimNumber,
         status: statusMatch?.[1] || "",
-        checkEft: paymentCells[0] || "",
-        paymentDate: paymentCells[1] || "",
-        paymentAmount: paymentCells[2] || (totalPaymentMatch?.[1] ? `$${totalPaymentMatch[1]}` : ""),
+        checkEft,
+        paymentDate,
+        paymentAmount: paymentAmount || (totalPaymentMatch?.[1] ? `$${totalPaymentMatch[1]}` : ""),
         claimCodeDescriptionTable: codeDescriptionRows.join("\n"),
         claimCodeDescriptions,
         claimLevelDescription,
@@ -1811,7 +1832,7 @@ async function extractClaimDetails(
   // and report a false "Services section not found". Keep waiting until the Services section
   // itself has been detected too (or the deadline is reached), instead of rushing off the first
   // field that happens to appear.
-  while ((!hasRealClaimDetails(latest) || !latest.servicesSectionFound) && Date.now() < deadline) {
+  while ((!hasRealClaimDetails(latest) || !latest.servicesSectionFound || !latest.services.length) && Date.now() < deadline) {
     attempt += 1;
     await context.log({
       level: "info",
@@ -1835,6 +1856,7 @@ async function extractClaimDetails(
 async function findMatchingService(
   details: ClaimDetails,
   cptCode: string,
+  dos: string,
   context: ScraperContext,
   rowIndex: number,
 ): Promise<ServiceLine | null> {
@@ -1846,12 +1868,14 @@ async function findMatchingService(
     await context.log({ level: "info", message: `Service row ${index + 1} raw Service: ${service.service}.`, rowIndex });
     await context.log({ level: "info", message: `Service row ${index + 1} CPT extracted: ${portalCpt}.`, rowIndex });
     await context.log({ level: "info", message: `Comparing Excel CPT ${normalizedCpt} with portal CPT ${portalCpt}.`, rowIndex });
-    if (portalCpt === normalizedCpt) {
+    const datesMatch = serviceDatesMatch(service.from, service.to, dos);
+    await context.log({ level: "info", message: `Service row ${index + 1}: From=${service.from}, To=${service.to}, expected DOS=${dos}, dates_match=${datesMatch ? "yes" : "no"}.`, rowIndex });
+    if (portalCpt === normalizedCpt && datesMatch) {
       await context.log({ level: "info", message: `Matching CPT found at service row ${index + 1}.`, rowIndex });
       return service;
     }
   }
-  await context.log({ level: "warn", message: "CPT not found after checking all service rows.", rowIndex });
+  await context.log({ level: "warn", message: "No service matched CPT and both service dates after checking all service rows.", rowIndex });
   return null;
 }
 
@@ -1898,84 +1922,142 @@ async function processRow(page: Page, inputRow: KaiserInputRow, state: KaiserWor
   const matchedRows = await findMatchingSearchRows(searchRows, inputRow, context);
   if (!matchedRows.length) {
     await context.log({ level: "warn", message: "No matching patient/DOS row.", rowIndex: inputRow.inputRowId });
-    state.outputRows.push(baseOutputRow(inputRow, "No claim row matched Patient Name and DOS", "No claim row matched Patient Name and DOS"));
-    addAudit(state, inputRow, "search", "completed", "No claim row matched Patient Name and DOS");
+    state.outputRows.push(baseOutputRow(inputRow, "Review required", "Patient name/DOS could not be confirmed"));
+    addAudit(state, inputRow, "search", "review", "Patient name/DOS could not be confirmed");
     return;
   }
   if (matchedRows.length > 1) {
     await context.log({
       level: "warn",
-      message: `Multiple matching claim rows found: ${matchedRows.map((row) => row.claimNumber).join(", ")}. Checking each matched claim for CPT.`,
+      message: `Multiple matching claim rows found: ${matchedRows.map((row) => row.claimNumber).join(", ")}. Prioritizing newest Clm Rcv Dt and status before opening details.`,
       rowIndex: inputRow.inputRowId,
     });
   }
 
-  for (const resultRow of matchedRows) {
-    await context.log({ level: "info", message: `TRACE 16: Matching row selected: ${maskValue(resultRow.claimNumber)}.`, rowIndex: inputRow.inputRowId });
-    await context.log({ level: "info", message: `Matching claim row found: ${resultRow.claimNumber}.`, rowIndex: inputRow.inputRowId });
-    await context.log({ level: "info", message: `Clicking Claim # ${maskValue(resultRow.claimNumber)}.`, rowIndex: inputRow.inputRowId });
-    let detailPageOpened = false;
-    let detailProcessingResult = "Claim details unavailable";
-    try {
-      await openClaimDetail(page, resultRow, inputRow, context);
-      detailPageOpened = true;
-      await context.log({ level: "info", message: "Claim-detail page loaded.", rowIndex: inputRow.inputRowId });
-      await context.log({ level: "info", message: `Extracting Kaiser claim ${resultRow.claimNumber}.`, rowIndex: inputRow.inputRowId });
-      const details = await extractClaimDetails(page, resultRow.claimNumber, context, inputRow.inputRowId);
-      await context.log({ level: "info", message: `Excel CPT raw: ${inputRow.cptCodeRaw || inputRow.cptCode}.`, rowIndex: inputRow.inputRowId });
-      await context.log({ level: "info", message: `Services section found: ${details.servicesSectionFound ? "yes" : "no"}.`, rowIndex: inputRow.inputRowId });
-      await context.log({ level: "info", message: `Services table found: ${details.servicesTableFound ? "yes" : "no"}.`, rowIndex: inputRow.inputRowId });
-      await context.log({ level: "info", message: `Services rows extracted: ${details.services.length}.`, rowIndex: inputRow.inputRowId });
-      await context.log({ level: "info", message: `TRACE 20: Services rows extracted: ${details.services.length}.`, rowIndex: inputRow.inputRowId });
-      await context.log({ level: "info", message: `TRACE 21: Excel CPT compared against Services rows: ${inputRow.cptCode}.`, rowIndex: inputRow.inputRowId });
-      if (!details.servicesSectionFound) {
-        detailProcessingResult = "Services section not found";
-        await logEmptyServiceDiagnostics(context, inputRow.inputRowId, details);
-        await captureDiagnostics(context, page, inputRow, "services-section-not-found");
-        state.outputRows.push(baseOutputRow(inputRow, "Services section not found", "Services section not found"));
-        addAudit(state, inputRow, "detail", "failed", "Services section not found");
-        return;
+  const verifiedCandidates: Array<SelectionCandidate & { details: ClaimDetails; service: ServiceLine }> = [];
+  const detailFailures: string[] = [];
+  const stagedRows = stagedSearchRowsByReceivedDateAndStatus(matchedRows);
+  for (const [stageIndex, stageRows] of stagedRows.entries()) {
+    if (matchedRows.length > 1) {
+      await context.log({
+        level: "info",
+        message: `Checking Kaiser candidate stage ${stageIndex + 1}/${stagedRows.length}: ${stageRows.map((row) => `${maskValue(row.claimNumber)} (${getCell(row.cells, ["Clm Rcv Dt"])}, ${getCell(row.cells, ["Status"])})`).join(", ")}.`,
+        rowIndex: inputRow.inputRowId,
+      });
+    }
+    for (const resultRow of stageRows) {
+      await context.log({ level: "info", message: `TRACE 16: Matching row selected: ${maskValue(resultRow.claimNumber)}.`, rowIndex: inputRow.inputRowId });
+      await context.log({ level: "info", message: `Matching claim row found: ${resultRow.claimNumber}.`, rowIndex: inputRow.inputRowId });
+      await context.log({ level: "info", message: `Clicking Claim # ${maskValue(resultRow.claimNumber)}.`, rowIndex: inputRow.inputRowId });
+      let detailPageOpened = false;
+      let detailAttemptStarted = false;
+      let detailProcessingResult = "Claim details unavailable";
+      try {
+        detailAttemptStarted = true;
+        await openClaimDetail(page, resultRow, inputRow, context);
+        detailPageOpened = true;
+        await context.log({ level: "info", message: "Claim-detail page loaded.", rowIndex: inputRow.inputRowId });
+        await context.log({ level: "info", message: `Extracting Kaiser claim ${resultRow.claimNumber}.`, rowIndex: inputRow.inputRowId });
+        const details = await extractClaimDetails(page, resultRow.claimNumber, context, inputRow.inputRowId);
+        await context.log({ level: "info", message: `Excel CPT raw: ${inputRow.cptCodeRaw || inputRow.cptCode}.`, rowIndex: inputRow.inputRowId });
+        await context.log({ level: "info", message: `Services section found: ${details.servicesSectionFound ? "yes" : "no"}.`, rowIndex: inputRow.inputRowId });
+        await context.log({ level: "info", message: `Services table found: ${details.servicesTableFound ? "yes" : "no"}.`, rowIndex: inputRow.inputRowId });
+        await context.log({ level: "info", message: `Services rows extracted: ${details.services.length}.`, rowIndex: inputRow.inputRowId });
+        await context.log({ level: "info", message: `TRACE 20: Services rows extracted: ${details.services.length}.`, rowIndex: inputRow.inputRowId });
+        await context.log({ level: "info", message: `TRACE 21: Excel CPT compared against Services rows: ${inputRow.cptCode}.`, rowIndex: inputRow.inputRowId });
+        if (!details.servicesSectionFound) {
+          detailProcessingResult = "Services section not found";
+          await logEmptyServiceDiagnostics(context, inputRow.inputRowId, details);
+          await captureDiagnostics(context, page, inputRow, "services-section-not-found");
+          detailFailures.push(`${resultRow.claimNumber}: Services section not found`);
+          addAudit(state, inputRow, "detail", "failed", `${resultRow.claimNumber}: Services section not found`);
+          continue;
+        }
+        if (!details.services.length) {
+          detailProcessingResult = "Services rows could not be extracted";
+          await logEmptyServiceDiagnostics(context, inputRow.inputRowId, details);
+          await captureDiagnostics(context, page, inputRow, "services-rows-not-extracted");
+          detailFailures.push(`${resultRow.claimNumber}: Services rows could not be extracted`);
+          addAudit(state, inputRow, "detail", "failed", `${resultRow.claimNumber}: Services rows could not be extracted`);
+          continue;
+        }
+        const matchingService = await findMatchingService(details, inputRow.cptCode, inputRow.dos, context, inputRow.inputRowId);
+        if (matchingService) {
+          const denialDescription = serviceSpecificDenial(details, matchingService);
+          await context.log({ level: "info", message: `Matching service row found: ${matchingService.service}.`, rowIndex: inputRow.inputRowId });
+          await context.log({ level: "info", message: `Matching service Net Payable: ${matchingService.netPayable || "0.00"}.`, rowIndex: inputRow.inputRowId });
+          await context.log({ level: "info", message: `Matching service claim codes: ${matchingService.claimCodes || "(none)"}.`, rowIndex: inputRow.inputRowId });
+          await context.log({ level: "info", message: `Matching service denial description: ${denialDescription.text || "(none)"}.`, rowIndex: inputRow.inputRowId });
+          await context.log({ level: "info", message: `Matching service denial source: ${denialDescription.source || "(none)"}.`, rowIndex: inputRow.inputRowId });
+          await context.log({ level: "info", message: "TRACE 22: Matching service extracted.", rowIndex: inputRow.inputRowId });
+          const sameCptServices = details.services.filter(service => serviceCodeFromText(service.service) === normalizeCptCode(inputRow.cptCode) && serviceDatesMatch(service.from, service.to, inputRow.dos));
+          if (sameCptServices.length !== 1) {
+            const reason = "Review required: multiple service lines match the input CPT and both service dates";
+            state.outputRows.push(baseOutputRow(inputRow, "Review required", reason));
+            addAudit(state, inputRow, "selection", "review", reason);
+            return;
+          }
+          verifiedCandidates.push({
+            claimNumber: resultRow.claimNumber,
+            receivedDate: getCell(resultRow.cells, ["Clm Rcv Dt"]),
+            status: getCell(resultRow.cells, ["Status"]),
+            providerNpi: getCell(resultRow.cells, ["Provider NPI"]),
+            vendorTaxId: getCell(resultRow.cells, ["Vendor Tax ID"]),
+            provider: getCell(resultRow.cells, ["Provider"]),
+            vendor: getCell(resultRow.cells, ["Vendor"]),
+            patient: getCell(resultRow.cells, ["Member Name"]),
+            dos: getCell(resultRow.cells, ["Svc Frm Dt"]),
+            cpt: normalizeCptCode(inputRow.cptCode),
+            details,
+            service: matchingService,
+          });
+          await context.log({ level: "info", message: `Selection candidate ${maskValue(resultRow.claimNumber)}: received=${getCell(resultRow.cells, ["Clm Rcv Dt"])}, status=${getCell(resultRow.cells, ["Status"])}, CPT verified.`, rowIndex: inputRow.inputRowId });
+          detailProcessingResult = "CPT verified; collecting candidates for selection";
+          continue;
+        }
+        detailProcessingResult = "CPT/service dates not found in Services";
+        await context.log({ level: "warn", message: `No matching CPT service row in claim ${resultRow.claimNumber}.`, rowIndex: inputRow.inputRowId });
+      } catch (error) {
+        detailProcessingResult = "Claim details unavailable";
+        await context.log({ level: "error", message: `Claim details unavailable: ${errorMessage(error)}`, rowIndex: inputRow.inputRowId });
+        detailFailures.push(`${resultRow.claimNumber}: Claim details unavailable`);
+        addAudit(state, inputRow, "detail", "failed", `${resultRow.claimNumber}: Claim details unavailable`);
+      } finally {
+        if (detailAttemptStarted && !context.isCancelled?.()) {
+          if (detailPageOpened) {
+            await context.log({ level: "info", message: `Detail processing result: ${detailProcessingResult}.`, rowIndex: inputRow.inputRowId });
+          }
+          await goBackToSearch(page, context, inputRow.inputRowId);
+        }
       }
-      if (!details.services.length) {
-        detailProcessingResult = "Services rows could not be extracted";
-        await logEmptyServiceDiagnostics(context, inputRow.inputRowId, details);
-        await captureDiagnostics(context, page, inputRow, "services-rows-not-extracted");
-        state.outputRows.push(baseOutputRow(inputRow, "Services rows could not be extracted", "Services rows could not be extracted"));
-        addAudit(state, inputRow, "detail", "failed", "Services rows could not be extracted");
-        return;
-      }
-      const matchingService = await findMatchingService(details, inputRow.cptCode, context, inputRow.inputRowId);
-      if (matchingService) {
-        const denialDescription = serviceSpecificDenial(details, matchingService);
-        await context.log({ level: "info", message: `Matching service row found: ${matchingService.service}.`, rowIndex: inputRow.inputRowId });
-        await context.log({ level: "info", message: `Matching service Net Payable: ${matchingService.netPayable || "0.00"}.`, rowIndex: inputRow.inputRowId });
-        await context.log({ level: "info", message: `Matching service claim codes: ${matchingService.claimCodes || "(none)"}.`, rowIndex: inputRow.inputRowId });
-        await context.log({ level: "info", message: `Matching service denial description: ${denialDescription.text || "(none)"}.`, rowIndex: inputRow.inputRowId });
-        await context.log({ level: "info", message: `Matching service denial source: ${denialDescription.source || "(none)"}.`, rowIndex: inputRow.inputRowId });
-        await context.log({ level: "info", message: "TRACE 22: Matching service extracted.", rowIndex: inputRow.inputRowId });
-        state.outputRows.push(outputRowFromClaim(inputRow, details, matchingService));
-        addAudit(state, inputRow, "detail", "completed", `Matched claim ${resultRow.claimNumber} and CPT ${inputRow.cptCode}.`);
-        detailProcessingResult = "Success";
-        return;
-      }
-      detailProcessingResult = "CPT not found in Services";
-      await context.log({ level: "warn", message: `No matching CPT service row in claim ${resultRow.claimNumber}.`, rowIndex: inputRow.inputRowId });
-    } catch (error) {
-      detailProcessingResult = "Claim details unavailable";
-      await context.log({ level: "error", message: `Claim details unavailable: ${errorMessage(error)}`, rowIndex: inputRow.inputRowId });
-      state.outputRows.push(baseOutputRow(inputRow, "Claim details unavailable", "Claim details unavailable"));
-      addAudit(state, inputRow, "detail", "failed", "Claim details unavailable");
-      return;
-    } finally {
-      if (detailPageOpened && !context.isCancelled?.()) {
-        await context.log({ level: "info", message: `Detail processing result: ${detailProcessingResult}.`, rowIndex: inputRow.inputRowId });
-        await goBackToSearch(page, context, inputRow.inputRowId);
-      }
+    }
+    if (verifiedCandidates.length) {
+      await context.log({
+        level: "info",
+        message: `Kaiser candidate stage ${stageIndex + 1} produced verified CPT/service-date candidate(s); lower-priority received-date/status rows will not be opened.`,
+        rowIndex: inputRow.inputRowId,
+      });
+      break;
     }
   }
 
-  state.outputRows.push(baseOutputRow(inputRow, "CPT not found in Services", `CPT not found in Services: ${inputRow.cptCode}.`));
-  addAudit(state, inputRow, "detail", "completed", `No service matched CPT ${inputRow.cptCode}.`);
+  if (verifiedCandidates.length) {
+    const decision = selectKaiserCandidate(verifiedCandidates);
+    await context.log({ level: decision.selected ? "info" : "warn", message: `Kaiser selection: ${decision.reason}${decision.selected ? `; claim=${maskValue(decision.selected.claimNumber)}` : ""}.`, rowIndex: inputRow.inputRowId });
+    if (decision.selected) {
+      const output = outputRowFromClaim(inputRow, { ...decision.selected.details, status: decision.selected.details.status.trim() || decision.selected.status }, decision.selected.service);
+      output.botMessage = `${output.botMessage} Selection: ${decision.reason}.`;
+      state.outputRows.push(output);
+    } else {
+      state.outputRows.push(baseOutputRow(inputRow, "Review required", decision.reason));
+    }
+    addAudit(state, inputRow, "selection", decision.selected ? "completed" : "review", `${decision.reason}; candidates=${verifiedCandidates.map(candidate => `${candidate.claimNumber} (${candidate.receivedDate}, ${candidate.status})`).join(", ")}${decision.selected ? `; selected=${decision.selected.claimNumber}` : ""}`);
+    return;
+  }
+
+  const failureSummary = detailFailures.length ? ` Detail failures: ${detailFailures.join("; ")}.` : "";
+  state.outputRows.push(baseOutputRow(inputRow, "CPT/service dates not found in Services", `No service matched CPT ${inputRow.cptCode} with From and To equal to ${inputRow.dos}.${failureSummary}`));
+  addAudit(state, inputRow, "detail", "completed", `No service matched CPT ${inputRow.cptCode}.${failureSummary}`);
 }
 
 async function emitArtifacts(context: ScraperContext, state: KaiserWorkbookState): Promise<void> {

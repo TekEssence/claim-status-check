@@ -58,6 +58,7 @@ export async function readJopariCredentials(file: File): Promise<PaymentEobCrede
     const rawUrl = valueFor(row, ["Link", "URL", "Login URL", "Portal Link"]);
     return {
       loginUrl: rawUrl ? (rawUrl.startsWith("http") ? rawUrl : `https://${rawUrl}`) : DEFAULT_LOGIN_URL,
+      clientName: valueFor(row, ["Client Name", "Client", "Client Code", "Group", "Group Name"]),
       username,
       password,
       totpSecret: "",

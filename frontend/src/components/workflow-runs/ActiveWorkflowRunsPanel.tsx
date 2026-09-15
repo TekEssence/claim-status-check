@@ -29,6 +29,7 @@ const PORTAL_LABELS: Record<string, string> = {
   kaiser: "Kaiser",
   "my-family": "My Family",
   "optum-pro": "Optum Pro",
+  "office-ally": "Office Ally",
   physicians: "Physicians",
   regal: "Regal",
   uhc: "UHC",

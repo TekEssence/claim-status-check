@@ -1,4 +1,5 @@
 import { UnknownPortalError } from "../../core/errors";
+import { createOfficeAllyRunner } from "./portals/office-ally/scraper";
 import type { AutomationRunner } from "../types";
 import { createAvailityRemittanceRunner } from "./portals/availity-remittance/scraper";
 import { createEchoRemittanceRunner } from "./portals/echo-remittance/scraper";
@@ -8,6 +9,7 @@ import { createZelisRunner } from "./portals/zelis/scraper";
 import { createWaystarPaymentEobRunner } from "./portals/waystar/scraper";
 
 export const paymentEobPortalRegistry = {
+  "office-ally": createOfficeAllyRunner,
   "availity-remittance": createAvailityRemittanceRunner,
   "echo-remittance": createEchoRemittanceRunner,
   "instamed-remittance": createInstamedRemittanceRunner,

@@ -108,11 +108,15 @@ function styleHeader(worksheet: ExcelJS.Worksheet): void {
   });
 }
 
+const internalInputColumns = new Set([
+  "inputRowId", "memberId", "dos", "cptCodeRaw", "cptCode", "patientName", "validationStatus", "validationMessage",
+]);
+
 function inputColumnHeaders(rows: KaiserOutputRow[]): string[] {
   const headers: string[] = [];
   for (const row of rows) {
     for (const key of Object.keys(row.inputData)) {
-      if (!headers.includes(key)) headers.push(key);
+      if (!internalInputColumns.has(key) && !headers.includes(key)) headers.push(key);
     }
   }
   return headers;
@@ -120,18 +124,26 @@ function inputColumnHeaders(rows: KaiserOutputRow[]): string[] {
 
 function addOutputSheet(workbook: ExcelJS.Workbook, rows: KaiserOutputRow[]): void {
   const inputHeaders = inputColumnHeaders(rows);
+  // Keep the original input columns once; append results without duplicate headers.
+  const normalizedInputHeaders = new Set(inputHeaders.map(header => header.toLowerCase().replace(/[^a-z0-9]/g, "")));
+  const sharedColumns = new Set(["memberid", "dos", "cpt"]);
+  const resultColumns = outputColumns.filter(column => {
+    const header = column.header.toLowerCase().replace(/[^a-z0-9]/g, "");
+    return !sharedColumns.has(header) || !normalizedInputHeaders.has(header);
+  });
+  const resultHeaders = new Set(resultColumns.map(column => column.header.toLowerCase().replace(/[^a-z0-9]/g, "")));
   const worksheet = workbook.addWorksheet("Output");
   worksheet.views = [{ state: "frozen", ySplit: 1 }];
   worksheet.columns = [
-    ...inputHeaders.map((header) => ({ header, key: `input:${header}`, width: Math.max(14, Math.min(header.length + 4, 30)) })),
-    ...outputColumns.map((column) => ({ header: column.header, key: String(column.key), width: column.width })),
+    ...inputHeaders.map((header) => ({ header: resultHeaders.has(header.toLowerCase().replace(/[^a-z0-9]/g, "")) ? `Input ${header}` : header, key: `input:${header}`, width: Math.max(14, Math.min(header.length + 4, 30)) })),
+    ...resultColumns.map((column) => ({ header: column.header, key: String(column.key), width: column.width })),
   ];
   styleHeader(worksheet);
 
   for (const row of rows) {
     worksheet.addRow({
       ...Object.fromEntries(inputHeaders.map((header) => [`input:${header}`, row.inputData[header] ?? ""])),
-      ...Object.fromEntries(outputColumns.map((column) => [String(column.key), row[column.key] ?? ""])),
+      ...Object.fromEntries(resultColumns.map((column) => [String(column.key), row[column.key] ?? ""])),
     });
   }
 }

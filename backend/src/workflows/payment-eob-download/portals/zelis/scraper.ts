@@ -1,3 +1,4 @@
+import { paymentFilename } from "../../filename";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -398,14 +399,14 @@ function shouldCapturePaymentScreenshot(payment: ZelisPaymentRow): boolean {
   return /virtual\s*card/i.test(payment.method);
 }
 
-async function saveZelisDownload(page: Page, payment: ZelisPaymentRow, outputFolder: string): Promise<string> {
+async function saveZelisDownload(page: Page, payment: ZelisPaymentRow, outputFolder: string, group?: string): Promise<string> {
   const downloadLink = payment.row.locator("a.downloadPaymentLink").filter({ hasText: /^Download$/i }).first();
   const downloadPromise = page.waitForEvent("download", { timeout: 90000 });
   await downloadLink.scrollIntoViewIfNeeded({ timeout: 10000 }).catch(() => {});
   await downloadLink.click({ timeout: 30000 });
   const download = await downloadPromise;
   const extension = path.extname(download.suggestedFilename()) || ".pdf";
-  const filename = `${safeFilePart(payment.paymentId)}_${dateFilePart(payment.paymentDate)}${extension}`;
+  const filename = await paymentFilename(outputFolder, { group, payer: payment.payer, mode: payment.method, amount: payment.amount, number: payment.paymentId, date: payment.paymentDate }, extension);
   await download.saveAs(path.join(outputFolder, filename));
   return filename;
 }
@@ -480,6 +481,7 @@ async function uploadToSharePointIfEnabled(credentials: PaymentEobCredentials, o
 }
 
 async function runMedRevenuePhases(options: {
+  group?: string;
   page: Page;
   referenceRows: PaymentEobReferenceRow[];
   outputPdfFolder: string;
@@ -527,7 +529,7 @@ async function runMedRevenuePhases(options: {
           message: "No exact Payment ID match was returned by Zelis.",
         }));
       } else {
-        const filename = await saveZelisDownload(page, payment, outputPdfFolder);
+        const filename = await saveZelisDownload(page, payment, outputPdfFolder, options.group);
         generatedFileCount += 1;
         results.push(medRevenueResult("Phase 1", payment, {
           sourceRow: reference.rowNumber,
@@ -575,7 +577,7 @@ async function runMedRevenuePhases(options: {
           }));
         } else {
           try {
-            const filename = await saveZelisDownload(page, payment, outputPdfFolder);
+            const filename = await saveZelisDownload(page, payment, outputPdfFolder, options.group);
             generatedFileCount += 1;
             results.push(medRevenueResult("Phase 2", payment, {
               decision: "Downloaded",
@@ -637,7 +639,7 @@ export async function runZelisJob(input: RunInput, context: AutomationContext): 
 
     if (processId === "medrevenue") {
       if (!input.referenceRows) throw new Error("Zelis MedRevenue requires a Control Log workbook.");
-      const generatedFileCount = await runMedRevenuePhases({ page, referenceRows: input.referenceRows, outputPdfFolder, outputRoot, context });
+      const generatedFileCount = await runMedRevenuePhases({ group: input.credentials.clientName, page, referenceRows: input.referenceRows, outputPdfFolder, outputRoot, context });
       if (generatedFileCount > 0) {
         await emitRunZip(outputRoot, context);
         const downloadsRoot = getLocalDownloadsRoot(context.jobId);
@@ -694,7 +696,7 @@ export async function runZelisJob(input: RunInput, context: AutomationContext): 
 
           try {
             await context.log({ level: "info", message: `Processing Zelis Payment ID ${payment.paymentId}; Downloaded column is blank.`, eventName: "payment_eob_zelis_payment_process" });
-            const downloadFilename = await saveZelisDownload(page, payment, outputPdfFolder);
+            const downloadFilename = await saveZelisDownload(page, payment, outputPdfFolder, input.credentials.clientName);
             const screenshotFilename = shouldCapturePaymentScreenshot(payment)
               ? await capturePaymentPopupScreenshot(page, payment, screenshotFolder)
               : "";

@@ -1,7 +1,7 @@
 export const kaiserConfig = {
   id: "kaiser",
   name: "KAISER Claim Status",
-  defaultLoginUrl: "https://epiclink-cs.kp.org/cs/common/epic_main.asp",
+  defaultLoginUrl: "https://epiclink-cs.kp.org/cs/common/login_msg_show.asp",
   selectors: {
     username: "#username, input[name='pf.username']",
     password: "#password, input[name='pf.pass']",

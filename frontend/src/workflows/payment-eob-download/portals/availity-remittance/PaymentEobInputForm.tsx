@@ -68,7 +68,9 @@ export function PaymentEobInputForm({
           mode="file"
           accept=".xlsx,.xls,.csv"
           acceptedFormats=".xlsx, .xls, .csv"
-          description={`Upload the workbook containing ${portalName} credential details.`}
+          description={portalName === "Office Ally"
+            ? "Required columns: Login URL, Username, Password, Start Date, End Date. Use MM/DD/YYYY dates; both endpoints and every day between them are included."
+            : `Upload the workbook containing ${portalName} credential details.`}
           fileName={credentialFileName}
           icon={KeyRound}
           inputId="paymentEobCredentialExcel"

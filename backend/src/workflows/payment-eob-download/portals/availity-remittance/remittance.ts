@@ -1,3 +1,4 @@
+import { paymentFilename, paymentMode, paymentField } from "../../filename";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createRequire } from "node:module";
@@ -851,7 +852,16 @@ async function downloadPdfFromMatchingRow(
   outputPdfFolder: string,
   context: AutomationContext,
 ): Promise<{ filename: string; message: string; found: boolean }> {
-  const filename = `${safeFilePart(record.checkNumber)}_${dateFilePart(record.checkDate)}.pdf`;
+  // Read the grid's labeled columns for search-only payments as well as CSV records.
+  const values = await matchingRow.locator('[role="cell"]').allTextContents();
+  const headers = await matchingRow.locator('xpath=ancestor::*[@role="table" or @role="grid"][1]').locator('[role="columnheader"]').allTextContents();
+  const displayed = Object.fromEntries(headers.map((header, index) => [header.trim(), values[index]?.trim() || ""]));
+  record.payer ||= paymentField(displayed, ["Payer", "Payer Name"]);
+  record.payee ||= paymentField(displayed, ["Payee", "Payee Name"]);
+  record.checkDate ||= paymentField(displayed, ["Check/EFT Date", "Check Date", "Payment Date"]);
+  record.amount ||= paymentField(displayed, ["Check/EFT Amount", "Check Amount", "Amount"]);
+  record.modeOfPayment ||= paymentMode(displayed);
+  const filename = await paymentFilename(outputPdfFolder, { group: record.group, payer: record.payer, mode: record.modeOfPayment || paymentMode(record.raw), amount: record.amount, number: record.checkNumber, date: record.checkDate });
   const pdfPath = path.join(outputPdfFolder, filename);
   let lastError = "";
   const maxAttempts = 2;
@@ -934,7 +944,7 @@ async function searchPendingEftAndDownloadPdf(
 ): Promise<{ record: PaymentEobPortalRecord; filename: string; message: string; found: boolean }> {
   const startDate = credentials.startDate || daysAgoMmDdYyyy(credentials.lookbackDays);
   const endDate = credentials.endDate || todayMmDdYyyy();
-  const emptyRecord: PaymentEobPortalRecord = { checkNumber, checkDate: "", payer: "", payee: "", receivedByAvaility: "", amount: "", raw: {} };
+  const emptyRecord: PaymentEobPortalRecord = { group: credentials.clientName, modeOfPayment: "EFT", checkNumber, checkDate: "", payer: "", payee: "", receivedByAvaility: "", amount: "", raw: {} };
   try {
     await context.log({ level: "info", message: `Searching pending EFT ${checkNumber} with leading-zero normalization.`, eventName: "payment_eob_normalized_search" });
     const matchingRows = await searchMatchingRows(surface, checkNumber, startDate, endDate);
@@ -1080,7 +1090,7 @@ export async function runAvailityRemittanceJob(input: RunInput, context: Automat
       }
       try {
         await context.log({ level: "info", message: `${processId === "medrevenue" ? "MedRevenue Phase 2 searching unique zero-payment" : "Searching unmatched"} Check/EFT ${record.checkNumber} (${record.checkDate}).`, eventName: "payment_eob_pdf_search" });
-        const result = await searchAndDownloadPdf(remittanceSurface, page, record, outputPdfFolder, context);
+        const result = await searchAndDownloadPdf(remittanceSurface, page, { ...record, group: input.credentials.clientName, modeOfPayment: paymentMode(record.raw) || input.referenceRows?.find(row => normalizeCheckNumberForComparison(row.checkNumber) === normalizeCheckNumberForComparison(record.checkNumber))?.modeOfPayment }, outputPdfFolder, context);
         const comparisonRow: PaymentEobComparisonRow = {
           checkNumber: record.checkNumber,
           checkDate: record.checkDate,

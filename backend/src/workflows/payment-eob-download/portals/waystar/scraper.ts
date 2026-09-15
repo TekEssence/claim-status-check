@@ -1,3 +1,4 @@
+import { paymentFilename } from "../../filename";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { Download, Locator, Page } from "playwright-core";
@@ -11,6 +12,7 @@ import { waystarPaymentEobConfig } from "./config";
 import { isEligibleWaystarControlRow, isUsableCheckNumber, normalizeAmount, normalizePaymentNumber, readWaystarControlLog, readWaystarPaymentCredentials } from "./input";
 import { buildWaystarBulkPayments, buildWaystarSearchResults, buildWaystarZeroPayments } from "./output-builder";
 import { resolveWaystarPaymentProcess } from "./process-registry";
+import { verifyPscdSingleAccount } from "./single-account";
 import type { WaystarBulkPaymentOutputRow, WaystarBulkPaymentType, WaystarControlLogRow, WaystarPaymentCredentials, WaystarPaymentRecord, WaystarSearchResult, WaystarZeroPaymentOutputRow } from "./types";
 
 function requireFile(formData: FormData, key: string, label: string): File {
@@ -107,6 +109,11 @@ function chooseAccountMatch(accountNames: string[], searchText: string): { index
 
 async function selectAccount(page: Page, credentials: WaystarPaymentCredentials, context: AutomationContext): Promise<void> {
   await context.log({ level: "info", message: `Checking Waystar account selection for client ${credentials.clientName} and mapped account ${credentials.account}.`, eventName: "waystar_payment_account_check" });
+  const singleAccount = await verifyPscdSingleAccount(page, credentials.clientName, credentials.account);
+  if (singleAccount) {
+    await context.log({ level: "info", message: `Waystar PSCD single account verified from Account Profile: ${singleAccount}.`, eventName: "waystar_payment_account_selected" });
+    return;
+  }
   const current = page.locator(".header-account-search-text").first();
   await current.waitFor({ state: "visible", timeout: 60000 });
   const currentValue = (await current.inputValue().catch(() => "")).trim();
@@ -595,7 +602,7 @@ async function selectZeroPaymentRow(page: Page, paymentNumber: string): Promise<
   return row;
 }
 
-async function downloadSelectedZeroPaymentEob(page: Page, record: WaystarPaymentRecord, folder: string): Promise<string> {
+async function downloadSelectedZeroPaymentEob(page: Page, record: WaystarPaymentRecord, folder: string, group?: string): Promise<string> {
   const row = await selectZeroPaymentRow(page, record.paymentNumber);
   const action = page.locator("#paymentsTableGrid .gridActionMenu:visible a")
     .filter({ hasText: /^\s*View EOB\s*$/i })
@@ -608,7 +615,7 @@ async function downloadSelectedZeroPaymentEob(page: Page, record: WaystarPayment
   await action.waitFor({ state: "visible", timeout: 10000 });
 
   const outcome = await openEobAndWaitForFirstOutcome(page, action, true);
-  const filename = `${safePart(record.paymentNumber)}_${safePart(record.paymentDate)}.pdf`;
+  const filename = await paymentFilename(folder, { group, payer: record.payer, mode: record.type, amount: record.paymentAmount, number: record.paymentNumber, date: record.paymentDate });
   const outputPath = path.join(folder, filename);
 
   if (outcome.kind === "download") {
@@ -745,7 +752,7 @@ async function runZeroPaymentsPhase(
     };
     try {
       await context.log({ level: "info", message: `${record.paymentNumber}: new zero payment (${index + 1} of ${records.length}); downloading View EOB.`, eventName: "waystar_zero_payment_download_start" });
-      const filename = await downloadSelectedZeroPaymentEob(page, record, outputFolder);
+      const filename = await downloadSelectedZeroPaymentEob(page, record, outputFolder, credentials.clientName);
       outputRow.pdfFileName = filename;
       outputRow.downloadStatus = "DOWNLOAD_SUCCESS";
       await context.log({ level: "info", message: `${record.paymentNumber}: zero-payment EOB downloaded as ${filename}.`, eventName: "waystar_zero_payment_download_complete" });
@@ -769,11 +776,11 @@ async function runZeroPaymentsPhase(
   return outputRows;
 }
 
-async function downloadEob(page: Page, record: WaystarPaymentRecord, folder: string): Promise<string> {
+async function downloadEob(page: Page, record: WaystarPaymentRecord, folder: string, group?: string): Promise<string> {
   const row = page.locator("#paymentsTableGrid tr.gridViewRow[data-paymentnumber]").nth(record.rowIndex);
   const action = await revealViewEob(page, row);
   const outcome = await openEobAndWaitForFirstOutcome(page, action);
-  const filename = `${safePart(record.paymentNumber)}_${safePart(record.paymentDate)}.pdf`;
+  const filename = await paymentFilename(folder, { group, payer: record.payer, mode: record.type, amount: record.paymentAmount, number: record.paymentNumber, date: record.paymentDate });
   const outputPath = path.join(folder, filename);
 
   if (outcome.kind === "download") {
@@ -888,7 +895,7 @@ async function runCashLogAndZeroPaymentsJob(credentials: WaystarPaymentCredentia
         } else {
           try {
             await context.log({ level: "info", message: `${input.checkNumber}: payment and amount matched; downloading View EOB.`, eventName: "waystar_payment_download_start", rowIndex: input.rowNumber });
-            result.pdfFileName = await downloadEob(page, exact, pdfFolder);
+            result.pdfFileName = await downloadEob(page, exact, pdfFolder, credentials.clientName);
             result.pdfStatus = "DOWNLOAD_SUCCESS"; result.finalResult = "DOWNLOAD_SUCCESS";
             await context.log({ level: "info", message: `${input.checkNumber}: downloaded ${result.pdfFileName}.`, eventName: "waystar_payment_download_complete", rowIndex: input.rowNumber });
             try {
@@ -1001,7 +1008,7 @@ async function runBulkPaymentPhase(
       error: "",
     };
     try {
-      row.pdfFileName = await downloadSelectedZeroPaymentEob(page, record, outputFolder);
+      row.pdfFileName = await downloadSelectedZeroPaymentEob(page, record, outputFolder, credentials.clientName);
       row.downloadStatus = "DOWNLOAD_SUCCESS";
       try {
         await archiveSelectedZeroPayment(page, record, context);

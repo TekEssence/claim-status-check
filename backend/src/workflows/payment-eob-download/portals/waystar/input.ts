@@ -43,14 +43,14 @@ export async function readWaystarPaymentCredentials(file: File): Promise<Waystar
   const base = await readWaystarCredentials(file);
   const workbookRows = await rows(file);
   const matching = workbookRows.rows.find((row) => find(row, ["Username", "User Name", "Login Name"]) === base.username) ?? workbookRows.rows[0];
-  const clientName = matching ? find(matching, ["Client Name", "Client"]) : "";
+  const clientName = matching ? find(matching, ["Client Name", "Client", "Group", "Group Name"]) : "";
   if (!clientName) throw new Error("Waystar credential Excel must contain a Client Name column.");
   const mappingRows = await rows(file, ["Mapping"]).catch(() => {
     throw new Error('Waystar credential Excel must contain a "Mapping" worksheet with Client Name and Account columns.');
   });
   const accountByClient = new Map<string, string>();
   for (const mappingRow of mappingRows.rows) {
-    const mappedClientName = find(mappingRow, ["Client Name", "Client", "Client Code"]);
+    const mappedClientName = find(mappingRow, ["Client Name", "Client", "Client Code", "Group", "Group Name"]);
     const account = find(mappingRow, ["Account", "Account Name", "Waystar Account"]);
     if (!mappedClientName && !account) continue;
     if (!mappedClientName || !account) {
@@ -90,7 +90,7 @@ export async function readWaystarControlLog(file: File): Promise<{ headers: stri
   const controlRows = parsed.rows.map((values, index) => ({
     rowNumber: index + 2,
     values,
-    clientName: find(values, ["Client Name", "Client"]),
+    clientName: find(values, ["Client Name", "Client", "Group", "Group Name"]),
     checkNumber: find(values, [
       "Check number",
       "Check Number",

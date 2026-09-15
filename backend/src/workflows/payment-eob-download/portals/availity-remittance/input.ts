@@ -238,7 +238,7 @@ export async function readAvailityRemittanceCredentials(file: File): Promise<Pay
   const organizationByClient = new Map<string, string>();
 
   for (const mappingRow of mappingRows) {
-    const clientName = findValue(mappingRow, ["Client Name", "Client", "Client Code"]);
+    const clientName = findValue(mappingRow, ["Client Name", "Client", "Client Code", "Group", "Group Name"]);
     const organization = findValue(mappingRow, ["Organization", "Org", "Provider Organization", "Practice", "Payee"]);
     if (!clientName && !organization) continue;
     if (!clientName || !organization) {
@@ -265,7 +265,7 @@ export async function readAvailityRemittanceCredentials(file: File): Promise<Pay
       "Migration Data",
     ]));
     if (!username || !password || !totpSecret) continue;
-    const clientName = findValue(row, ["Client", "Client Name", "Client Code"]);
+    const clientName = findValue(row, ["Client", "Client Name", "Client Code", "Group", "Group Name"]);
     if (!clientName) {
       throw new Error("Credentials worksheet must contain a Client Name for Availity organization mapping.");
     }
