@@ -64,6 +64,11 @@ function dateKey(value: string): number | null {
   return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day ? date.getTime() : null;
 }
 
+export function serviceDatesMatch(from: string, to: string, dos: string): boolean {
+  const expected = dateKey(dos);
+  return expected !== null && dateKey(from) === expected && dateKey(to) === expected;
+}
+
 export function statusPriority(status: string): number | null {
   switch (status.toLowerCase().replace(/\s+/g, " ").trim()) {
     case "paid": return 0;
@@ -71,6 +76,29 @@ export function statusPriority(status: string): number | null {
     case "denied": return 2;
     default: return null; // Approved/processed does not necessarily mean paid.
   }
+}
+
+export function candidateStagesByReceivedDateAndStatus<T extends { receivedDate: string; status: string }>(candidates: T[]): T[][] {
+  const keyed = candidates.map((candidate) => ({
+    candidate,
+    receivedKey: dateKey(candidate.receivedDate),
+    priority: statusPriority(candidate.status),
+  }));
+
+  if (keyed.some((item) => item.receivedKey === null || item.priority === null)) {
+    return [candidates];
+  }
+
+  const receivedKeys = Array.from(new Set(keyed.map((item) => item.receivedKey as number))).sort((a, b) => b - a);
+  const stages: T[][] = [];
+  for (const receivedKey of receivedKeys) {
+    const sameReceivedDate = keyed.filter((item) => item.receivedKey === receivedKey);
+    const priorities = Array.from(new Set(sameReceivedDate.map((item) => item.priority as number))).sort((a, b) => a - b);
+    for (const priority of priorities) {
+      stages.push(sameReceivedDate.filter((item) => item.priority === priority).map((item) => item.candidate));
+    }
+  }
+  return stages;
 }
 
 export function selectKaiserCandidate<T extends SelectionCandidate>(candidates: T[]): { selected?: T; reason: string } {

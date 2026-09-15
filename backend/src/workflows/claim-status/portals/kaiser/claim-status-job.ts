@@ -6,7 +6,7 @@ import { getJobDataPath } from "@/backend/src/core/storage";
 import type { ScraperContext } from "../../types";
 import { launchKaiserBrowser } from "./browser";
 import { kaiserConfig } from "./config";
-import { matchKaiserName, selectKaiserCandidate, type SelectionCandidate } from "./selection";
+import { candidateStagesByReceivedDateAndStatus, matchKaiserName, selectKaiserCandidate, serviceDatesMatch, type SelectionCandidate } from "./selection";
 import { extractCptFromServiceText, normalizeCptCode, parseKaiserInput, readKaiserInputWorkbook, type KaiserInputRow } from "./input";
 import { createKaiserOutputWorkbookBuffer, type KaiserAuditRow, type KaiserOutputRow, type KaiserWorkbookState } from "./workbook";
 
@@ -163,6 +163,14 @@ function normalizeDateValue(value: string): string {
   const year = rawYear < 100 ? 2000 + rawYear : rawYear;
   if (!month || !day || !year) return text;
   return `${year.toString().padStart(4, "0")}-${month.toString().padStart(2, "0")}-${day.toString().padStart(2, "0")}`;
+}
+
+function stagedSearchRowsByReceivedDateAndStatus(rows: ClaimSearchRow[]): ClaimSearchRow[][] {
+  return candidateStagesByReceivedDateAndStatus(rows.map((row) => ({
+    row,
+    receivedDate: getCell(row.cells, ["Clm Rcv Dt"]),
+    status: getCell(row.cells, ["Status"]),
+  }))).map((stage) => stage.map((item) => item.row));
 }
 
 function getCell(cells: Record<string, string>, names: string[]): string {
@@ -922,6 +930,7 @@ async function fillDateAndCommit(page: Page, selector: string, value: string, la
       message: label === "From Date" ? "TRACE 4: From Date filled." : "TRACE 7: To Date filled.",
       rowIndex,
     });
+    const typed = await locator.inputValue({ timeout: 1000 }).catch(() => "");
     await page.waitForTimeout(350);
     await locator.press("Enter").catch(() => {});
     await context.log({
@@ -929,6 +938,11 @@ async function fillDateAndCommit(page: Page, selector: string, value: string, la
       message: label === "From Date" ? "TRACE 5: From Date Enter pressed." : "TRACE 8: To Date Enter pressed.",
       rowIndex,
     });
+    if (label === "To Date" && normalizeDateValue(typed) === expected) {
+      await page.mouse.click(20, 20).catch(() => {});
+      await context.log({ level: "info", message: `Kaiser ${label} accepted: ${value}.`, rowIndex });
+      return;
+    }
     await page.waitForTimeout(350);
     await locator.evaluate((element) => (element as HTMLInputElement).blur()).catch(() => {});
     if (label === "From Date") {
@@ -1660,11 +1674,15 @@ async function extractClaimDetailsOnce(
       }
 
       const bodyText = text(document.body);
-      const statusMatch = bodyText.match(/Status\s+(Approved|Denied|Pending|In Process|Processed|Rejected)/i);
+      const statusMatch = bodyText.match(/Status\s+(In Progress|In Process|Paid|Approved|Denied|Pending|Processed|Rejected)/i);
       const totalPaymentMatch = bodyText.match(/Total Payment:\s*\$?([0-9,.]+)/i);
       const paymentSection = findSection("Payment");
       const paymentRow = firstDataRowAfterHeader(paymentSection, ["Check/EFT", "Date", "Amount"]);
-      const paymentCells = paymentRow.filter((value) => value.trim() && value !== "&nbsp;");
+      const paymentCells = paymentRow.map((value) => value === "&nbsp;" ? "" : value.trim());
+      const populatedPaymentCells = paymentCells.filter(Boolean);
+      const paymentDate = populatedPaymentCells.find((value) => /^\d{1,2}[\/.-]\d{1,2}[\/.-]\d{2,4}$/.test(value)) || "";
+      const paymentAmount = populatedPaymentCells.find((value) => /^\$?\d[\d,]*\.\d{2}$/.test(value)) || "";
+      const checkEft = populatedPaymentCells.find((value) => value !== paymentDate && value !== paymentAmount) || "";
 
       const serviceResult = serviceTableResult();
       const serviceRows = serviceResult.rows;
@@ -1731,9 +1749,9 @@ async function extractClaimDetailsOnce(
         frameUrl: window.location.href,
         claimNumber: args.fallbackClaimNumber,
         status: statusMatch?.[1] || "",
-        checkEft: paymentCells[0] || "",
-        paymentDate: paymentCells[1] || "",
-        paymentAmount: paymentCells[2] || (totalPaymentMatch?.[1] ? `$${totalPaymentMatch[1]}` : ""),
+        checkEft,
+        paymentDate,
+        paymentAmount: paymentAmount || (totalPaymentMatch?.[1] ? `$${totalPaymentMatch[1]}` : ""),
         claimCodeDescriptionTable: codeDescriptionRows.join("\n"),
         claimCodeDescriptions,
         claimLevelDescription,
@@ -1814,7 +1832,7 @@ async function extractClaimDetails(
   // and report a false "Services section not found". Keep waiting until the Services section
   // itself has been detected too (or the deadline is reached), instead of rushing off the first
   // field that happens to appear.
-  while ((!hasRealClaimDetails(latest) || !latest.servicesSectionFound) && Date.now() < deadline) {
+  while ((!hasRealClaimDetails(latest) || !latest.servicesSectionFound || !latest.services.length) && Date.now() < deadline) {
     attempt += 1;
     await context.log({
       level: "info",
@@ -1838,6 +1856,7 @@ async function extractClaimDetails(
 async function findMatchingService(
   details: ClaimDetails,
   cptCode: string,
+  dos: string,
   context: ScraperContext,
   rowIndex: number,
 ): Promise<ServiceLine | null> {
@@ -1849,12 +1868,14 @@ async function findMatchingService(
     await context.log({ level: "info", message: `Service row ${index + 1} raw Service: ${service.service}.`, rowIndex });
     await context.log({ level: "info", message: `Service row ${index + 1} CPT extracted: ${portalCpt}.`, rowIndex });
     await context.log({ level: "info", message: `Comparing Excel CPT ${normalizedCpt} with portal CPT ${portalCpt}.`, rowIndex });
-    if (portalCpt === normalizedCpt) {
+    const datesMatch = serviceDatesMatch(service.from, service.to, dos);
+    await context.log({ level: "info", message: `Service row ${index + 1}: From=${service.from}, To=${service.to}, expected DOS=${dos}, dates_match=${datesMatch ? "yes" : "no"}.`, rowIndex });
+    if (portalCpt === normalizedCpt && datesMatch) {
       await context.log({ level: "info", message: `Matching CPT found at service row ${index + 1}.`, rowIndex });
       return service;
     }
   }
-  await context.log({ level: "warn", message: "CPT not found after checking all service rows.", rowIndex });
+  await context.log({ level: "warn", message: "No service matched CPT and both service dates after checking all service rows.", rowIndex });
   return null;
 }
 
@@ -1908,93 +1929,115 @@ async function processRow(page: Page, inputRow: KaiserInputRow, state: KaiserWor
   if (matchedRows.length > 1) {
     await context.log({
       level: "warn",
-      message: `Multiple matching claim rows found: ${matchedRows.map((row) => row.claimNumber).join(", ")}. Checking each matched claim for CPT.`,
+      message: `Multiple matching claim rows found: ${matchedRows.map((row) => row.claimNumber).join(", ")}. Prioritizing newest Clm Rcv Dt and status before opening details.`,
       rowIndex: inputRow.inputRowId,
     });
   }
 
   const verifiedCandidates: Array<SelectionCandidate & { details: ClaimDetails; service: ServiceLine }> = [];
-  for (const resultRow of matchedRows) {
-    await context.log({ level: "info", message: `TRACE 16: Matching row selected: ${maskValue(resultRow.claimNumber)}.`, rowIndex: inputRow.inputRowId });
-    await context.log({ level: "info", message: `Matching claim row found: ${resultRow.claimNumber}.`, rowIndex: inputRow.inputRowId });
-    await context.log({ level: "info", message: `Clicking Claim # ${maskValue(resultRow.claimNumber)}.`, rowIndex: inputRow.inputRowId });
-    let detailPageOpened = false;
-    let detailProcessingResult = "Claim details unavailable";
-    try {
-      await openClaimDetail(page, resultRow, inputRow, context);
-      detailPageOpened = true;
-      await context.log({ level: "info", message: "Claim-detail page loaded.", rowIndex: inputRow.inputRowId });
-      await context.log({ level: "info", message: `Extracting Kaiser claim ${resultRow.claimNumber}.`, rowIndex: inputRow.inputRowId });
-      const details = await extractClaimDetails(page, resultRow.claimNumber, context, inputRow.inputRowId);
-      await context.log({ level: "info", message: `Excel CPT raw: ${inputRow.cptCodeRaw || inputRow.cptCode}.`, rowIndex: inputRow.inputRowId });
-      await context.log({ level: "info", message: `Services section found: ${details.servicesSectionFound ? "yes" : "no"}.`, rowIndex: inputRow.inputRowId });
-      await context.log({ level: "info", message: `Services table found: ${details.servicesTableFound ? "yes" : "no"}.`, rowIndex: inputRow.inputRowId });
-      await context.log({ level: "info", message: `Services rows extracted: ${details.services.length}.`, rowIndex: inputRow.inputRowId });
-      await context.log({ level: "info", message: `TRACE 20: Services rows extracted: ${details.services.length}.`, rowIndex: inputRow.inputRowId });
-      await context.log({ level: "info", message: `TRACE 21: Excel CPT compared against Services rows: ${inputRow.cptCode}.`, rowIndex: inputRow.inputRowId });
-      if (!details.servicesSectionFound) {
-        detailProcessingResult = "Services section not found";
-        await logEmptyServiceDiagnostics(context, inputRow.inputRowId, details);
-        await captureDiagnostics(context, page, inputRow, "services-section-not-found");
-        state.outputRows.push(baseOutputRow(inputRow, "Services section not found", "Services section not found"));
-        addAudit(state, inputRow, "detail", "failed", "Services section not found");
-        return;
-      }
-      if (!details.services.length) {
-        detailProcessingResult = "Services rows could not be extracted";
-        await logEmptyServiceDiagnostics(context, inputRow.inputRowId, details);
-        await captureDiagnostics(context, page, inputRow, "services-rows-not-extracted");
-        state.outputRows.push(baseOutputRow(inputRow, "Services rows could not be extracted", "Services rows could not be extracted"));
-        addAudit(state, inputRow, "detail", "failed", "Services rows could not be extracted");
-        return;
-      }
-      const matchingService = await findMatchingService(details, inputRow.cptCode, context, inputRow.inputRowId);
-      if (matchingService) {
-        const denialDescription = serviceSpecificDenial(details, matchingService);
-        await context.log({ level: "info", message: `Matching service row found: ${matchingService.service}.`, rowIndex: inputRow.inputRowId });
-        await context.log({ level: "info", message: `Matching service Net Payable: ${matchingService.netPayable || "0.00"}.`, rowIndex: inputRow.inputRowId });
-        await context.log({ level: "info", message: `Matching service claim codes: ${matchingService.claimCodes || "(none)"}.`, rowIndex: inputRow.inputRowId });
-        await context.log({ level: "info", message: `Matching service denial description: ${denialDescription.text || "(none)"}.`, rowIndex: inputRow.inputRowId });
-        await context.log({ level: "info", message: `Matching service denial source: ${denialDescription.source || "(none)"}.`, rowIndex: inputRow.inputRowId });
-        await context.log({ level: "info", message: "TRACE 22: Matching service extracted.", rowIndex: inputRow.inputRowId });
-        const sameCptServices = details.services.filter(service => serviceCodeFromText(service.service) === normalizeCptCode(inputRow.cptCode));
-        if (sameCptServices.length !== 1) {
-          const reason = "Review required: multiple service lines match the input CPT";
-          state.outputRows.push(baseOutputRow(inputRow, "Review required", reason));
-          addAudit(state, inputRow, "selection", "review", reason);
-          return;
+  const detailFailures: string[] = [];
+  const stagedRows = stagedSearchRowsByReceivedDateAndStatus(matchedRows);
+  for (const [stageIndex, stageRows] of stagedRows.entries()) {
+    if (matchedRows.length > 1) {
+      await context.log({
+        level: "info",
+        message: `Checking Kaiser candidate stage ${stageIndex + 1}/${stagedRows.length}: ${stageRows.map((row) => `${maskValue(row.claimNumber)} (${getCell(row.cells, ["Clm Rcv Dt"])}, ${getCell(row.cells, ["Status"])})`).join(", ")}.`,
+        rowIndex: inputRow.inputRowId,
+      });
+    }
+    for (const resultRow of stageRows) {
+      await context.log({ level: "info", message: `TRACE 16: Matching row selected: ${maskValue(resultRow.claimNumber)}.`, rowIndex: inputRow.inputRowId });
+      await context.log({ level: "info", message: `Matching claim row found: ${resultRow.claimNumber}.`, rowIndex: inputRow.inputRowId });
+      await context.log({ level: "info", message: `Clicking Claim # ${maskValue(resultRow.claimNumber)}.`, rowIndex: inputRow.inputRowId });
+      let detailPageOpened = false;
+      let detailAttemptStarted = false;
+      let detailProcessingResult = "Claim details unavailable";
+      try {
+        detailAttemptStarted = true;
+        await openClaimDetail(page, resultRow, inputRow, context);
+        detailPageOpened = true;
+        await context.log({ level: "info", message: "Claim-detail page loaded.", rowIndex: inputRow.inputRowId });
+        await context.log({ level: "info", message: `Extracting Kaiser claim ${resultRow.claimNumber}.`, rowIndex: inputRow.inputRowId });
+        const details = await extractClaimDetails(page, resultRow.claimNumber, context, inputRow.inputRowId);
+        await context.log({ level: "info", message: `Excel CPT raw: ${inputRow.cptCodeRaw || inputRow.cptCode}.`, rowIndex: inputRow.inputRowId });
+        await context.log({ level: "info", message: `Services section found: ${details.servicesSectionFound ? "yes" : "no"}.`, rowIndex: inputRow.inputRowId });
+        await context.log({ level: "info", message: `Services table found: ${details.servicesTableFound ? "yes" : "no"}.`, rowIndex: inputRow.inputRowId });
+        await context.log({ level: "info", message: `Services rows extracted: ${details.services.length}.`, rowIndex: inputRow.inputRowId });
+        await context.log({ level: "info", message: `TRACE 20: Services rows extracted: ${details.services.length}.`, rowIndex: inputRow.inputRowId });
+        await context.log({ level: "info", message: `TRACE 21: Excel CPT compared against Services rows: ${inputRow.cptCode}.`, rowIndex: inputRow.inputRowId });
+        if (!details.servicesSectionFound) {
+          detailProcessingResult = "Services section not found";
+          await logEmptyServiceDiagnostics(context, inputRow.inputRowId, details);
+          await captureDiagnostics(context, page, inputRow, "services-section-not-found");
+          detailFailures.push(`${resultRow.claimNumber}: Services section not found`);
+          addAudit(state, inputRow, "detail", "failed", `${resultRow.claimNumber}: Services section not found`);
+          continue;
         }
-        verifiedCandidates.push({
-          claimNumber: resultRow.claimNumber,
-          receivedDate: getCell(resultRow.cells, ["Clm Rcv Dt"]),
-          status: getCell(resultRow.cells, ["Status"]),
-          providerNpi: getCell(resultRow.cells, ["Provider NPI"]),
-          vendorTaxId: getCell(resultRow.cells, ["Vendor Tax ID"]),
-          provider: getCell(resultRow.cells, ["Provider"]),
-          vendor: getCell(resultRow.cells, ["Vendor"]),
-          patient: getCell(resultRow.cells, ["Member Name"]),
-          dos: getCell(resultRow.cells, ["Svc Frm Dt"]),
-          cpt: normalizeCptCode(inputRow.cptCode),
-          details,
-          service: matchingService,
-        });
-        await context.log({ level: "info", message: `Selection candidate ${maskValue(resultRow.claimNumber)}: received=${getCell(resultRow.cells, ["Clm Rcv Dt"])}, status=${getCell(resultRow.cells, ["Status"])}, CPT verified.`, rowIndex: inputRow.inputRowId });
-        detailProcessingResult = "CPT verified; collecting candidates for selection";
-        continue;
+        if (!details.services.length) {
+          detailProcessingResult = "Services rows could not be extracted";
+          await logEmptyServiceDiagnostics(context, inputRow.inputRowId, details);
+          await captureDiagnostics(context, page, inputRow, "services-rows-not-extracted");
+          detailFailures.push(`${resultRow.claimNumber}: Services rows could not be extracted`);
+          addAudit(state, inputRow, "detail", "failed", `${resultRow.claimNumber}: Services rows could not be extracted`);
+          continue;
+        }
+        const matchingService = await findMatchingService(details, inputRow.cptCode, inputRow.dos, context, inputRow.inputRowId);
+        if (matchingService) {
+          const denialDescription = serviceSpecificDenial(details, matchingService);
+          await context.log({ level: "info", message: `Matching service row found: ${matchingService.service}.`, rowIndex: inputRow.inputRowId });
+          await context.log({ level: "info", message: `Matching service Net Payable: ${matchingService.netPayable || "0.00"}.`, rowIndex: inputRow.inputRowId });
+          await context.log({ level: "info", message: `Matching service claim codes: ${matchingService.claimCodes || "(none)"}.`, rowIndex: inputRow.inputRowId });
+          await context.log({ level: "info", message: `Matching service denial description: ${denialDescription.text || "(none)"}.`, rowIndex: inputRow.inputRowId });
+          await context.log({ level: "info", message: `Matching service denial source: ${denialDescription.source || "(none)"}.`, rowIndex: inputRow.inputRowId });
+          await context.log({ level: "info", message: "TRACE 22: Matching service extracted.", rowIndex: inputRow.inputRowId });
+          const sameCptServices = details.services.filter(service => serviceCodeFromText(service.service) === normalizeCptCode(inputRow.cptCode) && serviceDatesMatch(service.from, service.to, inputRow.dos));
+          if (sameCptServices.length !== 1) {
+            const reason = "Review required: multiple service lines match the input CPT and both service dates";
+            state.outputRows.push(baseOutputRow(inputRow, "Review required", reason));
+            addAudit(state, inputRow, "selection", "review", reason);
+            return;
+          }
+          verifiedCandidates.push({
+            claimNumber: resultRow.claimNumber,
+            receivedDate: getCell(resultRow.cells, ["Clm Rcv Dt"]),
+            status: getCell(resultRow.cells, ["Status"]),
+            providerNpi: getCell(resultRow.cells, ["Provider NPI"]),
+            vendorTaxId: getCell(resultRow.cells, ["Vendor Tax ID"]),
+            provider: getCell(resultRow.cells, ["Provider"]),
+            vendor: getCell(resultRow.cells, ["Vendor"]),
+            patient: getCell(resultRow.cells, ["Member Name"]),
+            dos: getCell(resultRow.cells, ["Svc Frm Dt"]),
+            cpt: normalizeCptCode(inputRow.cptCode),
+            details,
+            service: matchingService,
+          });
+          await context.log({ level: "info", message: `Selection candidate ${maskValue(resultRow.claimNumber)}: received=${getCell(resultRow.cells, ["Clm Rcv Dt"])}, status=${getCell(resultRow.cells, ["Status"])}, CPT verified.`, rowIndex: inputRow.inputRowId });
+          detailProcessingResult = "CPT verified; collecting candidates for selection";
+          continue;
+        }
+        detailProcessingResult = "CPT/service dates not found in Services";
+        await context.log({ level: "warn", message: `No matching CPT service row in claim ${resultRow.claimNumber}.`, rowIndex: inputRow.inputRowId });
+      } catch (error) {
+        detailProcessingResult = "Claim details unavailable";
+        await context.log({ level: "error", message: `Claim details unavailable: ${errorMessage(error)}`, rowIndex: inputRow.inputRowId });
+        detailFailures.push(`${resultRow.claimNumber}: Claim details unavailable`);
+        addAudit(state, inputRow, "detail", "failed", `${resultRow.claimNumber}: Claim details unavailable`);
+      } finally {
+        if (detailAttemptStarted && !context.isCancelled?.()) {
+          if (detailPageOpened) {
+            await context.log({ level: "info", message: `Detail processing result: ${detailProcessingResult}.`, rowIndex: inputRow.inputRowId });
+          }
+          await goBackToSearch(page, context, inputRow.inputRowId);
+        }
       }
-      detailProcessingResult = "CPT not found in Services";
-      await context.log({ level: "warn", message: `No matching CPT service row in claim ${resultRow.claimNumber}.`, rowIndex: inputRow.inputRowId });
-    } catch (error) {
-      detailProcessingResult = "Claim details unavailable";
-      await context.log({ level: "error", message: `Claim details unavailable: ${errorMessage(error)}`, rowIndex: inputRow.inputRowId });
-      state.outputRows.push(baseOutputRow(inputRow, "Claim details unavailable", "Claim details unavailable"));
-      addAudit(state, inputRow, "detail", "failed", "Claim details unavailable");
-      return;
-    } finally {
-      if (detailPageOpened && !context.isCancelled?.()) {
-        await context.log({ level: "info", message: `Detail processing result: ${detailProcessingResult}.`, rowIndex: inputRow.inputRowId });
-        await goBackToSearch(page, context, inputRow.inputRowId);
-      }
+    }
+    if (verifiedCandidates.length) {
+      await context.log({
+        level: "info",
+        message: `Kaiser candidate stage ${stageIndex + 1} produced verified CPT/service-date candidate(s); lower-priority received-date/status rows will not be opened.`,
+        rowIndex: inputRow.inputRowId,
+      });
+      break;
     }
   }
 
@@ -2002,7 +2045,7 @@ async function processRow(page: Page, inputRow: KaiserInputRow, state: KaiserWor
     const decision = selectKaiserCandidate(verifiedCandidates);
     await context.log({ level: decision.selected ? "info" : "warn", message: `Kaiser selection: ${decision.reason}${decision.selected ? `; claim=${maskValue(decision.selected.claimNumber)}` : ""}.`, rowIndex: inputRow.inputRowId });
     if (decision.selected) {
-      const output = outputRowFromClaim(inputRow, decision.selected.details, decision.selected.service);
+      const output = outputRowFromClaim(inputRow, { ...decision.selected.details, status: decision.selected.details.status.trim() || decision.selected.status }, decision.selected.service);
       output.botMessage = `${output.botMessage} Selection: ${decision.reason}.`;
       state.outputRows.push(output);
     } else {
@@ -2012,8 +2055,9 @@ async function processRow(page: Page, inputRow: KaiserInputRow, state: KaiserWor
     return;
   }
 
-  state.outputRows.push(baseOutputRow(inputRow, "CPT not found in Services", `CPT not found in Services: ${inputRow.cptCode}.`));
-  addAudit(state, inputRow, "detail", "completed", `No service matched CPT ${inputRow.cptCode}.`);
+  const failureSummary = detailFailures.length ? ` Detail failures: ${detailFailures.join("; ")}.` : "";
+  state.outputRows.push(baseOutputRow(inputRow, "CPT/service dates not found in Services", `No service matched CPT ${inputRow.cptCode} with From and To equal to ${inputRow.dos}.${failureSummary}`));
+  addAudit(state, inputRow, "detail", "completed", `No service matched CPT ${inputRow.cptCode}.${failureSummary}`);
 }
 
 async function emitArtifacts(context: ScraperContext, state: KaiserWorkbookState): Promise<void> {
