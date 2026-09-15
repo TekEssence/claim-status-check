@@ -4,7 +4,7 @@ import type { AutomationRunner } from "../../../types";
 import type { EligibilityResult, EligibilityRunInput } from "../../types";
 import { parseEligibilityProjectId } from "../../projects";
 import { healthnetOutputValues, buildHealthNetOutput, readHealthNetCredentials, readHealthNetInput } from "./data";
-import { loginHealthNet, verifyHealthNetRow } from "./portal";
+import { HealthNetMemberMismatchError, loginHealthNet, verifyHealthNetRow } from "./portal";
 import { startHealthNetLoginDiagnostics } from './login-diagnostics';
 
 export function createHealthNetEligibilityRunner(): AutomationRunner<EligibilityRunInput> {
@@ -58,6 +58,7 @@ export function createHealthNetEligibilityRunner(): AutomationRunner<Eligibility
               throw new Error('Health Net automatic login failed after one fresh-session retry. The verification screen was not reached. No eligibility searches were performed. Review the login diagnostics for the SSO failure.');
             }
           } else {
+          if (error instanceof Error && error.message === 'Health Net did not retain the complete username after three entry attempts. Continue was not clicked.') throw error;
           // Playwright's raw error includes redirect URLs, query tokens and
           // occasionally entered values. Return only a safe summary to the UI.
           throw new Error('Health Net login did not complete. Download healthnet-login-diagnostics.json and review the masked login screenshot for the redirect failure.');
@@ -75,6 +76,11 @@ export function createHealthNetEligibilityRunner(): AutomationRunner<Eligibility
             }));
             await context.log({ level: "info", message: `Row ${rowIndex}: HealthNet response extracted.`, rowIndex, eventName: "eligibility_healthnet_row_complete" });
           } catch (error) {
+            if (error instanceof HealthNetMemberMismatchError) {
+              const comparison = { rowIndex, requestedMemberId: error.requestedMemberId, extractedMemberId: error.extractedMemberId,
+                explanation: 'Comparison ignores spaces, hyphens and letter case, and accepts an optional three-character trailing suffix. The shared base, including leading zeros, must match.' };
+              await context.emit({ type: 'file_download', filename: `healthnet-member-comparison-row-${rowIndex}.json`, mimeType: 'application/json', base64: Buffer.from(JSON.stringify(comparison, null, 2)).toString('base64') });
+            }
             const message = error instanceof Error ? error.message : "HealthNet row processing failed.";
             errors.set(rowIndex, message);
             await context.log({ level: "error", message, rowIndex, eventName: "eligibility_healthnet_row_failed" });
