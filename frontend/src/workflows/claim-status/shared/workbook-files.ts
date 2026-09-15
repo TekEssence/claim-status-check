@@ -89,16 +89,8 @@ export async function loadIehpWorkbookBundle(
   };
 }
 
-export async function loadUhcWorkbookBundle(claimFileHandle: FileSystemFileHandle, groupId: string): Promise<UhcWorkbookBundle> {
-  const currentPermission = await claimFileHandle.queryPermission({ mode: "readwrite" }).catch(() => "prompt" as const);
-  if (currentPermission !== "granted") {
-    if ((await claimFileHandle.requestPermission({ mode: "readwrite" }).catch(() => "denied" as const)) !== "granted") {
-      throw new Error("Write permission denied. Cannot update UHC Excel file.");
-    }
-  }
-
-  const file = await claimFileHandle.getFile();
-  const arrayBuffer = await file.arrayBuffer();
+export async function loadUhcWorkbookBundle(claimFile: File, groupId: string): Promise<UhcWorkbookBundle> {
+  const arrayBuffer = await claimFile.arrayBuffer();
   const excelWb = new ExcelJS.Workbook();
   await excelWb.xlsx.load(arrayBuffer);
   const worksheet = excelWb.worksheets[0];

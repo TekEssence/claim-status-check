@@ -24,9 +24,10 @@ async function buildWorksheet(headers: string[], rows: Record<string, unknown>[]
 
 test("UHC MedRevenu rows do not require Patient DOB and preserve CPT/service code", async () => {
   const worksheet = await buildWorksheet(
-    ["Subscriber ID", "Patient Name", "Service Date", "Service Code"],
+    ["Group", "Subscriber ID", "Patient Name", "Service Date", "Service Code"],
     [
       {
+        Group: "BZA",
         "Subscriber ID": "123456789",
         "Patient Name": "DOE, JANE",
         "Service Date": "04/16/2026",
@@ -47,9 +48,10 @@ test("UHC MedRevenu rows do not require Patient DOB and preserve CPT/service cod
 
 test("UHC Minimax rows can load without Patient DOB", async () => {
   const worksheet = await buildWorksheet(
-    ["Subscriber ID", "Patient Name", "Service Date"],
+    ["Group", "Subscriber ID", "Patient Name", "Service Date"],
     [
       {
+        Group: "BZA",
         "Subscriber ID": "123456789",
         "Patient Name": "DOE, JANE",
         "Service Date": "04/16/2026",
@@ -67,9 +69,10 @@ test("UHC Minimax rows can load without Patient DOB", async () => {
 
 test("UHC parser accepts Excel serial service dates", async () => {
   const worksheet = await buildWorksheet(
-    ["Member ID", "DOB", "DOS"],
+    ["Group", "Member ID", "DOB", "DOS"],
     [
       {
+        Group: "BZA",
         "Member ID": "123456789",
         DOB: 18050,
         DOS: 46128,
@@ -83,11 +86,30 @@ test("UHC parser accepts Excel serial service dates", async () => {
   assert.equal(rows[0].serviceDate, "04/16/2026");
 });
 
-test("UHC writer stores accounting credit amounts as negative Excel numbers", async () => {
+test("UHC parser prefers exact DOS column and accepts single-digit month/day", async () => {
   const worksheet = await buildWorksheet(
-    ["Subscriber ID", "Patient Name", "Service Date"],
+    ["Group", "Member ID", "Date of Service", "DOS"],
     [
       {
+        Group: "BZA",
+        "Member ID": "123456789",
+        "Date of Service": "01/01/1900",
+        DOS: "3/4/2026",
+      },
+    ],
+  );
+
+  const rows = parseUhcClaimRows(worksheet, { requirePatientDob: false });
+
+  assert.equal(rows[0].serviceDate, "3/4/2026");
+});
+
+test("UHC writer stores accounting credit amounts as negative Excel numbers", async () => {
+  const worksheet = await buildWorksheet(
+    ["Group", "Subscriber ID", "Patient Name", "Service Date"],
+    [
+      {
+        Group: "BZA",
         "Subscriber ID": "123456789",
         "Patient Name": "DOE, JANE",
         "Service Date": "04/16/2026",

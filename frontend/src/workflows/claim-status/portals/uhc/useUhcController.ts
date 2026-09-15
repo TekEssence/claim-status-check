@@ -1,16 +1,16 @@
 import { useMemo, useState, type Dispatch, type FormEvent, type SetStateAction } from "react";
+import ExcelJS from "exceljs";
 import {
-  cancelScrapeJob as cancelScrapeJobRequest, startScrapeJob,
+  startScrapeJob,
   submitScrapeJobInput, subscribeToScrapeJobEvents,
 } from "../../../../api/scrape-jobs-api";
-import type { FileSystemFileHandle } from "../../../../types/file-system-access";
 import type { ErrorScreenshot, JobProgressValue, ScrapeJobEvent } from "../../../../types/job";
 import {
-  buildDownloadArtifactKey, downloadTextFile, getErrorMessage, getEventRowIndex,
+  buildDownloadArtifactKey, downloadBlob, downloadTextFile, getErrorMessage, getEventRowIndex,
   hasDownloadedArtifact, rememberDownloadedArtifact,
 } from "../../shared/artifacts";
 import {
-  loadUhcWorkbookBundle, selectExcelFileHandle, writeWorkbookToClaimFile,
+  loadUhcWorkbookBundle,
   type UhcWorkbookBundle,
 } from "../../shared/workbook-files";
 import { applyUhcRowUpdateToWorksheet, postProcessUhcWorksheet } from "./workbook";
@@ -18,6 +18,86 @@ import type { UhcProviderPrompt } from "./UhcResultView";
 import type { PortalId } from "../../shared/model";
 
 type Setter<T> = Dispatch<SetStateAction<T>>;
+
+type UhcProviderMapping = {
+  group: string;
+  corporateTaxIdOwner: string;
+  taxIdNumber: string;
+  careProvider: string;
+};
+
+const UHC_PROVIDER_MAPPING_URL = "/provider-mappings/uhc-provider-mappings.xlsx";
+
+function cellText(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  if (value instanceof Date) return value.toISOString();
+  if (typeof value === "object" && "text" in value) {
+    return String((value as { text?: unknown }).text ?? "").trim();
+  }
+  return String(value).trim();
+}
+
+function normalizeHeader(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+function findColumn(headerRow: ExcelJS.Row, aliases: string[]): number {
+  const normalizedAliases = aliases.map(normalizeHeader);
+  let found = 0;
+  headerRow.eachCell((cell, colNum) => {
+    if (found) return;
+    const normalized = normalizeHeader(cellText(cell.value));
+    if (normalizedAliases.some((alias) => normalized === alias || normalized.includes(alias))) {
+      found = colNum;
+    }
+  });
+  return found;
+}
+
+async function loadUhcProviderMappings(): Promise<UhcProviderMapping[]> {
+  const response = await fetch(UHC_PROVIDER_MAPPING_URL, { cache: "no-store" });
+  if (!response.ok) {
+    throw new Error(`Unable to load UHC provider mapping workbook (${response.status}).`);
+  }
+
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(await response.arrayBuffer());
+  const worksheet = workbook.worksheets[0];
+  if (!worksheet) throw new Error("UHC provider mapping workbook does not contain a worksheet.");
+
+  const headerRow = worksheet.getRow(1);
+  const groupCol = findColumn(headerRow, ["group", "group name", "medical group", "medical group name"]);
+  const corporateCol = findColumn(headerRow, ["corporate tax id owner", "corporate taxid owner", "corporate owner"]);
+  const taxIdCol = findColumn(headerRow, ["tax id number", "tax id", "taxid", "tin"]);
+  const careProviderCol = findColumn(headerRow, ["care provider", "provider", "provider name"]);
+
+  if (!groupCol || !corporateCol || !careProviderCol) {
+    throw new Error("UHC provider mapping workbook requires Group, Corporate Tax ID Owner, and Care Provider columns.");
+  }
+
+  const mappings: UhcProviderMapping[] = [];
+  worksheet.eachRow((row, rowNumber) => {
+    if (rowNumber === 1) return;
+    const group = cellText(row.getCell(groupCol).value);
+    const corporateTaxIdOwner = cellText(row.getCell(corporateCol).value);
+    const careProvider = cellText(row.getCell(careProviderCol).value);
+    const taxIdNumber = taxIdCol ? cellText(row.getCell(taxIdCol).value) : "";
+    if (!group || (!corporateTaxIdOwner && !careProvider && !taxIdNumber)) return;
+    mappings.push({ group, corporateTaxIdOwner, taxIdNumber, careProvider });
+  });
+
+  if (mappings.length === 0) {
+    throw new Error("UHC provider mapping workbook does not contain usable mapping rows.");
+  }
+
+  return mappings;
+}
+
+async function downloadUhcWorkbook(filename: string, workbookBundle: UhcWorkbookBundle): Promise<void> {
+  postProcessUhcWorksheet(workbookBundle.worksheet);
+  const buffer = await workbookBundle.excelWb.xlsx.writeBuffer();
+  downloadBlob(filename, new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }));
+}
 
 export function useUhcController(p: {
   canStartAnotherRun: boolean;
@@ -29,8 +109,7 @@ export function useUhcController(p: {
   refreshRuns: () => void;
 }) {
   const [uhcLoginFile, setUhcLoginFile] = useState<File | null>(null);
-  const [uhcClaimFileHandle, setUhcClaimFileHandle] = useState<FileSystemFileHandle | null>(null);
-  const [uhcClaimFileName, setUhcClaimFileName] = useState("");
+  const [uhcClaimFile, setUhcClaimFile] = useState<File | null>(null);
   const [uhcGroupId, setUhcGroupId] = useState("minimax");
   const [uhcBrowserType, setUhcBrowserType] = useState<"chrome" | "firefox">("chrome");
   const [uhcJobId, setUhcJobId] = useState("");
@@ -38,23 +117,15 @@ export function useUhcController(p: {
   const [uhcOtpValue, setUhcOtpValue] = useState("");
   const [uhcProviderPrompt, setUhcProviderPrompt] = useState<UhcProviderPrompt | null>(null);
   const canSubmitUhc = useMemo(
-    () => Boolean(uhcLoginFile && uhcClaimFileHandle && p.canStartAnotherRun),
-    [p.canStartAnotherRun, uhcClaimFileHandle, uhcLoginFile],
+    () => Boolean(uhcLoginFile && uhcClaimFile && p.canStartAnotherRun),
+    [p.canStartAnotherRun, uhcClaimFile, uhcLoginFile],
   );
   const { resetRunState, setSelectedPortalId, setActiveJobId, setIsProcessing,
     setStatus, setLogs, setProgress, setErrorScreenshots } = p;
-  const refreshWorkflowRuns = (_options?: { silent?: boolean }) => p.refreshRuns();
+  const refreshWorkflowRuns = () => p.refreshRuns();
 
-  async function selectUhcClaimFile() {
-    try {
-      const handle = await selectExcelFileHandle();
-      if (!handle) return;
-      const file = await handle.getFile();
-      setUhcClaimFileHandle(handle);
-      setUhcClaimFileName(file.name);
-    } catch (error) {
-      setStatus(`Unable to select UHC claim file: ${getErrorMessage(error)}`);
-    }
+  function handleUhcClaimFileChange(file: File | null) {
+    setUhcClaimFile(file);
   }
 
   async function submitUhcOtp() {
@@ -97,7 +168,7 @@ export function useUhcController(p: {
   async function submitUhc(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
 
-    if (!uhcLoginFile || !uhcClaimFileHandle) {
+    if (!uhcLoginFile || !uhcClaimFile) {
       setStatus("Please provide both the UHC login Excel and claim Excel files.");
       return;
     }
@@ -106,10 +177,12 @@ export function useUhcController(p: {
     setSelectedPortalId("uhc");
 
     let workbookBundle: UhcWorkbookBundle;
+    let providerMappings: UhcProviderMapping[];
     try {
-      workbookBundle = await loadUhcWorkbookBundle(uhcClaimFileHandle, uhcGroupId);
+      workbookBundle = await loadUhcWorkbookBundle(uhcClaimFile, uhcGroupId);
+      providerMappings = await loadUhcProviderMappings();
     } catch (error) {
-      setStatus(`Unable to read UHC claim workbook: ${getErrorMessage(error)}`);
+      setStatus(`Unable to read UHC input files: ${getErrorMessage(error)}`);
       setIsProcessing(false);
       return;
     }
@@ -118,8 +191,9 @@ export function useUhcController(p: {
     formData.append("portalId", "uhc");
     formData.append("loginExcel", uhcLoginFile);
     formData.append("loginFileName", uhcLoginFile.name);
-    formData.append("claimFileName", uhcClaimFileName);
+    formData.append("claimFileName", uhcClaimFile.name);
     formData.append("claimRows", JSON.stringify(workbookBundle.claimRows));
+    formData.append("providerMappings", JSON.stringify(providerMappings));
     formData.append("startIndex", "0");
     formData.append("attempt", "1");
     formData.append("browserType", uhcBrowserType);
@@ -129,22 +203,8 @@ export function useUhcController(p: {
     let wasCancelled = false;
     let finalErrorMessage = "";
     let subscribedJobId = "";
-    let writeQueue = Promise.resolve();
     let uhcRowsSinceCheckpoint = 0;
     const streamAbortController = new AbortController();
-
-    const failForWriteError = (error: unknown) => {
-      const message = `UHC Excel update failed. Close Excel, verify file access, and run again. Details: ${getErrorMessage(error)}`;
-      hasError = true;
-      setStatus(`Error: ${message}`);
-      streamAbortController.abort();
-      if (subscribedJobId) {
-        void cancelScrapeJobRequest(subscribedJobId).catch((cancelError) => {
-          console.error("Failed to cancel UHC job after Excel write failure", cancelError);
-        });
-      }
-      window.alert(message);
-    };
 
     const handleJobEvent = async (eventData: ScrapeJobEvent) => {
       if (eventData.type === "log" && eventData.message) {
@@ -154,20 +214,17 @@ export function useUhcController(p: {
       } else if (eventData.type === "row_update") {
         applyUhcRowUpdateToWorksheet(workbookBundle.worksheet, eventData);
         uhcRowsSinceCheckpoint += 1;
-        const shouldWriteFullUhcCheckpoint = uhcRowsSinceCheckpoint >= 10;
-        if (shouldWriteFullUhcCheckpoint) {
+        const shouldDownloadFullUhcCheckpoint = uhcRowsSinceCheckpoint >= 10;
+        if (shouldDownloadFullUhcCheckpoint) {
           uhcRowsSinceCheckpoint = 0;
-        }
-        writeQueue = writeQueue.then(async () => {
           try {
-            if (shouldWriteFullUhcCheckpoint) {
-              postProcessUhcWorksheet(workbookBundle.worksheet);
-            }
-            await writeWorkbookToClaimFile(uhcClaimFileHandle, workbookBundle.excelWb);
-          } catch (writeError) {
-            failForWriteError(writeError);
+            await downloadUhcWorkbook(`uhc_checkpoint_row_${(eventData.index ?? 0) + 1}.xlsx`, workbookBundle);
+          } catch (downloadError) {
+            finalErrorMessage = getErrorMessage(downloadError);
+            setStatus(`UHC checkpoint download failed: ${finalErrorMessage}`);
+            hasError = true;
           }
-        });
+        }
       } else if (eventData.type === "error_screenshot" && typeof eventData.index === "number" && eventData.image) {
         setErrorScreenshots((prev) => [...prev, { index: eventData.index ?? -1, image: eventData.image ?? "" }]);
       } else if (eventData.type === "debug_html" && typeof eventData.index === "number" && eventData.html) {
@@ -216,10 +273,8 @@ export function useUhcController(p: {
       setActiveJobId(jobId);
       setUhcJobId(jobId);
       setUhcLoginFile(null);
-      setUhcClaimFileHandle(null);
-      setUhcClaimFileName("");
       setIsProcessing(false);
-      void refreshWorkflowRuns({ silent: true });
+      void refreshWorkflowRuns();
       await subscribeToScrapeJobEvents({
         jobId,
         signal: streamAbortController.signal,
@@ -233,13 +288,10 @@ export function useUhcController(p: {
         },
       });
 
-      await writeQueue;
       if (!hasError && !wasCancelled) {
-        postProcessUhcWorksheet(workbookBundle.worksheet);
-        await writeWorkbookToClaimFile(uhcClaimFileHandle, workbookBundle.excelWb);
+        await downloadUhcWorkbook("uhc_output.xlsx", workbookBundle);
       } else if (uhcRowsSinceCheckpoint > 0) {
-        postProcessUhcWorksheet(workbookBundle.worksheet);
-        await writeWorkbookToClaimFile(uhcClaimFileHandle, workbookBundle.excelWb);
+        await downloadUhcWorkbook("uhc_partial_output.xlsx", workbookBundle);
         uhcRowsSinceCheckpoint = 0;
       }
 
@@ -260,9 +312,9 @@ export function useUhcController(p: {
   }
 
   return {
-    uhcLoginFile, setUhcLoginFile, uhcClaimFileHandle, uhcClaimFileName,
+    uhcLoginFile, setUhcLoginFile, uhcClaimFile,
     uhcGroupId, setUhcGroupId, uhcBrowserType, setUhcBrowserType, uhcJobId, setUhcJobId,
     uhcOtpRequest, setUhcOtpRequest, uhcOtpValue, setUhcOtpValue, uhcProviderPrompt, setUhcProviderPrompt,
-    canSubmitUhc, selectUhcClaimFile, submitUhcOtp, submitUhcProviderSelection, submitUhc,
+    canSubmitUhc, handleUhcClaimFileChange, submitUhcOtp, submitUhcProviderSelection, submitUhc,
   };
 }

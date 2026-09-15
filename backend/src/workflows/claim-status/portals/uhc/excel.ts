@@ -13,6 +13,7 @@ export interface LoginCredentials {
 
 export interface ClaimRow {
   rowIndex: number;      // 1-based Excel row number (row 2 = first data row)
+  group?: string;
   subscriberNo: string;
   patientDOB: string;    // MM/DD/YYYY
   serviceDate: string;   // MM/DD/YYYY
@@ -77,12 +78,20 @@ function getCellText(cell: ExcelJS.Cell): string {
 }
 
 /** Normalize an Excel date cell value to MM/DD/YYYY string (UTC-safe) */
-export function normalizeDate(val: ExcelJS.CellValue): string {
+export function normalizeDate(val: ExcelJS.CellValue, options: { allowHistoricalSerial?: boolean } = {}): string {
   if (!val) return '';
   if (val instanceof Date) {
     const m = String(val.getUTCMonth() + 1).padStart(2, '0');
     const d = String(val.getUTCDate()).padStart(2, '0');
     return `${m}/${d}/${val.getUTCFullYear()}`;
+  }
+  if (typeof val === 'number' && Number.isFinite(val)) {
+    if (!options.allowHistoricalSerial && val < 30_000) return '';
+    const epoch = Date.UTC(1899, 11, 30);
+    const date = new Date(epoch + val * 24 * 60 * 60 * 1000);
+    const m = String(date.getUTCMonth() + 1).padStart(2, '0');
+    const d = String(date.getUTCDate()).padStart(2, '0');
+    return `${m}/${d}/${date.getUTCFullYear()}`;
   }
   // Hyperlink object
   if (typeof val === 'object' && 'text' in (val as object)) {
@@ -160,7 +169,9 @@ export async function readClaimsExcel(buffer: ArrayBuffer): Promise<ClaimRow[]> 
   const headerRow  = ws.getRow(1);
   const subNoCol   = findCol(headerRow, 'subscriber no', 'subscriber number', 'member id', 'memberid');
   const dobCol     = findCol(headerRow, 'patient dob', 'dob', 'date of birth', 'birth');
-  const svcDateCol = findCol(headerRow, 'service date', 'dos', 'date of service');
+  const svcDateCol = findExactCol(headerRow, 'dos') > 0
+    ? findExactCol(headerRow, 'dos')
+    : findCol(headerRow, 'service date', 'dos', 'date of service');
   const nameCol    = findExactCol(headerRow, 'patient') > 0
     ? findExactCol(headerRow, 'patient')
     : findCol(headerRow, 'patient name', 'subscriber name', 'name', 'member name');
@@ -184,8 +195,8 @@ export async function readClaimsExcel(buffer: ArrayBuffer): Promise<ClaimRow[]> 
     rows.push({
       rowIndex:    rowNum,
       subscriberNo,
-      patientDOB:  getCellText(row.getCell(dobCol))  || normalizeDate(row.getCell(dobCol).value),
-      serviceDate: getCellText(row.getCell(svcDateCol)) || normalizeDate(row.getCell(svcDateCol).value),
+      patientDOB:  normalizeDate(row.getCell(dobCol).value, { allowHistoricalSerial: true }) || getCellText(row.getCell(dobCol)),
+      serviceDate: normalizeDate(row.getCell(svcDateCol).value, { allowHistoricalSerial: false }) || getCellText(row.getCell(svcDateCol)),
       patientName: nameCol > 0 ? getCellText(row.getCell(nameCol)) : undefined,
       patientFirstName: firstCol > 0 ? getCellText(row.getCell(firstCol)) : undefined,
       patientLastName: lastCol > 0 ? getCellText(row.getCell(lastCol)) : undefined,
@@ -284,7 +295,9 @@ export async function postProcessWorksheet(buffer: ArrayBuffer): Promise<ArrayBu
 
   const headerRow = ws.getRow(1);
   const subNoCol   = findCol(headerRow, 'subscriber no', 'subscriber number', 'member id');
-  const svcDateCol = findCol(headerRow, 'service date', 'dos', 'date of service');
+  const svcDateCol = findExactCol(headerRow, 'dos') > 0
+    ? findExactCol(headerRow, 'dos')
+    : findCol(headerRow, 'service date', 'dos', 'date of service');
 
   const botColumnNumbers: number[] = [];
   headerRow.eachCell((cell, colNum) => {

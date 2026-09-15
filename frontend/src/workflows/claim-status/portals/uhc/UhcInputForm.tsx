@@ -37,7 +37,8 @@ export function UhcInputForm({
   return (
     <form className="space-y-5" onSubmit={onSubmit}>
       <div className="rounded-[1.2rem] border border-blue-100 bg-blue-50/70 px-4 py-3 text-sm text-blue-900">
-        <span className="font-semibold">Payer Portal:</span> UnitedHealthcare claim status with two group flows.
+        <span className="font-semibold">Payer Portal:</span> UnitedHealthcare claim status with group-based provider mapping.
+        <span className="mt-1 block text-xs text-blue-800">Provider mappings are read from public/provider-mappings/uhc-provider-mappings.xlsx.</span>
       </div>
 
       <div className="rounded-[1.2rem] border border-sky-100 bg-white/90 p-4">
@@ -102,7 +103,7 @@ export function UhcInputForm({
             mode="file"
             accept=".xlsx,.xls"
             acceptedFormats=".xlsx, .xls"
-            description="Upload the UHC claim workbook. Results are generated as downloadable output files without writing back to your local file."
+            description="Upload the UHC claim workbook. Required: Group, member/subscriber ID, and DOS."
             fileName={claimFileName}
             icon={FileSpreadsheet}
             inputId="uhcClaimExcel"
