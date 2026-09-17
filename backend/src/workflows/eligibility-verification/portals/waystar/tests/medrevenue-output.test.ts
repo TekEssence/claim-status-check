@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import * as XLSX from "xlsx";
 import { buildWaystarOutputWorkbook } from "../output";
+import { applyMedRevenueIpaResultMapping } from "../scraper";
 import type { EligibilityInputRow, EligibilityResult } from "../../../types";
 
 function inputFile(): File {
@@ -38,7 +39,29 @@ const result: EligibilityResult = {
   metadata: { medRevenuePrescriptionDrugServiceType: "Pharmacy" },
 };
 
-test("MedRevenue uses the unchanged Minimax output format plus Plan Date", async () => {
+test("MedRevenue exports the associated IPA only for the portal HMO plan type", async () => {
+  for (const [planType, ipa, expected] of [
+    ["Health Maintenance Organization - HMO", " Example Medical Group ", "Example Medical Group"],
+    ["Health Maintenance Organization (HMO)", "Example IPA", "Example IPA"],
+    ["HMO", undefined, "-"],
+    ["Preferred Provider Organization - PPO", "Example IPA", "-"],
+    [undefined, "Example IPA", "-"],
+  ]) {
+    // A payer may replace the displayed plan type with a plan name.
+    const mapped = applyMedRevenueIpaResultMapping({ ...result, planType: "Custom plan name", ipa: "Old IPA" }, {
+      healthBenefitPlanCoverage: { planType }, general: { ipa },
+    });
+    const output = await buildWaystarOutputWorkbook({
+      inputFile: inputFile(), rows: new Map([[2, row]]), results: new Map([[2, mapped]]),
+      errors: new Map(), projectId: "medrevenue",
+    });
+    const workbook = XLSX.read(output, { type: "buffer" });
+    const values = XLSX.utils.sheet_to_json<Record<string, string>>(workbook.Sheets[workbook.SheetNames[0]])[0];
+    assert.equal(values.IPA, expected);
+  }
+});
+
+test("MedRevenue extends the Minimax output with Plan Date, Service Type and IPA", async () => {
   const common = {
     rows: new Map([[2, row]]),
     results: new Map([[2, result]]),
@@ -64,8 +87,9 @@ test("MedRevenue uses the unchanged Minimax output format plus Plan Date", async
   const minimaxHeaders = Object.keys(minimaxRows[0]).filter((header) => header !== "error");
   const medRevenueHeaders = Object.keys(medRevenueRows[0]);
 
-  assert.deepEqual(medRevenueHeaders.slice(0, -2), minimaxHeaders);
-  assert.deepEqual(medRevenueHeaders.slice(-2), ["Plan Date", "Service Type"]);
+  assert.deepEqual(medRevenueHeaders.slice(0, -3), minimaxHeaders);
+  assert.deepEqual(medRevenueHeaders.slice(-3), ["Plan Date", "Service Type", "IPA"]);
+  assert.equal(medRevenueRows[0]["IPA"], "-");
   for (const header of minimaxHeaders) {
     assert.equal(medRevenueRows[0][header], minimaxRows[0][header]);
   }

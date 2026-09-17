@@ -1670,7 +1670,7 @@ async function selectPatientLookupOption(page: Page, lookupCode: string): Promis
   }
 }
 
-/** Minimax requires all four patient fields, regardless of the payer's default lookup. */
+/** Configured flows require all four patient fields, regardless of the payer's default lookup. */
 export async function ensureWaystarSubscriberLookup(page: Page): Promise<void> {
   const lookup = page.locator(WAYSTAR_SELECTORS.inquiry.patientLookup).first();
   for (let attempt = 0; attempt < 3; attempt += 1) {

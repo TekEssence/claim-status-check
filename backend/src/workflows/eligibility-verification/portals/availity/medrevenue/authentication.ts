@@ -8,7 +8,11 @@ export async function authenticateMedRevenueAvaility(
   page: Page, credentials: AvailityEligibilityCredentials, context: AutomationContext,
   waitForInput = waitForScrapeJobInput,
 ) {
-  if (credentials.totpSecret) return authenticateAvailityEligibility(page, credentials);
+  if (credentials.totpSecret) {
+    await context.log({ level: 'info', eventName: 'eligibility_availity_automatic_authentication',
+      message: 'MedRevenue Availity: using the login workbook Secret Key for automatic authenticator verification.' });
+    return authenticateAvailityEligibility(page, credentials);
+  }
   await page.goto(credentials.loginUrl, { waitUntil: "domcontentloaded" });
   await page.locator('#userId').fill(credentials.username);
   await page.locator('#password').fill(credentials.password);

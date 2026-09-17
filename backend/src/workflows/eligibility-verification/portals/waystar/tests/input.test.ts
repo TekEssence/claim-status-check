@@ -4,11 +4,39 @@ import * as XLSX from "xlsx";
 import { medRevenueWaystarConfig } from "../config/projects/medrevenue";
 import { minimaxWaystarConfig } from "../config/projects/minimax";
 import { normalizeWaystarDate } from "../dates";
+import { waystarPayerRegistry } from "../payer-registry";
 import {
   readWaystarEligibilityWorkbook,
   routeWaystarRowsByPayer,
   splitPatientName,
 } from "../input";
+
+test("all Waystar payers recognize combined and separate patient name columns", () => {
+  for (const payer of Object.values(waystarPayerRegistry)) {
+    for (const names of [
+      { "Patient Name": "fathima,afrin" },
+      { "Patient L Name": "fathima", "Patient F Name": "afrin" },
+      { "Patient Name": "fathima,afrin", "Patient L Name": "", "Patient F Name": "" },
+    ]) {
+      const routing = routeWaystarRowsByPayer([
+        { "Primary Insurance Name": payer.name, ...names },
+      ]);
+      assert.equal(routing.batches[0]?.payerId, payer.id, payer.name);
+      const row = routing.batches[0].rows[0];
+      assert.equal(row.patientLastName, "fathima", payer.name);
+      assert.equal(row.patientFirstName, "afrin", payer.name);
+    }
+  }
+});
+
+test("MedRevenue Medicare maps comma-separated patient names to last name then first name", () => {
+  const routing = routeWaystarRowsByPayer([
+    { "Primary Insurance Name": "Medicare", "Patient Name": " Fathima , Afrin " },
+  ], { projectConfig: medRevenueWaystarConfig });
+  const row = routing.batches[0].rows[0];
+  assert.equal(row.patientLastName, "Fathima");
+  assert.equal(row.patientFirstName, "Afrin");
+});
 
 test("MedRevenue uses each row's DOS instead of an earlier existing Plan Date column", () => {
   const routing = routeWaystarRowsByPayer([

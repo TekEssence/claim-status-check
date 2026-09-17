@@ -22,7 +22,7 @@ export function createHealthNetEligibilityRunner(): AutomationRunner<Eligibility
     async run(input, context) {
       if (input.projectId !== "medrevenue") throw new Error("HealthNet eligibility is available only for MedRevenu.");
       const inputRows = await readHealthNetInput(input.inputFile);
-      if (!inputRows.length) throw new Error("No MedRevenu eligibility rows found.");
+      if (!inputRows.length) throw new Error('No matching MedRevenu Health Net eligibility rows found. Check that Primary Insurance Name (or Insurance in the legacy workbook layout) contains Health Net. If provided, Project must be MedRevenu or MedRevenue.');
       const credentials = await readHealthNetCredentials(input.credentialFile);
       const rows = new Map(inputRows.map((row) => [row.originalIndex, row]));
       const results = new Map<number, EligibilityResult>();

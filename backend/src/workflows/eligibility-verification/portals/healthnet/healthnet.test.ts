@@ -145,6 +145,28 @@ test('Health Net routing, credentials and input are isolated to MedRevenu', asyn
   await assert.rejects(readHealthNetCredentials(await file([['Project', 'Portal'], ['Minimax', 'Health Net']])), /exactly one/);
 });
 
+test('Health Net reads legacy Insurance and mislabeled member ID columns without losing row positions', async () => {
+  const input = await file([
+    ['DOS', 'Patient Name ', 'DOB', 'Insurance ', 'Primary Insurance Name"', 'Project'],
+    ['09/15/2026', 'Doe, Jane', '01/01/1980', ' Healthnet ', '00123', 'MedRevenu'],
+    [],
+    ['09/15/2026', 'Doe, John', '01/01/1980', 'HEALTHNET', '00456', ''],
+    ['09/15/2026', 'Doe, Jane', '01/01/1980', 'IEHP', '00789', 'MedRevenu'],
+    ['09/15/2026', 'Doe, Jane', '01/01/1980', 'Healthnet', '00999', 'Minimax'],
+  ]);
+  const rows = await readHealthNetInput(input);
+  assert.deepEqual(rows.map(row => [row.originalIndex, row.memberId]), [[2, '00123'], [4, '00456']]);
+  assert.equal(rows[0].patientFirstName, 'Jane');
+  assert.equal(rows[0].dateOfBirth, '01/01/1980');
+  assert.equal(rows[0].dateOfService, '09/15/2026');
+  const standard = await file([
+    ['Insurance', 'Primary Insurance Name"', 'Member ID'],
+    ['Healthnet', 'IEHP', '00123'],
+    ['IEHP', 'Health Net', '00456'],
+  ]);
+  assert.deepEqual((await readHealthNetInput(standard)).map(row => row.memberId), ['00456']);
+});
+
 test('Health Net extracts PPG name, preserves aligned history and existing output columns', async () => {
   const browser = await chromium.launch({ channel: 'msedge', headless: true });
   try {
