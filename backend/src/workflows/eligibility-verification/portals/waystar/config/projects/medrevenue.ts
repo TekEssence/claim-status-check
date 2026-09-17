@@ -136,6 +136,7 @@ export const medRevenueWaystarConfig: WaystarProjectConfig = {
       selectorFallbacks: { planDateFrom: "#txtPlanFrom", planDateTo: "#txtPlanTo" },
     },
     medicare: {
+      requireSubscriberLookup: true,
       settings: { requireFullPayerName: true },
       requireExactPayerSuggestionCommit: true,
       skipProviderHandling: true,

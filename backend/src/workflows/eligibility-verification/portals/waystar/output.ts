@@ -139,8 +139,7 @@ async function buildMedRevenueWaystarOutputWorkbook(options: {
   const sheet = workbook.worksheets[0];
   if (!sheet) throw new Error("The eligibility workbook does not contain a worksheet.");
 
-  // Deliberately mirrors the established Minimax columns without changing its
-  // code path. MedRevenue adds only the requested Plan Date column.
+  // Extend the established columns only for MedRevenue.
   const outputColumns = [
     ...BCBS_OUTPUT_COLUMNS.map((column) => ({ ...column })),
     { header: "Plan Date", value: (_row: EligibilityInputRow | undefined, result: EligibilityResult | undefined) => result?.planDate ?? "" },
@@ -149,6 +148,7 @@ async function buildMedRevenueWaystarOutputWorkbook(options: {
       value: (_row: EligibilityInputRow | undefined, result: EligibilityResult | undefined) =>
         String(result?.metadata?.medRevenueOutputServiceType ?? result?.metadata?.medRevenuePrescriptionDrugServiceType ?? ""),
     },
+    { header: "IPA", value: (_row: EligibilityInputRow | undefined, result: EligibilityResult | undefined) => result?.ipa ?? "" },
   ];
   if (Array.from(options.results.values()).some((result) => result.payerId === "bcbs-ppo" || result.payerId === "blue-shield")) {
     outputColumns.push(

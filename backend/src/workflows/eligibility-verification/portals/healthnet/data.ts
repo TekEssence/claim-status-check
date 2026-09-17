@@ -24,14 +24,22 @@ export async function readHealthNetInput(file: File): Promise<EligibilityInputRo
   if (!rawRows.length || !Object.keys(rawRows[0]).some((key) => normalizeHeader(key) === "primaryinsurancename")) {
     throw new Error('HealthNet input requires "Primary Insurance Name".');
   }
+  // Older Health Net exports label the member ID as Primary Insurance Name".
+  // Only use that layout when Insurance exists and no regular ID column exists.
+  const memberIdHeaders = ["Health Net ID", "Primary Insurance ID#", "Primary Insurance ID", "Primary Ins Subscriber No", "Subscriber ID", "Member ID"];
+  const headers = Object.keys(rawRows[0]);
+  const legacyMemberHeader = headers.find((key) => key.trim() === 'Primary Insurance Name"');
+  const legacyLayout = Boolean(legacyMemberHeader)
+    && headers.some((key) => normalizeHeader(key) === "insurance")
+    && !headers.some((key) => memberIdHeaders.some((alias) => normalizeHeader(key) === normalizeHeader(alias)));
   return rawRows.flatMap((raw, index) => {
     if (!Object.values(raw).some((entry) => String(entry ?? "").trim())) return [];
     const project = value(raw, ["Project", "Project Name", "Project ID"]);
     if (project && !credentialProjectMatches("medrevenue", project)) return [];
-    const payer = value(raw, ["Primary Insurance Name", "Payer", "Insurance Name"]);
+    const payer = value(raw, legacyLayout ? ["Insurance"] : ["Primary Insurance Name", "Payer", "Insurance Name"]);
     if (payer && !["healthnet"].includes(normalizeHeader(payer))) return [];
     const name = splitPatientName(value(raw, ["Patient Name", "Subscriber Name", "Member Name"]));
-    const memberId = value(raw, ["Health Net ID", "Primary Insurance ID#", "Primary Insurance ID", "Primary Ins Subscriber No", "Subscriber ID", "Member ID"]);
+    const memberId = legacyLayout ? String(raw[legacyMemberHeader!] ?? "").trim() : value(raw, memberIdHeaders);
     return [{ originalIndex: index + 2, raw, memberId, subscriberId: memberId,
       patientFirstName: value(raw, ["Subscriber First Name", "Patient First Name", "First Name"]) || name.firstName,
       patientLastName: value(raw, ["Subscriber Last Name", "Patient Last Name", "Last Name"]) || name.lastName,

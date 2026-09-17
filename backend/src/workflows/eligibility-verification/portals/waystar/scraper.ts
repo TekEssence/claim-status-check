@@ -256,6 +256,7 @@ export function createWaystarRunner(): AutomationRunner<EligibilityRunInput> {
                   }
                 }
                 if (input.projectId === "medrevenue") {
+                  result = applyMedRevenueIpaResultMapping(result, payload);
                   const services = payload.fullPayerResponse?.otherCoverageServiceTypes;
                   if (services !== undefined) {
                     result = { ...result, metadata: { ...result.metadata, medRevenueOutputServiceType: services.join("; ") } };
@@ -473,6 +474,15 @@ export function createWaystarRunner(): AutomationRunner<EligibilityRunInput> {
       }
     },
   };
+}
+
+export function applyMedRevenueIpaResultMapping(
+  result: EligibilityResult,
+  payload: { healthBenefitPlanCoverage?: { planType?: string }; general?: { ipa?: string } },
+): EligibilityResult {
+  const planType = payload.healthBenefitPlanCoverage?.planType ?? "";
+  const isHmo = /\bHMO\b|\bHealth Maintenance Organization\b/i.test(planType);
+  return { ...result, ipa: isHmo ? payload.general?.ipa?.trim() || undefined : undefined };
 }
 
 export function applyMedRevenueMedicareResultMappings(result: EligibilityResult): EligibilityResult {

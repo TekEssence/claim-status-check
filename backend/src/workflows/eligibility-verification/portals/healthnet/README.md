@@ -8,6 +8,8 @@ After submitting login, the bot waits for either Text Message verification or th
 
 Input: Primary Insurance Name = Health Net, Member ID (or Primary Insurance ID#), and DOB. Project rows for other projects and named payers other than Health Net are excluded. Credentials use Email Address (or Username), Password, and Link (HTTPS login URL); Project and Portal columns isolate rows in shared credential workbooks.
 
+Legacy input is also supported: DOS, Patient Name, DOB, Insurance, and `Primary Insurance Name"`. In this layout, Insurance contains Health Net and the mislabeled `Primary Insurance Name"` column contains the member ID. This mapping applies only when no standard member ID column exists.
+
 The supplied Eligibility link `a.eligibility[href="/careconnect/eligibility/bulkChecker"]` takes priority over generic navigation. The form fills workbook DOS first (when supplied), then Member ID and DOB. Masked dates are cleared with keyboard events and entered as digits so the portal inserts separators; retained dates are validated before Check Eligibility. Without workbook DOS, the portal's existing DOS is preserved.
 
 Login uses the supplied username, Continue, password, Login, Text Message, and Send Code elements. The existing frontend `otp_request`/job-input mechanism collects the SMS code. No other portal's OTP implementation is modified. The source document omits the OTP input and verification button, so those two controls currently use accessible-label/autocomplete fallbacks. Live verification and the missing OTP HTML are still needed to confirm those selectors.

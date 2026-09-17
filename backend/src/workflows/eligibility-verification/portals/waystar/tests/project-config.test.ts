@@ -15,7 +15,7 @@ test("Minimax requires subscriber lookup for every payer while preserving payer 
   for (const payerId of [medicarePayer.id, "aetna", "av-med", "any-payer"]) {
     assert.deepEqual(getWaystarPayerProjectConfig(config, payerId), { requireSubscriberLookup: true });
   }
-  assert.equal(getWaystarPayerProjectConfig(getWaystarProjectConfig("medrevenue"), "medicare").requireSubscriberLookup, undefined);
+  assert.equal(getWaystarPayerProjectConfig(getWaystarProjectConfig("medrevenue"), "medicare").requireSubscriberLookup, true);
   assert.equal(medicarePayer.portalPayerName, "Medicare A & B Eligibility (All States) (Z1073)");
 });
 
