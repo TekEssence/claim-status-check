@@ -36,6 +36,6 @@ export const medrevenuAvailityConfig: AvailityProjectConfig = {
     reportCombinedMemberPatientMismatch: true,
     allowFuzzyProviderSelection: false,
   },
-  preprocessingStrategy: "sumChargesByAccountEpisode",
+  preprocessingStrategy: "none",
   outputStrategy: "cptLineDetail",
 };

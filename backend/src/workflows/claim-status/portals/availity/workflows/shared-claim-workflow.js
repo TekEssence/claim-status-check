@@ -68,7 +68,7 @@ function evaluatePatientIdentity(result, rowData) {
   return { matched: false, status: "Patient identity mismatch", reason: `Patient ID was not returned; Patient Name mismatch: input=${rowData["Patient Name"] || "blank"}, Availity=${result.patientName || "blank"}.` };
 }
 
-function selectLatestFinalizedMatchedRow(matchedRows, sourceTab) {
+function selectLatestFinalizedMatchedRow(matchedRows, sourceTab, matchLabel) {
   if (matchedRows.length <= 1) {
     return {
       selectedRows: matchedRows[0] ? [matchedRows[0]] : [],
@@ -89,7 +89,7 @@ function selectLatestFinalizedMatchedRow(matchedRows, sourceTab) {
   const selectedRow = rowsWithFinalizedDate[0];
   return {
     selectedRows: [selectedRow],
-    notes: `${matchedRows.length} ${sourceTab} rows matched Service Date + Charges. Selected latest finalized date ${selectedRow.finalizedDate} for claim ${selectedRow.claimNumber || "blank"}.`
+    notes: `${matchedRows.length} ${sourceTab} rows matched ${matchLabel}. Selected latest finalized date ${selectedRow.finalizedDate} for claim ${selectedRow.claimNumber || "blank"}.`
   };
 }
 
@@ -210,7 +210,9 @@ async function processParsedSearchResults(page, row, provider, resultSummary, so
   const inputDate = normalizeDateText(row.data["Service Date"]);
   const inputCharge = normalizeMoney(row.data.Charges);
   const matchingPolicy = options.matchingPolicy || {};
+  const shouldMatchBilledAmount = matchingPolicy.matchBilledAmount !== false;
   const requirePatientIdentity = Boolean(matchingPolicy.patientIdFallback);
+  const matchLabel = `Service Date${shouldMatchBilledAmount ? " + Charges" : ""}${requirePatientIdentity ? " + Patient ID/Patient Name" : ""}`;
 
   resultRows.forEach((result) => {
     logger.info(
@@ -219,7 +221,8 @@ async function processParsedSearchResults(page, row, provider, resultSummary, so
   });
 
   const baseMatchedRows = resultRows.filter((result) => {
-    return result.serviceDate === inputDate && normalizeMoney(result.billedAmount) === inputCharge;
+    return result.serviceDate === inputDate
+      && (!shouldMatchBilledAmount || normalizeMoney(result.billedAmount) === inputCharge);
   });
   const identityFailures = [];
   const identityCheckedRows = baseMatchedRows.map((result) => {
@@ -236,14 +239,14 @@ async function processParsedSearchResults(page, row, provider, resultSummary, so
   const matchedRows = sourceTab === "HIPAA Standard"
     ? identityCheckedRows
     : identityCheckedRows.filter((result) => !requirePatientIdentity || result.patientIdentityMatched);
-  logger.info(`Matched ${matchedRows.length} ${sourceTab} result row(s) by Service Date + Charges${requirePatientIdentity ? " + Patient ID/Patient Name" : ""}`);
+  logger.info(`Matched ${matchedRows.length} ${sourceTab} result row(s) by ${matchLabel}`);
   const matchDetails = buildMatchDetails({
     sourceTab,
     provider,
     rowData: row.data,
     resultRows,
     matchedRows,
-    matchLabel: `Service Date + Charges${requirePatientIdentity ? " + Patient ID/Patient Name" : ""}`,
+    matchLabel,
   });
   if (matchedRows.length === 0) {
     logger.warn(`No ${sourceTab} rows matched input after parsing. Check result-row parse logs above if values look different in portal.`);
@@ -258,8 +261,8 @@ async function processParsedSearchResults(page, row, provider, resultSummary, so
     const returnedRowsSummary = buildReturnedRowsSummary(resultRows);
     const returnedCount = resultSummary.total ?? (resultRows.length || "unknown");
     const primaryMismatch = baseMatchedRows.length
-      ? `${baseMatchedRows.length} row(s) matched mandatory Service Date ${row.data["Service Date"]} and Charges ${row.data.Charges}, but failed Patient ID/Patient Name comparison.`
-      : `Portal returned ${returnedCount} rows in ${sourceTab} for provider ${provider}, but none matched mandatory Service Date ${row.data["Service Date"]} and Charges ${row.data.Charges}.`;
+      ? `${baseMatchedRows.length} row(s) matched mandatory ${matchLabel}, but failed Patient ID/Patient Name comparison.`
+      : `Portal returned ${returnedCount} rows in ${sourceTab} for provider ${provider}, but none matched mandatory ${matchLabel}.`;
     const mismatchReason = [
       `${primaryMismatch} ${returnedRowsSummary}`,
       identityFailures.length ? `Patient comparison: ${identityFailures.join("; ")}` : "",
@@ -279,7 +282,7 @@ async function processParsedSearchResults(page, row, provider, resultSummary, so
   const summaries = [];
   const details = [];
   const notes = resultSummary.portalAlertMessage ? [resultSummary.portalAlertMessage] : [];
-  const latestSelection = selectLatestFinalizedMatchedRow(matchedRows, sourceTab);
+  const latestSelection = selectLatestFinalizedMatchedRow(matchedRows, sourceTab, matchLabel);
   if (latestSelection.notes) {
     logger.info(latestSelection.notes);
     notes.push(latestSelection.notes);
@@ -368,7 +371,11 @@ async function runMemberProviderSearch(page, row, providerOrder = PROVIDERS, sea
       continue;
     }
 
-    return processParsedSearchResults(page, row, provider, resultSummary, "Member", resultRows, "not_found");
+    return processParsedSearchResults(page, row, provider, resultSummary, "Member", resultRows, "not_found", {
+      matchingPolicy: {
+        matchBilledAmount: options.matchingPolicy?.matchBilledAmount,
+      },
+    });
   }
 
   return {

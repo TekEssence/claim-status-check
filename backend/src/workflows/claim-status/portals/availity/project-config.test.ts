@@ -37,7 +37,7 @@ describe("applyProjectPreprocessing", () => {
     assert.equal(row.data["Patient DOB"], "01/15/1980");
   });
 
-  it("sums Medrevenu CPT-level billed amounts by account number and episode dos", () => {
+  it("keeps each Medrevenu CPT-level billed amount unchanged", () => {
     const rows = [
       createRow(1, {
         "Responsible Payer": "Molina",
@@ -64,14 +64,14 @@ describe("applyProjectPreprocessing", () => {
 
     const processed = applyProjectPreprocessing("medrevenu", rows);
 
-    assert.equal(processed[0].data.Charges, "3500.00");
-    assert.equal(processed[1].data.Charges, "3500.00");
-    assert.equal(processed[2].data.Charges, "125.00");
+    assert.equal(processed[0].data.Charges, "$1,000.00");
+    assert.equal(processed[1].data.Charges, "2500");
+    assert.equal(processed[2].data.Charges, "125");
     assert.equal(processed[0].data["Line Billed Amount"], "$1,000.00");
     assert.equal(processed[1].data["Line Billed Amount"], "2500");
   });
 
-  it("handles date-like episode dos values as grouping text", () => {
+  it("does not aggregate Medrevenu rows with the same account and episode dos", () => {
     const rows = [
       createRow(1, {
         "Billed Amount": "100.10",
@@ -87,8 +87,8 @@ describe("applyProjectPreprocessing", () => {
 
     const processed = applyProjectPreprocessing("medrevenu", rows);
 
-    assert.equal(processed[0].data.Charges, "300.30");
-    assert.equal(processed[1].data.Charges, "300.30");
+    assert.equal(processed[0].data.Charges, "100.10");
+    assert.equal(processed[1].data.Charges, "200.20");
   });
 
   it("does not change non-Medrevenu rows", () => {
