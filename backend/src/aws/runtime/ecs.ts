@@ -65,6 +65,7 @@ export async function runWorkerTask(params: {
     { name: "INPUT_FILE_S3_KEY", value: params.inputKeys.inputFile ?? "" },
     { name: "CREDENTIAL_FILE_S3_KEY", value: params.inputKeys.credentialFile ?? "" },
     { name: "REFERENCE_EXCEL_S3_KEY", value: params.inputKeys.referenceExcel ?? "" },
+    { name: "SELECTION_RULES_FILE_S3_KEY", value: params.inputKeys.selectionRulesFile ?? "" },
     { name: "CLAIM_ROWS_S3_KEY", value: params.inputKeys.claimRows ?? "" },
     { name: "FORM_FIELDS_JSON", value: JSON.stringify(params.formFields ?? {}) },
   ];

@@ -127,7 +127,7 @@ function getStringField(formData: FormData, key: string): string {
 }
 
 function getUploadFiles(formData: FormData) {
-  const fields = ["claimExcel", "loginExcel", "inputExcel", "credentialExcel", "inputFile", "credentialFile", "referenceExcel"] as const;
+  const fields = ["claimExcel", "loginExcel", "inputExcel", "credentialExcel", "inputFile", "credentialFile", "referenceExcel", "selectionRulesFile"] as const;
   return fields.flatMap((field) => {
     const value = formData.get(field);
     if (!(value instanceof File) || value.size === 0) return [];

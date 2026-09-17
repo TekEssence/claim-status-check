@@ -2,6 +2,7 @@ import path from "node:path";
 import ExcelJS from "exceljs";
 import { applyProjectColumnMapping, applyProjectPreprocessing, getProjectInputHeaders, normalizeProjectId } from "./project-config";
 import type { AvailityCredentials, AvailityInput } from "./types";
+import type { AvailityProviderSelectionMode, AvailitySelectionRule, AvailityTabId } from "./config/projects";
 
 const SUPPORTED_PAYER_PATTERN = /\b(aetna|anthem|blue\s*cross|blue\s*shield|florida\s*blue|bcbs|bcbstx|regence|carefirst|carelon|bhomd|wellpoint|wellcare|humana|central\s*health|health\s*net|healthnet|molina|providence|scan|triwest|tricare)\b/i;
 
@@ -75,6 +76,207 @@ async function readWorkbookRows(buffer: ArrayBuffer): Promise<{ headers: string[
   return { headers: headers.filter(Boolean), rows };
 }
 
+function parseCsvRows(content: string): { headers: string[]; rows: Record<string, string>[] } {
+  const records: string[][] = [];
+  let row: string[] = [];
+  let field = "";
+  let inQuotes = false;
+
+  for (let index = 0; index < content.length; index += 1) {
+    const char = content[index];
+    const next = content[index + 1];
+    if (inQuotes) {
+      if (char === "\"" && next === "\"") {
+        field += "\"";
+        index += 1;
+      } else if (char === "\"") {
+        inQuotes = false;
+      } else {
+        field += char;
+      }
+      continue;
+    }
+    if (char === "\"") {
+      inQuotes = true;
+    } else if (char === ",") {
+      row.push(field);
+      field = "";
+    } else if (char === "\n") {
+      row.push(field);
+      records.push(row);
+      row = [];
+      field = "";
+    } else if (char !== "\r") {
+      field += char;
+    }
+  }
+  row.push(field);
+  records.push(row);
+
+  const headers = (records.shift() || []).map(normalizeHeader);
+  const rows = records
+    .map((record) => {
+      const data: Record<string, string> = {};
+      headers.forEach((header, index) => {
+        if (header) data[header] = asText(record[index]);
+      });
+      return data;
+    })
+    .filter((data) => Object.values(data).some(Boolean));
+  return { headers: headers.filter(Boolean), rows };
+}
+
+async function readTableFileRows(file: File): Promise<{ headers: string[]; rows: Record<string, string>[] }> {
+  if (/\.csv$/i.test(file.name || "")) {
+    return parseCsvRows(await file.text());
+  }
+  return readWorkbookRows(await file.arrayBuffer());
+}
+
+function splitList(value: string): string[] {
+  return String(value || "")
+    .split(/[;,]/)
+    .map((item) => item.replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+}
+
+function normalizeChoice(value: string): string {
+  return normalizeAlias(value);
+}
+
+function normalizeProviderModeValue(value: string): AvailityProviderSelectionMode {
+  const normalized = normalizeChoice(value);
+  if (normalized === "individualprovider" || normalized === "individualnpifirst") return "individualNpiFirst";
+  if (normalized === "groupnamefirst") return "groupNameFirst";
+  if (normalized === "groupnameonly") return "groupNameOnly";
+  if (normalized === "none" || normalized === "directprovideridentifiers") return "none";
+  throw new Error(`Unsupported Charm provider mode "${value}". Use Individual provider, groupNameFirst, groupNameOnly, or none.`);
+}
+
+function normalizeTabPriorityValue(value: string): AvailityTabId {
+  const normalized = normalizeChoice(value);
+  if (normalized === "servicedates" || normalized === "servicedate") return "serviceDates";
+  if (normalized === "hipaastandard" || normalized === "hipaa") return "hipaaStandard";
+  if (normalized === "member") return "member";
+  if (normalized === "claimhistory") return "claimHistory";
+  throw new Error(`Unsupported Charm tab "${value}". Use Service Dates, HIPAA Standard, Member, or Claim History.`);
+}
+
+function pushRuleWhen(rule: AvailitySelectionRule, conditionType: string, conditionValue: string): void {
+  const type = normalizeChoice(conditionType);
+  const values = splitList(conditionValue);
+  if (!type || !values.length) return;
+
+  const field = type === "practice" || type === "group" ? "practice"
+    : type === "login" || type === "username" ? "login"
+      : type === "state" ? "state"
+        : type === "payer" ? "payer"
+          : "";
+  if (!field) {
+    throw new Error(`Unsupported Charm selection rule condition type "${conditionType}". Use practice, login, state, or payer.`);
+  }
+
+  const existing = rule.when[field as keyof typeof rule.when];
+  const merged = Array.from(new Set([
+    ...(Array.isArray(existing) ? existing : existing ? [existing] : []),
+    ...values,
+  ]));
+  const nextValue = merged.length === 1 ? merged[0] : merged;
+  if (field === "practice") {
+    rule.when.practice = values[0];
+  } else if (field === "login") {
+    rule.when.login = nextValue;
+  } else if (field === "state") {
+    rule.when.state = nextValue;
+  } else if (field === "payer") {
+    rule.when.payer = nextValue;
+  }
+}
+
+function setRuleUse(rule: AvailitySelectionRule, key: string, value: string): void {
+  const normalizedKey = normalizeChoice(key);
+  const values = splitList(value);
+  if (!normalizedKey || !values.length) return;
+
+  if (normalizedKey === "organization") {
+    rule.use.organization = values[0];
+  } else if (normalizedKey === "providername") {
+    rule.use.providerName = values[0];
+  } else if (normalizedKey === "providermode") {
+    rule.use.providerMode = normalizeProviderModeValue(values[0]);
+  } else if (normalizedKey === "tabpriority" || normalizedKey === "tab") {
+    const tabs = values.map(normalizeTabPriorityValue);
+    rule.use.tabPriority = Array.from(new Set([...(rule.use.tabPriority || []), ...tabs]));
+  } else {
+    throw new Error(`Unsupported Charm selection rule output type "${key}".`);
+  }
+}
+
+function parseWideSelectionRule(row: Record<string, string>): AvailitySelectionRule | undefined {
+  const project = findValue(row, ["Project"]);
+  if (project && normalizeProjectId(project) !== "charm") return undefined;
+
+  const rule: AvailitySelectionRule = { when: {}, use: {} };
+  const practice = findValue(row, ["Practice", "Group"]);
+  const login = findValue(row, ["Login", "Username"]);
+  const state = findValue(row, ["State", "State to choose in Availity", "Portal State"]);
+  const payer = findValue(row, ["Payer to choose in Availity", "Portal Payer Name", "Payer"]);
+  const organization = findValue(row, ["Organization to select", "Organization to select in Availity", "Use Organization", "Organization"]);
+  const tab = findValue(row, ["Tab to use", "Use Tab Priority", "Tab Priority", "Tab"]);
+  const providerName = findValue(row, ["Provider Name to select", "Use Provider Name", "Provider Name"]);
+  const providerMode = findValue(row, ["Provider Mode", "Use Provider Mode"]);
+
+  if (practice) rule.when.practice = practice;
+  if (login) rule.when.login = login;
+  if (state) rule.when.state = state;
+  if (payer) rule.when.payer = payer;
+  if (organization) rule.use.organization = organization;
+  if (providerName) rule.use.providerName = providerName;
+  if (providerMode) rule.use.providerMode = normalizeProviderModeValue(providerMode);
+  if (tab) rule.use.tabPriority = splitList(tab).map(normalizeTabPriorityValue);
+
+  if (!Object.keys(rule.when).length || !Object.keys(rule.use).length) return undefined;
+  return rule;
+}
+
+function parseSelectionRules(rows: Record<string, string>[]): AvailitySelectionRule[] {
+  const wideRules = rows.map(parseWideSelectionRule).filter((rule): rule is AvailitySelectionRule => Boolean(rule));
+  if (wideRules.length) return wideRules;
+
+  const grouped = new Map<string, AvailitySelectionRule>();
+
+  for (const [index, row] of rows.entries()) {
+    const ruleNumber = findValue(row, ["Rule Number", "rule_number", "Rule"]);
+    const key = ruleNumber || String(index + 1);
+    const rule = grouped.get(key) || { when: {}, use: {} };
+    grouped.set(key, rule);
+
+    pushRuleWhen(rule, findValue(row, ["When Field", "condition_type", "Condition Type"]), findValue(row, ["When Value", "condition_value", "Condition Value"]));
+    setRuleUse(rule, "organization", findValue(row, ["Use Organization", "use_organization", "Organization"]));
+    setRuleUse(rule, "providerName", findValue(row, ["Use Provider Name", "use_provider_name", "Provider Name"]));
+    setRuleUse(rule, "providerMode", findValue(row, ["Use Provider Mode", "use_provider_mode", "Provider Mode"]));
+    setRuleUse(rule, "tabPriority", findValue(row, ["Use Tab Priority", "use_tab_priority", "Tab Priority", "Tab"]));
+  }
+
+  return Array.from(grouped.values()).filter((rule) => Object.keys(rule.when).length && Object.keys(rule.use).length);
+}
+
+async function readOptionalSelectionRules(formData: FormData, projectId: string): Promise<AvailitySelectionRule[] | undefined> {
+  const file = formData.get("selectionRulesFile");
+  if (!(file instanceof File) || file.size === 0) {
+    return undefined;
+  }
+  if (projectId !== "charm") {
+    throw new Error("Selection rules upload is currently supported only for Charm Availity.");
+  }
+  const table = await readTableFileRows(file);
+  const rules = parseSelectionRules(table.rows);
+  if (!rules.length) {
+    throw new Error("Charm selection rules file did not contain any usable rules.");
+  }
+  return rules;
+}
+
 function parseCredentials(rows: Record<string, string>[], projectId: string): AvailityCredentials {
   const hasProjectColumn = rows.some((row) => findValue(row, ["Project", "Project Name", "Project ID"]));
   const candidateRows = hasProjectColumn
@@ -114,6 +316,7 @@ export async function parseAvailityInput(formData: FormData): Promise<AvailityIn
   const credentialExcel = formData.get("credentialExcel");
   const inputExcel = formData.get("inputExcel");
   const projectId = normalizeProjectId(formData.get("projectId"));
+  const selectionRules = await readOptionalSelectionRules(formData, projectId);
 
   if (!(credentialExcel instanceof File)) {
     throw new Error("Missing Availity login Excel file.");
@@ -138,6 +341,7 @@ export async function parseAvailityInput(formData: FormData): Promise<AvailityIn
   return {
     credentials: parseCredentials(credentialRows.rows, projectId),
     projectId,
+    selectionRules,
     inputHeaders: getProjectInputHeaders(projectId, inputWorkbook.headers),
     inputRows,
     claimFileName: inputExcel.name || "availity_claims.xlsx",

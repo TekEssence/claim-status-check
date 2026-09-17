@@ -17,6 +17,7 @@ export function useAvailityController(p: {
   const [projectId, setProjectId] = useState("minimax");
   const [credentialFile, setCredentialFile] = useState<File | null>(null);
   const [inputFile, setInputFile] = useState<File | null>(null);
+  const [selectionRulesFile, setSelectionRulesFile] = useState<File | null>(null);
   const [jobId, setJobId] = useState("");
   const [otpRequest, setOtpRequest] = useState<OtpRequest | null>(null);
   const [otpValue, setOtpValue] = useState("");
@@ -38,6 +39,9 @@ export function useAvailityController(p: {
     formData.append("projectId", projectId);
     formData.append("credentialExcel", credentialFile);
     formData.append("inputExcel", inputFile);
+    if (projectId === "charm" && selectionRulesFile) {
+      formData.append("selectionRulesFile", selectionRulesFile);
+    }
     formData.append("loginFileName", credentialFile.name);
     formData.append("claimFileName", inputFile.name);
     await p.runStandardPortalJob({
@@ -49,6 +53,7 @@ export function useAvailityController(p: {
       clearFiles: () => {
         setCredentialFile(null);
         setInputFile(null);
+        setSelectionRulesFile(null);
       },
     });
   }
@@ -115,8 +120,8 @@ export function useAvailityController(p: {
   }
 
   return {
-    canSubmit, credentialFile, inputFile, projectId, jobId, latestOutput,
-    otpRequest, otpValue, setCredentialFile, setInputFile, setProjectId, setJobId,
+    canSubmit, credentialFile, inputFile, projectId, jobId, latestOutput, selectionRulesFile,
+    otpRequest, otpValue, setCredentialFile, setInputFile, setProjectId, setJobId, setSelectionRulesFile,
     setLatestOutput, setOtpRequest, setOtpValue, submit, submitOtp, downloadLatestOutput,
     canDownloadOutput: Boolean(latestOutput || p.activeJobId || jobId),
   };

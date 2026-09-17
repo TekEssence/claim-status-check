@@ -8,7 +8,7 @@ import { launchAvailityBrowser } from "./browser";
 import { isRunnableAvailityPayerName, parseAvailityInput, readAvailityPayerMapping, unsupportedAvailityPayerMessage } from "./input";
 import { createAvailityOutputWorkbookBuffer } from "./output-writer";
 import { getMatchingPolicy, getMfaConfigForProject, getProviderOrderForRow, getRequiredFieldsForProject, getSelectionRuleProviderMode, getSelectionRuleProviderOrder, getTabPriorityForRow, readAvailityProviderMapping, resolvePortalSelections } from "./project-config";
-import type { AvailityPortalSelections } from "./config/projects";
+import type { AvailityPortalSelections, AvailitySelectionRule } from "./config/projects";
 import { applyProjectOutputStrategy } from "./project-output";
 import type { AvailityAuditRow, AvailityErrorRow, AvailityInputRow, AvailityOutputRow, AvailityProviderMapping } from "./types";
 
@@ -164,8 +164,64 @@ function locatorTimeoutActionKey(action: string): string {
   return action.replace(/\s+/g, " ").trim().toLowerCase();
 }
 
+function normalizeSelectionText(value: unknown): string {
+  return String(value || "").replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+function sameSelectionText(left: unknown, right: unknown): boolean {
+  const normalizedLeft = normalizeSelectionText(left);
+  const normalizedRight = normalizeSelectionText(right);
+  return Boolean(normalizedLeft && normalizedRight && normalizedLeft === normalizedRight);
+}
+
+function fallbackStateForOrganizationRefresh(portalState: string | undefined): string {
+  const normalizedPortalState = normalizeStateKey(portalState);
+  return normalizedPortalState === "CA" ? "Washington" : "California";
+}
+
 function isRecoverableRowError(message: string): boolean {
   return isClosedPageError(message) || isSubmitNoResponseError(message);
+}
+
+function isOrganizationSelectionError(message: string): boolean {
+  return /Availity organization .*(?:was not selected|dropdown has no exact option)|No visible Availity input was found for the requested selector group/i.test(message);
+}
+
+function isPayerSelectionError(message: string): boolean {
+  return /(?:Exact payer option was not visible|Payer .* was not committed|Selecting payer .* failed after \d+ attempts|No Availity dropdown option was found for)/i.test(message);
+}
+
+function normalizeSkipKeyPart(value: unknown): string {
+  return String(value || "").replace(/[^a-z0-9]+/gi, "").toLowerCase();
+}
+
+function findRowDataValue(row: AvailityInputRow, aliases: string[]): string {
+  const wanted = new Set(aliases.map(normalizeSkipKeyPart));
+  for (const [key, value] of Object.entries(row.data)) {
+    if (wanted.has(normalizeSkipKeyPart(key)) && value) {
+      return String(value).trim();
+    }
+  }
+  return "";
+}
+
+function buildSelectionSkipKey(
+  kind: "organization" | "payer",
+  fields: { projectId: string; login: string; row: AvailityInputRow; selections: AvailityPortalSelections },
+): string {
+  const practice = findRowDataValue(fields.row, ["Group", "Practice", "Organization Group"]);
+  const parts = [
+    kind,
+    fields.projectId,
+    fields.login,
+    fields.selections.state || "",
+    practice,
+    fields.selections.organization || "",
+  ];
+  if (kind === "payer") {
+    parts.push(fields.selections.payer || "");
+  }
+  return parts.map(normalizeSkipKeyPart).join("|");
 }
 
 function downloadableFileEvent(filename: string, buffer: Buffer, mimeType: string): Record<string, unknown> {
@@ -291,7 +347,7 @@ async function selectOrganization(page: Page, organization: string): Promise<voi
     ], 30000);
   });
   const currentSelectedText = await getOrganizationSelectedText(frame);
-  if (currentSelectedText === organization) {
+  if (sameSelectionText(currentSelectedText, organization)) {
     return;
   }
 
@@ -313,6 +369,24 @@ async function selectOrganization(page: Page, organization: string): Promise<voi
     await organizationInput.press("Backspace").catch(() => {});
     await organizationInput.pressSequentially(organization, { delay: 90 });
 
+    const clickedCaseInsensitiveOption = await frame.evaluate((expected: string) => {
+      const normalize = (text: unknown) => String(text || "").replace(/\s+/g, " ").trim().toLowerCase();
+      const candidates = Array.from(document.querySelectorAll("[role='option'], [id*='option'], .organization-select__option"));
+      const match = candidates.find((element) => normalize(element.textContent) === normalize(expected));
+      if (!match) return false;
+      match.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
+      match.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
+      (match as HTMLElement).click();
+      return true;
+    }, organization).catch(() => false);
+    if (clickedCaseInsensitiveOption) {
+      await page.waitForTimeout(1000);
+      lastSelectedValue = await getOrganizationSelectedText(frame);
+      if (sameSelectionText(lastSelectedValue, organization)) {
+        return;
+      }
+    }
+
     const roleOption = frame.getByRole("option", { name: organization, exact: true }).last();
     const classOption = frame.locator(".organization-select__option").filter({ hasText: organization }).last();
     const textOption = frame.getByText(organization, { exact: true }).last();
@@ -329,12 +403,12 @@ async function selectOrganization(page: Page, organization: string): Promise<voi
     await option.click({ timeout: 5000 });
     await page.waitForTimeout(1000);
     lastSelectedValue = await getOrganizationSelectedText(frame);
-    if (lastSelectedValue === organization) {
+    if (sameSelectionText(lastSelectedValue, organization)) {
       return;
     }
   }
 
-  if (lastSelectedValue !== organization) {
+  if (!sameSelectionText(lastSelectedValue, organization)) {
     throw new Error(`Availity organization "${organization}" was not selected. Current value: "${lastSelectedValue || currentSelectedText || "(blank)"}".`);
   }
 }
@@ -363,12 +437,40 @@ async function initializeSession(input: Awaited<ReturnType<typeof parseAvailityI
   return { ...session, page };
 }
 
+async function refreshOrganizationOptionsByStateToggle(
+  page: Page,
+  portalState: string | undefined,
+  automationState: { selectedOrganization: string; selectedState: string; selectedPayer: string; claimStatusOpened: boolean },
+): Promise<void> {
+  if (!portalState) {
+    throw new Error("Cannot refresh Availity organization options because no portal state was configured.");
+  }
+
+  const temporaryState = fallbackStateForOrganizationRefresh(portalState);
+  await selectState(page, temporaryState);
+  automationState.selectedState = normalizeStateKey(temporaryState);
+  automationState.selectedOrganization = "";
+  automationState.selectedPayer = "";
+  automationState.claimStatusOpened = false;
+  await page.waitForLoadState("networkidle", { timeout: 30000 }).catch(() => {});
+
+  await selectState(page, portalState);
+  automationState.selectedState = normalizeStateKey(portalState);
+  automationState.selectedOrganization = "";
+  automationState.selectedPayer = "";
+  automationState.claimStatusOpened = false;
+  await page.waitForLoadState("networkidle", { timeout: 30000 }).catch(() => {});
+
+  await openClaimStatus(page, { forceOpen: true });
+  automationState.claimStatusOpened = true;
+}
+
 async function processValidRow(
   page: Page,
   row: AvailityInputRow,
   selections: AvailityPortalSelections,
   automationState: { selectedOrganization: string; selectedState: string; selectedPayer: string; claimStatusOpened: boolean },
-  options: { projectId: string; providerMappings: AvailityProviderMapping[]; login: string },
+  options: { projectId: string; providerMappings: AvailityProviderMapping[]; login: string; selectionRules?: AvailitySelectionRule[] },
 ) {
   if (!selections.payer?.trim()) {
     throw new Error(`Payer mapping is blank for "${row.data["Payer Name"] || "unknown payer"}". Update backend/src/workflows/claim-status/portals/availity/config/Payer_mapping_ava.xlsx.`);
@@ -396,7 +498,7 @@ async function processValidRow(
   if (
     organization &&
     automationState.selectedOrganization &&
-    automationState.selectedOrganization !== organization
+    !sameSelectionText(automationState.selectedOrganization, organization)
   ) {
     await page.reload({ waitUntil: "domcontentloaded", timeout: 45000 });
     await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
@@ -406,13 +508,25 @@ async function processValidRow(
     automationState.selectedPayer = "";
   }
 
-  if (organization && automationState.selectedOrganization !== organization) {
-    await selectOrganization(page, organization);
+  if (organization && !sameSelectionText(automationState.selectedOrganization, organization)) {
+    try {
+      await selectOrganization(page, organization);
+    } catch (error) {
+      const message = friendlyAvailityError(error);
+      if (options.projectId !== "charm" || !isOrganizationSelectionError(message)) {
+        throw error;
+      }
+      await refreshOrganizationOptionsByStateToggle(page, portalState, automationState);
+      await selectOrganization(page, organization).catch((retryError) => {
+        const retryMessage = friendlyAvailityError(retryError);
+        throw new Error(`Availity organization "${organization}" was not selected after refreshing state options from ${portalState || "(blank state)"}. Last error: ${retryMessage}`);
+      });
+    }
     automationState.selectedOrganization = organization;
     automationState.selectedPayer = "";
   }
 
-  if (automationState.selectedPayer !== selections.payer) {
+  if (!sameSelectionText(automationState.selectedPayer, selections.payer)) {
     await selectPayer(page, selections.payer);
     automationState.selectedPayer = selections.payer;
   }
@@ -421,9 +535,9 @@ async function processValidRow(
     inputPayerName: row.data["Payer Name"] || "",
     mappedPortalPayerName: selections.payer,
   });
-  const providerOrder = getSelectionRuleProviderOrder(options.projectId, row, selections.payer, options.login)
+  const providerOrder = getSelectionRuleProviderOrder(options.projectId, row, selections.payer, options.login, options.selectionRules)
     || getProviderOrderForRow(options.projectId, row, options.providerMappings);
-  const providerMode = getSelectionRuleProviderMode(options.projectId, row, selections.payer, options.login);
+  const providerMode = getSelectionRuleProviderMode(options.projectId, row, selections.payer, options.login, options.selectionRules);
   const matchingPolicy = {
     ...getMatchingPolicy(options.projectId, selections.payer),
     fallbackProviderOnlyOnSelectionFailure: options.projectId === "charm",
@@ -433,7 +547,7 @@ async function processValidRow(
     providerOrder,
     providerMode,
     matchingPolicy,
-    tabPriority: getTabPriorityForRow(options.projectId, row, selections.payer, options.login),
+    tabPriority: getTabPriorityForRow(options.projectId, row, selections.payer, options.login, options.selectionRules),
   });
 }
 
@@ -449,6 +563,7 @@ export async function runAvailityClaimStatusJob(formData: FormData, context: Scr
   const providerMappings = await readAvailityProviderMapping();
   const runnableTotal = input.inputRows.filter((row) => isRunnableAvailityPayerName(row.data["Payer Name"] || "")).length;
   const locatorTimeoutFailuresByAction = new Map<string, number>();
+  const selectionSkipReasons = new Map<string, { stage: "organization_selection" | "payer_selection"; message: string }>();
   let completedRunnableRows = 0;
   let session: Awaited<ReturnType<typeof initializeSession>> | null = null;
   let activeRow: AvailityInputRow | null = null;
@@ -551,8 +666,8 @@ export async function runAvailityClaimStatusJob(formData: FormData, context: Scr
       let portalSelections: AvailityPortalSelections = { payer: "" };
       let providerModeForRow = "";
       try {
-        portalSelections = resolvePortalSelections(input.projectId, row, payerMapping, input.credentials.username);
-        providerModeForRow = getSelectionRuleProviderMode(input.projectId, row, portalSelections.payer, input.credentials.username) || "";
+        portalSelections = resolvePortalSelections(input.projectId, row, payerMapping, input.credentials.username, input.selectionRules);
+        providerModeForRow = getSelectionRuleProviderMode(input.projectId, row, portalSelections.payer, input.credentials.username, input.selectionRules) || "";
         validation = validateRow(
           row,
           payerMapping,
@@ -594,6 +709,38 @@ export async function runAvailityClaimStatusJob(formData: FormData, context: Scr
         continue;
       }
 
+      const organizationSkipKey = buildSelectionSkipKey("organization", {
+        projectId: input.projectId,
+        login: input.credentials.username,
+        row,
+        selections: portalSelections,
+      });
+      const payerSkipKey = buildSelectionSkipKey("payer", {
+        projectId: input.projectId,
+        login: input.credentials.username,
+        row,
+        selections: portalSelections,
+      });
+      const priorSelectionFailure = selectionSkipReasons.get(organizationSkipKey) || selectionSkipReasons.get(payerSkipKey);
+      if (priorSelectionFailure) {
+        const message = `Skipped because this ${priorSelectionFailure.stage === "organization_selection" ? "organization" : "payer"} selection already failed for the same login/state/practice${priorSelectionFailure.stage === "payer_selection" ? "/payer" : ""}. Original failure: ${priorSelectionFailure.message}`;
+        await log(`Availity row ${row.input_row_id} skipped: ${message}`);
+        markSkipped(outputRow, message);
+        outputRows.push(outputRow);
+        addError(errorRows, runId, row, {
+          failure_stage: priorSelectionFailure.stage,
+          failure_reason: message,
+          current_url: safePageUrl(session.page),
+          needs_manual_review: "no",
+        });
+        addAudit(auditRows, runId, row, priorSelectionFailure.stage, "skipped", message, startedAt);
+        completedRunnableRows += 1;
+        await context.emit({ type: "progress", completed: completedRunnableRows, total: runnableTotal });
+        await emitOutputSnapshot(completedRunnableRows);
+        activeRow = null;
+        continue;
+      }
+
       let rowHandled = false;
       let lastRowErrorMessage = "";
       const rowRecoveryNotes: string[] = [];
@@ -604,6 +751,7 @@ export async function runAvailityClaimStatusJob(formData: FormData, context: Scr
             projectId: input.projectId,
             providerMappings,
             login: input.credentials.username,
+            selectionRules: input.selectionRules,
           });
           if (rowRecoveryNotes.length) {
             result.notes = [result.notes, ...rowRecoveryNotes].filter(Boolean).join("; ");
@@ -670,6 +818,24 @@ export async function runAvailityClaimStatusJob(formData: FormData, context: Scr
             });
             addAudit(auditRows, runId, row, action, "fatal_repeated_locator_timeout", stopMessage, startedAt, rowAttempt);
             throw new Error(stopMessage);
+          }
+
+          if (isOrganizationSelectionError(message) || isPayerSelectionError(message)) {
+            const isOrganizationFailure = isOrganizationSelectionError(message);
+            const stage = isOrganizationFailure ? "organization_selection" : "payer_selection";
+            const skipKey = isOrganizationFailure ? organizationSkipKey : payerSkipKey;
+            selectionSkipReasons.set(skipKey, { stage, message });
+            markFailure(outputRow, message);
+            outputRows.push(outputRow);
+            addError(errorRows, runId, row, {
+              search_source_tab: "Member/HIPAA",
+              failure_stage: stage,
+              failure_reason: message,
+              current_url: safePageUrl(session.page),
+            });
+            addAudit(auditRows, runId, row, stage, "failed_cached_for_matching_rows", message, startedAt, rowAttempt);
+            rowHandled = true;
+            continue;
           }
 
           if (rowAttempt < ROW_PROCESS_MAX_ATTEMPTS && isRecoverableRowError(message)) {

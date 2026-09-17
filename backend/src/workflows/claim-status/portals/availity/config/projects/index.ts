@@ -1,7 +1,7 @@
 import { charmAvailityConfig } from "./charm";
 import { medrevenuAvailityConfig } from "./medrevenu";
 import { minimaxAvailityConfig } from "./minimax";
-import { DEFAULT_AVAILITY_REQUIRED_FIELDS, type AvailityProjectConfig } from "./types";
+import { type AvailityProjectConfig } from "./types";
 
 export const AVAILITY_PROJECT_CONFIGS: Record<string, AvailityProjectConfig> = {
   minimax: minimaxAvailityConfig,
@@ -23,6 +23,7 @@ export type {
   AvailityPortalSelections,
   AvailityProjectConfig,
   AvailityProjectFieldConfig,
+  AvailityProviderSelectionMode,
   AvailityRuleWhen,
   AvailitySelectionRule,
   AvailityTabId,

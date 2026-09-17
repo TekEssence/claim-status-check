@@ -135,6 +135,10 @@ function findBestSelectionRule(
     .sort((left, right) => right.score - left.score || left.index - right.index)[0]?.rule;
 }
 
+function selectionRulesForProject(projectId: string, overrideRules?: AvailitySelectionRule[]): AvailitySelectionRule[] {
+  return overrideRules ?? getAvailityProjectConfig(projectId).selectionRules ?? [];
+}
+
 function parseMoney(value: unknown): number | null {
   const raw = String(value || "").trim();
   if (!raw) return null;
@@ -219,6 +223,7 @@ export function resolvePortalSelections(
   row: AvailityInputRow,
   payerMapping: Map<string, string>,
   login = "",
+  selectionRuleOverrides?: AvailitySelectionRule[],
 ): AvailityPortalSelections {
   const config = getAvailityProjectConfig(projectId);
   const payerConfig = config.selections.payer;
@@ -246,7 +251,7 @@ export function resolvePortalSelections(
     }
   }
 
-  const selectionRule = findBestSelectionRule(config.selectionRules || [], {
+  const selectionRule = findBestSelectionRule(selectionRulesForProject(projectId, selectionRuleOverrides), {
     practice,
     payer,
     inputPayerName: directPayer || mappingValue,
@@ -466,13 +471,14 @@ export function getSelectionRuleProviderOrder(
   row: AvailityInputRow,
   portalPayerName: string,
   login = "",
+  selectionRuleOverrides?: AvailitySelectionRule[],
 ): string[] | undefined {
   const config = getAvailityProjectConfig(projectId);
   const providerConfig = config.provider;
   const practice = findRowValue(row, ["Group", "Practice", "Organization Group"]);
   const inputPayerName = findRowValue(row, ["Portal Payer Name", "Payer Name"]);
   const state = getPortalStateForRow(projectId, row) || "";
-  const rule = findBestSelectionRule(config.selectionRules || [], {
+  const rule = findBestSelectionRule(selectionRulesForProject(projectId, selectionRuleOverrides), {
     practice,
     payer: portalPayerName,
     inputPayerName,
@@ -499,12 +505,12 @@ export function getSelectionRuleProviderMode(
   row: AvailityInputRow,
   portalPayerName: string,
   login = "",
+  selectionRuleOverrides?: AvailitySelectionRule[],
 ): string | undefined {
-  const config = getAvailityProjectConfig(projectId);
   const practice = findRowValue(row, ["Group", "Practice", "Organization Group"]);
   const inputPayerName = findRowValue(row, ["Portal Payer Name", "Payer Name"]);
   const state = getPortalStateForRow(projectId, row) || "";
-  const rule = findBestSelectionRule(config.selectionRules || [], {
+  const rule = findBestSelectionRule(selectionRulesForProject(projectId, selectionRuleOverrides), {
     practice,
     payer: portalPayerName,
     inputPayerName,
@@ -519,12 +525,13 @@ export function getTabPriorityForRow(
   row: AvailityInputRow,
   portalPayerName: string,
   login = "",
+  selectionRuleOverrides?: AvailitySelectionRule[],
 ): AvailityTabId[] {
   const config = getAvailityProjectConfig(projectId);
   const practice = findRowValue(row, ["Group", "Practice", "Organization Group"]);
   const inputPayerName = findRowValue(row, ["Portal Payer Name", "Payer Name"]);
   const state = getPortalStateForRow(projectId, row) || "";
-  const rule = findBestSelectionRule(config.selectionRules || [], {
+  const rule = findBestSelectionRule(selectionRulesForProject(projectId, selectionRuleOverrides), {
     practice,
     payer: portalPayerName,
     inputPayerName,

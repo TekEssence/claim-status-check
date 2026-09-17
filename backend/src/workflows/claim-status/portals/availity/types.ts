@@ -15,6 +15,7 @@ export type AvailityInputRow = {
 export type AvailityInput = {
   credentials: AvailityCredentials;
   projectId: string;
+  selectionRules?: import("./config/projects").AvailitySelectionRule[];
   inputHeaders: string[];
   inputRows: AvailityInputRow[];
   claimFileName: string;

@@ -309,6 +309,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     credentialFile: availityCredentialFile,
     inputFile: availityInputFile,
     projectId: availityProjectId,
+    selectionRulesFile: availitySelectionRulesFile,
     jobId: availityJobId,
     latestOutput: latestAvailityOutput,
     otpRequest: availityOtpRequest,
@@ -316,6 +317,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     setCredentialFile: setAvailityCredentialFile,
     setInputFile: setAvailityInputFile,
     setProjectId: setAvailityProjectId,
+    setSelectionRulesFile: setAvailitySelectionRulesFile,
     setJobId: setAvailityJobId,
     setLatestOutput: setLatestAvailityOutput,
     setOtpRequest: setAvailityOtpRequest,
@@ -3484,10 +3486,15 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
                       credentialFileName={availityCredentialFile?.name ?? ""}
                       inputFileName={availityInputFile?.name ?? ""}
                       isProcessing={blockPortalFormForProcessing}
+                      selectionRulesFileName={availitySelectionRulesFile?.name ?? ""}
                       selectedProjectId={availityProjectId}
                       onCredentialFileChange={setAvailityCredentialFile}
                       onInputFileChange={setAvailityInputFile}
-                      onProjectChange={setAvailityProjectId}
+                      onProjectChange={(projectId) => {
+                        setAvailityProjectId(projectId);
+                        if (projectId !== "charm") setAvailitySelectionRulesFile(null);
+                      }}
+                      onSelectionRulesFileChange={setAvailitySelectionRulesFile}
                       onSubmit={submitAvaility}
                     />
                       ),

@@ -24,7 +24,7 @@ type CreateJobBody = {
   formFields?: Record<string, unknown>;
 };
 
-const uploadFields = new Set(["claimExcel", "loginExcel", "inputExcel", "credentialExcel", "inputFile", "credentialFile", "referenceExcel", "claimRows"]);
+const uploadFields = new Set(["claimExcel", "loginExcel", "inputExcel", "credentialExcel", "inputFile", "credentialFile", "referenceExcel", "selectionRulesFile", "claimRows"]);
 let s3Client: S3Client | null = null;
 let cloudWatchLogsClient: CloudWatchLogsClient | null = null;
 const activeJobStatuses = new Set(["queued", "running", "waiting_otp", "cancelling"]);
@@ -149,11 +149,6 @@ export async function createJob(event: ApiEvent) {
     const body = parseJsonBody<CreateJobBody>(event);
     const workflowId = normalizeWorkflowId(body.workflowId);
     const portalId = body.portalId?.trim() || "iehp";
-    const activeJob = (await listWorkflowJobsForUser(userId, 100))
-      .find((job) => job.workflowId === workflowId && job.portalId === portalId && isActiveJobStatus(job.status));
-    if (activeJob) {
-      return jsonResponse(409, { error: `A ${workflowId}/${portalId} job is already active.`, jobId: activeJob.jobId });
-    }
     const jobId = createJobId();
     const inputBucket = required("WORKFLOW_INPUTS_BUCKET");
     const outputBucket = required("WORKFLOW_OUTPUTS_BUCKET");

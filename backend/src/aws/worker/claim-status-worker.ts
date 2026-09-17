@@ -99,6 +99,12 @@ const fileInputs: FileInputSpec[] = [
     s3KeyEnv: "REFERENCE_EXCEL_S3_KEY",
     fallbackName: "reference.xlsx",
   },
+  {
+    formField: "selectionRulesFile",
+    localPathEnv: "SELECTION_RULES_FILE_PATH",
+    s3KeyEnv: "SELECTION_RULES_FILE_S3_KEY",
+    fallbackName: "selection-rules.xlsx",
+  },
 ];
 
 let s3Client: S3Client | null = null;
