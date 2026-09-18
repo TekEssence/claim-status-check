@@ -11,6 +11,7 @@ import {
   getWorkflowJobForUser,
   getWorkflowJobById,
   listArtifactsForJob,
+  listRecentOutputArtifactsForJob,
   listRunningWorkflowJobs,
   listWorkflowJobsForUser,
   listWorkflowEvents,
@@ -30,8 +31,10 @@ let cloudWatchLogsClient: CloudWatchLogsClient | null = null;
 const activeJobStatuses = new Set(["queued", "running", "waiting_otp", "cancelling"]);
 
 type WorkflowArtifact = Awaited<ReturnType<typeof listArtifactsForJob>>[number];
+type WorkflowListArtifact = Pick<WorkflowArtifact, "id" | "rowIndex" | "artifactType" | "filename" | "mimeType" | "createdAt">;
+type WorkflowJobSummarySource = Awaited<ReturnType<typeof listWorkflowJobsForUser>>[number];
 
-function toJobListArtifact(artifact: WorkflowArtifact) {
+function toJobListArtifact(artifact: WorkflowListArtifact) {
   return {
     id: artifact.id,
     rowIndex: artifact.rowIndex,
@@ -39,6 +42,30 @@ function toJobListArtifact(artifact: WorkflowArtifact) {
     filename: artifact.filename,
     mimeType: artifact.mimeType,
     createdAt: artifact.createdAt,
+  };
+}
+
+function toJobListSummary(job: WorkflowJobSummarySource, artifacts: ReturnType<typeof toJobListArtifact>[]) {
+  return {
+    jobId: job.jobId,
+    userId: job.userId,
+    workflowId: job.workflowId,
+    portalId: job.portalId,
+    status: job.status,
+    currentCompleted: job.currentCompleted,
+    totalRows: job.totalRows,
+    claimFileName: job.claimFileName,
+    loginFileName: job.loginFileName,
+    createdByUserId: job.createdByUserId,
+    createdByEmail: job.createdByEmail,
+    createdByName: job.createdByName,
+    startedAt: job.startedAt,
+    errorMessage: job.errorMessage,
+    artifactCount: artifacts.length,
+    createdAt: job.createdAt,
+    updatedAt: job.updatedAt,
+    finishedAt: job.finishedAt,
+    artifacts,
   };
 }
 
@@ -261,12 +288,11 @@ export async function listJobs(event: ApiEvent) {
     );
     const jobsWithArtifacts = await Promise.all(
       jobs.map(async (job) => {
-        const artifacts = await listArtifactsForJob(job.jobId).catch(() => []);
-        return {
-          ...job,
-          artifacts: artifacts.map(toJobListArtifact),
-          artifactCount: artifacts.length,
-        };
+        const outputArtifacts = await listRecentOutputArtifactsForJob(job.jobId).catch(() => []);
+        const outputArtifact = outputArtifacts.find((item) => isPreferredOutputArtifact(item.filename, item.mimeType))
+          ?? outputArtifacts.find((item) => isDownloadableNonDiagnosticArtifact(item.filename, item.mimeType))
+          ?? outputArtifacts[0];
+        return toJobListSummary(job, outputArtifact ? [toJobListArtifact(outputArtifact)] : []);
       }),
     );
     return jsonResponse(200, { jobs: jobsWithArtifacts });

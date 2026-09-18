@@ -302,7 +302,7 @@
       path: ".",
       environment: {
         STATIC_EXPORT: "true",
-        NEXT_PUBLIC_WORKFLOW_API_URL: "/api",
+        NEXT_PUBLIC_WORKFLOW_API_URL: httpApi.url,
         NEXT_PUBLIC_WORKFLOW_WS_URL: webSocketApi.url,
         NEXT_PUBLIC_COGNITO_USER_POOL_ID: userPool.id,
         NEXT_PUBLIC_COGNITO_CLIENT_ID: userPoolClient.id,

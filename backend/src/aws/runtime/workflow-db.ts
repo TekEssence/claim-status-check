@@ -339,6 +339,33 @@ export async function listArtifactsForJob(jobId: string) {
   }));
 }
 
+export async function listRecentOutputArtifactsForJob(jobId: string, limit = 10) {
+  const safeLimit = Math.max(1, Math.min(limit, 20));
+  return runDbWithRetry((db) =>
+    db
+      .select({
+        id: workflowJobArtifacts.id,
+        rowIndex: workflowJobArtifacts.rowIndex,
+        artifactType: workflowJobArtifacts.artifactType,
+        filename: workflowJobArtifacts.filename,
+        mimeType: workflowJobArtifacts.mimeType,
+        createdAt: workflowJobArtifacts.createdAt,
+      })
+      .from(workflowJobArtifacts)
+      .where(
+        and(
+          eq(workflowJobArtifacts.jobId, jobId),
+          or(
+            eq(workflowJobArtifacts.artifactType, "file_download"),
+            eq(workflowJobArtifacts.artifactType, "output_snapshot"),
+          ),
+        ),
+      )
+      .orderBy(desc(workflowJobArtifacts.id))
+      .limit(safeLimit),
+  );
+}
+
 export async function appendWorkflowArtifact(params: {
   jobId: string;
   artifactType: string;
