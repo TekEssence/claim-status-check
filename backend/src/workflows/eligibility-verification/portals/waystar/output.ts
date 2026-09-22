@@ -1,6 +1,7 @@
 ﻿import ExcelJS from "exceljs";
 import type { EligibilityInputRow, EligibilityResult } from "../../types";
 import type { EligibilityProjectId } from "../../projects";
+import { medRevenueDisplayCoverageStatus } from "./medrevenue-status";
 
 const LEGACY_OUTPUT_COLUMNS: Array<{
   header: string;
@@ -169,7 +170,7 @@ async function buildMedRevenueWaystarOutputWorkbook(options: {
   outputColumns[2] = { header: "End Date", value: (_row, result) => result?.terminationDate ?? "" };
   outputColumns[0] = {
     header: "Coverage Status",
-    value: (_row, result) => String(result?.metadata?.medRevenueMedicarePartBStatus ?? result?.coverageStatus ?? ""),
+    value: (_row, result) => medRevenueDisplayCoverageStatus(result),
   };
   const outputStartColumn = sheet.columnCount + 1;
   const headerRow = sheet.getRow(1);
@@ -203,7 +204,7 @@ async function buildMedRevenueWaystarOutputWorkbook(options: {
     outputColumns.forEach((column, offset) => {
       const cell = worksheetRow.getCell(outputStartColumn + offset);
       const value = rowFailed
-        ? column.header === "Coverage Status" ? result?.coverageStatus || "error" : "-"
+        ? column.header === "Coverage Status" ? medRevenueDisplayCoverageStatus(result) || "error" : "-"
         : column.value(row, result, error);
       cell.value = formatOutputValue(value) as ExcelJS.CellValue;
       cell.alignment = { vertical: "top", wrapText: true };

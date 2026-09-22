@@ -169,6 +169,29 @@ test("MedRevenue suppresses partial extracted values when the row status is erro
   assert.equal(rows[0]["Service Type"], "-");
 });
 
+test("MedRevenue Medicare shows subscriber not found instead of generic error", async () => {
+  const output = await buildWaystarOutputWorkbook({
+    inputFile: inputFile(),
+    rows: new Map([[2, row]]),
+    results: new Map([[2, {
+      ...result,
+      coverageStatus: "error",
+      planStatus: "Subscriber Not Found",
+      effectiveDate: "",
+      terminationDate: "",
+    }]]),
+    errors: new Map(),
+    projectId: "medrevenue",
+  });
+  const workbook = XLSX.read(output, { type: "buffer" });
+  const rows = XLSX.utils.sheet_to_json<Record<string, string>>(
+    workbook.Sheets[workbook.SheetNames[0]], { defval: "" },
+  );
+
+  assert.equal(rows[0]["Coverage Status"], "Subscriber Not Found");
+  assert.equal(rows[0]["Eff Date"], "-");
+});
+
 test("MedRevenue Blue Cross adds three secondary columns and reuses Service Type", async () => {
   const output = await buildWaystarOutputWorkbook({
     inputFile: inputFile(),

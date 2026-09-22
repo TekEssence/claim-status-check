@@ -12,6 +12,7 @@ import { loginToWaystar, submitWaystarInquiry } from "./portal";
 import { buildWaystarOutputWorkbook } from "./output";
 import { parseEligibilityProjectId, scopeEligibilityInputFile } from "../../projects";
 import { getWaystarPayerProjectConfig, getWaystarProjectConfig } from "./config/projects";
+import { medRevenueDisplayCoverageStatus } from "./medrevenue-status";
 
 function requireFile(formData: FormData, key: string, label: string): File {
   const value = formData.get(key);
@@ -636,7 +637,7 @@ function toWaystarLiveResult(
     __rowKey: String(row.originalIndex),
     __payer: payerName,
     __error: "",
-    "Coverage Status": String(result.metadata?.medRevenueMedicarePartBStatus ?? result.coverageStatus),
+    "Coverage Status": medRevenueDisplayCoverageStatus(result),
     "Eff Date": result.effectiveDate || "",
     "End Date": result.terminationDate || "",
     "Other Ins": result.otherInsurance || "",
