@@ -13,6 +13,7 @@ export const selectors = {
   eligibility: 'a.eligibility[href="/careconnect/eligibility/bulkChecker"]',
   search: 'input[type="submit"][name="check"][value="Check Eligibility"], button[name="submit"][type="submit"]',
   viewDetails: 'span.viewdetails',
+  viewPpgHistory: '#viewPpgHistoryButton',
   alert: 'div.alert.big', title: 'h4.title', product: '#elig_hist_productname',
 };
 
@@ -320,7 +321,26 @@ export async function extractHealthNetResult(page: Page, rowIndex: number): Prom
     const patientNames = patientSections.length === 1
       ? titles.filter(el => clean(el) === 'Name' && withinSection(el, patientSections[0])) : [];
     const patientName = patientNames.length === 1 ? readTitle(patientNames, 'patient Name') : '';
+    const addressTitles = patientSections.length === 1
+      ? titles.filter(el => clean(el) === 'Address' && withinSection(el, patientSections[0])) : [];
+    const address = addressTitles.length === 1 ? readTitle(addressTitles, 'Address') : '';
     const planName = readTitle(titles.filter(el => clean(el) === 'Name' && withinSection(el, ppg[0])), 'PPG Name');
+    const ppgHistoryTable = Array.from(document.querySelectorAll('table')).filter(visible)
+      .map(table => {
+        const headerRow = table.querySelector('thead tr') ?? table.querySelector('tr');
+        const headers = Array.from(headerRow?.children || []).map(cell => clean(cell).replace(/\s/g, '').toLowerCase());
+        const name = headers.findIndex(header => header === 'name');
+        const start = headers.findIndex(header => header === 'startdate');
+        const end = headers.findIndex(header => header === 'enddate');
+        return { table, headerRow, name, start, end };
+      })
+      .find(candidate => candidate.name >= 0 && candidate.start >= 0 && candidate.end >= 0);
+    const ppgHistory = ppgHistoryTable
+      ? Array.from(ppgHistoryTable.table.querySelectorAll('tr'))
+        .filter(row => row !== ppgHistoryTable.headerRow && !row.closest('thead') && row.closest('table') === ppgHistoryTable.table && visible(row))
+        .map(row => Array.from(row.children).filter(cell => /^(TD|TH)$/.test(cell.tagName)).map(cell => (cell as HTMLElement).innerText.replace(/\s+/g, ' ').trim()))
+        .find(cells => cells.length > Math.max(ppgHistoryTable.name, ppgHistoryTable.start, ppgHistoryTable.end))
+      : undefined;
     const tables = Array.from(document.querySelectorAll('table')).filter(visible)
       .filter(el => withinSection(el, history[0]) && el.querySelector('#elig_hist_productname'));
     if (tables.length !== 1) throw new Error('Health Net Eligibility History table is missing or ambiguous.');
@@ -335,16 +355,57 @@ export async function extractHealthNetResult(page: Page, rowIndex: number): Prom
       // Keep row-header cells so their positions still align with the columns.
       .map(el => Array.from(el.children).filter(cell => /^(TD|TH)$/.test(cell.tagName)).map(cell => (cell as HTMLElement).innerText.replace(/\s+/g, ' ').trim()))
       .filter(cells => cells.length > Math.max(start, end, product));
-    return { status, member, patientName, planName, history: rows.map(cells => ({ start: cells[start], end: cells[end], product: cells[product] })) };
+    return {
+      status,
+      member,
+      patientName,
+      address,
+      planName,
+      ppgHistory: ppgHistory ? {
+        name: ppgHistory[ppgHistoryTable!.name],
+        start: ppgHistory[ppgHistoryTable!.start],
+        end: ppgHistory[ppgHistoryTable!.end],
+      } : undefined,
+      history: rows.map(cells => ({ start: cells[start], end: cells[end], product: cells[product] })),
+    };
   });
   const coverageStatus = /\b(not eligible|ineligible)\b/i.test(data.status) ? 'inactive'
     : /\bis eligible\b/i.test(data.status) ? 'active' : 'unknown';
   return { rowIndex, payerId: 'healthnet', coverageStatus, planStatus: data.status,
-    memberId: data.member, patientName: data.patientName, planName: data.planName,
+    memberId: data.member, patientName: data.patientName, address: data.address, planName: data.planName,
     effectiveDate: data.history.map(row => row.start || '-').join(' | '),
     terminationDate: data.history.map(row => row.end || '-').join(' | '),
     planType: data.history.map(row => row.product || '-').join(' | '),
-    benefits: [], metadata: { healthnetEligibilityHistory: data.history } };
+    benefits: [], metadata: {
+      healthnetEligibilityHistory: data.history,
+      ...(data.ppgHistory ? {
+        healthnetPpgName: data.ppgHistory.name,
+        healthnetPpgStartDate: data.ppgHistory.start,
+        healthnetPpgEndDate: data.ppgHistory.end,
+      } : {}),
+    } };
+}
+
+async function openHealthNetPpgHistory(page: Page, report: (message: string) => Promise<void>) {
+  const button = page.locator(selectors.viewPpgHistory).filter({ visible: true });
+  if (!await button.count().catch(() => 0)) return;
+  if (await button.count() !== 1) throw new Error('Health Net View PPG History is ambiguous.');
+  await report('Opening Health Net View PPG History.');
+  await button.scrollIntoViewIfNeeded();
+  await button.evaluate((element) => {
+    element.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+  });
+  await page.waitForFunction(() => {
+    const clean = (el: Element) => el.textContent?.replace(/\s+/g, ' ').trim() || '';
+    const visible = (el: Element) => el.getClientRects().length > 0 && getComputedStyle(el).visibility !== 'hidden';
+    return Array.from(document.querySelectorAll('table')).filter(visible).some(table => {
+      const headerRow = table.querySelector('thead tr') ?? table.querySelector('tr');
+      const headers = Array.from(headerRow?.children || []).map(cell => clean(cell).replace(/\s/g, '').toLowerCase());
+      return headers.includes('name') && headers.includes('startdate') && headers.includes('enddate');
+    });
+  }, undefined, { timeout: 15_000 }).catch(async () => {
+    await report('Health Net View PPG History was clicked, but no readable PPG history row appeared. Output PPG history fields remain blank.');
+  });
 }
 
 export async function verifyHealthNetRow(page: Page, inquiryUrl: string, row: EligibilityInputRow, report: (message: string) => Promise<void> = async () => {}) {
@@ -391,6 +452,7 @@ export async function verifyHealthNetRow(page: Page, inquiryUrl: string, row: El
   await product.waitFor({ state: 'visible', timeout: 30_000 }).catch(() => {
     throw new Error('Health Net Eligibility History opened, but its Product Name column was not visible.');
   });
+  await openHealthNetPpgHistory(page, report);
   await report('Reading PPG Name, member identity and Eligibility History dates/product.');
   const historyDeadline = Date.now() + 15_000;
   let result = await extractHealthNetResult(page, row.originalIndex);

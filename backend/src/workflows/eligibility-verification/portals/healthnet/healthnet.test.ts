@@ -44,8 +44,10 @@ async function file(rows: unknown[][]) {
 }
 
 const response = `<div class="alert alert-success big">This patient is eligible as of today, Sep 10, 2026</div>
-  <h3>Patient Information</h3><div><h4 class="title">Name</h4><p>Jane Doe</p></div><div><h4 class="title">Member #</h4><p>00123</p></div>
-  <h3>PPG Information</h3><div><h4 class="title">Name</h4><p>Example PPG</p></div>
+  <h3>Patient Information</h3><div><h4 class="title">Name</h4><p>Jane Doe</p></div><div><h4 class="title">Address</h4><p>123 Main St, Fresno, CA 93720</p></div><div><h4 class="title">Member #</h4><p>00123</p></div>
+  <h3>PPG Information</h3><div><h4 class="title">Name</h4><p>Example PPG</p></div><a href="" id="viewPpgHistoryButton"> View PPG History </a>
+  <table><thead><tr><th>Name</th><th width="28%">Start Date</th><th width="28%">End Date</th></tr></thead>
+  <tbody><tr><td>First PPG</td><td>02/01/2024</td><td>12/31/2024</td></tr><tr><td>Second PPG</td><td>01/01/2023</td><td>12/31/2023</td></tr></tbody></table>
   <h3>Eligibility History</h3><table><thead><tr><th>Start Date</th><th>End Date</th><th id="elig_hist_productname">Product Name</th></tr></thead>
   <tbody><tr><td>01/01/2026</td><td></td><td>HMO</td></tr><tr><td>01/01/2025</td><td>12/31/2025</td><td>PPO</td></tr></tbody></table>`;
 
@@ -173,6 +175,10 @@ test('Health Net extracts PPG name, preserves aligned history and existing outpu
     const page = await browser.newPage(); await page.setContent(response.replace('<p>00123</p>', '<p>00123MD1</p>'));
     const result = await extractHealthNetResult(page, 2);
     assert.equal(result.patientName, 'Jane Doe'); assert.equal(result.planName, 'Example PPG');
+    assert.equal(result.address, '123 Main St, Fresno, CA 93720');
+    assert.equal(result.metadata?.healthnetPpgName, 'First PPG');
+    assert.equal(result.metadata?.healthnetPpgStartDate, '02/01/2024');
+    assert.equal(result.metadata?.healthnetPpgEndDate, '12/31/2024');
     assert.equal(result.memberId, '00123MD1'); assert.equal(result.coverageStatus, 'active');
     assert.equal(healthNetMemberIdsMatch(result.memberId, '00123'), true);
     assert.equal(result.effectiveDate, '01/01/2026 | 01/01/2025');
@@ -186,6 +192,10 @@ test('Health Net extracts PPG name, preserves aligned history and existing outpu
     assert.equal(sheet.getCell(2, columns.Member).text, '00123MD1');
     assert.equal(sheet.getCell(2, columns['Patient Eligibility for Today']).text, result.planStatus);
     assert.equal(sheet.getCell(2, columns['Plan Name']).text, 'Example PPG');
+    assert.equal(sheet.getCell(2, columns.Address).text, '123 Main St, Fresno, CA 93720');
+    assert.equal(sheet.getCell(2, columns['PPG Name']).text, 'First PPG');
+    assert.equal(sheet.getCell(2, columns['PPG Start Date']).text, '02/01/2024');
+    assert.equal(sheet.getCell(2, columns['PPG End Date']).text, '12/31/2024');
     assert.equal(sheet.getCell(2, columns['Eff Date']).text, '01/01/2026 | 01/01/2025');
     assert.equal(sheet.getCell(2, columns['End Date']).text, '- | 12/31/2025');
     assert.equal(sheet.getCell(2, columns['Plan Type']).text, 'HMO | PPO');

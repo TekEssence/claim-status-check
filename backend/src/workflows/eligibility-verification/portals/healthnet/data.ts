@@ -76,7 +76,7 @@ export async function buildHealthNetOutput(options: {
   const sheet = workbook.worksheets[0];
   const columns: Record<string, number> = {};
   sheet.getRow(1).eachCell((cell, index) => { columns[cell.text] = index; });
-  for (const header of ["Patient Eligibility for Today", "Member", "Patient Name", "Plan Name", "error"]) {
+  for (const header of ["Patient Eligibility for Today", "Member", "Patient Name", "Address", "Plan Name", "PPG Name", "PPG Start Date", "PPG End Date", "error"]) {
     if (!columns[header]) {
       const index = sheet.columnCount + 1;
       columns[header] = index;
@@ -101,8 +101,12 @@ export function healthnetOutputValues(result?: EligibilityResult, error?: string
     "Coverage Status": error ? "error" : valid?.coverageStatus === "active" ? "Active Coverage" : valid?.coverageStatus === "inactive" ? "Inactive Coverage" : "unknown",
     "Patient Eligibility for Today": valid?.planStatus || "",
     "Patient Name": valid?.patientName || "",
+    "Address": valid?.address || "",
     "Member": valid?.memberId || "",
     "Plan Name": valid?.planName || "",
+    "PPG Name": String(valid?.metadata?.healthnetPpgName ?? ""),
+    "PPG Start Date": String(valid?.metadata?.healthnetPpgStartDate ?? ""),
+    "PPG End Date": String(valid?.metadata?.healthnetPpgEndDate ?? ""),
     "Eff Date": valid?.effectiveDate || "",
     "End Date": valid?.terminationDate || "",
     "Plan Type": valid?.planType || "",

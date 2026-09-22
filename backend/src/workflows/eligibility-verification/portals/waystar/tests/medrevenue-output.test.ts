@@ -87,14 +87,40 @@ test("MedRevenue extends the Minimax output with Plan Date, Service Type and IPA
   const minimaxHeaders = Object.keys(minimaxRows[0]).filter((header) => header !== "error");
   const medRevenueHeaders = Object.keys(medRevenueRows[0]);
 
-  assert.deepEqual(medRevenueHeaders.slice(0, -3), minimaxHeaders);
-  assert.deepEqual(medRevenueHeaders.slice(-3), ["Plan Date", "Service Type", "IPA"]);
+  assert.deepEqual(medRevenueHeaders.slice(0, minimaxHeaders.length), minimaxHeaders);
+  assert.deepEqual(medRevenueHeaders.slice(minimaxHeaders.length), ["Address", "Plan Date", "Service Type", "IPA", "Date of Death"]);
   assert.equal(medRevenueRows[0]["IPA"], "-");
   for (const header of minimaxHeaders) {
     assert.equal(medRevenueRows[0][header], minimaxRows[0][header]);
   }
+  assert.equal(medRevenueRows[0]["Address"], "-");
   assert.equal(medRevenueRows[0]["Plan Date"], "08/14/2026 to 08/14/2026");
   assert.equal(medRevenueRows[0]["Service Type"], "Pharmacy");
+});
+
+test("MedRevenue Waystar exports subscriber address from payer response", async () => {
+  const output = await buildWaystarOutputWorkbook({
+    inputFile: inputFile(),
+    rows: new Map([[2, row]]),
+    results: new Map([[2, {
+      ...result,
+      payerId: "umr",
+      address: "Patient fallback address",
+      metadata: {
+        subscriberInformation: {
+          address: "1634 REDWOOD WAY UPLAND, CA 917841787",
+        },
+      },
+    }]]),
+    errors: new Map(),
+    projectId: "medrevenue",
+  });
+  const workbook = XLSX.read(output, { type: "buffer" });
+  const rows = XLSX.utils.sheet_to_json<Record<string, string>>(
+    workbook.Sheets[workbook.SheetNames[0]], { defval: "" },
+  );
+
+  assert.equal(rows[0].Address, "1634 REDWOOD WAY UPLAND, CA 917841787");
 });
 
 test("MedRevenue keeps the full Eligibility Date range in Eff Date only", async () => {

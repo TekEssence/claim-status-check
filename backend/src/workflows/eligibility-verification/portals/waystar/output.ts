@@ -143,6 +143,7 @@ async function buildMedRevenueWaystarOutputWorkbook(options: {
   // Extend the established columns only for MedRevenue.
   const outputColumns = [
     ...BCBS_OUTPUT_COLUMNS.map((column) => ({ ...column })),
+    { header: "Address", value: (_row: EligibilityInputRow | undefined, result: EligibilityResult | undefined) => medRevenueSubscriberAddress(result) },
     { header: "Plan Date", value: (_row: EligibilityInputRow | undefined, result: EligibilityResult | undefined) => result?.planDate ?? "" },
     {
       header: "Service Type",
@@ -218,4 +219,35 @@ async function buildMedRevenueWaystarOutputWorkbook(options: {
   }
 
   return Buffer.from(await workbook.xlsx.writeBuffer());
+}
+
+function medRevenueSubscriberAddress(result: EligibilityResult | undefined): string {
+  if (!result) return "";
+  const fullPayerResponse = result.metadata?.fullPayerResponse;
+  const fullSubscriberInformation = fullPayerResponse && typeof fullPayerResponse === "object"
+    ? (fullPayerResponse as Record<string, unknown>).subscriberInformation
+    : undefined;
+  return findAddress(fullSubscriberInformation) ||
+    findAddress(result.metadata?.subscriberInformation) ||
+    result.address ||
+    "";
+}
+
+function findAddress(value: unknown): string {
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      const address = findAddress(entry);
+      if (address) return address;
+    }
+    return "";
+  }
+  if (!value || typeof value !== "object") return "";
+  const record = value as Record<string, unknown>;
+  const address = String(record.address ?? "").trim();
+  if (address) return address;
+  for (const nested of Object.values(record)) {
+    const nestedAddress = findAddress(nested);
+    if (nestedAddress) return nestedAddress;
+  }
+  return "";
 }
