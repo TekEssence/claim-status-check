@@ -2,10 +2,22 @@ import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import test from "node:test";
 import { chromium } from "playwright";
-import { ensureWaystarSubscriberLookup } from "../portal";
+import { ensureWaystarSubscriberLookup, findWaystarPatientLookupOption } from "../portal";
 
 const executablePath = [process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH, chromium.executablePath(),
   "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe"].find((path) => path && existsSync(path));
+
+test("matches Medicare subscriber lookup options by code and label", () => {
+  const options = [
+    { value: "", label: "Sbr ID, LName, FName" },
+    { value: "", label: "Sbr ID, LName, DOB" },
+    { value: "", label: "Sbr ID, LName, FName, DOB" },
+  ];
+
+  assert.equal(findWaystarPatientLookupOption(options, "9")?.label, "Sbr ID, LName, FName");
+  assert.equal(findWaystarPatientLookupOption(options, "49")?.label, "Sbr ID, LName, DOB");
+  assert.equal(findWaystarPatientLookupOption(options, "10")?.label, "Sbr ID, LName, FName, DOB");
+});
 
 test("Minimax lookup reveals subscriber ID, preserves a correct selection, and recovers a reset", {
   skip: !executablePath,

@@ -94,6 +94,23 @@ test("maps MedRevenue Medicare Part B termination date when present", () => {
   assert.equal(mapped.metadata?.medRevenueMedicareDateOfDeathStatus, "-");
 });
 
+test("does not mark MedRevenue Medicare Date of Death dead for non-date text", () => {
+  const result: EligibilityResult = {
+    rowIndex: 2,
+    payerId: "medicare",
+    coverageStatus: "active",
+    benefits: [],
+    metadata: {
+      fullPayerResponse: {
+        medicareDateOfDeath: "",
+      },
+    },
+  };
+
+  const mapped = applyMedRevenueMedicareResultMappings(result);
+  assert.equal(mapped.metadata?.medRevenueMedicareDateOfDeathStatus, "-");
+});
+
 test("maps MedRevenue Blue Cross secondary coverage fields from its own card", () => {
   const result: EligibilityResult = {
     rowIndex: 2,

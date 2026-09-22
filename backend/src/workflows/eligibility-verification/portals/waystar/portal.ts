@@ -450,7 +450,9 @@ export async function submitWaystarInquiry(options: {
     await humanPause(inquiryPage);
   }
   const requireSubscriberLookup = options.projectConfig?.requireSubscriberLookup === true;
-  let expectedPatientLookupCode = requireSubscriberLookup ? "10" : options.patientLookupCode;
+  let expectedPatientLookupCode = options.patientLookupCode ?? (requireSubscriberLookup ? "10" : undefined);
+  const subscriberLookupNeedsFirstName = !requireSubscriberLookup || expectedPatientLookupCode !== "49";
+  const subscriberLookupNeedsDateOfBirth = !requireSubscriberLookup || expectedPatientLookupCode !== "9";
   if (!useMedRevenueMedicareFlow && !requireSubscriberLookup) {
     const patientLookup = inquiryPage.locator(WAYSTAR_SELECTORS.inquiry.patientLookup).first();
     if (await patientLookup.isVisible().catch(() => false)) {
@@ -490,15 +492,22 @@ export async function submitWaystarInquiry(options: {
       await restoreMedRevenuePatientLookup(inquiryPage, Boolean(options.projectConfig.memberIdAndDobOnly));
     }
     if (requireSubscriberLookup) {
-      await ensureWaystarSubscriberLookup(inquiryPage);
+      if (expectedPatientLookupCode === "10") {
+        await ensureWaystarSubscriberLookup(inquiryPage);
+      } else if (expectedPatientLookupCode) {
+        await selectPatientLookupOption(inquiryPage, expectedPatientLookupCode);
+        await waitForBlockingOverlaysToClear(inquiryPage, 30000);
+      }
     }
     await fillVerifiedText(inquiryPage, WAYSTAR_SELECTORS.inquiry.memberId, expectedMemberId, "Member ID");
     if (requireSubscriberLookup || !options.projectConfig?.memberIdAndDobOnly) {
       await fillVerifiedText(inquiryPage, WAYSTAR_SELECTORS.inquiry.lastName, expectedLastName, "Last Name");
+    }
+    if (subscriberLookupNeedsFirstName && (requireSubscriberLookup || !options.projectConfig?.memberIdAndDobOnly)) {
       await fillVerifiedText(inquiryPage, WAYSTAR_SELECTORS.inquiry.firstName, expectedFirstName, "First Name");
     }
     if (
-      requireSubscriberLookup ||
+      (requireSubscriberLookup && subscriberLookupNeedsDateOfBirth) ||
       options.projectConfig?.restorePatientLookup ||
       options.projectConfig?.memberIdAndDobOnly ||
       !options.projectConfig?.useDateOfServiceForPlanDates
@@ -525,8 +534,8 @@ export async function submitWaystarInquiry(options: {
         ? repairMedRevenueAetnaUmrPatientFields : verifyMedRevenueMedicarePatientFields)(inquiryPage, {
         memberId: expectedMemberId,
         lastName: expectedLastName,
-        firstName: expectedFirstName,
-        dateOfBirth: medRevenueDateOfBirthFilled ? expectedDateOfBirth : undefined,
+        firstName: subscriberLookupNeedsFirstName ? expectedFirstName : undefined,
+        dateOfBirth: subscriberLookupNeedsDateOfBirth && medRevenueDateOfBirthFilled ? expectedDateOfBirth : undefined,
       }, options.projectConfig?.exactCignaPlanDate ? "Cigna" : undefined);
       await ensureSelectedServiceType(inquiryPage, expectedServiceType);
     } else {
@@ -907,7 +916,8 @@ const dataId = header.getAttribute("data-id");
         const labelText = textOf(label);
         value = rowText.startsWith(labelText) ? rowText.slice(labelText.length).replace(/^\s*:?\s*/, "").trim() : "";
       }
-      return value || undefined;
+      const date = value.match(/\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b/)?.[0];
+      return date || undefined;
     }
 
     function readSecondaryCoverage() {
@@ -1666,7 +1676,11 @@ export function findWaystarPatientLookupOption(
   options: Array<{ value: string; label: string }>,
   lookupCode: string,
 ): { value: string; label: string } | null {
-  const normalizedExpectedLabel = "sbr id lname fname dob";
+  const normalizedExpectedLabel = lookupCode === "9"
+    ? "sbr id lname fname"
+    : lookupCode === "49"
+    ? "sbr id lname dob"
+    : "sbr id lname fname dob";
   return options.find((option) => option.value === lookupCode) ??
     options.find((option) => normalizeText(option.label) === normalizedExpectedLabel) ??
     null;
@@ -1714,7 +1728,7 @@ async function selectPatientLookupOption(page: Page, lookupCode: string): Promis
   const options = await readWaystarSelectOptions(lookup);
   const expected = findWaystarPatientLookupOption(options, lookupCode);
   if (!expected) {
-    throw new Error(`Waystar Look Up By option Sbr ID, LName, FName, DOB (${lookupCode}) was not available.`);
+    throw new Error(`Waystar Look Up By option ${lookupCode} was not available.`);
   }
   await lookup.selectOption(expected.value);
   const selectedOption = lookup.locator("option:checked").first();
@@ -1977,7 +1991,7 @@ export async function repairWaystarMemberIdAndDob(page: Page, memberId: string, 
 
 export async function repairMedRevenueAetnaUmrPatientFields(
   page: Page,
-  expected: { memberId: string; lastName: string; firstName: string; dateOfBirth?: string },
+  expected: { memberId: string; lastName: string; firstName?: string; dateOfBirth?: string },
   payerLabel = "Aetna/UMR",
 ): Promise<void> {
   // Demographic blur handlers can clear fields filled earlier. Refill only
@@ -2009,7 +2023,7 @@ export async function repairMedRevenueAetnaUmrPatientFields(
 
 async function verifyMedRevenueMedicarePatientFields(
   page: Page,
-  expected: { memberId: string; lastName: string; firstName: string; dateOfBirth?: string },
+  expected: { memberId: string; lastName: string; firstName?: string; dateOfBirth?: string },
 ): Promise<void> {
   const actual = {
     memberId: await page.locator(WAYSTAR_SELECTORS.inquiry.memberId).first().inputValue().catch(() => ""),
@@ -2020,7 +2034,7 @@ async function verifyMedRevenueMedicarePatientFields(
   const missing: string[] = [];
   if (actual.memberId.trim() !== expected.memberId.trim()) missing.push(`memberId=${actual.memberId || "blank"}`);
   if (actual.lastName.trim() !== expected.lastName.trim()) missing.push(`lastName=${actual.lastName || "blank"}`);
-  if (actual.firstName.trim() !== expected.firstName.trim()) missing.push(`firstName=${actual.firstName || "blank"}`);
+  if (expected.firstName && actual.firstName.trim() !== expected.firstName.trim()) missing.push(`firstName=${actual.firstName || "blank"}`);
   if (expected.dateOfBirth && !waystarDatesMatch(actual.dateOfBirth, expected.dateOfBirth)) {
     missing.push(`dateOfBirth=${actual.dateOfBirth || "blank"}`);
   }

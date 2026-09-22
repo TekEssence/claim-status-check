@@ -222,7 +222,38 @@ export function createWaystarRunner(): AutomationRunner<EligibilityRunInput> {
                 if (input.projectId === "medrevenue" && (payer.id === "bcbs-ppo" || payer.id === "blue-shield")) {
                   result = applyMedRevenueBlueCrossResultMappings(result);
                 }
-                if (isRetryablePayerError(result)) {
+                if (isRetryablePayerError(result) && input.projectId === "medrevenue" && payer.id === "medicare") {
+                  for (const lookupCode of ["9", "49"]) {
+                    if (!isRetryablePayerError(result)) break;
+                    const payerResponse = describePayerError(result);
+                    await context.log({
+                      level: "warn",
+                      message: `${payer.name} eligibility row ${row.originalIndex} returned ${payerResponse}. Retrying with Look Up By option ${lookupCode}.`,
+                      rowIndex: row.originalIndex,
+                      eventName: "eligibility_row_retry_medicare_lookup",
+                      meta: { lookupCode },
+                    });
+                    await page.waitForTimeout(3000);
+                    payload = await submitWaystarInquiry({
+                      page,
+                      credentials,
+                      payerName: payerProjectConfig.portalPayerName ?? payer.portalPayerName,
+                      serviceTypeCode: payer.serviceTypeCode,
+                      patientLookupCode: lookupCode,
+                      projectConfig: payerProjectConfig,
+                      isCancelled: context.isCancelled,
+                      onWaiting: (elapsedSeconds) => context.log({
+                        level: "info",
+                        message: `${payer.name} row ${row.originalIndex} lookup ${lookupCode} retry is still waiting for the payer response (${elapsedSeconds}s).`,
+                        rowIndex: row.originalIndex,
+                        eventName: "eligibility_waystar_waiting_for_payer",
+                      }),
+                      row,
+                    });
+                    result = applyWaystarResultDefaults(payer.parseResult(payload, row), row);
+                    result = applyMedRevenueMedicareResultMappings(result);
+                  }
+                } else if (isRetryablePayerError(result)) {
                   const payerResponse = describePayerError(result);
                   await context.log({
                     level: "warn",
@@ -495,7 +526,7 @@ export function applyMedRevenueMedicareResultMappings(result: EligibilityResult)
   const medicarePartBEffectiveDate = findResponseValue(medicarePartBCoverage, "Effective Date");
   const medicarePartBTerminationDate = findResponseValue(medicarePartBCoverage, "Termination Date");
   const medicarePartBStatus = findResponseStatus(medicarePartBCoverage);
-  const medicareDateOfDeath = String(response.medicareDateOfDeath ?? "").trim();
+  const medicareDateOfDeath = String(response.medicareDateOfDeath ?? "").match(/\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b/)?.[0] ?? "";
   const prescriptionDrugCoverage = findResponseBlockByTitle(
     response.otherCoverageInformation,
     "Medicare Prescription Drug Coverage",
