@@ -44,7 +44,7 @@ export function createWaystarRunner(): AutomationRunner<EligibilityRunInput> {
       });
       const routing = await readWaystarEligibilityWorkbook(scopedInputFile, input.credentialFile, projectConfig);
       const credentialProfiles = await readWaystarCredentialProfiles(input.credentialFile);
-      await context.log({ level: "info", message: `Eligibility project selected: ${input.projectId === "minimax" ? "Minimax" : "MedRevenue"}.`, eventName: "eligibility_project_selected", meta: { projectId: input.projectId } });
+      await context.log({ level: "info", message: `Eligibility project selected: ${input.projectId === "minimax" ? "Minimax" : "MedRevenu"}.`, eventName: "eligibility_project_selected", meta: { projectId: input.projectId } });
       await context.emit({
         type: "progress",
         completed: 0,
@@ -491,6 +491,11 @@ export function applyMedRevenueMedicareResultMappings(result: EligibilityResult)
   const response = fullResponse as Record<string, unknown>;
 
   const eligibilityDate = findResponseValue(response.subscriberCoverageInformation, "Eligibility Date");
+  const medicarePartBCoverage = response.medicarePartBCoverage;
+  const medicarePartBEffectiveDate = findResponseValue(medicarePartBCoverage, "Effective Date");
+  const medicarePartBTerminationDate = findResponseValue(medicarePartBCoverage, "Termination Date");
+  const medicarePartBStatus = findResponseStatus(medicarePartBCoverage);
+  const medicareDateOfDeath = String(response.medicareDateOfDeath ?? "").trim();
   const prescriptionDrugCoverage = findResponseBlockByTitle(
     response.otherCoverageInformation,
     "Medicare Prescription Drug Coverage",
@@ -503,12 +508,17 @@ export function applyMedRevenueMedicareResultMappings(result: EligibilityResult)
 
   return {
     ...result,
-    effectiveDate: eligibilityDate || result.effectiveDate,
+    effectiveDate: medicarePartBEffectiveDate || eligibilityDate || result.effectiveDate,
+    terminationDate: medicarePartBTerminationDate || result.terminationDate,
     planDate: alcoholismMedicarePartBPlanDate || result.planDate,
+    planStatus: medicarePartBStatus || result.planStatus,
     otherInsurance: prescriptionPayer || result.otherInsurance,
     otherInsuranceEffectiveDate: prescriptionBenefitDate || result.otherInsuranceEffectiveDate,
     metadata: {
       ...(result.metadata ?? {}),
+      ...(medicarePartBStatus ? { medRevenueMedicarePartBStatus: medicarePartBStatus } : {}),
+      medRevenueMedicareDateOfDeathStatus: medicareDateOfDeath ? "Dead" : "-",
+      ...(medicareDateOfDeath ? { medRevenueMedicareDateOfDeath: medicareDateOfDeath } : {}),
       ...(prescriptionServiceType ? { medRevenuePrescriptionDrugServiceType: prescriptionServiceType } : {}),
     },
   };
@@ -580,6 +590,12 @@ function findResponseValue(value: unknown, expectedLabel: string): string {
   return "";
 }
 
+function findResponseStatus(value: unknown): string {
+  if (!value || typeof value !== "object") return "";
+  const status = String((value as Record<string, unknown>).status ?? "").trim();
+  return status;
+}
+
 function toWaystarLiveResult(
   payerName: string,
   row: EligibilityInputRow,
@@ -589,7 +605,7 @@ function toWaystarLiveResult(
     __rowKey: String(row.originalIndex),
     __payer: payerName,
     __error: "",
-    "Coverage Status": result.coverageStatus,
+    "Coverage Status": String(result.metadata?.medRevenueMedicarePartBStatus ?? result.coverageStatus),
     "Eff Date": result.effectiveDate || "",
     "End Date": result.terminationDate || "",
     "Other Ins": result.otherInsurance || "",

@@ -16,6 +16,15 @@ test("maps MedRevenue Medicare response fields without changing shared parser fi
         subscriberCoverageInformation: {
           fields: { "Eligibility Date": "01/01/2026 to 12/31/2026" },
         },
+        medicarePartBCoverage: {
+          title: "Medicare Part B",
+          status: "ACTIVE COVERAGE",
+          rows: [
+            { label: "Effective Date", value: "09/01/2014" },
+            { label: "Termination Date", value: "" },
+          ],
+        },
+        medicareDateOfDeath: "02/01/2025",
         otherCoverageInformation: [{
           title: "Other Coverage Information",
           groups: [{
@@ -45,13 +54,44 @@ test("maps MedRevenue Medicare response fields without changing shared parser fi
 
   const mapped = applyMedRevenueMedicareResultMappings(result);
   assert.equal(mapped.coverageStatus, "active");
-  assert.equal(mapped.planStatus, "Active Coverage");
+  assert.equal(mapped.planStatus, "ACTIVE COVERAGE");
   assert.equal(mapped.planDate, "05/01/2019");
-  assert.equal(mapped.effectiveDate, "01/01/2026 to 12/31/2026");
+  assert.equal(mapped.effectiveDate, "09/01/2014");
   assert.equal(mapped.terminationDate, undefined);
   assert.equal(mapped.otherInsurance, "WELLCARE PRESCRIPTION INSURANCE, INC.");
   assert.equal(mapped.otherInsuranceEffectiveDate, "01/01/2023");
+  assert.equal(mapped.metadata?.medRevenueMedicarePartBStatus, "ACTIVE COVERAGE");
+  assert.equal(mapped.metadata?.medRevenueMedicareDateOfDeathStatus, "Dead");
+  assert.equal(mapped.metadata?.medRevenueMedicareDateOfDeath, "02/01/2025");
   assert.equal(mapped.metadata?.medRevenuePrescriptionDrugServiceType, "Pharmacy");
+});
+
+test("maps MedRevenue Medicare Part B termination date when present", () => {
+  const result: EligibilityResult = {
+    rowIndex: 2,
+    payerId: "medicare",
+    coverageStatus: "active",
+    effectiveDate: "01/01/2026",
+    terminationDate: undefined,
+    benefits: [],
+    metadata: {
+      fullPayerResponse: {
+        medicarePartBCoverage: {
+          title: "Medicare Part B",
+          status: "ACTIVE COVERAGE",
+          rows: [
+            { label: "Effective Date", value: "09/01/2014" },
+            { label: "Termination Date", value: "12/31/2026" },
+          ],
+        },
+      },
+    },
+  };
+
+  const mapped = applyMedRevenueMedicareResultMappings(result);
+  assert.equal(mapped.effectiveDate, "09/01/2014");
+  assert.equal(mapped.terminationDate, "12/31/2026");
+  assert.equal(mapped.metadata?.medRevenueMedicareDateOfDeathStatus, "-");
 });
 
 test("maps MedRevenue Blue Cross secondary coverage fields from its own card", () => {

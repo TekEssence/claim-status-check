@@ -117,6 +117,33 @@ test("MedRevenue keeps the full Eligibility Date range in Eff Date only", async 
   assert.equal(rows[0]["End Date"], "-");
 });
 
+test("MedRevenue Medicare exports exact Part B dates and status", async () => {
+  const output = await buildWaystarOutputWorkbook({
+    inputFile: inputFile(),
+    rows: new Map([[2, row]]),
+    results: new Map([[2, {
+      ...result,
+      effectiveDate: "09/01/2014",
+      terminationDate: "12/31/2026",
+      metadata: {
+        medRevenueMedicarePartBStatus: "ACTIVE COVERAGE",
+        medRevenueMedicareDateOfDeathStatus: "Dead",
+      },
+    }]]),
+    errors: new Map(),
+    projectId: "medrevenue",
+  });
+  const workbook = XLSX.read(output, { type: "buffer" });
+  const rows = XLSX.utils.sheet_to_json<Record<string, string>>(
+    workbook.Sheets[workbook.SheetNames[0]], { defval: "" },
+  );
+
+  assert.equal(rows[0]["Coverage Status"], "ACTIVE COVERAGE");
+  assert.equal(rows[0]["Eff Date"], "09/01/2014");
+  assert.equal(rows[0]["End Date"], "12/31/2026");
+  assert.equal(rows[0]["Date of Death"], "Dead");
+});
+
 test("MedRevenue suppresses partial extracted values when the row status is error", async () => {
   const output = await buildWaystarOutputWorkbook({
     inputFile: inputFile(),

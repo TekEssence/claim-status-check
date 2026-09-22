@@ -157,8 +157,20 @@ async function buildMedRevenueWaystarOutputWorkbook(options: {
       { header: "Secondary Group or Policy Number", value: (_row, result) => String(result?.metadata?.medRevenueSecondaryGroupOrPolicyNumber ?? "") },
     );
   }
+  if (Array.from(options.results.values()).some((result) => result.payerId === "medicare")) {
+    outputColumns.push({
+      header: "Date of Death",
+      value: (_row, result) => result?.payerId === "medicare"
+        ? String(result?.metadata?.medRevenueMedicareDateOfDeathStatus ?? "-")
+        : "",
+    });
+  }
   outputColumns[1] = { header: "Eff Date", value: (_row, result) => result?.effectiveDate ?? "" };
   outputColumns[2] = { header: "End Date", value: (_row, result) => result?.terminationDate ?? "" };
+  outputColumns[0] = {
+    header: "Coverage Status",
+    value: (_row, result) => String(result?.metadata?.medRevenueMedicarePartBStatus ?? result?.coverageStatus ?? ""),
+  };
   const outputStartColumn = sheet.columnCount + 1;
   const headerRow = sheet.getRow(1);
   outputColumns.forEach((column, offset) => {

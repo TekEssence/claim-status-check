@@ -70,6 +70,8 @@ export type WaystarInquiryPayload = {
     subscriberCoverageInformation?: unknown;
     otherCoverageInformation?: unknown;
     otherCoverageServiceTypes?: string[];
+    medicarePartBCoverage?: unknown;
+    medicareDateOfDeath?: string;
     uhcOtherCoveragePayerBlocks?: import("./payers/united-healthcare-all-states/medrevenue-other-coverage").UhcOtherCoverageBlock[];
     generalInformation?: unknown;
     sections?: unknown;
@@ -861,6 +863,53 @@ const dataId = header.getAttribute("data-id");
       return bestRows.length ? { title: textOf(title), rows: bestRows } : undefined;
     }
 
+    function readMedicarePartBCoverage() {
+      const title = Array.from(document.querySelectorAll("div.section"))
+        .find((element) => {
+          const spans = Array.from(element.querySelectorAll(":scope > span"));
+          return normalizeFieldLabel(textOf(spans[0] ?? null)) === "medicare part b";
+        });
+      if (!title) return undefined;
+
+      const status = textOf(title.querySelector(".benefit-section-status"));
+      const rowsContainer = title.nextElementSibling;
+      const rows = rowsContainer
+        ? Array.from(rowsContainer.querySelectorAll(".date-section.Row.clearfix, .date-section"))
+          .map((row) => {
+            const label = textOf(row.querySelector(".LabelPrimary.field, .LabelPrimary, .Label, label"))
+              .replace(/:\s*$/, "")
+              .trim();
+            const valueElement = Array.from(row.querySelectorAll(".field"))
+              .find((field) => !field.classList.contains("LabelPrimary"));
+            const value = textOf(valueElement ?? null);
+            return label ? { label, value } : undefined;
+          })
+          .filter((row): row is { label: string; value: string } => Boolean(row))
+        : [];
+
+      return { title: textOf(title.querySelector(":scope > span")), status, rows };
+    }
+
+    function readMedicareDateOfDeath() {
+      const label = Array.from(document.querySelectorAll(".LabelPrimary"))
+        .find((element) => normalizeFieldLabel(textOf(element)) === "date of death");
+      if (!label) return undefined;
+      const row = label.closest(".Row, .clearfix, tr") ?? label.parentElement;
+      const sibling = label.nextElementSibling;
+      let value = sibling ? textOf(sibling) : "";
+      if (!value && row) {
+        const valueElement = Array.from(row.querySelectorAll(".field, .Text, .Value, td"))
+          .find((element) => element !== label && !element.classList.contains("LabelPrimary"));
+        value = textOf(valueElement ?? null);
+      }
+      if (!value && row) {
+        const rowText = textOf(row);
+        const labelText = textOf(label);
+        value = rowText.startsWith(labelText) ? rowText.slice(labelText.length).replace(/^\s*:?\s*/, "").trim() : "";
+      }
+      return value || undefined;
+    }
+
     function readSecondaryCoverage() {
       const wantedLabels = new Set(["coverage description", "cob date", "group or policy number", "service type"]);
       const readExactRows = (card: Element) => Array.from(card.querySelectorAll(".Label, label, dt, th"))
@@ -982,6 +1031,12 @@ const dataId = header.getAttribute("data-id");
     const medicarePrescriptionDrugCoverage = selectors.extractFullPayerResponse
       ? readMedicarePrescriptionDrugCoverage()
       : undefined;
+    const medicarePartBCoverage = selectors.extractFullPayerResponse
+      ? readMedicarePartBCoverage()
+      : undefined;
+    const medicareDateOfDeath = selectors.extractFullPayerResponse
+      ? readMedicareDateOfDeath()
+      : undefined;
     const secondaryCoverageInformation = selectors.extractSecondaryCoverage
       ? readSecondaryCoverage()
       : undefined;
@@ -1001,6 +1056,8 @@ const dataId = header.getAttribute("data-id");
         ...readBlocksByHeading("General"),
       ],
       sections: fullSections,
+      medicarePartBCoverage,
+      medicareDateOfDeath,
       secondaryCoverageInformation,
     } : undefined;
 
