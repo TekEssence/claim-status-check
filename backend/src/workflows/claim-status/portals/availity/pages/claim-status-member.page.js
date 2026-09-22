@@ -92,7 +92,9 @@ async function selectState(page, stateName) {
       if (!(await option.isVisible({ timeout: 1000 }).catch(() => false))) {
         option = page.locator("#region-select button.UserRegionsMenu__option--button").filter({ hasText: new RegExp(`^${expectedState.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i") }).first();
       }
-      await option.waitFor({ state: "visible", timeout: 10000 });
+      if (!(await option.isVisible({ timeout: 3000 }).catch(() => false))) {
+        throw new Error(`Availity state option "${expectedState}" was not available for this login.`);
+      }
       const optionId = await option.locator("xpath=ancestor::li[starts-with(@id,'region-')][1]").getAttribute("id");
       const expectedCode = String(optionId || "").replace(/^region-/i, "").trim();
       if (currentState.toLowerCase() === expectedState.toLowerCase() || currentState.toUpperCase() === expectedCode.toUpperCase()) {

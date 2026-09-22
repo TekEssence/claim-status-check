@@ -187,6 +187,10 @@ function isOrganizationSelectionError(message: string): boolean {
   return /Availity organization .*(?:was not selected|dropdown has no exact option)|No visible Availity input was found for the requested selector group/i.test(message);
 }
 
+function isStateSelectionError(message: string): boolean {
+  return /Availity state option ".*" was not available for this login|Selecting state .* failed after \d+ attempts\. Availity state option ".*" was not available for this login/i.test(message);
+}
+
 function isPayerSelectionError(message: string): boolean {
   return /(?:Exact payer option was not visible|Payer .* was not committed|Selecting payer .* failed after \d+ attempts|No Availity dropdown option was found for)/i.test(message);
 }
@@ -206,7 +210,7 @@ function findRowDataValue(row: AvailityInputRow, aliases: string[]): string {
 }
 
 function buildSelectionSkipKey(
-  kind: "organization" | "payer",
+  kind: "state" | "organization" | "payer",
   fields: { projectId: string; login: string; row: AvailityInputRow; selections: AvailityPortalSelections },
 ): string {
   const practice = findRowDataValue(fields.row, ["Group", "Practice", "Organization Group"]);
@@ -563,7 +567,7 @@ export async function runAvailityClaimStatusJob(formData: FormData, context: Scr
   const providerMappings = await readAvailityProviderMapping();
   const runnableTotal = input.inputRows.filter((row) => isRunnableAvailityPayerName(row.data["Payer Name"] || "")).length;
   const locatorTimeoutFailuresByAction = new Map<string, number>();
-  const selectionSkipReasons = new Map<string, { stage: "organization_selection" | "payer_selection"; message: string }>();
+  const selectionSkipReasons = new Map<string, { stage: "state_selection" | "organization_selection" | "payer_selection"; message: string }>();
   let completedRunnableRows = 0;
   let session: Awaited<ReturnType<typeof initializeSession>> | null = null;
   let activeRow: AvailityInputRow | null = null;
@@ -709,6 +713,12 @@ export async function runAvailityClaimStatusJob(formData: FormData, context: Scr
         continue;
       }
 
+      const stateSkipKey = buildSelectionSkipKey("state", {
+        projectId: input.projectId,
+        login: input.credentials.username,
+        row,
+        selections: portalSelections,
+      });
       const organizationSkipKey = buildSelectionSkipKey("organization", {
         projectId: input.projectId,
         login: input.credentials.username,
@@ -721,9 +731,14 @@ export async function runAvailityClaimStatusJob(formData: FormData, context: Scr
         row,
         selections: portalSelections,
       });
-      const priorSelectionFailure = selectionSkipReasons.get(organizationSkipKey) || selectionSkipReasons.get(payerSkipKey);
+      const priorSelectionFailure = selectionSkipReasons.get(stateSkipKey) || selectionSkipReasons.get(organizationSkipKey) || selectionSkipReasons.get(payerSkipKey);
       if (priorSelectionFailure) {
-        const message = `Skipped because this ${priorSelectionFailure.stage === "organization_selection" ? "organization" : "payer"} selection already failed for the same login/state/practice${priorSelectionFailure.stage === "payer_selection" ? "/payer" : ""}. Original failure: ${priorSelectionFailure.message}`;
+        const selectionLabel = priorSelectionFailure.stage === "state_selection"
+          ? "state"
+          : priorSelectionFailure.stage === "organization_selection"
+            ? "organization"
+            : "payer";
+        const message = `Skipped because this ${selectionLabel} selection already failed for the same login/state/practice${priorSelectionFailure.stage === "payer_selection" ? "/payer" : ""}. Original failure: ${priorSelectionFailure.message}`;
         await log(`Availity row ${row.input_row_id} skipped: ${message}`);
         markSkipped(outputRow, message);
         outputRows.push(outputRow);
@@ -783,6 +798,21 @@ export async function runAvailityClaimStatusJob(formData: FormData, context: Scr
           const message = friendlyAvailityError(error);
           lastRowErrorMessage = message;
           await context.log({ level: "warn", message: `Availity row ${row.input_row_id} attempt ${rowAttempt} failed: ${message}` });
+
+          if (isStateSelectionError(message)) {
+            selectionSkipReasons.set(stateSkipKey, { stage: "state_selection", message });
+            markFailure(outputRow, message);
+            outputRows.push(outputRow);
+            addError(errorRows, runId, row, {
+              search_source_tab: "Member/HIPAA",
+              failure_stage: "state_selection",
+              failure_reason: message,
+              current_url: safePageUrl(session.page),
+            });
+            addAudit(auditRows, runId, row, "state_selection", "failed_cached_for_matching_rows", message, startedAt, rowAttempt);
+            rowHandled = true;
+            continue;
+          }
 
           if (isLocatorTimeoutError(message)) {
             const action = locatorTimeoutAction(message);
