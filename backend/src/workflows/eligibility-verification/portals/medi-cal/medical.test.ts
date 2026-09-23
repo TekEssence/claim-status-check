@@ -84,7 +84,7 @@ test('Medi-Cal filters mixed inputs and updates only matching rows, reusing Desc
   const result = { rowIndex: 2, payerId: 'medical', coverageStatus: 'unknown' as const, benefits: [], coverageDescription: 'Full eligibility result.', patientName: 'TEST PERSON', metadata: { medicareId: 'TEST123' } };
   const output = await buildMediCalOutput({ inputFile: file, rows: new Map([[2, rows[0]]]), results: new Map([[2, result]]), errors: new Map() });
   const loaded = new ExcelJS.Workbook(); await loaded.xlsx.load(new Uint8Array(output).buffer);
-  const sheet = loaded.worksheets[0];
+  const sheet = loaded.getWorksheet("Output")!;
   assert.equal(sheet.getCell('G2').text, 'Full eligibility result.');
   assert.equal(sheet.getCell('G3').text, 'keep'); assert.equal(sheet.getCell('G4').text, 'keep too');
   const headers = (sheet.getRow(1).values as ExcelJS.CellValue[]).slice(1);
@@ -116,7 +116,7 @@ test('Medi-Cal standard output supports legacy XLS, snapshots and failed rows', 
     const output = await buildMediCalOutput({ inputFile, rows: new Map([[2, row]]), results: new Map(), errors });
     const book = new ExcelJS.Workbook();
     await book.xlsx.load(new Uint8Array(output).buffer);
-    const sheet = book.worksheets[0];
+    const sheet = book.getWorksheet("Output")!;
     const headers = (sheet.getRow(1).values as ExcelJS.CellValue[]).slice(1);
     const cell = (header: string) => sheet.getCell(2, headers.indexOf(header) + 1);
     assert.equal(cell('Member ID').text, '00123');

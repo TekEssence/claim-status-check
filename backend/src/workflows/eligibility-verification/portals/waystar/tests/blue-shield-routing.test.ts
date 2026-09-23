@@ -153,7 +153,7 @@ test("Blue Shield and Blue Cross produce identical extracted fields and MedReven
   for (const result of [cross, shield]) {
     const output = await buildWaystarOutputWorkbook({ inputFile, rows: new Map([[2, row]]), results: new Map([[2, result]]), errors: new Map(), projectId: "medrevenue" });
     const book = XLSX.read(output, { type: "buffer" });
-    outputRows.push(XLSX.utils.sheet_to_json<Record<string, string>>(book.Sheets[book.SheetNames[0]], { defval: "" }));
+    outputRows.push(XLSX.utils.sheet_to_json<Record<string, string>>(book.Sheets.Output, { defval: "" }));
   }
   assert.deepEqual(outputRows[1], outputRows[0]);
   assert.equal(outputRows[1][0]["Secondary Coverage Description"], "Secondary plan");

@@ -22,7 +22,7 @@ test("MedRevenue UHC outputs full COB range and service from the same payer bloc
   const inputFile = new File([XLSX.write(input, { type: "buffer", bookType: "xlsx" })], "test.xlsx");
   const output = await buildWaystarOutputWorkbook({ inputFile, rows: new Map([[2, row]]), results: new Map([[2, result]]), errors: new Map(), projectId: "medrevenue" });
   const book = XLSX.read(output, { type: "buffer" });
-  const rows = XLSX.utils.sheet_to_json<Record<string, string>>(book.Sheets[book.SheetNames[0]]);
+  const rows = XLSX.utils.sheet_to_json<Record<string, string>>(book.Sheets.Output);
   assert.equal(rows[0]["Plan Date"], blocks[0].cobDate);
   assert.equal(rows[0]["Service Type"], "Pharmacy");
 });
@@ -39,7 +39,7 @@ test("vendor Service Type reaches Excel even without a payer or COB Date", async
   const inputFile = new File([XLSX.write(input, { type: "buffer", bookType: "xlsx" })], "test.xlsx");
   const output = await buildWaystarOutputWorkbook({ inputFile, rows: new Map([[2, row]]), results: new Map([[2, result]]), errors: new Map(), projectId: "medrevenue" });
   const book = XLSX.read(output, { type: "buffer" });
-  const rows = XLSX.utils.sheet_to_json<Record<string, string>>(book.Sheets[book.SheetNames[0]]);
+  const rows = XLSX.utils.sheet_to_json<Record<string, string>>(book.Sheets.Output);
   assert.equal(rows[0]["Plan Date"], "-");
   assert.equal(rows[0]["Service Type"], "Pharmacy");
   assert.equal(rows[0]["DOS"], row.dateOfService);

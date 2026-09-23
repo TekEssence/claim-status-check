@@ -187,7 +187,7 @@ test('Health Net extracts PPG name, preserves aligned history and existing outpu
     const rows = await readHealthNetInput(input);
     const output = await buildHealthNetOutput({ inputFile: input, rows: new Map([[2, rows[0]]]), results: new Map([[2, result]]), errors: new Map() });
     const wb = new ExcelJS.Workbook(); await wb.xlsx.load(new Uint8Array(output).buffer);
-    const sheet = wb.worksheets[0]; const columns: Record<string, number> = {};
+    const sheet = wb.getWorksheet("Output")!; const columns: Record<string, number> = {};
     sheet.getRow(1).eachCell((cell, index) => { columns[cell.text] = index; });
     assert.equal(sheet.getCell(2, columns.Member).text, '00123MD1');
     assert.equal(sheet.getCell(2, columns['Patient Eligibility for Today']).text, result.planStatus);
@@ -206,9 +206,10 @@ test('Health Net extracts PPG name, preserves aligned history and existing outpu
     assert.equal(noPpgHistoryRows.metadata?.healthnetPpgName, undefined);
     const noPpgHistoryOutput = await buildHealthNetOutput({ inputFile: input, rows: new Map([[2, rows[0]]]), results: new Map([[2, noPpgHistoryRows]]), errors: new Map() });
     const noPpgHistoryWorkbook = new ExcelJS.Workbook(); await noPpgHistoryWorkbook.xlsx.load(new Uint8Array(noPpgHistoryOutput).buffer);
-    assert.equal(noPpgHistoryWorkbook.worksheets[0].getCell(2, columns['PPG Name']).text, '');
-    assert.equal(noPpgHistoryWorkbook.worksheets[0].getCell(2, columns['PPG Start Date']).text, '');
-    assert.equal(noPpgHistoryWorkbook.worksheets[0].getCell(2, columns['PPG End Date']).text, '');
+    const noPpgHistorySheet = noPpgHistoryWorkbook.getWorksheet("Output")!;
+    assert.equal(noPpgHistorySheet.getCell(2, columns['PPG Name']).text, '');
+    assert.equal(noPpgHistorySheet.getCell(2, columns['PPG Start Date']).text, '');
+    assert.equal(noPpgHistorySheet.getCell(2, columns['PPG End Date']).text, '');
     await page.setContent(response.replace('<div><h4 class="title">Member #</h4><p>00123</p></div>', ''));
     const missingMember = await extractHealthNetResult(page, 2);
     assert.equal(missingMember.memberId, '');
@@ -217,9 +218,10 @@ test('Health Net extracts PPG name, preserves aligned history and existing outpu
     assert.equal(missingMember.planName, 'Example PPG');
     const missingMemberOutput = await buildHealthNetOutput({ inputFile: input, rows: new Map([[2, rows[0]]]), results: new Map([[2, missingMember]]), errors: new Map() });
     const missingMemberWorkbook = new ExcelJS.Workbook(); await missingMemberWorkbook.xlsx.load(new Uint8Array(missingMemberOutput).buffer);
-    assert.equal(missingMemberWorkbook.worksheets[0].getCell(2, columns.Member).text, '');
-    assert.equal(missingMemberWorkbook.worksheets[0].getCell(2, columns['Patient Name']).text, 'Jane Doe');
-    assert.equal(missingMemberWorkbook.worksheets[0].getCell(2, columns['Plan Name']).text, 'Example PPG');
+    const missingMemberSheet = missingMemberWorkbook.getWorksheet("Output")!;
+    assert.equal(missingMemberSheet.getCell(2, columns.Member).text, '');
+    assert.equal(missingMemberSheet.getCell(2, columns['Patient Name']).text, 'Jane Doe');
+    assert.equal(missingMemberSheet.getCell(2, columns['Plan Name']).text, 'Example PPG');
     await page.setContent(response.replace(
       '<div><h4 class="title">Name</h4><p>Jane Doe</p></div><div><h4 class="title">Address</h4><p>123 Main St, Fresno, CA 93720</p></div><div><h4 class="title">Member #</h4><p>00123</p></div>',
       '<div>Name<br>Jane Doe</div><div>Member ID<br>00123</div><div>Address<br>123 Main St<br>Fresno, CA 93720</div>',
@@ -269,7 +271,7 @@ test('Health Net extracts PPG name, preserves aligned history and existing outpu
     const wrappedWorkbook = new ExcelJS.Workbook();
     await wrappedWorkbook.xlsx.load(new Uint8Array(wrappedOutput).buffer);
     for (const [header, expected] of Object.entries({ 'Eff Date': wrapped.effectiveDate, 'End Date': 'Ongoing', 'Plan Type': wrapped.planType })) {
-      assert.equal(wrappedWorkbook.worksheets[0].getCell(2, columns[header]).text, expected);
+      assert.equal(wrappedWorkbook.getWorksheet("Output")!.getCell(2, columns[header]).text, expected);
     }
     await page.setContent(response.replace('<p>00123</p>', '<span>:</span><p><span hidden>OLD-ID</span>00123</p>'));
     assert.equal((await extractHealthNetResult(page, 2)).memberId, '00123');

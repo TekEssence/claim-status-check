@@ -28,7 +28,7 @@ test("response dates reach Excel without HBPC or Row.clearfix wrappers", { skip:
       const inputFile = new File([new Uint8Array(XLSX.write(workbook, { type: "buffer", bookType: "xlsx" }))], "input.xlsx");
       const output = await buildWaystarOutputWorkbook({ inputFile, rows: new Map([[2, row]]), results: new Map([[2, result]]), errors: new Map(), projectId: "medrevenue" });
       const parsed = XLSX.read(output, { type: "buffer" });
-      const values = XLSX.utils.sheet_to_json<Record<string, unknown>>(parsed.Sheets[parsed.SheetNames[0]])[0];
+      const values = XLSX.utils.sheet_to_json<Record<string, unknown>>(parsed.Sheets.Output)[0];
       assert.equal(values["Eff Date"], expected);
       assert.equal(values["Plan Date"], "02/15/2025");
     }

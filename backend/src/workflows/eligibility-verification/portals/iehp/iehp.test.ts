@@ -130,7 +130,7 @@ test("IEHP extracts DOM colors, DOS and output fields without altering other row
     assert.equal(rows.length, 1); assert.equal(rows[0].originalIndex, 2);
     const output = await buildIehpOutput({ inputFile: file, rows: new Map([[2, rows[0]]]), results: new Map([[2, result]]), errors: new Map() });
     const out = new ExcelJS.Workbook(); await out.xlsx.load(new Uint8Array(output).buffer);
-    const sheet = out.worksheets[0]; const cols: Record<string, number> = {};
+    const sheet = out.getWorksheet("Output")!; const cols: Record<string, number> = {};
     sheet.getRow(1).eachCell((c,i) => { cols[c.text] = i; });
     assert.equal(sheet.getCell(2, cols["Coverage Status"]).text, "Active Coverage");
     assert.equal(sheet.getCell(2, cols["Medicare ID"]).text, "00123");

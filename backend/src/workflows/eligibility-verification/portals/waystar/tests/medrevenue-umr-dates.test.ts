@@ -24,7 +24,7 @@ test("MedRevenue UMR uses Other Coverage Benefit Begin Date and Plan Begin Date 
   const inputFile = new File([new Uint8Array(XLSX.write(workbook, { type: "buffer", bookType: "xlsx" }))], "input.xlsx");
   const output = await buildWaystarOutputWorkbook({ inputFile, rows: new Map([[2, row]]), results: new Map([[2, result]]), errors: new Map(), projectId: "medrevenue" });
   const parsed = XLSX.read(output, { type: "buffer" });
-  const values = XLSX.utils.sheet_to_json<Record<string, unknown>>(parsed.Sheets[parsed.SheetNames[0]])[0];
+  const values = XLSX.utils.sheet_to_json<Record<string, unknown>>(parsed.Sheets.Output)[0];
   assert.equal(values["Eff Date"], "01/01/2025");
   assert.equal(values["Plan Date"], "07/01/2024");
 });

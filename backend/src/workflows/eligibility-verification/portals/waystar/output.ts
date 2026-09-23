@@ -58,6 +58,48 @@ function formatOutputValue(value: unknown): unknown {
   return value;
 }
 
+function copyWorksheetValues(source: ExcelJS.Worksheet, target: ExcelJS.Worksheet) {
+  source.eachRow({ includeEmpty: true }, (sourceRow, rowNumber) => {
+    const targetRow = target.getRow(rowNumber);
+    sourceRow.eachCell({ includeEmpty: true }, (sourceCell, columnNumber) => {
+      const targetCell = targetRow.getCell(columnNumber);
+      targetCell.value = sourceCell.value;
+      targetCell.style = structuredClone(sourceCell.style);
+      targetCell.numFmt = sourceCell.numFmt;
+    });
+    targetRow.height = sourceRow.height;
+  });
+  for (let column = 1; column <= source.columnCount; column += 1) {
+    target.getColumn(column).width = source.getColumn(column).width;
+  }
+}
+
+function styleLogSheet(sheet: ExcelJS.Worksheet) {
+  const header = sheet.getRow(1);
+  header.eachCell((cell) => {
+    cell.font = { bold: true, color: { argb: "FFFFFFFF" } };
+    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF5B9BD5" } };
+    cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
+  });
+  header.height = 26;
+  sheet.columns.forEach((column) => {
+    column.width = 24;
+  });
+  sheet.eachRow((row, rowNumber) => {
+    if (rowNumber > 1) {
+      row.eachCell((cell) => {
+        cell.alignment = { vertical: "top", wrapText: true };
+      });
+    }
+  });
+}
+
+export function getMedRevenueOutputWorksheet(workbook: ExcelJS.Workbook): ExcelJS.Worksheet {
+  const sheet = workbook.getWorksheet("Output") ?? workbook.worksheets[0];
+  if (!sheet) throw new Error("The eligibility output workbook does not contain a worksheet.");
+  return sheet;
+}
+
 export async function buildWaystarOutputWorkbook(options: {
   inputFile: File;
   rows: Map<number, EligibilityInputRow>;
@@ -135,10 +177,20 @@ async function buildMedRevenueWaystarOutputWorkbook(options: {
   results: Map<number, EligibilityResult>;
   errors: Map<number, string>;
 }): Promise<Buffer> {
+  const sourceWorkbook = new ExcelJS.Workbook();
+  await sourceWorkbook.xlsx.load(await options.inputFile.arrayBuffer());
+  const sourceSheet = sourceWorkbook.worksheets[0];
+  if (!sourceSheet) throw new Error("The eligibility workbook does not contain a worksheet.");
+
   const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.load(await options.inputFile.arrayBuffer());
-  const sheet = workbook.worksheets[0];
-  if (!sheet) throw new Error("The eligibility workbook does not contain a worksheet.");
+  const inputSheet = workbook.addWorksheet("Input");
+  copyWorksheetValues(sourceSheet, inputSheet);
+  const sheet = workbook.addWorksheet("Output");
+  copyWorksheetValues(sourceSheet, sheet);
+  const auditSheet = workbook.addWorksheet("Audit Log");
+  auditSheet.addRow(["Timestamp", "Row", "Status", "Message"]);
+  const errorSheet = workbook.addWorksheet("Error Log");
+  errorSheet.addRow(["Timestamp", "Row", "Error"]);
 
   // Extend the established columns only for MedRevenue.
   const outputColumns = [
@@ -216,7 +268,14 @@ async function buildMedRevenueWaystarOutputWorkbook(options: {
         right: { style: "thin", color: { argb: "FFD9E2F3" } },
       };
     });
+    const processedAt = new Date().toISOString();
+    const status = rowFailed ? "Failed" : "Completed";
+    const message = error || result?.planStatus || result?.coverageStatus || "Eligibility verification completed.";
+    auditSheet.addRow([processedAt, rowIndex, status, message]);
+    if (rowFailed) errorSheet.addRow([processedAt, rowIndex, error || result?.planStatus || "The payer response did not establish eligibility."]);
   }
+  styleLogSheet(auditSheet);
+  styleLogSheet(errorSheet);
 
   return Buffer.from(await workbook.xlsx.writeBuffer());
 }

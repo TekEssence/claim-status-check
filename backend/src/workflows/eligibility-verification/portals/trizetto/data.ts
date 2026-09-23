@@ -3,7 +3,7 @@ import ExcelJS from "exceljs";
 import type { EligibilityInputRow, EligibilityResult } from "../../types";
 import { credentialProjectMatches } from "../../projects";
 import { splitPatientName } from "../waystar/input";
-import { buildWaystarOutputWorkbook } from "../waystar/output";
+import { buildWaystarOutputWorkbook, getMedRevenueOutputWorksheet } from "../waystar/output";
 
 const normalizeHeader = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, "");
 export function value(raw: Record<string, unknown>, aliases: string[]): string {
@@ -74,7 +74,7 @@ export async function buildTriZettoOutput(options: {
   const existing = await buildWaystarOutputWorkbook({ ...options, projectId: "medrevenue" });
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(new Uint8Array(existing).buffer);
-  const sheet = workbook.worksheets[0];
+  const sheet = getMedRevenueOutputWorksheet(workbook);
   let column = 0;
   let patientNameColumn = 0;
   sheet.getRow(1).eachCell((cell, index) => { if (normalizeHeader(cell.text) === "patientname") patientNameColumn = index; });

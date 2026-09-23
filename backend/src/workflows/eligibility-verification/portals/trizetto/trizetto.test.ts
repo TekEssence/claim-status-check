@@ -53,7 +53,7 @@ test("input preserves row indexes, primary insurance IDs and MedRevenu isolation
   const buffer = await buildTriZettoOutput({ inputFile: file, rows: new Map(rows.map((row) => [row.originalIndex, row])), results: new Map([[2, result]]), errors: new Map([[5, "TriZetto payer not found"]]) });
   const output = new ExcelJS.Workbook();
   await output.xlsx.load(new Uint8Array(buffer).buffer);
-  const sheet = output.worksheets[0];
+  const sheet = output.getWorksheet("Output")!;
   const headers = (sheet.getRow(1).values as string[]).slice(8);
   assert.deepEqual(headers, ["Coverage Status", "Eff Date", "End Date", "Other Ins", "Other Ins Eff Date", "Relationship to Subscriber", "Plan Type", "Bot Insurance Type", "Plan Date", "Service Type", "Description"]);
   assert.equal(sheet.getCell(2, 18).text, "Open Access Plus");

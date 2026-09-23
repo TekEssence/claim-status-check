@@ -4,7 +4,7 @@ import ExcelJS from "exceljs";
 import type { EligibilityInputRow, EligibilityResult } from "../../types";
 import { credentialProjectMatches } from "../../projects";
 import { splitPatientName } from "../waystar/input";
-import { buildWaystarOutputWorkbook } from "../waystar/output";
+import { buildWaystarOutputWorkbook, getMedRevenueOutputWorksheet } from "../waystar/output";
 
 
 const normalizeHeader = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, "");
@@ -76,7 +76,7 @@ export async function buildMediCalOutput(options: {
   const commonOutput = await buildWaystarOutputWorkbook({ ...options, inputFile, projectId: "medrevenue" });
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(new Uint8Array(commonOutput).buffer);
-  const sheet = workbook.worksheets[0];
+  const sheet = getMedRevenueOutputWorksheet(workbook);
   const columns: Record<string, number> = {};
   sheet.getRow(1).eachCell((cell, index) => { columns[normalizeHeader(cell.text)] = index; });
   for (const header of ["Description", "Medicare ID", "Subscriber Name", "error"]) {

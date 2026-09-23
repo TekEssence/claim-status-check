@@ -39,6 +39,12 @@ const result: EligibilityResult = {
   metadata: { medRevenuePrescriptionDrugServiceType: "Pharmacy" },
 };
 
+function outputSheet(workbook: XLSX.WorkBook): XLSX.WorkSheet {
+  const sheet = workbook.Sheets.Output;
+  assert.ok(sheet, "Expected MedRevenue workbook to include an Output sheet.");
+  return sheet;
+}
+
 test("MedRevenue exports the associated IPA only for the portal HMO plan type", async () => {
   for (const [planType, ipa, expected] of [
     ["Health Maintenance Organization - HMO", " Example Medical Group ", "Example Medical Group"],
@@ -56,7 +62,7 @@ test("MedRevenue exports the associated IPA only for the portal HMO plan type", 
       errors: new Map(), projectId: "medrevenue",
     });
     const workbook = XLSX.read(output, { type: "buffer" });
-    const values = XLSX.utils.sheet_to_json<Record<string, string>>(workbook.Sheets[workbook.SheetNames[0]])[0];
+    const values = XLSX.utils.sheet_to_json<Record<string, string>>(outputSheet(workbook))[0];
     assert.equal(values.IPA, expected);
   }
 });
@@ -76,13 +82,13 @@ test("MedRevenue extends the Minimax output with Plan Date, Service Type and IPA
 
   const minimaxWorkbook = XLSX.read(minimaxOutput, { type: "buffer" });
   const medRevenueWorkbook = XLSX.read(medRevenueOutput, { type: "buffer" });
-  assert.deepEqual(medRevenueWorkbook.SheetNames, minimaxWorkbook.SheetNames);
+  assert.deepEqual(medRevenueWorkbook.SheetNames, ["Input", "Output", "Audit Log", "Error Log"]);
 
   const minimaxRows = XLSX.utils.sheet_to_json<Record<string, string>>(
     minimaxWorkbook.Sheets[minimaxWorkbook.SheetNames[0]], { defval: "" },
   );
   const medRevenueRows = XLSX.utils.sheet_to_json<Record<string, string>>(
-    medRevenueWorkbook.Sheets[medRevenueWorkbook.SheetNames[0]], { defval: "" },
+    outputSheet(medRevenueWorkbook), { defval: "" },
   );
   const minimaxHeaders = Object.keys(minimaxRows[0]).filter((header) => header !== "error");
   const medRevenueHeaders = Object.keys(medRevenueRows[0]);
@@ -117,7 +123,7 @@ test("MedRevenue Waystar exports subscriber address from payer response", async 
   });
   const workbook = XLSX.read(output, { type: "buffer" });
   const rows = XLSX.utils.sheet_to_json<Record<string, string>>(
-    workbook.Sheets[workbook.SheetNames[0]], { defval: "" },
+    outputSheet(workbook), { defval: "" },
   );
 
   assert.equal(rows[0].Address, "1634 REDWOOD WAY UPLAND, CA 917841787");
@@ -137,7 +143,7 @@ test("MedRevenue keeps the full Eligibility Date range in Eff Date only", async 
   });
   const workbook = XLSX.read(output, { type: "buffer" });
   const rows = XLSX.utils.sheet_to_json<Record<string, string>>(
-    workbook.Sheets[workbook.SheetNames[0]], { defval: "" },
+    outputSheet(workbook), { defval: "" },
   );
   assert.equal(rows[0]["Eff Date"], "08/14/2026 to 08/14/2026");
   assert.equal(rows[0]["End Date"], "-");
@@ -161,7 +167,7 @@ test("MedRevenue Medicare exports exact Part B dates and status", async () => {
   });
   const workbook = XLSX.read(output, { type: "buffer" });
   const rows = XLSX.utils.sheet_to_json<Record<string, string>>(
-    workbook.Sheets[workbook.SheetNames[0]], { defval: "" },
+    outputSheet(workbook), { defval: "" },
   );
 
   assert.equal(rows[0]["Coverage Status"], "ACTIVE COVERAGE");
@@ -185,7 +191,7 @@ test("MedRevenue suppresses partial extracted values when the row status is erro
   });
   const workbook = XLSX.read(output, { type: "buffer" });
   const rows = XLSX.utils.sheet_to_json<Record<string, string>>(
-    workbook.Sheets[workbook.SheetNames[0]], { defval: "" },
+    outputSheet(workbook), { defval: "" },
   );
 
   assert.equal(rows[0]["Coverage Status"], "error");
@@ -211,7 +217,7 @@ test("MedRevenue Medicare shows subscriber not found instead of generic error", 
   });
   const workbook = XLSX.read(output, { type: "buffer" });
   const rows = XLSX.utils.sheet_to_json<Record<string, string>>(
-    workbook.Sheets[workbook.SheetNames[0]], { defval: "" },
+    outputSheet(workbook), { defval: "" },
   );
 
   assert.equal(rows[0]["Coverage Status"], "Subscriber Not Found");
@@ -238,7 +244,7 @@ test("MedRevenue Blue Cross adds three secondary columns and reuses Service Type
   });
   const workbook = XLSX.read(output, { type: "buffer" });
   const rows = XLSX.utils.sheet_to_json<Record<string, string>>(
-    workbook.Sheets[workbook.SheetNames[0]], { defval: "" },
+    outputSheet(workbook), { defval: "" },
   );
 
   assert.equal(rows[0]["Secondary Coverage Description"], "SECONDARY BLUE ON BLUE INTRA");
