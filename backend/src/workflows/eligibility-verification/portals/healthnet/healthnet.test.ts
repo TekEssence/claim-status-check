@@ -199,6 +199,35 @@ test('Health Net extracts PPG name, preserves aligned history and existing outpu
     assert.equal(sheet.getCell(2, columns['Eff Date']).text, '01/01/2026 | 01/01/2025');
     assert.equal(sheet.getCell(2, columns['End Date']).text, '- | 12/31/2025');
     assert.equal(sheet.getCell(2, columns['Plan Type']).text, 'HMO | PPO');
+    await page.setContent(response.replace('<tbody><tr><td>First PPG</td><td>02/01/2024</td><td>12/31/2024</td></tr><tr><td>Second PPG</td><td>01/01/2023</td><td>12/31/2023</td></tr></tbody></table>', '<tbody></tbody></table>'));
+    const noPpgHistoryRows = await extractHealthNetResult(page, 2);
+    assert.equal(noPpgHistoryRows.coverageStatus, 'active');
+    assert.equal(noPpgHistoryRows.planName, 'Example PPG');
+    assert.equal(noPpgHistoryRows.metadata?.healthnetPpgName, undefined);
+    const noPpgHistoryOutput = await buildHealthNetOutput({ inputFile: input, rows: new Map([[2, rows[0]]]), results: new Map([[2, noPpgHistoryRows]]), errors: new Map() });
+    const noPpgHistoryWorkbook = new ExcelJS.Workbook(); await noPpgHistoryWorkbook.xlsx.load(new Uint8Array(noPpgHistoryOutput).buffer);
+    assert.equal(noPpgHistoryWorkbook.worksheets[0].getCell(2, columns['PPG Name']).text, '');
+    assert.equal(noPpgHistoryWorkbook.worksheets[0].getCell(2, columns['PPG Start Date']).text, '');
+    assert.equal(noPpgHistoryWorkbook.worksheets[0].getCell(2, columns['PPG End Date']).text, '');
+    await page.setContent(response.replace('<div><h4 class="title">Member #</h4><p>00123</p></div>', ''));
+    const missingMember = await extractHealthNetResult(page, 2);
+    assert.equal(missingMember.memberId, '');
+    assert.equal(missingMember.coverageStatus, 'active');
+    assert.equal(missingMember.patientName, 'Jane Doe');
+    assert.equal(missingMember.planName, 'Example PPG');
+    const missingMemberOutput = await buildHealthNetOutput({ inputFile: input, rows: new Map([[2, rows[0]]]), results: new Map([[2, missingMember]]), errors: new Map() });
+    const missingMemberWorkbook = new ExcelJS.Workbook(); await missingMemberWorkbook.xlsx.load(new Uint8Array(missingMemberOutput).buffer);
+    assert.equal(missingMemberWorkbook.worksheets[0].getCell(2, columns.Member).text, '');
+    assert.equal(missingMemberWorkbook.worksheets[0].getCell(2, columns['Patient Name']).text, 'Jane Doe');
+    assert.equal(missingMemberWorkbook.worksheets[0].getCell(2, columns['Plan Name']).text, 'Example PPG');
+    await page.setContent(response.replace(
+      '<div><h4 class="title">Name</h4><p>Jane Doe</p></div><div><h4 class="title">Address</h4><p>123 Main St, Fresno, CA 93720</p></div><div><h4 class="title">Member #</h4><p>00123</p></div>',
+      '<div>Name<br>Jane Doe</div><div>Member ID<br>00123</div><div>Address<br>123 Main St<br>Fresno, CA 93720</div>',
+    ));
+    const alternatePatientLayout = await extractHealthNetResult(page, 2);
+    assert.equal(alternatePatientLayout.patientName, 'Jane Doe');
+    assert.equal(alternatePatientLayout.memberId, '00123');
+    assert.equal(alternatePatientLayout.address, '123 Main St Fresno, CA 93720');
     await page.setContent(response.replace('<h4 class="title">Member #</h4><p>00123</p>', '<div><h4 class="title">Member #</h4></div><p>00123</p><span>Additional information</span>'));
     assert.equal((await extractHealthNetResult(page, 2)).memberId, '00123');
     await page.setContent(response.replace(/<table>[\s\S]*<\/table>/, `<table><thead><tr><th>Start<br>Date</th><th>End<br>Date</th><th id="elig_hist_productname">Product Name</th><th>Product Description</th></tr></thead><tbody><tr><th>Feb 1,<br>2026</th><td>Ongoing</td><td>HMO WholeCare<br>Small Group<br>(Platinum, Gold, Silver)</td><td>Different description</td></tr></tbody></table>`));
@@ -299,6 +328,79 @@ test('Health Net selects Text Message, verifies OTP, opens dashboard Eligibility
     for (const [inputName] of job.inputWaiters) submitScrapeJobInput(job.id, inputName, '');
     await browser.close();
   }
+});
+
+test('Health Net retries alternate plan types when commercial has no record', async () => {
+  const browser = await chromium.launch({ channel: 'msedge', headless: true });
+  try {
+    const page = await browser.newPage();
+    await page.route('https://healthnet-plan.test/**', route => route.fulfill({ contentType: 'text/html', body: `<select id="providerProfileName" data-bs-class="btn-blue">
+      <option value="11228262">Medicare/DSNP Integrated Plans</option>
+      <option value="11228261">Medi-Cal</option>
+      <option value="11228260" selected>Commercial</option>
+      </select><button id="medicalDropdownSubmitID" type="button" onclick="if(providerProfileName.value==='11228262'&&!document.body.dataset.reverted){document.body.dataset.reverted='true';providerProfileName.value='11228260'};document.body.dataset.plan=providerProfileName.options[providerProfileName.selectedIndex].text.trim();notfound.hidden=true;summary.hidden=true;result.innerHTML='';searchForm.hidden=true;setTimeout(()=>searchForm.hidden=false,50)">GO</button>
+      <form id="searchForm" onsubmit="event.preventDefault();document.body.dataset.attempts=String(Number(document.body.dataset.attempts||0)+1);if((document.body.dataset.plan||'Commercial')==='Commercial'){notfound.hidden=false}else{summary.hidden=false}">
+      <input name="dos" id="dos" class="mask-date" value="09/15/2026"><input name="memberIdOrLastName"><input name="dob" class="mask-date"><input type="submit" name="check" value="Check Eligibility"></form>
+      <div id="notfound" hidden>No record found</div>
+      <div id="summary" hidden><span class="viewdetails" onclick="result.innerHTML=template.innerHTML">View details</span></div>
+      <div id="result"></div><template id="template">${response}</template>` }));
+    const result = await verifyHealthNetRow(page, 'https://healthnet-plan.test/eligibility', {
+      originalIndex: 2,
+      memberId: '00123',
+      dateOfBirth: '01/01/1980',
+      dateOfService: '09/02/2026',
+      raw: {},
+    });
+
+    assert.equal(result.coverageStatus, 'active');
+    assert.equal(await page.locator('#providerProfileName').inputValue(), '11228262');
+    assert.equal(await page.locator('body').getAttribute('data-attempts'), '2');
+    assert.equal(await page.locator('body').getAttribute('data-reverted'), 'true');
+  } finally { await browser.close(); }
+});
+
+test('Health Net ignores the static can-find-member help note while waiting for results', async () => {
+  const browser = await chromium.launch({ channel: 'msedge', headless: true });
+  try {
+    const page = await browser.newPage();
+    await page.route('https://healthnet-note.test/**', route => route.fulfill({ contentType: 'text/html', body: `<p>Please note: Cant find a member using their member ID?</p>
+      <form onsubmit="event.preventDefault();setTimeout(()=>summary.hidden=false,250)">
+      <input name="dos" id="dos" class="mask-date" value="09/15/2026"><input name="memberIdOrLastName"><input name="dob" class="mask-date"><input type="submit" name="check" value="Check Eligibility"></form>
+      <div id="summary" hidden><span class="viewdetails" onclick="result.innerHTML=template.innerHTML">View details</span></div>
+      <div id="result"></div><template id="template">${response}</template>` }));
+    const result = await verifyHealthNetRow(page, 'https://healthnet-note.test/eligibility', {
+      originalIndex: 2,
+      memberId: '00123',
+      dateOfBirth: '01/01/1980',
+      dateOfService: '09/02/2026',
+      raw: {},
+    });
+
+    assert.equal(result.coverageStatus, 'active');
+    assert.equal(result.memberId, '00123');
+  } finally { await browser.close(); }
+});
+
+test('Health Net waits past a transient no-record message before retrying plan types', async () => {
+  const browser = await chromium.launch({ channel: 'msedge', headless: true });
+  try {
+    const page = await browser.newPage();
+    await page.route('https://healthnet-transient.test/**', route => route.fulfill({ contentType: 'text/html', body: `<form onsubmit="event.preventDefault();notfound.hidden=false;setTimeout(()=>{notfound.hidden=true;summary.hidden=false},500)">
+      <input name="dos" id="dos" class="mask-date" value="09/15/2026"><input name="memberIdOrLastName"><input name="dob" class="mask-date"><input type="submit" name="check" value="Check Eligibility"></form>
+      <div id="notfound" hidden>No record found</div>
+      <div id="summary" hidden><span class="viewdetails" onclick="result.innerHTML=template.innerHTML">View details</span></div>
+      <div id="result"></div><template id="template">${response}</template>` }));
+    const result = await verifyHealthNetRow(page, 'https://healthnet-transient.test/eligibility', {
+      originalIndex: 2,
+      memberId: '00123',
+      dateOfBirth: '01/01/1980',
+      dateOfService: '09/02/2026',
+      raw: {},
+    });
+
+    assert.equal(result.coverageStatus, 'active');
+    assert.equal(result.memberId, '00123');
+  } finally { await browser.close(); }
 });
 
 test('Health Net proceeds after delayed direct login without requesting OTP or waiting for SMS', async () => {

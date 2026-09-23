@@ -89,11 +89,13 @@ export async function buildHealthNetOutput(options: {
     const result = options.results.get(index);
     const error = options.errors.get(index);
     for (const [header, entry] of Object.entries(healthnetOutputValues(result, error))) {
-      if (columns[header]) sheet.getCell(index, columns[header]).value = entry || "-";
+      if (columns[header]) sheet.getCell(index, columns[header]).value = entry || (healthnetBlankWhenMissing.has(header) ? "" : "-");
     }
   }
   return Buffer.from(await workbook.xlsx.writeBuffer());
 }
+
+const healthnetBlankWhenMissing = new Set(["Patient Name", "Address", "Member", "Plan Name", "PPG Name", "PPG Start Date", "PPG End Date"]);
 
 export function healthnetOutputValues(result?: EligibilityResult, error?: string): Record<string, string> {
   const valid = error ? undefined : result;

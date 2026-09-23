@@ -12,6 +12,8 @@ export const selectors = {
   member: 'input[name="memberIdOrLastName"]', dob: 'input[name="dob"]',
   eligibility: 'a.eligibility[href="/careconnect/eligibility/bulkChecker"]',
   search: 'input[type="submit"][name="check"][value="Check Eligibility"], button[name="submit"][type="submit"]',
+  planType: '#providerProfileName',
+  planTypeGo: '#medicalDropdownSubmitID',
   viewDetails: 'span.viewdetails',
   viewPpgHistory: '#viewPpgHistoryButton',
   alert: 'div.alert.big', title: 'h4.title', product: '#elig_hist_productname',
@@ -44,6 +46,23 @@ function isHealthNetDashboard(page: Page) {
   return /\/careconnect\/home\/?$|\/home\/?$/i.test(new URL(page.url()).pathname);
 }
 
+async function isHealthNetQuickEligibilityHome(page: Page) {
+  if (isHealthNetDashboard(page)) return true;
+  return page.getByRole('heading', { name: /Quick Eligibility Check/i }).filter({ visible: true }).isVisible().catch(() => false);
+}
+
+async function reopenHealthNetEligibilityFromHome(page: Page, report: (message: string) => Promise<void>) {
+  if (!await isHealthNetQuickEligibilityHome(page)) return;
+  await report('Health Net is on the Home Quick Eligibility screen after Plan Type selection. Opening the Eligibility screen again.');
+  const exact = page.locator(selectors.eligibility).filter({ visible: true });
+  const navigation = await exact.count() ? exact : page.getByRole('link', { name: /^Eligibility$/i })
+    .or(page.getByRole('button', { name: /^Eligibility$/i })).filter({ visible: true });
+  await Promise.all([
+    page.waitForLoadState('domcontentloaded', { timeout: 30_000 }).catch(() => {}),
+    navigation.first().click({ timeout: 30_000 }),
+  ]);
+}
+
 export async function fillHealthNetDate(field: Locator, value: string, label: string) {
   const normalized = normalizeWaystarDate(value);
   await field.scrollIntoViewIfNeeded();
@@ -67,8 +86,15 @@ export async function fillHealthNetDate(field: Locator, value: string, label: st
   throw new Error(`Health Net did not retain ${label}. Check Eligibility was not submitted.`);
 }
 
-async function fillHealthNetMember(page: Page, memberId: string, dob: string, dos?: string) {
-  if (dos) await fillHealthNetDate(page.locator('input#dos[name=dos]').filter({ visible: true }), dos, 'DOS');
+async function fillHealthNetMember(page: Page, memberId: string, dob: string, dos?: string, report: (message: string) => Promise<void> = async () => {}) {
+  if (dos) {
+    const dosField = page.locator('input#dos[name=dos]').filter({ visible: true });
+    if (await dosField.first().isVisible({ timeout: 5_000 }).catch(() => false)) {
+      await fillHealthNetDate(dosField, dos, 'DOS');
+    } else {
+      await report('Health Net DOS field was not visible on the current Plan Type form. Continuing with Member ID and DOB.');
+    }
+  }
   const member = page.locator(selectors.member).filter({ visible: true });
   await member.scrollIntoViewIfNeeded();
   await member.fill('');
@@ -265,6 +291,13 @@ export class HealthNetMemberMismatchError extends Error {
   }
 }
 
+class HealthNetMemberNotFoundError extends Error {
+  constructor(public readonly planType: string) {
+    super(`Health Net member was not found under ${planType}.`);
+    this.name = 'HealthNetMemberNotFoundError';
+  }
+}
+
 export async function extractHealthNetResult(page: Page, rowIndex: number): Promise<EligibilityResult> {
   const data = await page.evaluate(() => {
     // Avoid named arrow helpers that tsx would serialize into browser code.
@@ -313,17 +346,51 @@ export async function extractHealthNetResult(page: Page, rowIndex: number): Prom
       }
       return '';
     }];
-    const member = readTitle(titles.filter(el => /^(member\s*(#|id|number)|member)\s*:?$/i.test(clean(el))), 'Member');
-    if (!member) throw new Error('Health Net result Member is missing.');
     // Provider/PCP sections also contain Name. Never treat all non-PPG
     // names as patient names, or discard eligibility over this optional field.
     const patientSections = headings.filter(el => /^patient information$/i.test(clean(el)));
+    const sectionText = (heading?: Element) => {
+      if (!heading) return '';
+      const parts: string[] = [];
+      for (let node = heading.nextSibling; node; node = node.nextSibling) {
+        if (node instanceof Element && node.matches('h3')) break;
+        if (node instanceof Element) {
+          if (!visible(node)) continue;
+          parts.push((node instanceof HTMLElement ? node.innerText : node.textContent)?.replace(/\r/g, '').trim() || '');
+        } else {
+          parts.push(node.textContent?.trim() || '');
+        }
+      }
+      return parts.filter(Boolean).join('\n');
+    };
+    const readLabelFromText = (text: string, label: RegExp, multiline = false) => {
+      const lines = text.split(/\n+/).map(line => line.replace(/\s+/g, ' ').trim()).filter(Boolean);
+      const knownLabel = /^(name|address|member\s*(#|id|number)|subscriber\s*(#|id|number)|id\s*(#|number)?)$/i;
+      for (let index = 0; index < lines.length; index += 1) {
+        const line = lines[index];
+        const normalizedLine = line.replace(/:\s*$/, '');
+        const colon = line.match(/^([^:]+):\s*(.+)$/);
+        if (colon && label.test(colon[1].trim())) return colon[2].trim();
+        const prefix = line.match(/^([A-Za-z][A-Za-z #/.-]{1,40})\s{2,}(.+)$/);
+        if (prefix && label.test(prefix[1].trim())) return prefix[2].trim();
+        if (label.test(normalizedLine)) {
+          if (!multiline) return lines[index + 1] || '';
+          const values: string[] = [];
+          for (let next = index + 1; next < lines.length && !knownLabel.test(lines[next].replace(/:\s*$/, '')); next += 1) values.push(lines[next]);
+          return values.join(' ');
+        }
+      }
+      return '';
+    };
+    const patientText = patientSections.length === 1 ? sectionText(patientSections[0]) : '';
+    const memberTitle = readTitle(titles.filter(el => /^(member\s*(#|id|number)|subscriber\s*(#|id|number)|id\s*(#|number)?)\s*:?$/i.test(clean(el))), 'Member');
+    const member = memberTitle || readLabelFromText(patientText, /^(member\s*(#|id|number)|subscriber\s*(#|id|number)|id\s*(#|number)?)$/i);
     const patientNames = patientSections.length === 1
       ? titles.filter(el => clean(el) === 'Name' && withinSection(el, patientSections[0])) : [];
-    const patientName = patientNames.length === 1 ? readTitle(patientNames, 'patient Name') : '';
+    const patientName = patientNames.length === 1 ? readTitle(patientNames, 'patient Name') : readLabelFromText(patientText, /^name$/i);
     const addressTitles = patientSections.length === 1
       ? titles.filter(el => clean(el) === 'Address' && withinSection(el, patientSections[0])) : [];
-    const address = addressTitles.length === 1 ? readTitle(addressTitles, 'Address') : '';
+    const address = (addressTitles.length === 1 ? readTitle(addressTitles, 'Address') : '') || readLabelFromText(patientText, /^address$/i, true);
     const planName = readTitle(titles.filter(el => clean(el) === 'Name' && withinSection(el, ppg[0])), 'PPG Name');
     const ppgHistoryTable = Array.from(document.querySelectorAll('table')).filter(visible)
       .map(table => {
@@ -404,26 +471,121 @@ async function openHealthNetPpgHistory(page: Page, report: (message: string) => 
       return headers.includes('name') && headers.includes('startdate') && headers.includes('enddate');
     });
   }, undefined, { timeout: 15_000 }).catch(async () => {
-    await report('Health Net View PPG History was clicked, but no readable PPG history row appeared. Output PPG history fields remain blank.');
+    await report('Health Net View PPG History did not show a readable history table. Continuing with available eligibility data.');
   });
 }
 
-export async function verifyHealthNetRow(page: Page, inquiryUrl: string, row: EligibilityInputRow, report: (message: string) => Promise<void> = async () => {}) {
-  if (!row.memberId || !row.dateOfBirth) throw new Error('Health Net requires Member ID and DOB.');
-  const dob = normalizeWaystarDate(row.dateOfBirth);
-  // Clear the previous member response before each new inquiry.
-  await page.goto(inquiryUrl, { waitUntil: 'domcontentloaded' });
-  // A saved flow URL can redirect back home. Its embedded member field does
-  // not establish that the Eligibility navigation has been opened.
-  if (isHealthNetDashboard(page)) {
-    await report('Opening Health Net Eligibility from the dashboard before entering the member.');
-    const exact = page.locator(selectors.eligibility).filter({ visible: true });
-    const navigation = await exact.count() ? exact : page.getByRole('link', { name: /^Eligibility$/i })
-      .or(page.getByRole('button', { name: /^Eligibility$/i })).filter({ visible: true });
-    await navigation.click();
+async function selectHealthNetPlanType(page: Page, planType: string, report: (message: string) => Promise<void>) {
+  const normalized = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  const wanted = normalized(planType);
+  let lastSelected = '';
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    const dropdown = page.locator(selectors.planType).filter({ visible: true }).first();
+    if (!await dropdown.count().catch(() => 0)) return;
+    await dropdown.waitFor({ state: 'visible', timeout: 30_000 });
+    const options = await dropdown.locator('option').evaluateAll((elements) =>
+      elements.map((option) => ({ value: (option as HTMLOptionElement).value, label: option.textContent?.replace(/\s+/g, ' ').trim() || '' })),
+    );
+    const option = options.find(entry => normalized(entry.label) === wanted) ??
+      options.find(entry => normalized(entry.label).includes(wanted));
+    if (!option) throw new Error(`Health Net Plan Type option "${planType}" was not available.`);
+    lastSelected = await selectedHealthNetPlanTypeLabel(dropdown);
+    if (await dropdown.inputValue().catch(() => '') !== option.value) {
+      await report(`Switching Health Net Plan Type to ${option.label}.`);
+      await dropdown.selectOption(option.value);
+      await dropdown.evaluate((select) => {
+        select.dispatchEvent(new Event('input', { bubbles: true }));
+        select.dispatchEvent(new Event('change', { bubbles: true }));
+        select.dispatchEvent(new Event('blur', { bubbles: true }));
+      });
+      const go = page.locator(selectors.planTypeGo).filter({ visible: true }).first();
+      await Promise.all([
+        page.waitForLoadState('domcontentloaded', { timeout: 30_000 }).catch(() => {}),
+        go.click({ timeout: 30_000 }),
+      ]);
+      await reopenHealthNetEligibilityFromHome(page, report);
+    }
+    await waitForHealthNetSearchForm(page, report);
+    const refreshed = page.locator(selectors.planType).filter({ visible: true }).first();
+    if (!await refreshed.count().catch(() => 0)) return;
+    lastSelected = await selectedHealthNetPlanTypeLabel(refreshed);
+    if (normalized(lastSelected) === normalized(option.label)) return;
+    await report(`Health Net Plan Type did not stay on ${option.label}; currently ${lastSelected || 'blank'}. Retrying plan selection.`);
   }
+  throw new Error(`Health Net Plan Type did not change to ${planType}. Last selected plan was ${lastSelected || 'blank'}.`);
+}
+
+async function selectedHealthNetPlanTypeLabel(dropdown: Locator): Promise<string> {
+  return dropdown.locator('option:checked').first().textContent()
+    .then(text => text?.replace(/\s+/g, ' ').trim() || '')
+    .catch(() => '');
+}
+
+async function waitForHealthNetSearchForm(page: Page, report: (message: string) => Promise<void>) {
+  await reopenHealthNetEligibilityFromHome(page, report);
+  const member = page.locator(selectors.member).filter({ visible: true });
+  const dob = page.locator(selectors.dob).filter({ visible: true });
+  const search = page.locator(selectors.search).filter({ visible: true });
+  const dos = page.locator('input#dos[name=dos]').filter({ visible: true });
+  try {
+    await member.waitFor({ state: 'visible', timeout: 30_000 });
+    await dob.waitFor({ state: 'visible', timeout: 30_000 });
+    await search.waitFor({ state: 'visible', timeout: 30_000 });
+    if (await page.locator('input#dos[name=dos]').count().catch(() => 0)) {
+      await dos.waitFor({ state: 'visible', timeout: 5_000 }).catch(async () => {
+        await report('Health Net DOS field is not visible on this Plan Type form. Continuing without blocking on DOS.');
+      });
+    }
+  } catch (error) {
+    await report('Health Net search form was not visible after loading the selected Plan Type. Reopening the Eligibility screen.');
+    const navigation = page.locator(selectors.eligibility).filter({ visible: true })
+      .or(page.getByRole('link', { name: /^Eligibility$/i }))
+      .or(page.getByRole('button', { name: /^Eligibility$/i })).filter({ visible: true }).first();
+    if (await navigation.count().catch(() => 0)) {
+      await navigation.click({ timeout: 30_000 });
+    }
+    await member.waitFor({ state: 'visible', timeout: 30_000 });
+    await dob.waitFor({ state: 'visible', timeout: 30_000 });
+    await search.waitFor({ state: 'visible', timeout: 30_000 });
+    if (await page.locator('input#dos[name=dos]').count().catch(() => 0)) {
+      await dos.waitFor({ state: 'visible', timeout: 5_000 }).catch(async () => {
+        await report('Health Net DOS field is not visible after reopening Eligibility. Continuing without blocking on DOS.');
+      });
+    }
+    if (error instanceof Error && /Timeout/.test(error.name)) return;
+  }
+}
+
+async function healthNetNotFoundVisible(page: Page): Promise<boolean> {
+  return page.evaluate(() => {
+    const visible = (element: Element) => element.getClientRects().length > 0 && getComputedStyle(element).visibility !== 'hidden';
+    const text = document.body?.innerText || document.body?.textContent || '';
+    return visible(document.body) && /(?:no\s+records?\s+found|member\s+not\s+found|patient\s+not\s+found|unable\s+to\s+locate|no\s+matching\s+(?:member|patient)|member\s+could\s+not\s+be\s+found)/i.test(text);
+  }).catch(() => false);
+}
+
+async function waitForHealthNetSearchOutcome(page: Page): Promise<'details' | 'not-found'> {
+  const details = page.locator(selectors.viewDetails).filter({ hasText: /^\s*View details\s*$/i }).filter({ visible: true });
+  const product = page.locator(selectors.product).filter({ visible: true });
+  const deadline = Date.now() + 60_000;
+  let notFoundSince = 0;
+  while (Date.now() < deadline) {
+    if (await details.or(product).first().isVisible().catch(() => false)) return 'details';
+    if (await healthNetNotFoundVisible(page)) {
+      notFoundSince ||= Date.now();
+      if (Date.now() - notFoundSince >= 8_000) return 'not-found';
+    } else {
+      notFoundSince = 0;
+    }
+    await page.waitForTimeout(500);
+  }
+  await details.or(product).first().waitFor({ state: 'visible', timeout: 1 });
+  return 'details';
+}
+
+async function searchHealthNetRowWithCurrentPlan(page: Page, row: EligibilityInputRow, dob: string, planType: string, report: (message: string) => Promise<void>) {
   await report('Entering DOS, Member ID and DOB in the Health Net eligibility form.');
-  await fillHealthNetMember(page, row.memberId, dob, row.dateOfService);
+  await fillHealthNetMember(page, row.memberId || '', dob, row.dateOfService, report);
   if (await page.locator(`${selectors.alert}:visible`).filter({ hasText: /patient.*eligib/i }).count()) throw new Error('Health Net inquiry contains a previous patient result before search.');
   await report('Member ID and DOB entered. Checking Health Net eligibility.');
   // Submit inputs expose their value as the accessible name, not textContent.
@@ -431,7 +593,7 @@ export async function verifyHealthNetRow(page: Page, inquiryUrl: string, row: El
   const details = page.locator(selectors.viewDetails).filter({ hasText: /^\s*View details\s*$/i }).filter({ visible: true });
   const product = page.locator(selectors.product).filter({ visible: true });
   // Some responses show a summary first; others already have details expanded.
-  await details.or(product).first().waitFor({ state: 'visible', timeout: 60_000 });
+  if (await waitForHealthNetSearchOutcome(page) === 'not-found') throw new HealthNetMemberNotFoundError(planType);
   if (!await product.isVisible()) {
     if (await details.count() !== 1) throw new Error('Health Net View details is missing or ambiguous.');
     await report('Opening Health Net View details for PPG Information and Eligibility History.');
@@ -461,6 +623,38 @@ export async function verifyHealthNetRow(page: Page, inquiryUrl: string, row: El
     result = await extractHealthNetResult(page, row.originalIndex);
   }
   if (!(result.metadata?.healthnetEligibilityHistory as unknown[])?.length) await report('Eligibility History has no readable rows after waiting. Preserving coverage, Member and PPG Name; history output fields remain blank.');
-  if (!healthNetMemberIdsMatch(result.memberId || '', row.memberId)) throw new HealthNetMemberMismatchError(row.memberId, result.memberId || '');
+  if (result.memberId && !healthNetMemberIdsMatch(result.memberId, row.memberId)) throw new HealthNetMemberMismatchError(row.memberId, result.memberId);
+  if (!result.memberId) await report('Health Net result did not show a Member value. Preserving available eligibility data and leaving Member blank.');
   return result;
+}
+
+export async function verifyHealthNetRow(page: Page, inquiryUrl: string, row: EligibilityInputRow, report: (message: string) => Promise<void> = async () => {}) {
+  if (!row.memberId || !row.dateOfBirth) throw new Error('Health Net requires Member ID and DOB.');
+  const dob = normalizeWaystarDate(row.dateOfBirth);
+  // Clear the previous member response before each new inquiry.
+  await page.goto(inquiryUrl, { waitUntil: 'domcontentloaded' });
+  // A saved flow URL can redirect back home. Its embedded member field does
+  // not establish that the Eligibility navigation has been opened.
+  if (isHealthNetDashboard(page)) {
+    await report('Opening Health Net Eligibility from the dashboard before entering the member.');
+    const exact = page.locator(selectors.eligibility).filter({ visible: true });
+    const navigation = await exact.count() ? exact : page.getByRole('link', { name: /^Eligibility$/i })
+      .or(page.getByRole('button', { name: /^Eligibility$/i })).filter({ visible: true });
+    await navigation.click();
+  }
+  await waitForHealthNetSearchForm(page, report);
+
+  const planTypes = ['Commercial', 'Medicare/DSNP Integrated Plans', 'Medi-Cal'];
+  let lastNotFound: HealthNetMemberNotFoundError | undefined;
+  for (const planType of planTypes) {
+    await selectHealthNetPlanType(page, planType, report);
+    try {
+      return await searchHealthNetRowWithCurrentPlan(page, row, dob, planType, report);
+    } catch (error) {
+      if (!(error instanceof HealthNetMemberNotFoundError)) throw error;
+      lastNotFound = error;
+      await report(`${error.message} Trying the next Health Net Plan Type if available.`);
+    }
+  }
+  throw lastNotFound ?? new Error('Health Net member was not found.');
 }
