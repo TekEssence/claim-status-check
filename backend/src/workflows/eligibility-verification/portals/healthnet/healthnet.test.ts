@@ -228,6 +228,14 @@ test('Health Net extracts PPG name, preserves aligned history and existing outpu
     assert.equal(alternatePatientLayout.patientName, 'Jane Doe');
     assert.equal(alternatePatientLayout.memberId, '00123');
     assert.equal(alternatePatientLayout.address, '123 Main St Fresno, CA 93720');
+    await page.setContent(response.replace(
+      '<div><h4 class="title">Name</h4><p>Jane Doe</p></div><div><h4 class="title">Address</h4><p>123 Main St, Fresno, CA 93720</p></div><div><h4 class="title">Member #</h4><p>00123</p></div>',
+      '<div><p class="title">Name</p><p>Jane Doe</p></div><div><p class="title">Address</p><p>123 Main St, Fresno, CA 93720</p></div><div><p class="title">Member #</p><p>00123</p></div>',
+    ));
+    const mediCalPatientLayout = await extractHealthNetResult(page, 2);
+    assert.equal(mediCalPatientLayout.patientName, 'Jane Doe');
+    assert.equal(mediCalPatientLayout.memberId, '00123');
+    assert.equal(mediCalPatientLayout.address, '123 Main St, Fresno, CA 93720');
     await page.setContent(response.replace('<h4 class="title">Member #</h4><p>00123</p>', '<div><h4 class="title">Member #</h4></div><p>00123</p><span>Additional information</span>'));
     assert.equal((await extractHealthNetResult(page, 2)).memberId, '00123');
     await page.setContent(response.replace(/<table>[\s\S]*<\/table>/, `<table><thead><tr><th>Start<br>Date</th><th>End<br>Date</th><th id="elig_hist_productname">Product Name</th><th>Product Description</th></tr></thead><tbody><tr><th>Feb 1,<br>2026</th><td>Ongoing</td><td>HMO WholeCare<br>Small Group<br>(Platinum, Gold, Silver)</td><td>Different description</td></tr></tbody></table>`));

@@ -318,7 +318,7 @@ export async function extractHealthNetResult(page: Page, rowIndex: number): Prom
       const next = headings[headings.indexOf(heading) + 1];
       return !next || Boolean(element.compareDocumentPosition(next) & Node.DOCUMENT_POSITION_FOLLOWING);
     }];
-    const titles = Array.from(document.querySelectorAll('h4.title')).filter(visible);
+    const titles = Array.from(document.querySelectorAll('h4.title, p.title')).filter(visible);
     const [readTitle] = [(matches: Element[], field: string) => {
       if (matches.length === 0) return '';
       if (matches.length !== 1) throw new Error(`Health Net ${field} is ambiguous.`);
