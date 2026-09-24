@@ -12,11 +12,13 @@ test("matches Medicare subscriber lookup options by code and label", () => {
     { value: "", label: "Sbr ID, LName, FName" },
     { value: "", label: "Sbr ID, LName, DOB" },
     { value: "", label: "Sbr ID, LName, FName, DOB" },
+    { value: "83", label: "Member ID, Last Name, First Name, Date of Birth" },
   ];
 
   assert.equal(findWaystarPatientLookupOption(options, "9")?.label, "Sbr ID, LName, FName");
   assert.equal(findWaystarPatientLookupOption(options, "49")?.label, "Sbr ID, LName, DOB");
   assert.equal(findWaystarPatientLookupOption(options, "10")?.label, "Sbr ID, LName, FName, DOB");
+  assert.equal(findWaystarPatientLookupOption(options.slice(3), "10")?.value, "83");
 });
 
 test("Minimax lookup reveals subscriber ID, preserves a correct selection, and recovers a reset", {
@@ -47,6 +49,29 @@ test("Minimax lookup reveals subscriber ID, preserves a correct selection, and r
     await page.evaluate("PatientLookup.value = '25'; SbrId.style.display = 'none'; resetOnce = true;");
     await ensureWaystarSubscriberLookup(page);
     assert.equal(await page.locator("#PatientLookup").inputValue(), "10");
+    assert.equal(await page.locator("#SbrId").isVisible(), true);
+  } finally {
+    await browser.close();
+  }
+});
+
+test("Minimax subscriber lookup selects all four fields even when the portal value is not 10", {
+  skip: !executablePath,
+}, async () => {
+  const browser = await chromium.launch({ executablePath, headless: true });
+  try {
+    const page = await browser.newPage();
+    await page.setContent(`<select id="PatientLookup">
+      <option value="25" selected>LName, FName, DOB</option>
+      <option value="83">Member ID, Last Name, First Name, Date of Birth</option></select>
+      <input id="SbrId" style="display:none"><input id="LName"><input id="FName"><input id="DOB">
+      <script>
+        PatientLookup.addEventListener('change', () => {
+          SbrId.style.display = PatientLookup.value === '83' ? '' : 'none';
+        });
+      </script>`);
+    await ensureWaystarSubscriberLookup(page);
+    assert.equal(await page.locator("#PatientLookup").inputValue(), "83");
     assert.equal(await page.locator("#SbrId").isVisible(), true);
   } finally {
     await browser.close();

@@ -41,13 +41,17 @@ const LEGACY_OUTPUT_COLUMNS: Array<{
 const BCBS_OUTPUT_COLUMNS = [LEGACY_OUTPUT_COLUMNS[1], LEGACY_OUTPUT_COLUMNS[5], LEGACY_OUTPUT_COLUMNS[6], LEGACY_OUTPUT_COLUMNS[8], LEGACY_OUTPUT_COLUMNS[8], LEGACY_OUTPUT_COLUMNS[0], LEGACY_OUTPUT_COLUMNS[3], LEGACY_OUTPUT_COLUMNS[8]].map((column) => ({ ...column }));
 
 BCBS_OUTPUT_COLUMNS[0].header = "Coverage Status";
+BCBS_OUTPUT_COLUMNS[0].value = (_row, result, _error) => formatWaystarCoverageStatus(result);
 BCBS_OUTPUT_COLUMNS[1] = { header: "Eff Date", value: (_row, result) => splitOutputDateRange(result?.effectiveDate).effectiveDate };
 BCBS_OUTPUT_COLUMNS[2] = { header: "End Date", value: (_row, result) => result?.terminationDate || splitOutputDateRange(result?.effectiveDate).endDate || "" };
 BCBS_OUTPUT_COLUMNS[3] = { header: "Other Ins", value: (_row, result) => result?.otherInsurance || "" };
 BCBS_OUTPUT_COLUMNS[4] = { header: "Other Ins Eff Date", value: (_row, result) => result?.otherInsuranceEffectiveDate || "" };
 BCBS_OUTPUT_COLUMNS[5].header = "Relationship to Subscriber";
 BCBS_OUTPUT_COLUMNS[6].header = "Plan Type";
-BCBS_OUTPUT_COLUMNS[7].header = "Bot Insurance Type";
+BCBS_OUTPUT_COLUMNS[7] = {
+  header: "Bot Insurance Type",
+  value: (_row, result) => formatWaystarInsuranceType(result?.insuranceType, result?.planType),
+};
 function splitOutputDateRange(value?: string): { effectiveDate: string; endDate: string } {
   const [effectiveDate = "", endDate = ""] = (value ?? "").split(/\s*\bto\b\s*/i, 2);
   return { effectiveDate: effectiveDate.trim(), endDate: endDate.trim() };
@@ -56,6 +60,77 @@ function formatOutputValue(value: unknown): unknown {
   if (value === null || value === undefined) return "-";
   if (typeof value === "string" && value.trim() === "") return "-";
   return value;
+}
+
+function normalizeHeader(value: unknown): string {
+  return String(value ?? "").trim().toLowerCase();
+}
+
+function stripExistingWaystarOutputColumns(sheet: ExcelJS.Worksheet, outputHeaders: string[]): void {
+  const headerRow = sheet.getRow(1);
+  const normalizedHeaders = outputHeaders.map(normalizeHeader);
+  for (let column = sheet.columnCount; column >= 1; column -= 1) {
+    const matches = normalizedHeaders.every((header, offset) =>
+      normalizeHeader(headerRow.getCell(column + offset).value) === header
+    );
+    if (matches) {
+      sheet.spliceColumns(column, outputHeaders.length);
+    }
+  }
+}
+
+export function formatWaystarInsuranceType(insuranceType?: string, planType?: string): string {
+  const base = String(insuranceType ?? "").trim();
+  const planKind = detectPlanKind(planType);
+  if (!planKind) return base;
+  if (new RegExp(`\\b${planKind}\\b`, "i").test(base)) return base;
+  return base ? `${base} (${planKind})` : planKind;
+}
+
+export function formatWaystarCoverageStatus(result: EligibilityResult | undefined): "active" | "inactive" | "error" {
+  return result?.coverageStatus === "active" || result?.coverageStatus === "inactive"
+    ? result.coverageStatus
+    : "error";
+}
+
+export function sanitizeWaystarErrorMessage(message?: string): string {
+  const raw = String(message ?? "").trim();
+  if (!raw) return "";
+  const withoutAnsi = raw.replace(/\u001b\[[0-9;]*m|\[[0-9]+m/g, "");
+  const firstLine = withoutAnsi.split(/\r?\n/).map((line) => line.trim()).find(Boolean) ?? withoutAnsi;
+  const normalized = withoutAnsi.toLowerCase();
+  if (
+    normalized.includes("presssequentially") ||
+    normalized.includes("waiting for locator") ||
+    normalized.includes("locator(") ||
+    normalized.includes("call log:")
+  ) {
+    if (normalized.includes("#fname") || normalized.includes("first name")) {
+      return "Waystar First Name field did not become ready before timeout. The row was not submitted.";
+    }
+    if (normalized.includes("#lname") || normalized.includes("last name")) {
+      return "Waystar Last Name field did not become ready before timeout. The row was not submitted.";
+    }
+    if (normalized.includes("#sbrid") || normalized.includes("member id") || normalized.includes("subscriber id")) {
+      return "Waystar Member ID field did not become ready before timeout. The row was not submitted.";
+    }
+    if (normalized.includes("#dob") || normalized.includes("date of birth")) {
+      return "Waystar Date of Birth field did not become ready before timeout. The row was not submitted.";
+    }
+    return "Waystar portal field did not become ready before timeout. The row was not submitted.";
+  }
+  if (/\btimeout\b/i.test(firstLine) || /\btimed out\b/i.test(firstLine)) {
+    return "Waystar portal timed out before this row could be completed.";
+  }
+  return firstLine;
+}
+
+function detectPlanKind(planType?: string): "PPO" | "HMO" | undefined {
+  const compact = String(planType ?? "").toUpperCase().replace(/[^A-Z0-9]+/g, "");
+  if (!compact) return undefined;
+  if (compact.includes("PPO")) return "PPO";
+  if (compact.includes("HMO")) return "HMO";
+  return undefined;
 }
 
 function copyWorksheetValues(source: ExcelJS.Worksheet, target: ExcelJS.Worksheet) {
@@ -120,11 +195,14 @@ export async function buildWaystarOutputWorkbook(options: {
     {
       header: "error",
       value: (_row: EligibilityInputRow | undefined, result: EligibilityResult | undefined, error: string | undefined) =>
-        error || (result?.coverageStatus === "error" || result?.coverageStatus === "unknown"
+        sanitizeWaystarErrorMessage(error || (!result
+          ? "Eligibility row was not processed before output was created."
+          : result.coverageStatus === "error" || result.coverageStatus === "unknown"
           ? result.planStatus || "The payer response did not establish eligibility."
-          : ""),
+          : "")),
     },
   ];
+  stripExistingWaystarOutputColumns(sheet, outputColumns.map((column) => column.header));
   const outputStartColumn = sheet.columnCount + 1;
   const headerRow = sheet.getRow(1);
   outputColumns.forEach((column, offset) => {
@@ -219,6 +297,7 @@ async function buildMedRevenueWaystarOutputWorkbook(options: {
         : "",
     });
   }
+  stripExistingWaystarOutputColumns(sheet, outputColumns.map((column) => column.header));
   outputColumns[1] = { header: "Eff Date", value: (_row, result) => result?.effectiveDate ?? "" };
   outputColumns[2] = { header: "End Date", value: (_row, result) => result?.terminationDate ?? "" };
   outputColumns[0] = {
@@ -251,7 +330,7 @@ async function buildMedRevenueWaystarOutputWorkbook(options: {
   for (const rowIndex of rowIndexes) {
     const row = options.rows.get(rowIndex);
     const result = options.results.get(rowIndex);
-    const error = options.errors.get(rowIndex);
+    const error = sanitizeWaystarErrorMessage(options.errors.get(rowIndex) || (!result ? "Eligibility row was not processed before output was created." : undefined));
     const rowFailed = Boolean(error) || result?.coverageStatus?.trim().toLowerCase() === "error";
     const worksheetRow = sheet.getRow(rowIndex);
     outputColumns.forEach((column, offset) => {
@@ -270,9 +349,9 @@ async function buildMedRevenueWaystarOutputWorkbook(options: {
     });
     const processedAt = new Date().toISOString();
     const status = rowFailed ? "Failed" : "Completed";
-    const message = error || result?.planStatus || result?.coverageStatus || "Eligibility verification completed.";
+    const message = error || sanitizeWaystarErrorMessage(result?.planStatus) || result?.coverageStatus || "Eligibility verification completed.";
     auditSheet.addRow([processedAt, rowIndex, status, message]);
-    if (rowFailed) errorSheet.addRow([processedAt, rowIndex, error || result?.planStatus || "The payer response did not establish eligibility."]);
+    if (rowFailed) errorSheet.addRow([processedAt, rowIndex, error || sanitizeWaystarErrorMessage(result?.planStatus) || "The payer response did not establish eligibility."]);
   }
   styleLogSheet(auditSheet);
   styleLogSheet(errorSheet);

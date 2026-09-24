@@ -85,15 +85,18 @@ export function parseWaystarEligibilityResult(
   const sectionStatuses = result.sectionStatuses ?? [];
   const overallStatus = asText(result.overallStatus);
   const sectionStatus = sectionStatuses.map((section) => asText(section.status)).find(Boolean);
+  const sectionCoverageStatus = firstCoverageDetermination(sectionStatuses.map((section) => asText(section.status)));
   const planStatus = asText(coverage?.planStatus) ||
     sectionStatus ||
     overallStatus;
   const planCoverageStatus = normalizeCoverageStatus(
-    asText(coverage?.planStatus) || sectionStatus,
+    asText(coverage?.planStatus),
   );
   const overallCoverageStatus = normalizeCoverageStatus(overallStatus);
   const coverageStatus = isCoverageDetermination(planCoverageStatus)
     ? planCoverageStatus
+    : sectionCoverageStatus
+    ? sectionCoverageStatus
     : overallCoverageStatus !== "unknown"
     ? overallCoverageStatus
     : normalizeCoverageStatus(planStatus);
@@ -382,6 +385,14 @@ function isCoverageDetermination(
   status: EligibilityCoverageStatus,
 ): status is "active" | "inactive" {
   return status === "active" || status === "inactive";
+}
+
+function firstCoverageDetermination(values: Array<string | undefined>): "active" | "inactive" | undefined {
+  for (const value of values) {
+    const status = normalizeCoverageStatus(value);
+    if (isCoverageDetermination(status)) return status;
+  }
+  return undefined;
 }
 
 function normalizePlanType(value?: string): string | undefined {

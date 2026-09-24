@@ -1678,8 +1678,19 @@ export function findWaystarPatientLookupOption(
     : lookupCode === "49"
     ? "sbr id lname dob"
     : "sbr id lname fname dob";
+  const hasCompatibleFields = (label: string) => {
+    const text = normalizeText(label);
+    const hasSubscriberId = /\b(sbr|subscriber|member)\s+id\b/.test(text);
+    const hasLastName = /\b(lname|last name)\b/.test(text);
+    const hasFirstName = /\b(fname|first name)\b/.test(text);
+    const hasDateOfBirth = /\b(dob|date of birth)\b/.test(text);
+    if (lookupCode === "9") return hasSubscriberId && hasLastName && hasFirstName && !hasDateOfBirth;
+    if (lookupCode === "49") return hasSubscriberId && hasLastName && hasDateOfBirth && !hasFirstName;
+    return hasSubscriberId && hasLastName && hasFirstName && hasDateOfBirth;
+  };
   return options.find((option) => option.value === lookupCode) ??
     options.find((option) => normalizeText(option.label) === normalizedExpectedLabel) ??
+    options.find((option) => hasCompatibleFields(option.label)) ??
     null;
 }
 
@@ -1746,8 +1757,10 @@ export async function ensureWaystarSubscriberLookup(page: Page): Promise<void> {
       await waitForBlockingOverlaysToClear(page, 30000);
       await lookup.waitFor({ state: "visible", timeout: 10000 });
       await waitForEnabled(lookup, "Waystar Look Up By");
-      if (await lookup.inputValue() !== "10") {
-        await lookup.selectOption("10", { timeout: 10000 });
+      const expected = findWaystarPatientLookupOption(await readWaystarSelectOptions(lookup), "10");
+      if (!expected) throw new Error("Waystar Look Up By has no option exposing Member ID, Last Name, First Name and DOB.");
+      if (await lookup.inputValue() !== expected.value) {
+        await lookup.selectOption(expected.value, { timeout: 10000 });
       }
       await waitForBlockingOverlaysToClear(page, 30000);
       for (const selector of [WAYSTAR_SELECTORS.inquiry.memberId, WAYSTAR_SELECTORS.inquiry.lastName,
@@ -1755,12 +1768,12 @@ export async function ensureWaystarSubscriberLookup(page: Page): Promise<void> {
         await page.locator(selector).first().waitFor({ state: "visible", timeout: 3000 });
       }
       // A payer/service-type refresh can restore the default after the change event.
-      if (await lookup.inputValue() === "10") return;
+      if (await lookup.inputValue() === expected.value) return;
     } catch (error) {
       if (page.isClosed()) throw error;
     }
   }
-  throw new Error("Waystar inquiry fields were not present on the page before submit: Look Up By must be Sbr ID, LName, FName, DOB (10), with all four fields visible.");
+  throw new Error("Waystar inquiry fields were not present on the page before submit: Look Up By must expose Member ID, Last Name, First Name and DOB, with all four fields visible.");
 }
 async function selectServiceType(page: Page, serviceTypeCode: string): Promise<void> {
   const serviceType = page.locator(WAYSTAR_SELECTORS.inquiry.serviceType).first();
@@ -1924,10 +1937,7 @@ async function fillVerifiedText(page: Page, selector: string, value: string, lab
   let actualValue = await input.inputValue().catch(() => "");
   let matches = compareAsDate ? waystarDatesMatch(actualValue, value) : actualValue.trim() === value.trim();
   if (!matches) {
-    await input.focus();
-    await input.press("Control+A").catch(() => {});
-    await input.press("Backspace").catch(() => {});
-    await input.pressSequentially(value, { delay: randomBetween(25, 40) });
+    await typeIntoWaystarInput(input, value, randomBetween(25, 40));
     await commitInputValue(input);
     await page.waitForTimeout(150);
     actualValue = await input.inputValue().catch(() => "");
@@ -2376,13 +2386,41 @@ async function humanType(locator: Locator, value: string): Promise<void> {
   // Waystar can leave its jQuery date picker over other form fields between
   // inquiries. Programmatic focus avoids a pointer click being intercepted by
   // the calendar while still sending keyboard input to the field.
-  await locator.focus();
-  await locator.press("Control+A").catch(() => {});
-  await locator.press("Backspace").catch(() => {});
   const delay = authenticatedWaystarContexts.has(locator.page().context())
     ? randomBetween(8, 18)
     : randomBetween(85, 140);
-  await locator.pressSequentially(value, { delay });
+  await typeIntoWaystarInput(locator, value, delay);
+}
+
+async function typeIntoWaystarInput(locator: Locator, value: string, delay: number): Promise<void> {
+  await locator.focus();
+  await locator.press("Control+A").catch(() => {});
+  await locator.press("Backspace").catch(() => {});
+  try {
+    await locator.pressSequentially(value, { delay, timeout: 5000 });
+  } catch (error) {
+    if (!isPlaywrightTimeout(error)) throw error;
+    await setInputValueWithEvents(locator, value);
+  }
+}
+
+async function setInputValueWithEvents(locator: Locator, value: string): Promise<void> {
+  await locator.evaluate((element, nextValue) => {
+    if (!(element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement)) {
+      throw new Error("Waystar text field was not an input element.");
+    }
+    const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(element), "value")?.set ||
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+    if (!setter) throw new Error("Browser input value setter is unavailable.");
+    setter.call(element, nextValue);
+    element.dispatchEvent(new Event("input", { bubbles: true }));
+    element.dispatchEvent(new Event("change", { bubbles: true }));
+    element.dispatchEvent(new Event("blur", { bubbles: true }));
+  }, value);
+}
+
+function isPlaywrightTimeout(error: unknown): boolean {
+  return error instanceof Error && /timeout/i.test(error.message);
 }
 async function humanPause(page: Page, minimumMs = 800, maximumMs = 1400): Promise<void> {
   if (authenticatedWaystarContexts.has(page.context())) return;

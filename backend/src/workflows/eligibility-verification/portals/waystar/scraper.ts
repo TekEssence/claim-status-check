@@ -9,10 +9,11 @@ import { findWaystarCredentialsForPayer, readWaystarCredentialProfiles } from ".
 import { readWaystarEligibilityWorkbook } from "./input";
 import { getWaystarPayer } from "./payer-registry";
 import { loginToWaystar, submitWaystarInquiry } from "./portal";
-import { buildWaystarOutputWorkbook } from "./output";
+import { buildWaystarOutputWorkbook, formatWaystarCoverageStatus, formatWaystarInsuranceType, sanitizeWaystarErrorMessage } from "./output";
 import { parseEligibilityProjectId, scopeEligibilityInputFile } from "../../projects";
 import { getWaystarPayerProjectConfig, getWaystarProjectConfig } from "./config/projects";
-import { medRevenueDisplayCoverageStatus } from "./medrevenue-status";
+
+const WAYSTAR_ROW_RETRY_LIMIT = 2;
 
 function requireFile(formData: FormData, key: string, label: string): File {
   const value = formData.get(key);
@@ -340,14 +341,14 @@ export function createWaystarRunner(): AutomationRunner<EligibilityRunInput> {
                   break payerBatches;
                 }
                 const sessionRetries = sessionRetryCounts.get(row.originalIndex) ?? 0;
-                if (isWaystarSessionLoginError(message) && sessionRetries < 1) {
+                if (isWaystarSessionLoginError(message) && sessionRetries < WAYSTAR_ROW_RETRY_LIMIT) {
                   sessionRetryCounts.set(row.originalIndex, sessionRetries + 1);
                   try {
                     await recoverWaystarSession(page, credentials);
                     batch.rows.push(row);
                     await context.log({
                       level: "warn",
-                      message: `${payer.name} eligibility row ${row.originalIndex} was redirected to login. Restored the Waystar session and deferred the row for one retry.`,
+                      message: `${payer.name} eligibility row ${row.originalIndex} was redirected to login. Restored the Waystar session and deferred the row for retry ${sessionRetries + 1} of ${WAYSTAR_ROW_RETRY_LIMIT}.`,
                       rowIndex: row.originalIndex,
                       eventName: "eligibility_waystar_session_restored",
                     });
@@ -360,26 +361,26 @@ export function createWaystarRunner(): AutomationRunner<EligibilityRunInput> {
                   }
                 }
                 const fieldRetries = fieldRetryCounts.get(row.originalIndex) ?? 0;
-                if ((isWaystarInquiryFieldError(message) || (input.projectId === "medrevenue" && message.startsWith("Waystar payer changed or was not selected."))) && fieldRetries < 1) {
+                if ((isWaystarInquiryFieldError(message) || (input.projectId === "medrevenue" && message.startsWith("Waystar payer changed or was not selected."))) && fieldRetries < WAYSTAR_ROW_RETRY_LIMIT) {
                   fieldRetryCounts.set(row.originalIndex, fieldRetries + 1);
                   await closeWaystarInquiryWindows(page);
                   batch.rows.push(row);
                   await context.log({
                     level: "warn",
-                    message: `${payer.name} eligibility row ${row.originalIndex} had a field reset by Waystar. Reopening a clean inquiry window and deferring the row for one retry.`,
+                    message: `${payer.name} eligibility row ${row.originalIndex} had a field reset by Waystar. Reopening a clean inquiry window and deferring the row for retry ${fieldRetries + 1} of ${WAYSTAR_ROW_RETRY_LIMIT}.`,
                     rowIndex: row.originalIndex,
                     eventName: "eligibility_row_deferred_field_reset",
                   });
                   continue;
                 }
                 const timeoutRetries = timeoutRetryCounts.get(row.originalIndex) ?? 0;
-                if (isWaystarInquiryTimeout(message) && timeoutRetries < 1) {
+                if (isWaystarInquiryTimeout(message) && timeoutRetries < WAYSTAR_ROW_RETRY_LIMIT) {
                   timeoutRetryCounts.set(row.originalIndex, timeoutRetries + 1);
                   await closeWaystarInquiryWindows(page);
                   batch.rows.push(row);
                   await context.log({
                     level: "warn",
-                    message: `${payer.name} eligibility row ${row.originalIndex} timed out at the payer. Deferred until the remaining rows finish.`,
+                    message: `${payer.name} eligibility row ${row.originalIndex} timed out at the payer. Deferred until the remaining rows finish for retry ${timeoutRetries + 1} of ${WAYSTAR_ROW_RETRY_LIMIT}.`,
                     rowIndex: row.originalIndex,
                     eventName: "eligibility_row_deferred_timeout",
                   });
@@ -450,6 +451,30 @@ export function createWaystarRunner(): AutomationRunner<EligibilityRunInput> {
 
         }
         const cancelled = context.isCancelled?.() === true;
+        const unresolvedRows = Array.from(inputRows.values()).filter((row) =>
+          !results.has(row.originalIndex) && !rowErrors.has(row.originalIndex)
+        );
+        if (unresolvedRows.length > 0) {
+          const message = cancelled
+            ? "Eligibility run was cancelled before this row was processed."
+            : "Eligibility row was not processed before output was created.";
+          failureCount += unresolvedRows.length;
+          for (const row of unresolvedRows) {
+            rowErrors.set(row.originalIndex, message);
+            errorReportLines.push(`Waystar row ${row.originalIndex}: ${message}`);
+            await context.emit({
+              type: "eligibility_waystar_result",
+              rowIndex: row.originalIndex,
+              update: toWaystarLiveError("Waystar", row, message),
+            });
+          }
+          await context.log({
+            level: "error",
+            message: `${unresolvedRows.length} Waystar eligibility row(s) reached output creation without a result or row error.`,
+            eventName: "eligibility_unresolved_rows_marked_failed",
+            meta: { rows: unresolvedRows.map((row) => row.originalIndex) },
+          });
+        }
         const output = await buildWaystarOutputWorkbook({
           inputFile: scopedInputFile,
           rows: inputRows,
@@ -637,14 +662,14 @@ function toWaystarLiveResult(
     __rowKey: String(row.originalIndex),
     __payer: payerName,
     __error: "",
-    "Coverage Status": medRevenueDisplayCoverageStatus(result),
+    "Coverage Status": formatWaystarCoverageStatus(result),
     "Eff Date": result.effectiveDate || "",
     "End Date": result.terminationDate || "",
     "Other Ins": result.otherInsurance || "",
     "Other Ins Eff Date": result.otherInsuranceEffectiveDate || "",
     "Relationship to Subscriber": result.relationshipToSubscriber || "",
     "Plan Type": result.planType || "",
-    "Bot Insurance Type": result.insuranceType || "",
+    "Bot Insurance Type": formatWaystarInsuranceType(result.insuranceType, result.planType),
   };
 }
 
@@ -656,7 +681,7 @@ function toWaystarLiveError(
   return {
     __rowKey: String(row.originalIndex),
     __payer: payerName,
-    __error: `${payerName} row ${row.originalIndex}: ${message}`,
+    __error: `${payerName} row ${row.originalIndex}: ${sanitizeWaystarErrorMessage(message)}`,
     "Coverage Status": "error",
     "Eff Date": "",
     "End Date": "",
@@ -752,6 +777,7 @@ export function applyWaystarResultDefaults(
   };
 }
 function isRetryablePayerError(result: EligibilityResult): boolean {
+  if (result.coverageStatus === "active" || result.coverageStatus === "inactive") return false;
   const response = `${result.coverageStatus || ""} ${result.planStatus || ""}`.toLowerCase();
   return result.coverageStatus === "error" ||
     result.coverageStatus === "unknown" ||
