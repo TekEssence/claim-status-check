@@ -432,11 +432,18 @@ function matchesProjectPayerRoutingRule(
   memberId: string | undefined,
 ): boolean {
   const normalizedInsurance = normalizeHeader(insuranceName);
+  const compactInsurance = normalizeCompact(insuranceName);
   if (rule.memberIdPrefixAlternative && (memberId ?? "").trim().toUpperCase().startsWith(rule.memberIdPrefixAlternative.toUpperCase())) return true;
   const nameMatches = rule.insuranceNameAliases.some((alias) => {
     const normalizedAlias = normalizeHeader(alias);
-    if (rule.insuranceNameMatch === "contains") return ` ${normalizedInsurance} `.includes(` ${normalizedAlias} `);
-    return normalizedInsurance === normalizedAlias || normalizedInsurance.startsWith(`${normalizedAlias} `);
+    const compactAlias = normalizeCompact(alias);
+    if (rule.insuranceNameMatch === "contains") {
+      return ` ${normalizedInsurance} `.includes(` ${normalizedAlias} `) || compactInsurance.includes(compactAlias);
+    }
+    return normalizedInsurance === normalizedAlias
+      || normalizedInsurance.startsWith(`${normalizedAlias} `)
+      || compactInsurance === compactAlias
+      || compactInsurance.startsWith(compactAlias);
   });
   if (!nameMatches) return false;
   return !rule.memberIdStartsWithAlphabetic || /^[A-Za-z]/.test(memberId ?? "");
@@ -459,6 +466,10 @@ function findValue(row: Record<string, unknown>, aliases: readonly string[]): st
 
 function normalizeHeader(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().replace(/\s+/g, " ");
+}
+
+function normalizeCompact(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, "");
 }
 
 function asText(value: unknown): string {

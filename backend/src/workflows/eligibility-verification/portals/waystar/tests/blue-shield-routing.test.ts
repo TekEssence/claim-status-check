@@ -41,7 +41,7 @@ test("MedRevenue Blue Shield names always select SB542 and X prefixes use SB542 
       ["912345", "A12345", "X12345"].map(id => ({ name, id, payer: "blue-shield" }))),
     ...["SCAN", "United Healthcare", "Medicare", "Unknown", ""].map(name =>
       ({ name, id: " x12345 ", payer: "blue-shield" })),
-    ...["Blue Cross", "BLUE CROSS OF CALIFORNIA", "Blue Cross California"].map(name =>
+    ...["Blue Cross", "bluecross", "blue-cross", "BLUECROSS OF CALIFORNIA", "BLUE CROSS OF CALIFORNIA", "Blue Cross California"].map(name =>
       ({ name, id: "X12345", payer: "bcbs-ppo" })),
   ];
   for (const { name, id, payer } of cases) {

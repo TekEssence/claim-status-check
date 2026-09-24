@@ -1265,20 +1265,17 @@ type WaystarSelectOption = {
 };
 
 async function readWaystarSelectOptions(select: Locator, options: { includeDisabled?: boolean } = {}): Promise<WaystarSelectOption[]> {
-  const optionLocator = select.locator("option");
-  const optionCount = await optionLocator.count();
-  const values: WaystarSelectOption[] = [];
-  for (let index = 0; index < optionCount; index += 1) {
-    const option = optionLocator.nth(index);
-    const disabled = await option.isDisabled().catch(() => false);
-    if (disabled && !options.includeDisabled) continue;
-    values.push({
-      value: await option.getAttribute("value").then((value) => value || ""),
-      label: (await option.textContent().catch(() => "") || "").trim(),
-      disabled,
-    });
-  }
-  return values;
+  const includeDisabled = options.includeDisabled === true;
+  return select.evaluate((element, includeDisabledValue) => {
+    const selectElement = element as HTMLSelectElement;
+    return Array.from(selectElement.options)
+      .map((option) => ({
+        value: option.value || "",
+        label: (option.textContent || "").trim(),
+        disabled: option.disabled,
+      }))
+      .filter((option) => includeDisabledValue || !option.disabled);
+  }, includeDisabled);
 }
 
 type WaystarInquirySnapshot = {
@@ -2273,16 +2270,22 @@ export async function fillPlanDatesFromDateOfService(
     // input DOS via keyboard; response dates never participate in this step.
     await waitForBlockingOverlaysToClear(page, 30000);
     await fillVerifiedText(page, `${fromSelector}:visible`, planDate, "Plan Date From", true);
-    if (hasToInput) await fillVerifiedText(page, `${toSelector}:visible`, planDate, "Plan Date To", true);
+    const visibleToInput = projectConfig.planDateToOptional
+      ? await toInput.isVisible().catch(() => false)
+      : hasToInput;
+    if (visibleToInput) await fillVerifiedText(page, `${toSelector}:visible`, planDate, "Plan Date To", true);
     await dismissWaystarDatePicker(page);
     await page.waitForTimeout(200);
     await waitForBlockingOverlaysToClear(page, 30000);
   }
+  const finalHasToInput = projectConfig.planDateToOptional
+    ? await toInput.isVisible().catch(() => false)
+    : hasToInput;
   const actualFrom = await fromInput.inputValue().catch(() => "");
-  const actualTo = hasToInput ? await toInput.inputValue().catch(() => "") : "";
-  if (waystarDatesMatch(actualFrom, planDate) && (!hasToInput || waystarDatesMatch(actualTo, planDate))) return;
+  const actualTo = finalHasToInput ? await toInput.inputValue().catch(() => "") : "";
+  if (waystarDatesMatch(actualFrom, planDate) && (!finalHasToInput || waystarDatesMatch(actualTo, planDate))) return;
   throw new Error(
-    `MedRevenue Plan Date(s) did not retain the input DOS ${planDate}. From=${actualFrom || "blank"}, To=${hasToInput ? actualTo || "blank" : "not shown"}.`,
+    `MedRevenue Plan Date(s) did not retain the input DOS ${planDate}. From=${actualFrom || "blank"}, To=${finalHasToInput ? actualTo || "blank" : "not shown"}.`,
   );
 }
 

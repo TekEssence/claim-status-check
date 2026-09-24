@@ -19,7 +19,7 @@ test("form recovery is scoped to affected MedRevenue payers", () => {
   for (const project of ["minimax", "medrevenue"] as const) {
     for (const payer of ["scan", "blue-shield", "bcbs-ppo", "united-healthcare-all-states", "medicare", "aetna"]) {
       const config = getWaystarPayerProjectConfig(getWaystarProjectConfig(project), payer);
-      assert.equal(Boolean(config.retryPlanDatesWithKeyboard), project === "medrevenue" && payer === "umr");
+      assert.equal(Boolean(config.retryPlanDatesWithKeyboard), project === "medrevenue" && ["scan", "umr"].includes(payer));
       assert.equal(Boolean(config.repairPatientValueReset), project === "medrevenue" && payer === "blue-shield");
       assert.equal(Boolean(config.restorePatientLookup), project === "medrevenue" && ["scan", "blue-shield", "bcbs-ppo", "united-healthcare-all-states", "aetna", "umr"].includes(payer));
     }

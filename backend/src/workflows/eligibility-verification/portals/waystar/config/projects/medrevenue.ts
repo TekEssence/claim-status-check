@@ -89,6 +89,7 @@ export const medRevenueWaystarConfig: WaystarProjectConfig = {
       extractFullPayerResponse: true,
     },
     scan: {
+      retryPlanDatesWithKeyboard: true,
       restorePatientLookup: true,
       skipProviderHandling: true,
       serviceTypeDirectValue: "30",
