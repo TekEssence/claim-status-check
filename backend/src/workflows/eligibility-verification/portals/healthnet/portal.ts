@@ -68,17 +68,17 @@ export async function fillHealthNetDate(field: Locator, value: string, label: st
   await field.scrollIntoViewIfNeeded();
   for (let attempt = 0; attempt < 2; attempt++) {
     await field.click();
-    await field.press('ControlOrMeta+A');
-    await field.press('Backspace');
     if (await field.getAttribute('type') === 'date') {
       const [month, day, year] = normalized.split('/');
       await field.fill(`${year}-${month}-${day}`);
     } else {
-      // The mask inserts separators itself. Clear through keyboard events so
-      // its internal buffer and caret reset, then enter only the date digits.
-      await field.press('Home');
-      const masked = (await field.getAttribute('class') || '').split(/\s+/).includes('mask-date');
-      await field.pressSequentially(masked && attempt === 0 ? normalized.replace(/\D/g, '') : normalized, { delay: 100 });
+      await field.fill('');
+      await field.evaluate((element: HTMLInputElement, nextValue) => {
+        const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+        setter?.call(element, nextValue);
+        element.dispatchEvent(new Event('input', { bubbles: true }));
+        element.dispatchEvent(new Event('change', { bubbles: true }));
+      }, normalized);
     }
     await field.press('Tab');
     try { if (normalizeWaystarDate(await field.inputValue()) === normalized) return; } catch { /* Retry without discarding validation. */ }
