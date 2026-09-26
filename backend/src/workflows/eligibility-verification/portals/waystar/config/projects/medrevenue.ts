@@ -5,7 +5,7 @@ export const medRevenueWaystarConfig: WaystarProjectConfig = {
   id: "medrevenue",
   requireInputProjectColumn: false,
   allowUnscopedCredentials: true,
-  settings: { extractOtherCoverageServiceTypes: true, verifyPayerBeforeSubmit: true },
+  settings: { extractOtherCoverageServiceTypes: true, extractPayerResponseReason: true, verifyPayerBeforeSubmit: true },
   inputColumnMappings: {
     dateOfService: ["Date of Service (DOS)", "Plan Date", "Plan Date(s)"],
   },

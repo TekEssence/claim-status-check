@@ -971,7 +971,21 @@ const dataId = header.getAttribute("data-id");
       return blocks.flatMap((block) => block.rows)
         .find((entry) => normalizeFieldLabel(entry.label) === wanted)?.value;
     }
+    function readPayerResponse() {
+      const headings = findHeadingElements("Payer Response");
+      const heading = headings[headings.length - 1];
+      if (!heading) return undefined;
 
+      const container = resolveHeadingContainer(heading);
+      const rows = readOrderedRows(container);
+      const reason = rows.find((entry) => normalizeFieldLabel(entry.label) === "reason")?.value;
+      const action = rows.find((entry) => normalizeFieldLabel(entry.label) === "action")?.value;
+      const status = Array.from(container.querySelectorAll(".SectionTitle, h1, h2, h3, h4, .Header, .Title"))
+        .map((element) => textOf(element))
+        .find((value) => value && normalizeFieldLabel(value) !== "payer response");
+      const text = textOf(container);
+      return reason || action || status || text ? { status, reason, action, text } : undefined;
+    }
     // ---- overall status + fallback section list (unchanged) ----
     const statusElementText = textOf(document.querySelector(selectors.inquiry.activeCoverageDom));
     const visibleCoverageBanner = document.body?.innerText.match(/\b(?:INACTIVE|ACTIVE)\s+COVERAGE\b/i)?.[0];
@@ -1050,7 +1064,9 @@ const dataId = header.getAttribute("data-id");
     const secondaryCoverageInformation = selectors.extractSecondaryCoverage
       ? readSecondaryCoverage()
       : undefined;
+    const payerResponse = selectors.extractPayerResponse ? readPayerResponse() : undefined;
     const fullPayerResponse = selectors.extractFullPayerResponse || selectors.extractSecondaryCoverage ? {
+      payerResponse,
       subscriberInformation: subscriberBlock || fullSubscriberBlocks,
       subscriberCoverageInformation: coverageBlock || fullCoverageBlocks,
       otherCoverageInformation: [
@@ -1112,12 +1128,14 @@ const dataId = header.getAttribute("data-id");
       subscriberInformation,
       patientInformation,
       subscriberCoverageInformation,
+      payerResponse,
       general: primaryCareProvider || ipa ? { primaryCareProvider, ipa } : undefined,
       healthBenefitPlanCoverage,
       professionalOffice,
       fullPayerResponse,
     };
   }, {
+    extractPayerResponse: Boolean(options.projectConfig?.settings?.extractPayerResponseReason),
     extractFullPayerResponse: Boolean(options.projectConfig?.extractFullPayerResponse),
     extractSecondaryCoverage: Boolean(options.projectConfig?.extractSecondaryCoverage),
     exactUmrDates: Boolean(options.projectConfig?.exactUmrDates),

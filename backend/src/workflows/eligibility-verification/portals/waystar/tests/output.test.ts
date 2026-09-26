@@ -262,3 +262,38 @@ test("includes an unresolved payer error in the Minimax error column", async () 
   const rows = XLSX.utils.sheet_to_json<Record<string, string>>(workbook.Sheets[workbook.SheetNames[0]]);
   assert.equal(rows[0].error, "Failed at payer: subscriber not found");
 });
+
+test("uses MedRevenue payer response reason in the error log", async () => {
+  const inputWorkbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(inputWorkbook, XLSX.utils.aoa_to_sheet([
+    ["Member ID"],
+    ["TEST-MEMBER"],
+  ]), "Eligibility");
+  const inputBuffer = XLSX.write(inputWorkbook, { type: "buffer", bookType: "xlsx" }) as Buffer;
+
+  const output = await buildWaystarOutputWorkbook({
+    inputFile: new File([new Uint8Array(inputBuffer)], "medrevenue-waystar.xlsx"),
+    projectId: "medrevenue",
+    rows: new Map([[2, { originalIndex: 2, memberId: "TEST-MEMBER", raw: {} }]]),
+    results: new Map([[2, {
+      rowIndex: 2,
+      payerId: "aetna",
+      coverageStatus: "error",
+      planStatus: "SUBSCRIBER NOT FOUND",
+      benefits: [],
+      metadata: {
+        payerResponse: {
+          reason: "Invalid / Missing Subscriber / Insured ID",
+          action: "Please Correct and Resubmit",
+        },
+      },
+    }]]),
+    errors: new Map(),
+  });
+
+  const workbook = XLSX.read(output, { type: "buffer" });
+  const errorRows = XLSX.utils.sheet_to_json<Record<string, string>>(workbook.Sheets["Error Log"], { defval: "" });
+  const auditRows = XLSX.utils.sheet_to_json<Record<string, string>>(workbook.Sheets["Audit Log"], { defval: "" });
+  assert.equal(errorRows[0].Error, "Invalid / Missing Subscriber / Insured ID");
+  assert.equal(auditRows[0].Message, "Invalid / Missing Subscriber / Insured ID");
+});

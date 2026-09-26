@@ -125,6 +125,21 @@ export function sanitizeWaystarErrorMessage(message?: string): string {
   return firstLine;
 }
 
+function medRevenuePayerResponseReason(result: EligibilityResult | undefined): string {
+  const payerResponse = result?.metadata?.payerResponse;
+  if (!payerResponse || typeof payerResponse !== "object") return "";
+  const reason = (payerResponse as Record<string, unknown>).reason;
+  return sanitizeWaystarErrorMessage(typeof reason === "string" ? reason : String(reason ?? ""));
+}
+
+function medRevenueErrorMessage(result: EligibilityResult | undefined, error?: string): string {
+  const sanitizedError = sanitizeWaystarErrorMessage(error);
+  const payerReason = medRevenuePayerResponseReason(result);
+  if (payerReason && (!sanitizedError || /subscriber not found|failed at payer|payer response did not establish/i.test(sanitizedError))) {
+    return payerReason;
+  }
+  return sanitizedError || sanitizeWaystarErrorMessage(result?.planStatus) || "";
+}
 function detectPlanKind(planType?: string): "PPO" | "HMO" | undefined {
   const compact = String(planType ?? "").toUpperCase().replace(/[^A-Z0-9]+/g, "");
   if (!compact) return undefined;
@@ -330,7 +345,7 @@ async function buildMedRevenueWaystarOutputWorkbook(options: {
   for (const rowIndex of rowIndexes) {
     const row = options.rows.get(rowIndex);
     const result = options.results.get(rowIndex);
-    const error = sanitizeWaystarErrorMessage(options.errors.get(rowIndex) || (!result ? "Eligibility row was not processed before output was created." : undefined));
+    const error = medRevenueErrorMessage(result, options.errors.get(rowIndex) || (!result ? "Eligibility row was not processed before output was created." : undefined));
     const rowFailed = Boolean(error) || result?.coverageStatus?.trim().toLowerCase() === "error";
     const worksheetRow = sheet.getRow(rowIndex);
     outputColumns.forEach((column, offset) => {
@@ -349,9 +364,9 @@ async function buildMedRevenueWaystarOutputWorkbook(options: {
     });
     const processedAt = new Date().toISOString();
     const status = rowFailed ? "Failed" : "Completed";
-    const message = error || sanitizeWaystarErrorMessage(result?.planStatus) || result?.coverageStatus || "Eligibility verification completed.";
+    const message = error || medRevenueErrorMessage(result) || result?.coverageStatus || "Eligibility verification completed.";
     auditSheet.addRow([processedAt, rowIndex, status, message]);
-    if (rowFailed) errorSheet.addRow([processedAt, rowIndex, error || sanitizeWaystarErrorMessage(result?.planStatus) || "The payer response did not establish eligibility."]);
+    if (rowFailed) errorSheet.addRow([processedAt, rowIndex, error || medRevenueErrorMessage(result) || "The payer response did not establish eligibility."]);
   }
   styleLogSheet(auditSheet);
   styleLogSheet(errorSheet);

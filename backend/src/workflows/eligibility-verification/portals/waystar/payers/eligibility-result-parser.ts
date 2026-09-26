@@ -10,6 +10,7 @@ type WaystarEligibilityPayload = {
   subscriberInformation?: WaystarSubscriberInformation;
   patientInformation?: WaystarPatientInformation;
   subscriberCoverageInformation?: WaystarSubscriberCoverageInformation;
+  payerResponse?: WaystarPayerResponse;
   general?: { primaryCareProvider?: unknown; ipa?: unknown };
   healthBenefitPlanCoverage?: {
     coverageDescription?: unknown;
@@ -24,6 +25,7 @@ type WaystarEligibilityPayload = {
   };
   professionalOffice?: WaystarProfessionalOfficeSection[];
   fullPayerResponse?: {
+    payerResponse?: unknown;
     subscriberInformation?: unknown;
     subscriberCoverageInformation?: unknown;
     otherCoverageInformation?: unknown;
@@ -57,6 +59,13 @@ type WaystarSubscriberCoverageInformation = {
   insuranceType?: unknown;
   otherInsurance?: unknown;
   otherInsuranceEffectiveDate?: unknown;
+};
+
+type WaystarPayerResponse = {
+  status?: unknown;
+  reason?: unknown;
+  action?: unknown;
+  text?: unknown;
 };
 
 export type WaystarProfessionalOfficeEntry = {
@@ -107,6 +116,7 @@ export function parseWaystarEligibilityResult(
   const subscriber = result.subscriberInformation ?? {};
   const patient = result.patientInformation ?? {};
   const subscriberCoverage = result.subscriberCoverageInformation ?? {};
+  const payerResponse = result.payerResponse ?? {};
   const planDateRange = payerId === "bcbs-ppo"
     ? splitPlanDateRange(asText(subscriberCoverage.planDate))
     : {};
@@ -181,6 +191,7 @@ export function parseWaystarEligibilityResult(
       subscriberInformation: subscriber,
       patientInformation: patient,
       subscriberCoverageInformation: subscriberCoverage,
+      payerResponse,
       professionalOffice,
       ...(result.fullPayerResponse ? { fullPayerResponse: result.fullPayerResponse } : {}),
     },

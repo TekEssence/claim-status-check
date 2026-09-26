@@ -4,7 +4,7 @@ import ExcelJS from 'exceljs';
 import { chromium } from 'playwright-core';
 import { createHealthNetEligibilityRunner } from './scraper';
 import { readHealthNetInput, readHealthNetCredentials, buildHealthNetOutput } from './data';
-import { extractHealthNetResult, loginHealthNet, recoverHealthNetLogin, verifyHealthNetRow, waitForHealthNetLoginScreen, selectHealthNetTextMessage } from './portal';
+import { extractHealthNetResult, loginHealthNet, recoverHealthNetLogin, verifyHealthNetRow, waitForHealthNetLoginScreen, selectHealthNetTextMessage, openFirstHealthNetViewDetails } from './portal';
 import { getEligibilityPortalsForProject } from '@/frontend/src/workflows/eligibility-verification/registry';
 import { createScrapeJob, submitScrapeJobInput } from '@/backend/src/jobs/job-store';
 import { enterHealthNetUsername, healthNetMemberIdsMatch } from './portal';
@@ -441,5 +441,22 @@ test('Health Net proceeds after delayed direct login without requesting OTP or w
       if (destination === 'home') assert.ok(logs.some(message => message.includes('Opening Eligibility from the dashboard')));
       await page.close();
     }
+  } finally { await browser.close(); }
+});
+
+test('Health Net opens the first View details result when multiple eligibility rows are returned', async () => {
+  const browser = await chromium.launch({ channel: 'msedge', headless: true });
+  try {
+    const page = await browser.newPage();
+    const opened: string[] = [];
+    await page.setContent(`<div>
+      <span class="viewdetails" onclick="document.body.dataset.clicked='first'">View details</span>
+      <span class="viewdetails" onclick="document.body.dataset.clicked='second'">View details</span>
+    </div>`);
+
+    await openFirstHealthNetViewDetails(page, async message => opened.push(message));
+
+    assert.equal(await page.locator('body').getAttribute('data-clicked'), 'first');
+    assert.match(opened[0], /first Health Net View details/);
   } finally { await browser.close(); }
 });

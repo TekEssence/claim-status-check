@@ -583,6 +583,17 @@ async function waitForHealthNetSearchOutcome(page: Page): Promise<'details' | 'n
   return 'details';
 }
 
+export async function openFirstHealthNetViewDetails(page: Page, report: (message: string) => Promise<void> = async () => {}) {
+  const details = page.locator(selectors.viewDetails).filter({ hasText: /^\s*View details\s*$/i }).filter({ visible: true });
+  const detailCount = await details.count();
+  if (detailCount < 1) throw new Error('Health Net View details is missing.');
+  const firstDetails = details.first();
+  await report(detailCount > 1
+    ? 'Opening the first Health Net View details result for PPG Information and Eligibility History.'
+    : 'Opening Health Net View details for PPG Information and Eligibility History.');
+  await firstDetails.scrollIntoViewIfNeeded();
+  await firstDetails.click();
+}
 async function searchHealthNetRowWithCurrentPlan(page: Page, row: EligibilityInputRow, dob: string, planType: string, report: (message: string) => Promise<void>) {
   await report('Entering DOS, Member ID and DOB in the Health Net eligibility form.');
   await fillHealthNetMember(page, row.memberId || '', dob, row.dateOfService, report);
@@ -594,12 +605,7 @@ async function searchHealthNetRowWithCurrentPlan(page: Page, row: EligibilityInp
   const product = page.locator(selectors.product).filter({ visible: true });
   // Some responses show a summary first; others already have details expanded.
   if (await waitForHealthNetSearchOutcome(page) === 'not-found') throw new HealthNetMemberNotFoundError(planType);
-  if (!await product.isVisible()) {
-    if (await details.count() !== 1) throw new Error('Health Net View details is missing or ambiguous.');
-    await report('Opening Health Net View details for PPG Information and Eligibility History.');
-    await details.scrollIntoViewIfNeeded();
-    await details.click();
-  }
+  if (!await product.isVisible()) await openFirstHealthNetViewDetails(page, report);
   await page.locator(`${selectors.alert}:visible`).filter({ hasText: /patient.*eligib/i }).waitFor({ state: 'visible', timeout: 60_000 });
   for (const section of ['PPG Information', 'Eligibility History']) {
     await report(`Overview loaded. Locating ${section}.`);
