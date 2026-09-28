@@ -32,6 +32,18 @@ type UhcInputRow = {
   dateOfBirth: string;
 };
 
+type UhcSkippedInputRow = {
+  worksheetRow: number;
+  payerName: string;
+  error: string;
+};
+
+type UhcInputRouting = {
+  rows: UhcInputRow[];
+  skippedRows: UhcSkippedInputRow[];
+  totalRows: number;
+};
+
 const UHC_SAVE_INTERVAL = 5;
 
 const SELECTORS = {
@@ -132,11 +144,40 @@ function findColumn(headers: Map<string, number>, aliases: string[]): number {
   return 0;
 }
 
-function readInputRows(sheet: ExcelJS.Worksheet): UhcInputRow[] {
+const PAYER_HEADERS = [
+  "Payer",
+  "Payer Name",
+  "Insurance",
+  "Insurance Name",
+  "Primary Insurance",
+  "Primary Insurance Name",
+  "Primary Insurance Payer",
+  "Primary Insurance Payer Name",
+  "Primary Insurance Payer State",
+];
+
+function normalizePayer(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, "");
+}
+
+function isSupportedUhcPayer(payerName: string): boolean {
+  const normalized = normalizePayer(payerName);
+  return normalized.includes("uhc")
+    || normalized.includes("unitedhealth")
+    || normalized.includes("wellmed")
+    || normalized.includes("surest");
+}
+
+function unsupportedPayerError(payerName: string): string {
+  return `Unsupported UHC eligibility payer "${payerName}" in the input workbook. Expected UHC, United Healthcare, United Health Care, United Healthcare Dual Complete, UHC Medicare Advantage, United Health Choice Plus Network, United Healthcare Community Plan TX, AARP Medicare Advantage Wellmed, Surest, or Wellmed.`;
+}
+
+export function readUhcEligibilityInputRows(sheet: ExcelJS.Worksheet): UhcInputRouting {
   const headers = new Map<string, number>();
   sheet.getRow(1).eachCell({ includeEmpty: false }, (cell, column) => {
     headers.set(normalizedHeader(cellText(cell.value)), column);
   });
+  const payerColumn = findColumn(headers, PAYER_HEADERS);
   const memberColumn = findColumn(headers, [
     "Member ID",
     "Member Id",
@@ -173,15 +214,31 @@ function readInputRows(sheet: ExcelJS.Worksheet): UhcInputRow[] {
   if (!memberColumn || !dobColumn) throw new Error("UHC eligibility workbook requires Member ID and Date of Birth/DOB columns.");
 
   const rows: UhcInputRow[] = [];
+  const skippedRows: UhcSkippedInputRow[] = [];
   for (let worksheetRow = 2; worksheetRow <= sheet.rowCount; worksheetRow += 1) {
     const row = sheet.getRow(worksheetRow);
     const memberId = cellText(row.getCell(memberColumn).value);
     const dateOfBirth = cellText(row.getCell(dobColumn).value);
     if (!memberId && !dateOfBirth) continue;
+    const payerName = payerColumn ? cellText(row.getCell(payerColumn).value) : "";
+    if (payerColumn) {
+      if (!payerName) {
+        skippedRows.push({
+          worksheetRow,
+          payerName,
+          error: `Missing payer name in row ${worksheetRow}. Add a UHC payer name or remove the payer column for a dedicated UHC workbook.`,
+        });
+        continue;
+      }
+      if (!isSupportedUhcPayer(payerName)) {
+        skippedRows.push({ worksheetRow, payerName, error: unsupportedPayerError(payerName) });
+        continue;
+      }
+    }
     rows.push({ worksheetRow, memberId, dateOfBirth });
   }
-  if (!rows.length) throw new Error("The UHC eligibility workbook does not contain member rows.");
-  return rows;
+  if (!rows.length && !skippedRows.length) throw new Error("The UHC eligibility workbook does not contain member rows.");
+  return { rows, skippedRows, totalRows: rows.length + skippedRows.length };
 }
 
 function formatDob(value: string): string {
@@ -651,6 +708,19 @@ function addOutputColumns(sheet: ExcelJS.Worksheet): number {
   return start;
 }
 
+function writeUhcOutputRow(
+  sheet: ExcelJS.Worksheet,
+  worksheetRow: number,
+  outputStart: number,
+  result: UhcEligibilityOutput,
+): void {
+  UHC_OUTPUT_HEADERS.forEach((header, offset) => {
+    const cell = sheet.getRow(worksheetRow).getCell(outputStart + offset);
+    cell.value = result[header] || "-";
+    cell.alignment = { vertical: "top", wrapText: true };
+  });
+}
+
 export function shouldRetryNoResult(message: string): boolean {
   return /^No Results Found$/i.test(message.trim())
     || /no results with the Member ID you submitted/i.test(message);
@@ -694,11 +764,53 @@ export async function runUhcWellmedEligibilityWorkflow(options: {
   await workbook.xlsx.load(await options.inputFile.arrayBuffer());
   const sheet = workbook.worksheets[0];
   if (!sheet) throw new Error("The UHC eligibility workbook does not contain a worksheet.");
-  const rows = readInputRows(sheet);
+  const routing = readUhcEligibilityInputRows(sheet);
+  const { rows, skippedRows, totalRows } = routing;
   const outputStart = addOutputColumns(sheet);
 
+  for (const skipped of skippedRows) {
+    const result = outputTemplate();
+    result.Error = skipped.error;
+    writeUhcOutputRow(sheet, skipped.worksheetRow, outputStart, result);
+    await options.context.log({
+      level: "warn",
+      message: skipped.error,
+      rowIndex: skipped.worksheetRow,
+      eventName: "eligibility_uhc_input_row_skipped",
+      meta: { payerName: skipped.payerName },
+    });
+    await options.context.emit({ type: "eligibility_uhc_result", rowIndex: skipped.worksheetRow, update: result });
+  }
+
+  await options.context.emit({ type: "progress", completed: skippedRows.length, total: totalRows });
+  if (!rows.length) {
+    await options.context.log({
+      level: "warn",
+      message: `No supported UHC rows were found. Finalizing the workbook with ${skippedRows.length} skipped row(s).`,
+      eventName: "eligibility_uhc_no_supported_rows",
+    });
+    const { output, outputPath } = await saveUhcWorkbook(
+      workbook,
+      options.context.jobId,
+      "uhc-wellmed-eligibility-results.xlsx",
+    );
+    await options.context.log({
+      level: "info",
+      message: `Saved the UHC workbook to ${outputPath}.`,
+      eventName: "eligibility_uhc_output_saved",
+    });
+    await options.context.emit({
+      type: "file_download",
+      filename: "uhc-wellmed-eligibility-results.xlsx",
+      path: outputPath,
+      mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      base64: output.toString("base64"),
+    });
+    await options.context.emit({ type: "progress", completed: totalRows, total: totalRows });
+    return;
+  }
+
   await openEligibilitySearch(options.page);
-  await options.context.emit({ type: "progress", completed: 0, total: rows.length });
   let processedRows = 0;
   let cancelled = false;
   for (let index = 0; index < rows.length; index += 1) {
@@ -716,8 +828,8 @@ export async function runUhcWellmedEligibilityWorkflow(options: {
     });
     await options.context.emit({
       type: "progress",
-      completed: index,
-      total: rows.length,
+      completed: skippedRows.length + index,
+      total: totalRows,
       currentRow: row.worksheetRow,
     });
 
@@ -766,13 +878,14 @@ export async function runUhcWellmedEligibilityWorkflow(options: {
       }
     }
     if (cancelled) break;
-    UHC_OUTPUT_HEADERS.forEach((header, offset) => {
-      const cell = sheet.getRow(row.worksheetRow).getCell(outputStart + offset);
-      cell.value = result[header] || "-";
-      cell.alignment = { vertical: "top", wrapText: true };
-    });
+    writeUhcOutputRow(sheet, row.worksheetRow, outputStart, result);
     processedRows = index + 1;
-    await options.context.emit({ type: "progress", completed: processedRows, total: rows.length, currentRow: row.worksheetRow });
+    await options.context.emit({
+      type: "progress",
+      completed: skippedRows.length + processedRows,
+      total: totalRows,
+      currentRow: row.worksheetRow,
+    });
     if (processedRows % UHC_SAVE_INTERVAL === 0) {
       const checkpoint = await saveUhcWorkbook(
         workbook,
@@ -795,21 +908,19 @@ export async function runUhcWellmedEligibilityWorkflow(options: {
 
   if (cancelled) {
     for (let index = processedRows; index < rows.length; index += 1) {
-      UHC_OUTPUT_HEADERS.forEach((header, offset) => {
-        const cell = sheet.getRow(rows[index].worksheetRow).getCell(outputStart + offset);
-        cell.value = header === "Error" ? "Cancelled - not processed" : "-";
-        cell.alignment = { vertical: "top", wrapText: true };
-      });
+      const result = outputTemplate();
+      result.Error = "Cancelled - not processed";
+      writeUhcOutputRow(sheet, rows[index].worksheetRow, outputStart, result);
     }
     await options.context.log({
       level: "warn",
-      message: `UHC cancellation detected. Finalizing the partial workbook with ${processedRows} of ${rows.length} rows processed.`,
+      message: `UHC cancellation detected. Finalizing the partial workbook with ${processedRows} of ${rows.length} supported row(s) processed and ${skippedRows.length} skipped row(s).`,
       eventName: "eligibility_uhc_partial_output_finalizing",
     });
   } else {
     await options.context.log({
       level: "info",
-      message: `All ${processedRows} UHC rows processed. Finalizing the output workbook.`,
+      message: `All ${processedRows} supported UHC row(s) processed with ${skippedRows.length} skipped row(s). Finalizing the output workbook.`,
       eventName: "eligibility_uhc_output_finalizing",
     });
   }

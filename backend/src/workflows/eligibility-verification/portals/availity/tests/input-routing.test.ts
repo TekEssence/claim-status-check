@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import * as XLSX from "xlsx";
 import {
+  readAvailityEligibilityInputRouting,
   readAvailityEligibilityInputPayer,
   readAvailityEligibilityInputPayers,
   resolveAvailityEligibilityInputPayer,
@@ -47,4 +48,24 @@ test("groups shuffled multiple-payer rows in first-occurrence order", async () =
     wellpointWorkbook.Sheets[wellpointWorkbook.SheetNames[0]],
   );
   assert.deepEqual(wellpointRows.map((row) => row["Member ID"]), ["W1", "W2"]);
+});
+
+test("keeps supported payer batches when other rows are unsupported", async () => {
+  const routing = await readAvailityEligibilityInputRouting(inputFile([
+    { Payer: "Healthspring", "Member ID": "H1" },
+    { Payer: "BCBS", "Member ID": "B1" },
+    { Payer: "Wellcare", "Member ID": "W1" },
+  ]));
+
+  assert.deepEqual(routing.batches.map(({ payerId, rowCount }) => ({ payerId, rowCount })), [
+    { payerId: "bcbs", rowCount: 1 },
+    { payerId: "wellcare", rowCount: 1 },
+  ]);
+  assert.deepEqual(routing.skippedRows, [
+    {
+      rowNumber: 2,
+      payerName: "Healthspring",
+      error: 'Unsupported Availity eligibility payer "Healthspring" in the input workbook. Expected Aetna, Aetna Medicare, Blue Cross Blue Shield, Humana, Van Lang IPA, VI Care Health IPA, Amerigroup, Wellpoint, or Wellcare.',
+    },
+  ]);
 });

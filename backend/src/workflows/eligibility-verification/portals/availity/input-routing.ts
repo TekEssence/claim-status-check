@@ -18,6 +18,17 @@ export type AvailityEligibilityPayerBatch = {
   originalRowNumbers: number[];
 };
 
+export type AvailityEligibilitySkippedRow = {
+  rowNumber: number;
+  payerName: string;
+  error: string;
+};
+
+export type AvailityEligibilityInputRouting = {
+  batches: AvailityEligibilityPayerBatch[];
+  skippedRows: AvailityEligibilitySkippedRow[];
+};
+
 function normalize(value: unknown): string {
   return String(value ?? "").trim();
 }
@@ -59,40 +70,24 @@ export function resolveAvailityEligibilityInputPayer(payerName: string): Availit
   if (normalized.includes("amerigroup")) return "amerigroup";
   if (normalized.includes("wellcare")) return "wellcare";
   if (normalized.includes("wellpoint")) return "wellpoint";
-  throw new Error(
-    `Unsupported Availity eligibility payer "${payerName}" in the input workbook. Expected Aetna, Aetna Medicare, Blue Cross Blue Shield, Humana, Van Lang IPA, VI Care Health IPA, Amerigroup, Wellpoint, or Wellcare.`,
-  );
+  throw new Error(unsupportedPayerError(payerName));
 }
 
-export async function readAvailityEligibilityInputPayers(
-  inputFile: File,
-): Promise<AvailityEligibilityPayerBatch[]> {
-  const workbook = XLSX.read(await inputFile.arrayBuffer(), { type: "array" });
-  const sheet = workbook.Sheets[workbook.SheetNames[0]];
-  if (!sheet) throw new Error("The Availity eligibility input workbook does not contain a worksheet.");
-  const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: "", raw: false });
-  if (!rows.length) throw new Error("The Availity eligibility input workbook is empty.");
+function unsupportedPayerError(payerName: string): string {
+  return `Unsupported Availity eligibility payer "${payerName}" in the input workbook. Expected Aetna, Aetna Medicare, Blue Cross Blue Shield, Humana, Van Lang IPA, VI Care Health IPA, Amerigroup, Wellpoint, or Wellcare.`;
+}
 
-  const grouped = new Map<AvailityEligibilityPayerId, Record<string, unknown>[]>();
-  for (const [index, row] of rows.entries()) {
-    const payerName = findPayerName(row);
-    if (!payerName) {
-      throw new Error(
-        `Missing payer name in row ${index + 2}. Add one of these columns: ${PAYER_HEADERS.join(", ")}.`,
-      );
-    }
-    const payerId = resolveAvailityEligibilityInputPayer(payerName);
-    const payerRows = grouped.get(payerId) ?? [];
-    payerRows.push({ ...row, [AVAILITY_ORIGINAL_ROW_FIELD]: index + 2 });
-    grouped.set(payerId, payerRows);
-  }
-
+function createPayerBatches(
+  grouped: Map<AvailityEligibilityPayerId, Record<string, unknown>[]>,
+  sheetName: string,
+  inputFileName: string,
+): AvailityEligibilityPayerBatch[] {
   return Array.from(grouped, ([payerId, payerRows]) => {
     const payerWorkbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(
       payerWorkbook,
       XLSX.utils.json_to_sheet(payerRows),
-      workbook.SheetNames[0] || "Eligibility",
+      sheetName || "Eligibility",
     );
     const buffer = XLSX.write(payerWorkbook, { type: "buffer", bookType: "xlsx" }) as Buffer;
     const bytes = new Uint8Array(buffer.byteLength);
@@ -101,11 +96,61 @@ export async function readAvailityEligibilityInputPayers(
       payerId,
       rowCount: payerRows.length,
       originalRowNumbers: payerRows.map((row) => Number(row[AVAILITY_ORIGINAL_ROW_FIELD])),
-      inputFile: new File([bytes], `${payerId}-${inputFile.name}`, {
+      inputFile: new File([bytes], `${payerId}-${inputFileName}`, {
         type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
       }),
     };
   });
+}
+
+export async function readAvailityEligibilityInputRouting(
+  inputFile: File,
+): Promise<AvailityEligibilityInputRouting> {
+  const workbook = XLSX.read(await inputFile.arrayBuffer(), { type: "array" });
+  const sheet = workbook.Sheets[workbook.SheetNames[0]];
+  if (!sheet) throw new Error("The Availity eligibility input workbook does not contain a worksheet.");
+  const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: "", raw: false });
+  if (!rows.length) throw new Error("The Availity eligibility input workbook is empty.");
+
+  const grouped = new Map<AvailityEligibilityPayerId, Record<string, unknown>[]>();
+  const skippedRows: AvailityEligibilitySkippedRow[] = [];
+  for (const [index, row] of rows.entries()) {
+    const rowNumber = index + 2;
+    const payerName = findPayerName(row);
+    if (!payerName) {
+      skippedRows.push({
+        rowNumber,
+        payerName: "",
+        error: `Missing payer name in row ${rowNumber}. Add one of these columns: ${PAYER_HEADERS.join(", ")}.`,
+      });
+      continue;
+    }
+    let payerId: AvailityEligibilityPayerId;
+    try {
+      payerId = resolveAvailityEligibilityInputPayer(payerName);
+    } catch {
+      skippedRows.push({
+        rowNumber,
+        payerName,
+        error: unsupportedPayerError(payerName),
+      });
+      continue;
+    }
+    const payerRows = grouped.get(payerId) ?? [];
+    payerRows.push({ ...row, [AVAILITY_ORIGINAL_ROW_FIELD]: rowNumber });
+    grouped.set(payerId, payerRows);
+  }
+
+  return {
+    batches: createPayerBatches(grouped, workbook.SheetNames[0], inputFile.name),
+    skippedRows,
+  };
+}
+
+export async function readAvailityEligibilityInputPayers(
+  inputFile: File,
+): Promise<AvailityEligibilityPayerBatch[]> {
+  return (await readAvailityEligibilityInputRouting(inputFile)).batches;
 }
 
 export async function readAvailityEligibilityInputPayer(

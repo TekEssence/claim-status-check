@@ -11,7 +11,7 @@ import {
 } from "./credentials";
 import {
   AVAILITY_ORIGINAL_ROW_FIELD,
-  readAvailityEligibilityInputPayers,
+  readAvailityEligibilityInputRouting,
 } from "./input-routing";
 import { getAvailityEligibilityPayer } from "./payers/registry";
 import { parseEligibilityProjectId, scopeEligibilityInputFile } from "../../projects";
@@ -107,7 +107,8 @@ export function createAvailityEligibilityRunner(): AutomationRunner<EligibilityR
         return runAvailityMemberSearch(input, context, projectConfig);
       }
       const scopedInputFile = await scopeEligibilityInputFile(input.inputFile, input.projectId);
-      const batches = await readAvailityEligibilityInputPayers(scopedInputFile);
+      const routing = await readAvailityEligibilityInputRouting(scopedInputFile);
+      const batches = routing.batches;
       const credentialProfiles = await readAvailityEligibilityCredentialProfiles(input.credentialFile, input.projectId);
       const log = async (message: string) => context.log({
         level: "info",
@@ -119,11 +120,14 @@ export function createAvailityEligibilityRunner(): AutomationRunner<EligibilityR
       let activeLoginIdentity: string | null = null;
       let activePayerName = "Not started";
       let stage = "input routing";
-      const totalRows = batches.reduce((sum, batch) => sum + batch.rowCount, 0);
       const originalRows = await readOriginalRows(scopedInputFile);
+      const totalRows = originalRows.length;
       const mergedOutputRows: Record<string, unknown>[] = [];
       const rowUpdates = new Map<number, Record<string, unknown>>();
-      let completedRows = 0;
+      for (const skipped of routing.skippedRows) {
+        rowUpdates.set(skipped.rowNumber, { Error: skipped.error });
+      }
+      let completedRows = routing.skippedRows.length;
       let finalOutputEmitted = false;
       const safeJobId = context.jobId.replace(/[^a-zA-Z0-9_-]+/g, "_");
       const backupDirectory = path.join(process.cwd(), "data", "outputs", "availity", safeJobId);
@@ -180,9 +184,23 @@ export function createAvailityEligibilityRunner(): AutomationRunner<EligibilityR
         });
         await context.log({
           level: "info",
-          message: `Detected ${batches.length} payer batch(es) across ${totalRows} row(s).`,
+          message: `Detected ${batches.length} payer batch(es) across ${totalRows} row(s)${routing.skippedRows.length ? `; ${routing.skippedRows.length} unsupported or unroutable row(s) will be marked as skipped.` : ""}.`,
           eventName: "eligibility_availity_batches_detected",
         });
+
+        for (const skipped of routing.skippedRows) {
+          await context.log({
+            level: "warn",
+            message: skipped.error,
+            eventName: "eligibility_availity_input_row_skipped",
+            rowIndex: skipped.rowNumber,
+            meta: { payerName: skipped.payerName, projectId: input.projectId },
+          });
+        }
+        if (routing.skippedRows.length) {
+          persistBackupOutput();
+          await context.emit({ type: "progress", completed: completedRows, total: totalRows });
+        }
 
         for (const batch of batches) {
           if (context.isCancelled?.()) throw new AvailityCancellation();
