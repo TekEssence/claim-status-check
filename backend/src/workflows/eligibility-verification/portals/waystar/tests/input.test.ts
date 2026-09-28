@@ -221,6 +221,16 @@ test("keeps BCBS Federal Employee Plan PPO under BCBS when an old mapping points
   assert.equal(routing.batches[0]?.payerId, "bcbs-ppo");
   assert.equal(routing.batches[0]?.payerName, "BCBS PPO");
 });
+test("routes Surest UHC through the United Healthcare all states Waystar payer", () => {
+  const routing = routeWaystarRowsByPayer([
+    { Payer: "Surest (UHC)", "Member ID": "SUREST-1" },
+  ], { projectConfig: minimaxWaystarConfig });
+
+  assert.deepEqual(routing.batches.map((batch) => [batch.payerId, batch.payerName]), [
+    ["united-healthcare-all-states", "United Healthcare of All States"],
+  ]);
+  assert.equal(routing.unsupportedRows.length, 0);
+});
 test("groups mixed payer rows so each payer can use its own portal flow", () => {
   const routing = routeWaystarRowsByPayer([
     { "Insurance Name": "Medicare" },
