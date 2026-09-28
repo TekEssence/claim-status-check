@@ -1784,14 +1784,7 @@ async function selectServiceType(page: Page, serviceTypeCode: string): Promise<v
   let matchingOption: WaystarSelectOption | null = null;
   let latestOptions: WaystarSelectOption[] = [];
   while (Date.now() < deadline) {
-    // allTextContents is implemented by Playwright and does not serialize one
-    // of our callbacks into the page. This avoids the AWS bundle's `__name`
-    // transform and snapshots the dynamic Waystar dropdown in one operation.
-    const labels = await serviceType.locator("option").allTextContents();
-    latestOptions = labels.map((label) => ({
-      value: "",
-      label: label.trim(),
-    }));
+    latestOptions = await readWaystarSelectOptions(serviceType);
     matchingOption = findWaystarServiceTypeOption(latestOptions, serviceTypeCode);
     if (matchingOption) break;
     await page.waitForTimeout(250);
@@ -1808,21 +1801,85 @@ async function selectServiceType(page: Page, serviceTypeCode: string): Promise<v
   }
 
   await humanPause(page, 300, 650);
-  await serviceType.selectOption({ label: matchingOption.label });
+  await commitServiceTypeSelection(page, matchingOption, serviceTypeCode);
+}
 
-  await serviceType.blur().catch(() => {});
+async function commitServiceTypeSelection(
+  page: Page,
+  matchingOption: WaystarSelectOption,
+  serviceTypeCode: string,
+): Promise<void> {
+  const serviceType = page.locator(WAYSTAR_SELECTORS.inquiry.serviceType).first();
+  let selectedOption: WaystarSelectOption = { value: "", label: "" };
 
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    await waitForBlockingOverlaysToClear(page, 30000);
+    await serviceType.waitFor({ state: "visible", timeout: 10000 });
+    await waitForEnabled(serviceType, "Waystar service type");
+
+    if (matchingOption.value) {
+      await serviceType.selectOption(matchingOption.value, { timeout: 10000 }).catch(() => {});
+    } else {
+      await serviceType.selectOption({ label: matchingOption.label }, { timeout: 10000 }).catch(() => {});
+    }
+    await serviceType.evaluate((element) => {
+      element.dispatchEvent(new Event("input", { bubbles: true }));
+      element.dispatchEvent(new Event("change", { bubbles: true }));
+      element.dispatchEvent(new Event("blur", { bubbles: true }));
+    }).catch(() => {});
+    await serviceType.blur().catch(() => {});
+    await page.waitForTimeout(200);
+
+    selectedOption = await readSelectedServiceTypeOption(serviceType);
+    if (findWaystarServiceTypeOption([selectedOption], serviceTypeCode)) return;
+
+    // Some Waystar DDE selects visually highlight an item but do not commit
+    // through Playwright's selectOption. Set the native select directly and
+    // emit the same events the legacy page listens for.
+    await evaluateWaystarPage(page, (expected) => {
+      const normalize = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().replace(/\s+/g, " ");
+      const serviceCode = (value: string) => value.trim().match(/^([A-Za-z0-9]{1,3})\b/)?.[1]?.toUpperCase() || "";
+      const selects = Array.from(document.querySelectorAll<HTMLSelectElement>("select#ddlSTCCode"));
+      const select = selects.find((candidate) => candidate.offsetParent !== null) ?? selects[0];
+      if (!select) return false;
+      const options = Array.from(select.options);
+      const expectedCode = serviceCode(expected.requestedCode);
+      const option = options.find((candidate) =>
+        Boolean(expected.value) && candidate.value === expected.value
+      ) ?? options.find((candidate) =>
+        normalize(candidate.textContent || "") === normalize(expected.label)
+      ) ?? options.find((candidate) =>
+        Boolean(expectedCode) && (serviceCode(candidate.value) === expectedCode || serviceCode(candidate.textContent || "") === expectedCode)
+      );
+      if (!option) return false;
+      select.selectedIndex = options.indexOf(option);
+      select.value = option.value;
+      select.dispatchEvent(new Event("input", { bubbles: true }));
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+      select.dispatchEvent(new Event("blur", { bubbles: true }));
+      return select.value === option.value;
+    }, {
+      value: matchingOption.value,
+      label: matchingOption.label,
+      requestedCode: serviceTypeCode,
+    }).catch(() => false);
+    await page.waitForTimeout(300);
+
+    selectedOption = await readSelectedServiceTypeOption(serviceType);
+    if (findWaystarServiceTypeOption([selectedOption], serviceTypeCode)) return;
+  }
+
+  throw new Error(
+    `Waystar service type selection did not stick. Expected ${serviceTypeCode}, found ${selectedOption.label || selectedOption.value || "blank"}.`,
+  );
+}
+
+async function readSelectedServiceTypeOption(serviceType: Locator): Promise<WaystarSelectOption> {
   const selectedServiceOption = serviceType.locator("option:checked").first();
-  const selectedOption = {
+  return {
     value: await selectedServiceOption.getAttribute("value").then((value) => value || "").catch(() => ""),
     label: (await selectedServiceOption.textContent().catch(() => "") || "").trim(),
   };
-
-  if (!findWaystarServiceTypeOption([selectedOption], serviceTypeCode)) {
-    throw new Error(
-      `Waystar service type selection did not stick. Expected ${serviceTypeCode}, found ${selectedOption.label || selectedOption.value || "blank"}.`,
-    );
-  }
 }
 
 async function commitExactPayerSuggestion(
