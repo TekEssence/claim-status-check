@@ -128,10 +128,54 @@ function renderCptLineSummary(detail: ClaimDetail, line: ClaimLineDetail, inputC
   return `DOS ${serviceDate}: Checked Availity portal CPT ${procedureCode} claim processed on ${finalizedDate} current status ${valueOrBlank(lineStatus(line) || detail.claimStatus || detail.type)}. Claim# ${claimNumber}.`;
 }
 
-function applyCommonBotFields(outputRow: AvailityOutputRow, result: WorkflowResult): void {
+function charmDisplayStatus(result: WorkflowResult): string {
+  const status = asText(result.status).toLowerCase();
+  const notes = asText(result.notes);
+  const matchDetails = asText(result.matchDetails);
+  const combined = `${notes}\n${matchDetails}`.toLowerCase();
+
+  if (status === "success") return "Success";
+  if (status === "skipped") return "Skipped";
+
+  const returnedRowMatch = combined.match(/portal returned\s+(\d+)\s+rows/);
+  const returnedRows = returnedRowMatch ? Number(returnedRowMatch[1]) : undefined;
+  const comparedRowsMatch = combined.match(/final matched rows:\s*\d+\/(\d+)/);
+  const comparedRows = comparedRowsMatch ? Number(comparedRowsMatch[1]) : undefined;
+
+  if (
+    status === "not_found"
+    || combined.includes("no claim rows returned")
+    || combined.includes("returned rows: none parsed")
+    || returnedRows === 0
+    || comparedRows === 0
+  ) {
+    return "No Results";
+  }
+
+  if (
+    returnedRows !== undefined
+    || (comparedRows !== undefined && comparedRows > 0)
+    || combined.includes("none matched")
+    || combined.includes("mismatch")
+    || combined.includes("not matched")
+  ) {
+    return "No Match";
+  }
+
+  return status ? "Failed" : "";
+}
+
+function outputStatusForProject(projectId: string, result: WorkflowResult): string {
+  if (projectId === "charm") {
+    return charmDisplayStatus(result);
+  }
+  return result.status || "";
+}
+
+function applyCommonBotFields(projectId: string, outputRow: AvailityOutputRow, result: WorkflowResult): void {
   outputRow.bot_search_source_tab = result.sourceTab || "";
   outputRow.bot_match_count = String(result.matchCount ?? "");
-  outputRow.bot_overall_result = result.status || "";
+  outputRow.bot_overall_result = outputStatusForProject(projectId, result);
   outputRow.bot_notes = result.notes || "";
   if (result.selectedOrganization || result.providerMode) {
     outputRow["Availity Selection"] = [
@@ -189,7 +233,7 @@ export function applyProjectOutputStrategy(options: {
   timestamp: string;
 }): AvailityOutputRow[] {
   const { projectId, row, outputRow, result, timestamp } = options;
-  applyCommonBotFields(outputRow, result);
+  applyCommonBotFields(projectId, outputRow, result);
   applyPatientIdentityOutput(projectId, row, outputRow, result);
   outputRow.bot_updated_time = timestamp;
 

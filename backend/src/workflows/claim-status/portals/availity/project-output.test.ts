@@ -44,6 +44,65 @@ describe("applyProjectOutputStrategy", () => {
     assert.equal(outputRow["Patient ID"], "PAT15396");
     assert.equal(outputRow["Patient Identity Match"], "Patient name not matched; Patient ID matched");
     assert.equal(outputRow.bot_updated_claim_status, "claim extracted");
+    assert.equal(outputRow.bot_overall_result, "Success");
+  });
+
+  it("marks Charm no-results separately from failures", () => {
+    const row = createInputRow({ "Patient Name": "DOE, JANE", "Patient ID": "PAT15396" });
+    const [outputRow] = applyProjectOutputStrategy({
+      projectId: "charm",
+      row,
+      outputRow: createOutputRow(row),
+      timestamp: "2026-07-15T00:00:00.000Z",
+      result: {
+        status: "failed",
+        summaries: ["FAILED - Provider billing returned no rows"],
+        sourceTab: "Service Dates",
+        matchCount: 0,
+        notes: "Searched Availity Service Dates providers: Provider billing. Last provider failure: Provider billing: no claim rows returned.",
+      },
+    });
+
+    assert.equal(outputRow.bot_overall_result, "No Results");
+  });
+
+  it("marks Charm returned rows without a matching claim as no-match", () => {
+    const row = createInputRow({ "Patient Name": "DOE, JANE", "Patient ID": "PAT15396" });
+    const [outputRow] = applyProjectOutputStrategy({
+      projectId: "charm",
+      row,
+      outputRow: createOutputRow(row),
+      timestamp: "2026-07-15T00:00:00.000Z",
+      result: {
+        status: "failed",
+        summaries: ["FAILED - No matching row"],
+        sourceTab: "Service Dates",
+        matchCount: 0,
+        notes: "Portal returned 3 rows in Service Dates for provider Billing. Service Date mismatch for input 06/01/2026.",
+        matchDetails: "Final matched rows: 0/3",
+      },
+    });
+
+    assert.equal(outputRow.bot_overall_result, "No Match");
+  });
+
+  it("keeps unclear Charm errors as failed", () => {
+    const row = createInputRow({ "Patient Name": "DOE, JANE", "Patient ID": "PAT15396" });
+    const [outputRow] = applyProjectOutputStrategy({
+      projectId: "charm",
+      row,
+      outputRow: createOutputRow(row),
+      timestamp: "2026-07-15T00:00:00.000Z",
+      result: {
+        status: "failed",
+        summaries: ["FAILED - Timeout"],
+        sourceTab: "Service Dates",
+        matchCount: 0,
+        notes: "Timed out waiting for Availity search page.",
+      },
+    });
+
+    assert.equal(outputRow.bot_overall_result, "Failed");
   });
 
   it("keeps Minimax claim-level summary unchanged", () => {
