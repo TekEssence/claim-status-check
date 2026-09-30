@@ -889,8 +889,10 @@ export async function runVanLangIpaAvailityEligibilityWorkflow({ page, inputFile
       }
       const benefits = parseAvailityVanLangIpaBenefits(resultText, memberId);
       const tableBenefits = await readProfessionalTableBenefits(portal, memberId);
-      if (tableBenefits?.coinsurance) benefits.coinsurance = tableBenefits.coinsurance;
-      if (tableBenefits?.copay) benefits.copay = tableBenefits.copay;
+      if (tableBenefits) {
+        benefits.coinsurance = tableBenefits.coinsurance;
+        benefits.copay = tableBenefits.copay;
+      }
 
       const result = {
         "Coverage Status": coverageStatus ? coverageStatus[0].toUpperCase() + coverageStatus.slice(1) : "",
