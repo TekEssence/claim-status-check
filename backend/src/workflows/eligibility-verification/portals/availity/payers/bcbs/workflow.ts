@@ -152,6 +152,55 @@ async function ensureHealthBenefitPlanCoverage(page: PortalScope): Promise<void>
   await ensureAutocompleteSelected(page, SELECTORS.inquiryForm.serviceType, "Health Benefit Plan Coverage - 30");
 }
 
+async function selectedText(locator: Locator): Promise<string> {
+  return [
+    await locator.inputValue().catch(() => ""),
+    await locator.getAttribute("value").catch(() => ""),
+    await locator.getAttribute("aria-valuetext").catch(() => ""),
+    await locator.innerText({ timeout: 1_000 }).catch(() => ""),
+  ].join(" ");
+}
+
+async function tryChoosePatientNameSearchOption(page: PortalScope): Promise<boolean> {
+  const desired = "Patient ID, Patient Last Name, Patient First Name, Date of Birth";
+  let control = page.getByLabel("Patient Search Option", { exact: true }).first();
+
+  if (!await control.isVisible().catch(() => false)) {
+    const label = page.getByText("Patient Search Option", { exact: true }).first();
+    let container = label.locator("xpath=..");
+    for (let depth = 0; depth < 5; depth += 1) {
+      const candidate = container.locator("[role='combobox'], button, input").first();
+      if (await candidate.isVisible().catch(() => false)) {
+        control = candidate;
+        break;
+      }
+      container = container.locator("xpath=..");
+    }
+  }
+
+  if (!await control.isVisible().catch(() => false)) return false;
+  if ((await selectedText(control)).includes(desired)) return true;
+
+  await control.scrollIntoViewIfNeeded().catch(() => {});
+  await control.click({ timeout: 5_000 }).catch(() => {});
+  await pause(300);
+
+  const option = page.getByRole("option", { name: desired, exact: true }).first()
+    .or(page.getByText(desired, { exact: true }).first())
+    .first();
+  if (!await option.isVisible().catch(() => false)) {
+    await control.press("Escape").catch(() => {});
+    return false;
+  }
+
+  await option.click({ timeout: 5_000 }).catch(async () => {
+    await option.evaluate((element) => (element as HTMLElement).click());
+  });
+  await pause(500);
+  return (await selectedText(control)).includes(desired)
+    || await page.locator(SELECTORS.inquiryForm.patientLastName).first().isVisible().catch(() => false);
+}
+
 async function chooseProviderType(page: PortalScope, value: string): Promise<void> {
   const labeledControl = page.getByLabel("Provider Type", { exact: true }).first();
   let input = labeledControl.locator("input[role='combobox'], input").first();
@@ -955,14 +1004,23 @@ export async function runBcbsAvailityEligibilityWorkflow(
       if (!options.skipProviderType) {
         await chooseProviderType(portal, findValue(row, ["Provider Type"]) || "Professional");
       }
+      const patientNameSearchSelected = options.requirePatientName
+        ? await tryChoosePatientNameSearchOption(portal)
+        : false;
       await enterText(portal.locator(SELECTORS.inquiryForm.memberId).first(), memberId);
       if (options.requirePatientName) {
         const patientName = resolveAvailityWellcarePatientName(row);
-        if (!patientName.firstName || !patientName.lastName) {
+        const lastName = patientNameInput(portal, "Patient Last Name", SELECTORS.inquiryForm.patientLastName);
+        const firstName = patientNameInput(portal, "Patient First Name", SELECTORS.inquiryForm.patientFirstName);
+        const patientNameFieldsVisible = await lastName.isVisible().catch(() => false)
+          || await firstName.isVisible().catch(() => false);
+        if ((patientNameSearchSelected || patientNameFieldsVisible) && (!patientName.firstName || !patientName.lastName)) {
           throw new Error("Missing Patient First Name or Patient Last Name.");
         }
-        await enterText(patientNameInput(portal, "Patient Last Name", SELECTORS.inquiryForm.patientLastName), patientName.lastName);
-        await enterText(patientNameInput(portal, "Patient First Name", SELECTORS.inquiryForm.patientFirstName), patientName.firstName);
+        if (patientNameSearchSelected || patientNameFieldsVisible) {
+          await enterText(lastName, patientName.lastName);
+          await enterText(firstName, patientName.firstName);
+        }
       }
       await enterDob(portal, dob);
       for (const tip of await portal.locator(SELECTORS.inquiryForm.dismissTips).all()) await tip.click().catch(() => {});
@@ -1024,8 +1082,10 @@ export async function runBcbsAvailityEligibilityWorkflow(
       }
       const benefits = parseAvailityBcbsBenefits(resultText, memberId);
       const tableBenefits = await readProfessionalTableBenefits(portal, memberId);
-      if (tableBenefits?.coinsurance) benefits.coinsurance = tableBenefits.coinsurance;
-      if (tableBenefits?.copay) benefits.copay = tableBenefits.copay;
+      if (tableBenefits) {
+        benefits.coinsurance = tableBenefits.coinsurance;
+        benefits.copay = tableBenefits.copay;
+      }
 
       if (payerOverrides.coinsurance !== undefined) benefits.coinsurance = payerOverrides.coinsurance;
       if (payerOverrides.copay !== undefined) benefits.copay = payerOverrides.copay;
