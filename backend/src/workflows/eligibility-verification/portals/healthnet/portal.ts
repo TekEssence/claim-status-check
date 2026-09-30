@@ -629,7 +629,7 @@ async function searchHealthNetRowWithCurrentPlan(page: Page, row: EligibilityInp
     result = await extractHealthNetResult(page, row.originalIndex);
   }
   if (!(result.metadata?.healthnetEligibilityHistory as unknown[])?.length) await report('Eligibility History has no readable rows after waiting. Preserving coverage, Member and PPG Name; history output fields remain blank.');
-  if (result.memberId && !healthNetMemberIdsMatch(result.memberId, row.memberId)) throw new HealthNetMemberMismatchError(row.memberId, result.memberId);
+  if (result.memberId && !healthNetMemberIdsMatch(result.memberId, row.memberId!)) throw new HealthNetMemberMismatchError(row.memberId!, result.memberId);
   if (!result.memberId) await report('Health Net result did not show a Member value. Preserving available eligibility data and leaving Member blank.');
   return result;
 }

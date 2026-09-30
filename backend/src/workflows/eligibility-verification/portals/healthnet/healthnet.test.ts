@@ -454,7 +454,7 @@ test('Health Net opens the first View details result when multiple eligibility r
       <span class="viewdetails" onclick="document.body.dataset.clicked='second'">View details</span>
     </div>`);
 
-    await openFirstHealthNetViewDetails(page, async message => opened.push(message));
+    await openFirstHealthNetViewDetails(page, async message => { opened.push(message); });
 
     assert.equal(await page.locator('body').getAttribute('data-clicked'), 'first');
     assert.match(opened[0], /first Health Net View details/);

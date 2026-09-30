@@ -4,7 +4,7 @@ import ExcelJS from "exceljs";
 import { chromium } from "playwright-core";
 import { matchTriZettoPayer, readTriZettoInput, readTriZettoCredentials, buildTriZettoOutput } from "./data";
 import { createTriZettoEligibilityRunner } from "./scraper";
-import { coverageStatus, extractTriZettoResult, loginTriZetto, submitTriZettoCode, verifyTriZettoRow, selectors } from "./portal";
+import { coverageStatus, extractTriZettoResult, loginTriZetto, selectTriZettoPayer, submitTriZettoCode, verifyTriZettoRow, selectors } from "./portal";
 import { getEligibilityPortalsForProject } from "@/frontend/src/workflows/eligibility-verification/registry";
 import type { EligibilityResult } from "../../types";
 import { createScrapeJob, submitScrapeJobInput } from "@/backend/src/jobs/job-store";
@@ -29,9 +29,10 @@ test("TriZetto is visible and accepted only for MedRevenu", async () => {
 
 test("exact payer matching preserves plan qualifiers and rejects ambiguous IDs", () => {
   const payers = [{ name: "Aetna", id: "60054", index: 0 }, { name: "Aetna", id: "60054", index: 1 },
-    { name: "Aetna Medicare", id: "OTHER", index: 2 }, { name: "Blue Cross California", id: "47198", index: 3 }];
+    { name: "Aetna Medicare", id: "OTHER", index: 2 }, { name: "Blue Cross California", id: "47198", index: 3 }, { name: "Humana", id: "61101", index: 4 }];
   assert.equal(matchTriZettoPayer(" aETna ", payers).id, "60054");
   assert.equal(matchTriZettoPayer("Blue  Cross California", payers).id, "47198");
+  assert.equal(matchTriZettoPayer(" Humana ", payers).id, "61101");
   assert.throws(() => matchTriZettoPayer("Blue Cross", payers), /not found/);
   assert.throws(() => matchTriZettoPayer("Aetna PPO", payers), /not found/);
   assert.throws(() => matchTriZettoPayer("", payers), /missing/);
@@ -81,6 +82,54 @@ test("inactive and unknown responses are never reported active", () => {
   assert.equal(coverageStatus("Unable to determine eligibility"), "unknown");
 });
 
+
+test("selects the exact Humana payer from the TriZetto payer directory", async () => {
+  const browser = await chromium.launch({ channel: "chrome", headless: true });
+  try {
+    const page = await browser.newPage();
+    await page.setContent(`<ul id="Insurers"><li class="payer-row"><a class="payer-selection" onclick="document.body.dataset.payer='Humana'">
+                                    Humana
+                                </a><div class="payer-selection-id">61101</div></li></ul>`);
+    const payer = await selectTriZettoPayer(page, "Humana");
+    assert.equal(payer.id, "61101");
+    assert.equal(await page.locator("body").getAttribute("data-payer"), "Humana");
+  } finally { await browser.close(); }
+});
+
+test("Humana fills subscriber ID and DOB by label without requiring DOS End", async () => {
+  const browser = await chromium.launch({ channel: "chrome", headless: true });
+  try {
+    const page = await browser.newPage();
+    page.setDefaultTimeout(3000);
+    await page.route("https://trizetto-humana.test/inquiry", (route) => route.fulfill({ contentType: "text/html", body: `
+      <ul id="Insurers"><li class="payer-row"><a class="payer-selection">Humana</a><div class="payer-selection-id">61101</div></li></ul>
+      <div class="column columnpaddingdown">Date of Service</div><input id="humana-dos">
+      <div class="column columnpaddingdown">Subscriber ID</div><input id="humana-subscriber-id">
+      <div class="column columnpaddingdown">Subscriber Date of Birth</div><input id="humana-dob">
+      <span onclick="document.body.dataset.dos=document.getElementById('humana-dos').value;document.body.dataset.subscriber=document.getElementById('humana-subscriber-id').value;document.body.dataset.dob=document.getElementById('humana-dob').value;document.getElementById('response').style.display='block'">Submit Eligibility Inquiry</span>
+      <div class="validation-summary-errors"></div><div id="response" style="display:none">
+      <h1 id="trnEligibilityStatus">Active Coverage</h1><dl><dt>Plan Begin Date:</dt><dd>01/01/2025</dd><dt>Eligibility Begin Date:</dt><dd>01/01/2026</dd></dl>
+      <strong class="childtab">Patient Information</strong><a href="javascript:void(0);" class="sections active">Patient</a><div id="nadName">HUMANA MEMBER</div><dl><dt>Address</dt><dd>123 HUMANA ST, TAMPA, FL 33601</dd><dt>Relationship to insured</dt><dd>Self</dd></dl>
+      <strong class="childtab">Benefit Information</strong><a class="sections">Active Coverage</a>
+      <div><table><tr><th>Service Type</th><th>Description</th></tr><tr><td>Health Benefit Plan Coverage</td><td>Humana Choice</td></tr></table></div>
+      </div>` }));
+    const result = await verifyTriZettoRow(page, "https://trizetto-humana.test/inquiry", {
+      originalIndex: 6,
+      subscriberId: "H12345",
+      dateOfBirth: "01/02/1980",
+      dateOfService: "08/10/2026",
+      raw: { "Primary Insurance Name": "Humana" },
+    });
+    assert.equal(await page.locator("body").getAttribute("data-dos"), "08/10/2026");
+    assert.equal(await page.locator("body").getAttribute("data-subscriber"), "H12345");
+    assert.equal(await page.locator("body").getAttribute("data-dob"), "01/02/1980");
+    assert.equal(result.payerId, "trizetto:61101");
+    assert.equal(result.coverageStatus, "active");
+    assert.equal(result.patientName, "HUMANA MEMBER");
+    assert.equal(result.address, "123 HUMANA ST, TAMPA, FL 33601");
+    assert.equal(result.metadata?.trizettoDescription, "Humana Choice");
+  } finally { await browser.close(); }
+});
 test("browser handles hidden payer categories, validation failure, then a clean response", {
   skip: process.env.TRIZETTO_BROWSER_TESTS !== "1",
 }, async () => {

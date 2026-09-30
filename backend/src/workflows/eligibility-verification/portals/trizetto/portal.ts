@@ -77,6 +77,8 @@ export async function loginTriZetto(page: Page, credentials: Awaited<ReturnType<
   return page.url();
 }
 
+const normalizeTriZettoPayerName = (name: string) => name.trim().replace(/\s+/g, " ").toLowerCase();
+
 export async function selectTriZettoPayer(page: Page, name: string) {
   const rows = page.locator(selectors.payerRows);
   await rows.first().waitFor({ state: "attached" });
@@ -111,6 +113,7 @@ export async function extractTriZettoResult(page: Page, rowIndex: number, payerI
     planDate: await detail(page, "Plan Begin Date"), effectiveDate: await detail(page, "Eligibility Begin Date"), benefits: [] };
   await page.locator("strong.childtab").filter({ hasText: /^Patient Information$/ }).click();
   result.patientName = (await page.locator("#nadName").innerText()).trim();
+  result.address = await detail(page, "Address");
   result.relationshipToSubscriber = await detail(page, "Relationship to insured");
   await page.locator("strong.childtab").filter({ hasText: /^Benefit Information$/ }).click();
   const active = page.locator("a.sections").filter({ hasText: /^\s*Active Coverage\s*$/ });
@@ -163,19 +166,57 @@ export async function extractTriZettoResult(page: Page, rowIndex: number, payerI
   return result;
 }
 
+async function fillTriZettoVisibleField(page: Page, selector: string, value: string, label: string, options: { optional?: boolean } = {}) {
+  const field = page.locator(selector).first();
+  const count = await field.count().catch(() => 0);
+  const visible = count > 0 && await field.isVisible().catch(() => false);
+  if (!visible) {
+    if (options.optional) return false;
+    throw new Error(`TriZetto ${label} field is missing.`);
+  }
+  await field.fill(value);
+  await field.press("Tab");
+  return true;
+}
+
+async function fillTriZettoFieldAfterLabel(page: Page, label: string, value: string) {
+  const escapedLabel = label.replace(/"/g, '\\"');
+  const field = page.locator(`xpath=//*[normalize-space(.)="${escapedLabel}"]/following::input[1]`).filter({ visible: true }).first();
+  await field.waitFor({ state: "visible", timeout: 30_000 });
+  await field.fill(value);
+  await field.press("Tab");
+}
 export async function verifyTriZettoRow(page: Page, inquiryUrl: string, row: EligibilityInputRow): Promise<EligibilityResult> {
-  const required = [row.subscriberId, row.patientFirstName, row.patientLastName, row.dateOfBirth, row.dateOfService];
-  if (required.some((entry) => !entry)) throw new Error("Subscriber ID, first name, last name, DOB, and DOS are required for TriZetto.");
+  const payerName = value(row.raw, ["Primary Insurance Name"]);
+  const humanaInput = normalizeTriZettoPayerName(payerName) === "humana";
+  const required = humanaInput
+    ? [row.subscriberId, row.dateOfBirth, row.dateOfService]
+    : [row.subscriberId, row.patientFirstName, row.patientLastName, row.dateOfBirth, row.dateOfService];
+  if (required.some((entry) => !entry)) {
+    throw new Error(humanaInput
+      ? "Subscriber ID, DOB, and DOS are required for TriZetto Humana."
+      : "Subscriber ID, first name, last name, DOB, and DOS are required for TriZetto.");
+  }
   const dob = normalizeWaystarDate(row.dateOfBirth!);
   const dos = normalizeWaystarDate(row.dateOfService!);
   const dosEnd = normalizeWaystarDate(value(row.raw, ["Date of Service End", "DOS End"]) || row.dateOfService!);
   // A fresh inquiry per row clears old payer, patient, validation and response state.
   await page.goto(inquiryUrl, { waitUntil: "domcontentloaded" });
-  const payer = await selectTriZettoPayer(page, value(row.raw, ["Primary Insurance Name"]));
-  for (const [selector, entry] of [[selectors.dos, dos], [selectors.dosEnd, dosEnd], [selectors.subscriberId, row.subscriberId!],
-    [selectors.firstName, row.patientFirstName!], [selectors.lastName, row.patientLastName!], [selectors.dob, dob]]) {
-    await page.locator(selector).fill(entry);
-    await page.locator(selector).press("Tab");
+  const payer = await selectTriZettoPayer(page, payerName);
+  const isHumana = normalizeTriZettoPayerName(payer.name) === "humana" || payer.id === "61101";
+
+  if (isHumana) {
+    await fillTriZettoFieldAfterLabel(page, "Date of Service", dos);
+    await fillTriZettoVisibleField(page, selectors.dosEnd, dosEnd, "Date of Service End", { optional: true });
+    await fillTriZettoFieldAfterLabel(page, "Subscriber ID", row.subscriberId!);
+    await fillTriZettoFieldAfterLabel(page, "Subscriber Date of Birth", dob);
+  } else {
+    await fillTriZettoVisibleField(page, selectors.dos, dos, "Date of Service");
+    await fillTriZettoVisibleField(page, selectors.dosEnd, dosEnd, "Date of Service End");
+    await fillTriZettoVisibleField(page, selectors.subscriberId, row.subscriberId!, "Subscriber ID");
+    await fillTriZettoVisibleField(page, selectors.firstName, row.patientFirstName!, "First Name");
+    await fillTriZettoVisibleField(page, selectors.lastName, row.patientLastName!, "Last Name");
+    await fillTriZettoVisibleField(page, selectors.dob, dob, "Date of Birth");
   }
   await page.locator("span").filter({ hasText: /^Submit\s+Eligibility\s+Inquiry$/ }).click();
   await page.locator(selectors.status).or(page.locator(selectors.errors).filter({ hasText: /\S/ })).first().waitFor({ state: "visible", timeout: 60_000 });
