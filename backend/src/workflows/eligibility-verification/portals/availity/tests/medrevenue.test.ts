@@ -84,9 +84,17 @@ test("result parsing and workbook reuse preserve MedRevenue columns and DOS", as
   const output = await buildWaystarOutputWorkbook({ inputFile, rows: new Map([[2, row]]), results: new Map([[2, result]]), errors: new Map(), projectId: "medrevenue" });
   const wb = new ExcelJS.Workbook();
   await wb.xlsx.load(new Uint8Array(output).buffer);
-  assert.deepEqual(Array.from(wb.worksheets[0].getRow(1).values as ExcelJS.CellValue[]).slice(1), ["DOS", "Coverage Status", "Eff Date", "End Date", "Other Ins", "Other Ins Eff Date", "Relationship to Subscriber", "Plan Type", "Bot Insurance Type", "Plan Date", "Service Type"]);
-  assert.equal(wb.worksheets[0].getCell("A2").text, "09/11/2026");
-  assert.equal(wb.worksheets[0].getCell("C2").text, "12/01/2023");
+  const outputSheet = wb.getWorksheet("Output");
+  assert.ok(outputSheet, "Expected MedRevenue workbook to include an Output sheet.");
+  assert.deepEqual(Array.from(outputSheet.getRow(1).values as ExcelJS.CellValue[]).slice(1), ["DOS", "Coverage Status", "Eff Date", "End Date", "Other Ins", "Other Ins Eff Date", "Relationship to Subscriber", "Plan Type", "Bot Insurance Type", "Address", "Plan Date", "Service Type", "IPA"]);
+  assert.equal(outputSheet.getCell("A2").text, "09/11/2026");
+  assert.equal(outputSheet.getCell("C2").text, "12/01/2023");
+  assert.equal(outputSheet.getCell("D2").text, "12/01/2078");
+  assert.equal(outputSheet.getCell("G2").text, "Self");
+  assert.equal(outputSheet.getCell("H2").text, "HMO");
+  assert.equal(outputSheet.getCell("I2").text, "Medicaid (HMO)");
+  assert.equal(outputSheet.getCell("K2").text, "09/01/2026");
+  assert.equal(outputSheet.getCell("L2").text, "Health Benefit Plan Coverage");
 });
 
 test("browser member search selects the matching row, fills DOS, then submits", { skip: process.env.AVAILITY_BROWSER_TESTS !== "1" }, async () => {

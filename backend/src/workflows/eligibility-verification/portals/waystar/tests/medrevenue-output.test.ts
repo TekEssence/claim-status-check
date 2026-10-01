@@ -149,6 +149,41 @@ test("MedRevenue keeps the full Eligibility Date range in Eff Date only", async 
   assert.equal(rows[0]["End Date"], "-");
 });
 
+test("MedRevenue keeps extracted values when an active row has normal plan status text", async () => {
+  const output = await buildWaystarOutputWorkbook({
+    inputFile: inputFile(),
+    rows: new Map([[2, row]]),
+    results: new Map([[2, {
+      ...result,
+      coverageStatus: "active",
+      planStatus: "ACTIVE COVERAGE",
+      effectiveDate: "01/01/2026",
+      terminationDate: "12/31/2026",
+      otherInsurance: "Other Carrier",
+      otherInsuranceEffectiveDate: "02/01/2026",
+      planType: "Preferred Provider Organization - PPO",
+      insuranceType: "Medicare",
+      planDate: "08/14/2026 to 08/14/2026",
+      metadata: { medRevenueOutputServiceType: "Health Benefit Plan Coverage" },
+    }]]),
+    errors: new Map(),
+    projectId: "medrevenue",
+  });
+  const workbook = XLSX.read(output, { type: "buffer" });
+  const rows = XLSX.utils.sheet_to_json<Record<string, string>>(
+    outputSheet(workbook), { defval: "" },
+  );
+
+  assert.equal(rows[0]["Coverage Status"], "active");
+  assert.equal(rows[0]["Eff Date"], "01/01/2026");
+  assert.equal(rows[0]["End Date"], "12/31/2026");
+  assert.equal(rows[0]["Other Ins"], "Other Carrier");
+  assert.equal(rows[0]["Other Ins Eff Date"], "02/01/2026");
+  assert.equal(rows[0]["Plan Type"], "Preferred Provider Organization - PPO");
+  assert.equal(rows[0]["Bot Insurance Type"], "Medicare (PPO)");
+  assert.equal(rows[0]["Plan Date"], "08/14/2026 to 08/14/2026");
+  assert.equal(rows[0]["Service Type"], "Health Benefit Plan Coverage");
+});
 test("MedRevenue Medicare exports exact Part B dates and status", async () => {
   const output = await buildWaystarOutputWorkbook({
     inputFile: inputFile(),
