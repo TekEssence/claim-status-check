@@ -215,7 +215,7 @@ async function dismissWaystarReminder(page: Page): Promise<boolean> {
   return false;
 }
 
-async function handleOptionalProfileUpdate(page: Page): Promise<void> {
+export async function handleOptionalProfileUpdate(page: Page): Promise<void> {
   const profileUpdateShown = await clickWaystarActionWhenAvailable(page, "Get Started", 120000);
   if (!profileUpdateShown) return;
 
