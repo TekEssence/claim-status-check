@@ -8,6 +8,7 @@ export type AllCareCredentials = {
 
 export type AllCareInputRow = {
   inputRowId: number;
+  sourceRow: Record<string, unknown>;
   group: string;
   payer: string;
   memberId: string;

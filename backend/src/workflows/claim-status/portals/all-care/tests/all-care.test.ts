@@ -47,6 +47,24 @@ test("AllCare accepts ID as the input Member ID header", () => {
   assert.equal(rows[0].validationStatus, "valid");
 });
 
+test("AllCare requires Member ID and keeps original input columns in failed output", () => {
+  const row = readAllCareInputRows(buffer([
+    { Group: "ALPHA", "Responsible Party": "Payer One", "Member Name": "Jane Doe", "Date of Service": "10/01/2026" },
+  ]))[0];
+
+  assert.equal(row.validationStatus, "invalid");
+  assert.match(row.validationMessage, /Missing Member ID/);
+
+  const output = allCareOutputRow(row, {
+    claimNumber: "", datePaid: "", checkNumber: "", portalStatus: "", netAmount: "", cptCodes: [], memoLine1: "", serviceLines: [],
+  }, "failed", row.validationMessage);
+
+  assert.equal(output["Member Name"], "Jane Doe");
+  assert.equal(output["Date of Service"], "10/01/2026");
+  assert.equal(output.result, "failed");
+  assert.equal(output.notes, "Missing Member ID.");
+});
+
 test("AllCare selects the provider portal from Responsible Payer instead of login Group", () => {
   assert.equal(allCareProviderPortalMatches("ALPHA - Alpha Care Medical Group", "ALPHA", "1 - ALPHA CARE MEDICAL GROUP"), true);
   assert.equal(allCareProviderPortalMatches("AHC - Accountable Health Care", "AHC", "1 - ACCOUNTABLE HEALTH CARE IPA"), true);

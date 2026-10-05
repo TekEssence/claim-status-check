@@ -18,7 +18,7 @@ export function AllCareInputForm({ canSubmit, credentialFileName, inputFileName,
       </div>
       <div className="grid gap-5 xl:grid-cols-2">
         <PortalUploadCard mode="file" accept=".xlsx,.xls,.csv" acceptedFormats=".xlsx, .xls, .csv" description="Upload Group- and Payer-specific AllCare credentials." fileName={credentialFileName} icon={KeyRound} inputId="allCareCredentialExcel" onFileSelect={onCredentialFileChange} sizeHint="10 MB" title="Upload Login File" />
-        <PortalUploadCard mode="file" accept=".xlsx,.xls,.csv" acceptedFormats=".xlsx, .xls, .csv" description="Required: Group, Responsible Payer, and Member ID or Member Name." fileName={inputFileName} icon={FileSpreadsheet} inputId="allCareInputExcel" onFileSelect={onInputFileChange} sizeHint="25 MB" title="Upload Claim File" />
+        <PortalUploadCard mode="file" accept=".xlsx,.xls,.csv" acceptedFormats=".xlsx, .xls, .csv" description="Required: Group, Responsible Payer, and Member ID." fileName={inputFileName} icon={FileSpreadsheet} inputId="allCareInputExcel" onFileSelect={onInputFileChange} sizeHint="25 MB" title="Upload Claim File" />
       </div>
       <button type="submit" disabled={!canSubmit} className="inline-flex w-full items-center justify-center gap-2 rounded-[1.2rem] bg-[linear-gradient(90deg,#1f8bff_0%,#2563eb_44%,#2347ef_100%)] px-5 py-3.5 text-sm font-semibold text-white shadow-[0_18px_34px_rgba(37,99,235,0.24)] transition hover:shadow-[0_22px_40px_rgba(37,99,235,0.32)] disabled:cursor-not-allowed disabled:bg-slate-400 disabled:shadow-none">
         <Play className="h-4 w-4" strokeWidth={2.2} />

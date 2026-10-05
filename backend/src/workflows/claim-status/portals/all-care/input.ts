@@ -58,6 +58,7 @@ export function readAllCareInputRows(buffer: ArrayBuffer): AllCareInputRow[] {
     const missing = [!group && "Group", !payer && "Responsible Payer/Responsible Party", !memberId && "Member ID"].filter(Boolean);
     return {
       inputRowId: index + 2,
+      sourceRow: { ...row },
       group,
       payer,
       memberId,

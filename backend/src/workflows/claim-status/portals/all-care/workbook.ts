@@ -57,6 +57,7 @@ export function allCareOutputRows(row: AllCareInputRow, details: AllCareClaimDet
   return serviceLines.map((serviceLine) => {
     const net = serviceLine.net || details.netAmount;
     return {
+    ...row.sourceRow,
     input_row_id: row.inputRowId,
     group: row.group,
     payer: row.payer,
