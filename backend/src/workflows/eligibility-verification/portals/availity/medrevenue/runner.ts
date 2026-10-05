@@ -1,7 +1,7 @@
 import type { AutomationContext } from "../../../../types";
 import { installBrowserContextEvalHelpers } from "@/backend/src/core/playwright-browser-eval-helpers";
 import type { EligibilityResult, EligibilityRunInput } from "../../../types";
-import { buildWaystarOutputWorkbook } from "../../waystar/output";
+import { buildWaystarOutputWorkbook, formatWaystarInsuranceType } from "../../waystar/output";
 import { authenticateMedRevenueAvaility } from "./authentication";
 import { launchAvailityEligibilityBrowser } from "../browser";
 import { readAvailityEligibilityCredentialProfiles } from "../credentials";
@@ -67,8 +67,11 @@ export async function runAvailityMemberSearch(input: EligibilityRunInput, contex
       await context.emit({ type: "eligibility_availity_result", rowIndex: row.originalIndex, update: {
         __rowKey: String(row.originalIndex), "Coverage Status": errors.has(row.originalIndex) ? "error" : result?.coverageStatus || "unknown",
         "Eff Date": result?.effectiveDate || "-", "End Date": result?.terminationDate || "-",
-        "Relationship to Subscriber": result?.relationshipToSubscriber || "-", "Plan Date": result?.planDate || "-",
-        "Bot Insurance Type": result?.insuranceType || "-", "Plan Type": result?.planType || "-",
+        "Other Ins": result?.otherInsurance || "-", "Other Ins Eff Date": result?.otherInsuranceEffectiveDate || "-",
+        "Relationship to Subscriber": result?.relationshipToSubscriber || "-", "Plan Type": result?.planType || "-",
+        "Bot Insurance Type": formatWaystarInsuranceType(result?.insuranceType, result?.planType) || "-", "Address": result?.address || "-",
+        "Plan Date": result?.planDate || "-", "Service Type": String(result?.metadata?.medRevenueOutputServiceType ?? "-") || "-",
+        "IPA": result?.ipa || "-",
       } });
       await context.emit({ type: "progress", completed: ++completed, total: rows.size });
     }

@@ -135,10 +135,20 @@ function medRevenuePayerResponseReason(result: EligibilityResult | undefined): s
 function medRevenueErrorMessage(result: EligibilityResult | undefined, error?: string): string {
   const sanitizedError = sanitizeWaystarErrorMessage(error);
   const payerReason = medRevenuePayerResponseReason(result);
-  if (payerReason && (!sanitizedError || /subscriber not found|failed at payer|payer response did not establish/i.test(sanitizedError))) {
+  const hasResolvedCoverage = result?.coverageStatus === "active" || result?.coverageStatus === "inactive";
+  if (sanitizedError) {
+    if (payerReason && /subscriber not found|failed at payer|payer response did not establish/i.test(sanitizedError)) {
+      return payerReason;
+    }
+    return sanitizedError;
+  }
+  if (hasResolvedCoverage) {
+    return "";
+  }
+  if (payerReason) {
     return payerReason;
   }
-  return sanitizedError || sanitizeWaystarErrorMessage(result?.planStatus) || "";
+  return sanitizeWaystarErrorMessage(result?.planStatus) || "";
 }
 function detectPlanKind(planType?: string): "PPO" | "HMO" | undefined {
   const compact = String(planType ?? "").toUpperCase().replace(/[^A-Z0-9]+/g, "");

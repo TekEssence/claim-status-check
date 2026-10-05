@@ -73,6 +73,7 @@ export function parseMemberSearchResult(fields: Record<string, string>, row: Ava
     relationshipToSubscriber: fields.relationship || "-", planDate,
     insuranceType: fields.insuranceType, planType: fields.planType, benefits: [],
     metadata: { displayedCoverageStatus: status, displayedFields: { ...fields }, invalidDateFields,
+      medRevenueOutputServiceType: "Health Benefit Plan Coverage",
       missingFields: ["effectiveDate", "relationship", "planDate", "insuranceType", "planType"].filter(key => !({ ...fields, effectiveDate, planDate })[key]) },
   };
 }
