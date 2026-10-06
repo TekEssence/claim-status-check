@@ -188,13 +188,21 @@ async function clickIfVisible(page: Page, selector: string, timeout = 2500): Pro
   return true;
 }
 
-/** Simple fill used only for the login form, which does not have masked/scripted inputs. */
-async function fillField(page: Page, selector: string, value: string): Promise<void> {
+async function fillLoginFieldVerified(page: Page, selector: string, value: string, label: string): Promise<void> {
   const locator = await findVisibleLocator(page, selector, 5000);
-  if (!locator) throw new Error(`Could not find My family field: ${selector}`);
-  await locator.click();
-  await locator.fill("");
-  if (value) await locator.fill(value);
+  if (!locator) throw new Error(`Could not find My family login field: ${label}`);
+
+  await locator.click({ timeout: 5000 });
+  await page.keyboard.press("Control+A").catch(() => {});
+  await page.keyboard.press("Delete").catch(() => {});
+  await page.waitForTimeout(100);
+  await locator.pressSequentially(value, { delay: 45 });
+  await page.waitForTimeout(150);
+
+  const current = await locator.inputValue().catch(() => "");
+  if (current !== value) {
+    throw new Error(`My family login field "${label}" did not accept the entered value.`);
+  }
 }
 
 /**
@@ -347,8 +355,8 @@ async function waitForLoggedInHeader(page: Page): Promise<void> {
 
 async function submitLogin(page: Page, input: Awaited<ReturnType<typeof parseMyFamilyInput>>, context: ScraperContext): Promise<void> {
   await openLoginForm(page, context);
-  await fillField(page, myFamilyConfig.selectors.username, input.credentials.username);
-  await fillField(page, myFamilyConfig.selectors.password, input.credentials.password);
+  await fillLoginFieldVerified(page, myFamilyConfig.selectors.username, input.credentials.username, "Username");
+  await fillLoginFieldVerified(page, myFamilyConfig.selectors.password, input.credentials.password, "Password");
   await context.log({ level: "info", message: "Submitting My family credentials." });
   const submitClicked = await clickIfVisible(page, myFamilyConfig.selectors.submit, 5000);
   if (!submitClicked) throw new Error("Could not click the My family Login button.");
@@ -385,7 +393,8 @@ async function login(page: Page, input: Awaited<ReturnType<typeof parseMyFamilyI
   } catch (error) {
     const currentUrl = page.url();
     if (!/[?&]ClearS=1\b/i.test(currentUrl)) throw error;
-    await context.log({ level: "warn", message: "My family portal cleared an existing/stale session. Retrying login once." });
+    await context.log({ level: "warn", message: "My family portal cleared an existing/stale session. Reopening clean login page and retrying once." });
+    await page.goto(input.credentials.loginUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
     await submitLogin(page, input, context);
     await waitForLoggedInHeader(page);
   }
