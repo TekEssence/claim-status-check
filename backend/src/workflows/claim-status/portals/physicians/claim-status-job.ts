@@ -337,6 +337,42 @@ async function closeAnnouncementOnce(page: Page): Promise<number> {
     .catch(() => 0);
 }
 
+async function closeThickBoxOnce(surface: SearchSurface): Promise<number> {
+  return surface
+    .evaluate(() => {
+      function isVisible(element: Element): boolean {
+        const style = window.getComputedStyle(element as HTMLElement);
+        const rect = (element as HTMLElement).getBoundingClientRect();
+        return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
+      }
+
+      const thickBoxElements = Array.from(document.querySelectorAll<HTMLElement>("#TB_overlay, #TB_window, .TB_overlayBG"));
+      if (!thickBoxElements.some(isVisible)) return 0;
+
+      const closeButtons = Array.from(document.querySelectorAll<HTMLElement>(
+        "#TB_closeWindowButton, #TB_closeAjaxWindow, #TB_window .close, #TB_window a[title*='close' i]",
+      ));
+      for (const button of closeButtons) {
+        try {
+          button.click();
+        } catch {
+          // ignore - force-hide below if the portal handler does not close it
+        }
+      }
+
+      let closed = 0;
+      for (const element of thickBoxElements) {
+        if (!isVisible(element)) continue;
+        element.style.setProperty("display", "none", "important");
+        element.style.setProperty("visibility", "hidden", "important");
+        element.style.setProperty("pointer-events", "none", "important");
+        closed += 1;
+      }
+      return closed;
+    })
+    .catch(() => 0);
+}
+
 async function anyAnnouncementVisible(page: Page): Promise<boolean> {
   return page
     .evaluate(() => {
@@ -359,7 +395,8 @@ async function closeAnnouncement(page: Page, context: ScraperContext, timeoutMs 
   let totalClosed = 0;
   while (Date.now() < deadline) {
     const closedThisPass = await closeAnnouncementOnce(page);
-    totalClosed += closedThisPass;
+    const closedThickBox = await closeThickBoxOnce(page);
+    totalClosed += closedThisPass + closedThickBox;
     await page.waitForTimeout(400);
     if (!(await anyAnnouncementVisible(page))) break;
   }
@@ -390,6 +427,28 @@ async function installAnnouncementAutoCloser(page: Page): Promise<void> {
         }
         block.style.setProperty("display", "none", "important");
       });
+      const thickBoxElements = Array.from(document.querySelectorAll<HTMLElement>("#TB_overlay, #TB_window, .TB_overlayBG"));
+      const visibleThickBox = thickBoxElements.some((element) => {
+        const style = window.getComputedStyle(element);
+        const rect = element.getBoundingClientRect();
+        return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
+      });
+      if (visibleThickBox) {
+        document.querySelectorAll<HTMLElement>(
+          "#TB_closeWindowButton, #TB_closeAjaxWindow, #TB_window .close, #TB_window a[title*='close' i]",
+        ).forEach((button) => {
+          try {
+            button.click();
+          } catch {
+            // ignore - force-hide below regardless
+          }
+        });
+        thickBoxElements.forEach((element) => {
+          element.style.setProperty("display", "none", "important");
+          element.style.setProperty("visibility", "hidden", "important");
+          element.style.setProperty("pointer-events", "none", "important");
+        });
+      }
     };
     killAnnouncements();
     setInterval(killAnnouncements, 150);
@@ -472,6 +531,7 @@ async function getClaimSearchFrame(page: Page, context: ScraperContext, timeoutM
 
     const viewFrame = page.frame({ name: "viewFrame" }) || page.frames().find((frame) => /ExternalClaimSearch\.aspx/i.test(frame.url()));
     if (viewFrame) {
+      await closeThickBoxOnce(viewFrame);
       const ready = await viewFrame.locator(physiciansConfig.selectors.searchButton).first().isVisible().catch(() => false);
       if (ready) return viewFrame;
     }
@@ -487,6 +547,7 @@ async function clearSearch(page: Page, context: ScraperContext): Promise<void> {
     await openClaimSearch(page, context);
     return;
   }
+  await closeThickBoxOnce(frame);
   const cleared = await clickIfVisible(frame, physiciansConfig.selectors.clearButton, 1800);
   if (cleared) {
     await page.waitForTimeout(physiciansConfig.timing.postNavigationMs);
@@ -570,6 +631,7 @@ async function submitSearch(page: Page, inputRow: PhysiciansInputRow, context: S
   await clearSearch(page, context);
   const frame = await getClaimSearchFrame(page, context);
   if (!frame) throw new Error("Physicians Claim Search frame is not available for data entry.");
+  await closeThickBoxOnce(frame);
 
   await typeMemberId(frame, inputRow.memberId);
   await typeDateField(frame, physiciansConfig.selectors.serviceDateFrom, inputRow.dos, "Date of Service From");
