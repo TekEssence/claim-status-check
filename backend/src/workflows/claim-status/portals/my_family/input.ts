@@ -55,7 +55,20 @@ function findValue(row: Record<string, unknown>, aliases: string[]): string {
 
 function normalizeUrl(value: string): string {
   if (!value) return "";
-  return value.startsWith("http") ? value : `https://${value}`;
+  const url = value.startsWith("http") ? value : `https://${value}`;
+  try {
+    const parsed = new URL(url);
+    const hostname = parsed.hostname.toLowerCase();
+    if (hostname === "ez-net.myfamilymg.com" || hostname === "ezcap.myfamilymg.com") {
+      parsed.hostname = "ezcap.myfamilymg.com";
+      if (parsed.pathname === "/" || !parsed.pathname) {
+        parsed.pathname = "/EZ-NET60/Login.aspx";
+      }
+    }
+    return parsed.toString();
+  } catch {
+    return url;
+  }
 }
 
 export function normalizeCptCode(value: string): string {

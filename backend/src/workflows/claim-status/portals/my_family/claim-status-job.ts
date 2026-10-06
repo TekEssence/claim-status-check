@@ -313,6 +313,51 @@ async function openLoginForm(page: Page, context: ScraperContext): Promise<void>
   if (!usernameField) throw new Error("My family login panel did not open after clicking Login.");
 }
 
+async function waitForLoggedInHeader(page: Page): Promise<void> {
+  const deadline = Date.now() + 45000;
+  while (Date.now() < deadline) {
+    const state = await page
+      .evaluate(() => {
+        const visible = (selector: string) => {
+          const element = document.querySelector(selector) as HTMLElement | null;
+          return !!element && element.offsetParent !== null;
+        };
+        return {
+          mainMenuVisible: visible("#hyperMainMenu"),
+          logoutVisible: visible("#lnkLogout"),
+          userVisible: visible("#tblUser"),
+          loginVisible: visible("#tblLogin"),
+          url: window.location.href,
+        };
+      })
+      .catch(() => null);
+
+    if (state?.mainMenuVisible || state?.logoutVisible || state?.userVisible || /\/IAgreePage\.aspx/i.test(state?.url || "")) return;
+    await page.waitForTimeout(500);
+  }
+
+  const currentUrl = page.url();
+  const bodyText = cleanText(await visibleBodyText(page));
+  const stillOnLogin = await findVisibleLocator(page, myFamilyConfig.selectors.loginLink, 1000);
+  if (stillOnLogin || /\/login\.aspx/i.test(currentUrl)) {
+    throw new Error(`My family login did not complete; portal is still showing the public login page (${currentUrl}).`);
+  }
+  throw new Error(`My family login did not reach a logged-in header within 45 seconds (${currentUrl}). ${bodyText.slice(0, 200)}`);
+}
+
+async function submitLogin(page: Page, input: Awaited<ReturnType<typeof parseMyFamilyInput>>, context: ScraperContext): Promise<void> {
+  await openLoginForm(page, context);
+  await fillField(page, myFamilyConfig.selectors.username, input.credentials.username);
+  await fillField(page, myFamilyConfig.selectors.password, input.credentials.password);
+  await context.log({ level: "info", message: "Submitting My family credentials." });
+  const submitClicked = await clickIfVisible(page, myFamilyConfig.selectors.submit, 5000);
+  if (!submitClicked) throw new Error("Could not click the My family Login button.");
+  await Promise.all([
+    page.waitForLoadState("domcontentloaded", { timeout: 30000 }).catch(() => {}),
+    page.waitForURL((url) => !/\/login\.aspx$/i.test(url.pathname), { timeout: 30000 }).catch(() => {}),
+  ]);
+}
+
 async function captureDiagnostics(context: ScraperContext, page: Page, inputRow: MyFamilyInputRow | null, reason: string): Promise<void> {
   const safeReason = reason.replace(/[^a-z0-9_-]+/gi, "-").slice(0, 60) || "error";
   const dir = getJobDataPath(context.jobId, "screenshots");
@@ -334,17 +379,15 @@ async function captureDiagnostics(context: ScraperContext, page: Page, inputRow:
 async function login(page: Page, input: Awaited<ReturnType<typeof parseMyFamilyInput>>, context: ScraperContext): Promise<void> {
   await context.log({ level: "info", message: "Opening My family EZ-NET login page." });
   await page.goto(input.credentials.loginUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
-  await openLoginForm(page, context);
-  await fillField(page, myFamilyConfig.selectors.username, input.credentials.username);
-  await fillField(page, myFamilyConfig.selectors.password, input.credentials.password);
-  await context.log({ level: "info", message: "Submitting My family credentials." });
-  await Promise.all([
-    page.waitForLoadState("domcontentloaded", { timeout: 30000 }).catch(() => {}),
-    clickIfVisible(page, myFamilyConfig.selectors.submit, 5000),
-  ]);
-  await page.waitForTimeout(myFamilyConfig.timing.postLoginMs);
-  if (await findVisibleLocator(page, myFamilyConfig.selectors.password, 1000)) {
-    throw new Error("My family login failed or did not leave the login form.");
+  await submitLogin(page, input, context);
+  try {
+    await waitForLoggedInHeader(page);
+  } catch (error) {
+    const currentUrl = page.url();
+    if (!/[?&]ClearS=1\b/i.test(currentUrl)) throw error;
+    await context.log({ level: "warn", message: "My family portal cleared an existing/stale session. Retrying login once." });
+    await submitLogin(page, input, context);
+    await waitForLoggedInHeader(page);
   }
   await context.log({ level: "info", message: "My family login completed." });
 }
@@ -357,7 +400,14 @@ async function openClaimSearch(page: Page, context: ScraperContext): Promise<voi
     await clickIfVisible(page, myFamilyConfig.selectors.claimsMenu, 2500);
     await clickIfVisible(page, myFamilyConfig.selectors.claimSearchLink, 2500);
   });
-  await findVisibleLocator(page, myFamilyConfig.selectors.memberId, 10000);
+  const memberIdField = await findVisibleLocator(page, myFamilyConfig.selectors.memberId, 10000);
+  if (!memberIdField) {
+    const currentUrl = page.url();
+    if (/\/login\.aspx/i.test(currentUrl) || await findVisibleLocator(page, myFamilyConfig.selectors.loginLink, 1000)) {
+      throw new Error(`My family session is not authenticated; Claim Search redirected to login (${currentUrl}).`);
+    }
+    throw new Error(`My family Claim Search page did not expose the Member ID field (${currentUrl}).`);
+  }
   await context.log({ level: "info", message: "My family Claim Search page is ready." });
 }
 
