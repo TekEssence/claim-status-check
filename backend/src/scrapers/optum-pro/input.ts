@@ -18,6 +18,7 @@ export type OptumProInputRow = {
   rowNumber: number;
   medicalGroupName: string;
   patient: string;
+  dob?: string;
   dos: string;
   cpt: string;
   memberId: string;
@@ -51,6 +52,7 @@ function findValue(row: Record<string, unknown>, aliases: string[]): string {
 
 const MEDICAL_GROUP_NAME_ALIASES = ["Medical Group Name"];
 const PATIENT_ALIASES = ["Patient", "Patient Name", "Member Name"];
+const DOB_ALIASES = ["DOB", "Date of Birth", "Patient DOB", "Member DOB"];
 const DOS_ALIASES = ["DOS", "Date Of Service", "Date of Service", "Service Date", "First Service Date"];
 const CPT_ALIASES = ["CPT", "CPT Code", "Procedure Code", "Proc Code"];
 const MEMBER_ID_ALIASES = ["Member Id", "Member ID", "MemberId", "Subscriber ID", "Subscriber Id", "Policy ID", "Member Policy ID"];
@@ -69,6 +71,7 @@ export function readOptumProInputRowsFromBuffer(buffer: ArrayBuffer): OptumProIn
       rowNumber: index + 2,
       medicalGroupName: findValue(row, MEDICAL_GROUP_NAME_ALIASES),
       patient: findValue(row, PATIENT_ALIASES),
+      dob: findValue(row, DOB_ALIASES),
       dos: findValue(row, DOS_ALIASES),
       cpt: findValue(row, CPT_ALIASES),
       memberId: findValue(row, MEMBER_ID_ALIASES).replace(/\s+/g, ""),

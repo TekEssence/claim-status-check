@@ -79,6 +79,7 @@ type PatientDropdownRow = {
   text: string;
   subscriberId: string;
   patientName: string;
+  dob: string;
 };
 
 type PatientSelection = {
@@ -171,6 +172,10 @@ function normalizeDate(value: string): string {
   const day = match[2].padStart(2, "0");
   const year = match[3].length === 2 ? `20${match[3]}` : match[3];
   return `${month}/${day}/${year}`;
+}
+
+function normalizeDateDigits(value: string): string {
+  return normalizeDate(value).replace(/[^0-9]+/g, "");
 }
 
 function downloadableWorkbookEvent(filename: string, content: Buffer): Record<string, unknown> {
@@ -366,13 +371,29 @@ function bestPatientRow(rows: Array<{ index: number; text: string }>, patient: s
 function patientNameMatches(candidate: string, wanted: string): boolean {
   const candidateName = normalizeName(candidate);
   const wantedName = normalizeName(wanted);
-  return Boolean(candidateName && wantedName && (candidateName === wantedName || candidateName.includes(wantedName) || wantedName.includes(candidateName)));
+  if (!candidateName || !wantedName) return false;
+  if (candidateName === wantedName || candidateName.includes(wantedName) || wantedName.includes(candidateName)) return true;
+
+  const candidateTokens = new Set(candidateName.split(" ").filter(Boolean));
+  const wantedTokens = wantedName.split(" ").filter(Boolean);
+  return wantedTokens.length > 1 && wantedTokens.every((token) => candidateTokens.has(token));
+}
+
+function patientNameTokenScore(candidate: string, wanted: string): number {
+  return similarityScore(candidate, wanted);
+}
+
+function patientDobMatches(candidateDob: string, wantedDob: string): boolean {
+  if (!candidateDob || !wantedDob) return true;
+  const candidateDigits = normalizeDateDigits(candidateDob);
+  const wantedDigits = normalizeDateDigits(wantedDob);
+  return Boolean(candidateDigits && wantedDigits && candidateDigits === wantedDigits);
 }
 
 function patientDropdownRowLocator(page: Page) {
   const dropdown = page
     .locator("div.absolute.left-0.right-0.top-full:visible")
-    .filter({ has: page.getByText("Subscriber ID", { exact: true }) });
+    .filter({ has: page.getByText(/^(Subscriber ID|Member ID)$/i) });
   return dropdown.locator("div.max-h-60.overflow-y-auto > div.grid.grid-cols-3");
 }
 
@@ -386,8 +407,9 @@ async function patientDropdownRows(page: Page): Promise<PatientDropdownRow[]> {
     const text = (await row.innerText({ timeout: 1000 }).catch(() => "")).replace(/\s+/g, " ").trim();
     const subscriberId = (cells[0] || "").replace(/\s+/g, " ").trim();
     const patientName = (cells[1] || "").replace(/\s+/g, " ").trim();
+    const dob = (cells[2] || "").replace(/\s+/g, " ").trim();
     if (text && !/subscriber id/i.test(text)) {
-      values.push({ index, text, subscriberId, patientName });
+      values.push({ index, text, subscriberId, patientName, dob });
     }
   }
   return values;
@@ -407,26 +429,39 @@ async function selectPatient(page: Page, row: OptumProInputRow, mode: PatientSel
   const strippedMemberId = leadingThreeLettersStripped(row.memberId);
   if (strippedMemberId !== row.memberId) attempts.push(strippedMemberId);
 
-  for (const memberId of attempts) {
-    await fillInputLikeUser(page, CLAIM_SEARCH_PATIENT_SELECTOR, memberId, stageLog);
+  for (const searchText of Array.from(new Set(attempts.filter(Boolean)))) {
+    await fillInputLikeUser(page, CLAIM_SEARCH_PATIENT_SELECTOR, searchText, stageLog);
 
     const parsedRows = await waitForPatientDropdownRows(page);
-    const samePatientRows = parsedRows.filter((candidate) => patientNameMatches(candidate.patientName, row.patient));
-    const exactSubscriberMatch = samePatientRows.find((candidate) => normalize(candidate.subscriberId) === normalize(memberId));
+    const samePatientRows = parsedRows.filter((candidate) =>
+      patientNameMatches(candidate.patientName, row.patient)
+      && patientDobMatches(candidate.dob, row.dob || "")
+    );
+    const tokenMatchedPatientRows = parsedRows
+      .filter((candidate) => patientNameTokenScore(candidate.patientName || candidate.text, row.patient) >= 200)
+      .filter((candidate) => patientDobMatches(candidate.dob, row.dob || ""));
+    const exactSubscriberMatch = samePatientRows.find((candidate) => normalize(candidate.subscriberId) === normalize(searchText));
+    const inputSubscriberMatch = samePatientRows.find((candidate) => normalize(candidate.subscriberId) === normalize(row.memberId));
     const blankSubscriberMatch = samePatientRows.find((candidate) => !candidate.subscriberId);
     const duplicateSamePatientRows = samePatientRows.length >= 2;
 
     const visibleDropdownRows = parsedRows.map(({ index, text }) => ({ index, text }));
     const looseMatch = bestPatientRow(visibleDropdownRows, row.patient)
-      ?? visibleDropdownRows.find((candidate) => normalize(candidate.text).includes(normalize(memberId)));
+      ?? visibleDropdownRows.find((candidate) => normalize(candidate.text).includes(normalize(searchText)));
+    const tokenPatientMatch = tokenMatchedPatientRows[0];
 
-    const match = mode === "blank-subscriber"
-      ? blankSubscriberMatch
-      : duplicateSamePatientRows && exactSubscriberMatch
-        ? exactSubscriberMatch
-        : looseMatch
-          ? { index: looseMatch.index, text: looseMatch.text, subscriberId: "", patientName: "" }
-          : exactSubscriberMatch ?? blankSubscriberMatch;
+    let match: PatientDropdownRow | undefined;
+    if (mode === "blank-subscriber") {
+      match = blankSubscriberMatch;
+    } else if (duplicateSamePatientRows && exactSubscriberMatch) {
+      match = exactSubscriberMatch;
+    } else {
+      match = inputSubscriberMatch
+        ?? blankSubscriberMatch
+        ?? tokenPatientMatch
+        ?? (looseMatch ? { index: looseMatch.index, text: looseMatch.text, subscriberId: "", patientName: "", dob: "" } : undefined)
+        ?? exactSubscriberMatch;
+    }
 
     if (match) {
       await clickWithBlockingPopupRetry(page, stageLog, () => patientDropdownRowLocator(page).nth(match.index).click());
