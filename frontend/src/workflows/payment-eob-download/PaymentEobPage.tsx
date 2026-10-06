@@ -77,9 +77,11 @@ export function PaymentEobPage({ portalId: initialPortalId }: PaymentEobPageProp
   const [otpRequest, setOtpRequest] = useState<{ inputName: string; label: string; message: string } | null>(null);
   const [otpValue, setOtpValue] = useState("");
   const streamController = useRef<AbortController | null>(null);
+  const portalDisabledReason = portal && "disabledReason" in portal ? portal.disabledReason : "";
 
   const canStart = Boolean(
     selectedPortalId
+    && !portalDisabledReason
     && credentialFile
     && (!requiresReferenceExcel || referenceFile)
     && (selectedPortalId !== "availity-remittance" || availityProject)
@@ -104,6 +106,8 @@ export function PaymentEobPage({ portalId: initialPortalId }: PaymentEobPageProp
   }
 
   function choosePortal(nextPortalId: string) {
+    const nextPortal = getPaymentEobPortal(nextPortalId);
+    if (nextPortal && "disabledReason" in nextPortal && nextPortal.disabledReason) return;
     resetPortalRunState();
     setSelectedPortalId(nextPortalId);
   }
@@ -240,6 +244,11 @@ export function PaymentEobPage({ portalId: initialPortalId }: PaymentEobPageProp
 
   async function start(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (portalDisabledReason) {
+      setStatus(portalDisabledReason);
+      setErrors((current) => [...current, portalDisabledReason]);
+      return;
+    }
     if (!selectedPortalId || !credentialFile || (requiresReferenceExcel && !referenceFile)) return;
 
     setIsRunning(true);
@@ -373,24 +382,37 @@ export function PaymentEobPage({ portalId: initialPortalId }: PaymentEobPageProp
 
         {!selectedPortalId ? (
           <div className="mt-6 grid gap-5 md:grid-cols-2">
-            {paymentEobPortals.map((paymentPortal) => (
-              <button
-                key={paymentPortal.id}
-                type="button"
-                onClick={() => choosePortal(paymentPortal.id)}
-                className="group flex min-h-48 flex-col border border-slate-200 bg-white p-6 text-left shadow-sm transition hover:border-blue-400 hover:shadow-md"
-              >
-                <span className="flex h-11 w-11 items-center justify-center rounded-md bg-blue-100 text-blue-700">
-                  <ReceiptText className="h-5 w-5" />
-                </span>
-                <h2 className="mt-5 text-xl font-semibold">{paymentPortal.name}</h2>
-                <p className="mt-2 flex-1 text-sm leading-6 text-slate-600">{paymentPortal.description}</p>
-                <span className="mt-5 inline-flex items-center gap-2 text-sm font-semibold text-blue-700">
-                  Open portal
-                  <ArrowRight className="h-4 w-4 transition group-hover:translate-x-1" />
-                </span>
-              </button>
-            ))}
+            {paymentEobPortals.map((paymentPortal) => {
+              const disabledReason = "disabledReason" in paymentPortal ? paymentPortal.disabledReason : "";
+              return (
+                <button
+                  key={paymentPortal.id}
+                  type="button"
+                  onClick={() => choosePortal(paymentPortal.id)}
+                  disabled={Boolean(disabledReason)}
+                  title={disabledReason || undefined}
+                  className={`group flex min-h-48 flex-col border p-6 text-left shadow-sm transition ${
+                    disabledReason
+                      ? "cursor-not-allowed border-slate-200 bg-slate-50 opacity-70"
+                      : "border-slate-200 bg-white hover:border-blue-400 hover:shadow-md"
+                  }`}
+                >
+                  <span className={`flex h-11 w-11 items-center justify-center rounded-md ${disabledReason ? "bg-slate-200 text-slate-500" : "bg-blue-100 text-blue-700"}`}>
+                    <ReceiptText className="h-5 w-5" />
+                  </span>
+                  <h2 className="mt-5 text-xl font-semibold">{paymentPortal.name}</h2>
+                  <p className="mt-2 flex-1 text-sm leading-6 text-slate-600">{paymentPortal.description}</p>
+                  {disabledReason ? (
+                    <span className="mt-5 inline-flex text-sm font-semibold text-slate-500">{disabledReason}</span>
+                  ) : (
+                    <span className="mt-5 inline-flex items-center gap-2 text-sm font-semibold text-blue-700">
+                      Open portal
+                      <ArrowRight className="h-4 w-4 transition group-hover:translate-x-1" />
+                    </span>
+                  )}
+                </button>
+              );
+            })}
           </div>
         ) : (
           <div className="mt-6 grid gap-5 xl:grid-cols-[minmax(0,1fr)_380px]">

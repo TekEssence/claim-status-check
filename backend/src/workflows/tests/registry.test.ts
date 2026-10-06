@@ -172,6 +172,13 @@ test("payment EOB resolves Jopari runner", () => {
   assert.equal(runner.name, "Jopari Payment EOB Download");
 });
 
+test("payment EOB rejects disabled Echo Remittance runner", () => {
+  assert.throws(
+    () => getAutomationRunner("payment-eob-download", "echo-remittance"),
+    /Echo Remittance runs are temporarily disabled/,
+  );
+});
+
 test("claim status registry behavior remains unchanged", async () => {
   const scraper = await getClaimStatusScraper("iehp");
 

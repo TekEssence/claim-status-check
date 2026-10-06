@@ -1,4 +1,4 @@
-import { UnknownPortalError } from "../../core/errors";
+import { AppError, UnknownPortalError } from "../../core/errors";
 import { createOfficeAllyRunner } from "./portals/office-ally/scraper";
 import type { AutomationRunner } from "../types";
 import { createAvailityRemittanceRunner } from "./portals/availity-remittance/scraper";
@@ -19,6 +19,13 @@ export const paymentEobPortalRegistry = {
 } satisfies Record<string, () => AutomationRunner>;
 
 export function getPaymentEobRunner(portalId: string): AutomationRunner {
+  if (portalId === "echo-remittance") {
+    throw new AppError(
+      "Echo Remittance runs are temporarily disabled.",
+      "PORTAL_DISABLED",
+      { portalId },
+    );
+  }
   const factory = paymentEobPortalRegistry[portalId as keyof typeof paymentEobPortalRegistry];
   if (!factory) throw new UnknownPortalError(portalId);
   return factory();
