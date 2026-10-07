@@ -547,6 +547,8 @@ export async function submitWaystarInquiry(options: {
         lastName: expectedLastName,
         firstName: expectedFirstName,
         dateOfBirth: expectedDateOfBirth,
+        skipFirstName: !subscriberLookupNeedsFirstName,
+        skipDateOfBirth: !subscriberLookupNeedsDateOfBirth,
       });
     }
   };
@@ -2156,6 +2158,7 @@ async function verifyInquiryFieldsBeforeSubmit(
     lastName: string;
     firstName: string;
     dateOfBirth: string;
+    skipFirstName?: boolean;
     skipDateOfBirth?: boolean;
   },
   retryCount = 0,
@@ -2168,9 +2171,9 @@ async function verifyInquiryFieldsBeforeSubmit(
   ], expected.serviceTypeCode)) {
     missing.push(`serviceType=${snapshot.serviceTypeLabel || snapshot.serviceTypeValue || "blank"}`);
   }
-  if (expected.requireSubscriberLookup ? snapshot.patientLookupValue !== "10" : expected.patientLookupCode && !findWaystarPatientLookupOption([
+  if ((expected.patientLookupCode || expected.requireSubscriberLookup) && !findWaystarPatientLookupOption([
     { value: snapshot.patientLookupValue, label: snapshot.patientLookupLabel },
-  ], expected.patientLookupCode)) {
+  ], expected.patientLookupCode ?? "10")) {
     missing.push(`patientLookup=${snapshot.patientLookupLabel || snapshot.patientLookupValue || "blank"}`);
   }
   if (snapshot.memberId.trim() !== expected.memberId.trim()) {
@@ -2179,7 +2182,7 @@ async function verifyInquiryFieldsBeforeSubmit(
   if (snapshot.lastName.trim() !== expected.lastName.trim()) {
     missing.push(`lastName=${snapshot.lastName || "blank"}`);
   }
-  if (snapshot.firstName.trim() !== expected.firstName.trim()) {
+  if (!expected.skipFirstName && snapshot.firstName.trim() !== expected.firstName.trim()) {
     missing.push(`firstName=${snapshot.firstName || "blank"}`);
   }
   if (!expected.skipDateOfBirth && !waystarDatesMatch(snapshot.dateOfBirth, expected.dateOfBirth)) {
@@ -2189,14 +2192,16 @@ async function verifyInquiryFieldsBeforeSubmit(
   if (missing.length > 0 && retryCount === 0) {
     await dismissWaystarDatePicker(page);
     await selectServiceType(page, expected.serviceTypeCode);
-    if (expected.requireSubscriberLookup) {
-      await ensureWaystarSubscriberLookup(page);
-    } else if (expected.patientLookupCode) {
+    if (expected.patientLookupCode) {
       await selectPatientLookupOption(page, expected.patientLookupCode);
+    } else if (expected.requireSubscriberLookup) {
+      await ensureWaystarSubscriberLookup(page);
     }
     await fillVerifiedText(page, WAYSTAR_SELECTORS.inquiry.memberId, expected.memberId, "Member ID");
     await fillVerifiedText(page, WAYSTAR_SELECTORS.inquiry.lastName, expected.lastName, "Last Name");
-    await fillVerifiedText(page, WAYSTAR_SELECTORS.inquiry.firstName, expected.firstName, "First Name");
+    if (!expected.skipFirstName) {
+      await fillVerifiedText(page, WAYSTAR_SELECTORS.inquiry.firstName, expected.firstName, "First Name");
+    }
     if (!expected.skipDateOfBirth) {
       await fillVerifiedText(page, WAYSTAR_SELECTORS.inquiry.dateOfBirth, expected.dateOfBirth, "Date of Birth", true);
     }

@@ -253,7 +253,9 @@ export function createWaystarRunner(): AutomationRunner<EligibilityRunInput> {
                       row,
                     });
                     result = applyWaystarResultDefaults(payer.parseResult(payload, row), row);
-                    result = applyMedRevenueMedicareResultMappings(result);
+                    if (input.projectId === "medrevenue") {
+                      result = applyMedRevenueMedicareResultMappings(result);
+                    }
                   }
                 } else if (isRetryablePayerError(result)) {
                   const payerResponse = describePayerError(result);

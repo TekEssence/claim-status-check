@@ -193,6 +193,7 @@ test("routes BCBS names through the single BCBS PPO Waystar payer", () => {
 test("routes every BCBS PPO input alias through the same payer implementation", () => {
   const aliases = [
     "Anthem BCBS",
+    "Florida Blue PPO",
     "Florida Blue Options",
     "Florida Blue Medicare/PPO",
     "BCBS/of All States/Commercial/Federal",
