@@ -94,7 +94,7 @@ import { useUhcController } from "./portals/uhc/useUhcController";
 import {
   PORTAL_ROUTE_MAP, SELECTED_PORTAL_STORAGE_KEY, SKIP_JOB_RESTORE_ONCE_KEY,
   canRestoreCurrentJob, formatRunTimestamp, formatShortJobId, formatUploadedJobFiles,
-  formatUserRole, formatWorkflowLabel, hasExcelOutput, hasFullWorkflowAccess,
+  formatUserRole, formatWorkflowLabel, hasDownloadableOutput, hasFullWorkflowAccess,
   isExcelOutputArtifact, isLiveWorkflowStatus, isPortalId, isTerminalWorkflowStatus, persistCachedAuthUser,
   type AuthUser, type DashboardStatsData, type DownloadableArtifact,
   type ManagedUser, type PortalId,
@@ -262,7 +262,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
   const outputWorkflowRuns = useMemo(
     () =>
       workflowRuns.filter((job) =>
-        hasExcelOutput(job),
+        hasDownloadableOutput(job),
       ),
     [workflowRuns],
   );
@@ -1700,12 +1700,6 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
           if (!hasDownloadedArtifact(subscribedJobId, artifactKey)) {
             const rowIndex = getEventRowIndex(eventData);
             downloadTextFile(eventData.filename || `debug_dom_line_${rowIndex >= 0 ? rowIndex + 1 : "unknown"}.html`, eventData.html, "text/html");
-            rememberDownloadedArtifact(subscribedJobId, artifactKey);
-          }
-        } else if (eventData.type === "pdf_download" && eventData.filename && eventData.base64) {
-          const artifactKey = buildDownloadArtifactKey(eventData);
-          if (!hasDownloadedArtifact(subscribedJobId, artifactKey)) {
-            downloadBase64File(eventData.filename, eventData.base64, "application/pdf");
             rememberDownloadedArtifact(subscribedJobId, artifactKey);
           }
         } else if (eventData.type === "error" && eventData.message) {

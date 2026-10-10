@@ -23,11 +23,13 @@ import { workflowJobs } from "@/db/schema/workflow-runtime";
 import {
   appendWorkflowEvent,
   appendWorkflowArtifact,
+  listArtifactsForJob,
   consumePendingWorkflowCommands,
   updateWorkflowJob,
   type AwsWorkflowJobStatus,
 } from "@/backend/src/aws/runtime/workflow-db";
 import { publishWorkflowEvent } from "@/backend/src/aws/runtime/websocket-publisher";
+import { createIehpBundle } from "@/backend/src/aws/http/iehp-bundle";
 import {
   appendScrapeJobArtifact,
   createPersistentScrapeJob,
@@ -344,8 +346,12 @@ async function persistEvent(jobId: string, data: Record<string, unknown>): Promi
       mimeType: typeof data.mimeType === "string" ? data.mimeType : undefined,
     }).catch((error) => {
       console.error("Worker artifact upload failed", error);
+      if (data.type === "pdf_download" && data.path) throw error;
       return "";
     });
+    if (data.type === "pdf_download" && data.path && !s3Key) {
+      throw new Error("IEHP RA PDF could not be saved to S3.");
+    }
 
     await appendScrapeJobArtifact({
       jobId,
@@ -363,7 +369,9 @@ async function persistEvent(jobId: string, data: Record<string, unknown>): Promi
         bucket: process.env.WORKFLOW_OUTPUTS_BUCKET,
         s3Key,
         mimeType: typeof data.mimeType === "string" ? data.mimeType : undefined,
-      }).catch(() => {});
+      }).catch((error) => {
+        if (data.type === "pdf_download" && data.path) throw error;
+      });
     }
   }
 }
@@ -823,6 +831,7 @@ export async function main(): Promise<void> {
     portalId,
     isCancelled: cancellation.isCancelled,
     emit: async (event) => {
+      if (portalId === "iehp" && event.type === "done") return;
       emitScrapeJobEvent(job.id, event);
       if (
         typeof event === "object" &&
@@ -838,7 +847,17 @@ export async function main(): Promise<void> {
         applyClaimRowUpdateToWorksheet(iehpOutputWorkbook.worksheet, event as ClaimRowUpdateEvent);
         iehpOutputWorkbook.changed = true;
       }
-      await persistEvent(job.id, event);
+      try {
+        await persistEvent(job.id, event);
+      } catch (error) {
+        if (portalId === "iehp" && event.type === "pdf_download") {
+          scraperErrorMessage = `IEHP RA PDF storage failed: ${error instanceof Error ? error.message : String(error)}`;
+        }
+        throw error;
+      }
+      if (portalId === "iehp" && event.type === "pdf_download" && typeof event.path === "string") {
+        await fs.unlink(event.path).catch(() => {});
+      }
       if (
         portalId === "iehp" &&
         iehpOutputWorkbook?.changed &&
@@ -913,6 +932,9 @@ export async function main(): Promise<void> {
     if (status === "completed" && portalId === "iehp" && !uploadedIehpOutput) {
       throw new Error("IEHP worker completed without producing an output workbook artifact.");
     }
+    if (portalId === "iehp") {
+      await createIehpBundle({ jobId, artifacts: await listArtifactsForJob(jobId), partial: status !== "completed" });
+    }
     const awsStatus: AwsWorkflowJobStatus = status === "waiting_resume" ? "failed" : status;
     await updateWorkflowJob({ jobId, status: awsStatus, currentCompleted: completed, totalRows: total }).catch(() => {});
     await updateScrapeJobSnapshot({ jobId, status, currentCompleted: completed, totalRows: total }).catch(() => {});
@@ -929,6 +951,9 @@ export async function main(): Promise<void> {
       await uploadIehpOutputWorkbook(jobId, iehpOutputWorkbook).catch((uploadError) => {
         console.error("IEHP partial workbook upload failed", uploadError);
       });
+      await createIehpBundle({ jobId, artifacts: await listArtifactsForJob(jobId), partial: true }).catch((bundleError) => {
+        console.error("IEHP partial ZIP upload failed", bundleError);
+      });
     }
     await updateWorkflowJob({
       jobId,
@@ -940,6 +965,7 @@ export async function main(): Promise<void> {
     const failedEvent = { type: "failed", message };
     const failedEventId = await appendWorkflowEvent(jobId, "failed", failedEvent).catch(() => null);
     await publishWorkflowEvent(jobId, failedEvent, failedEventId).catch(() => {});
+    await publishWorkflowEvent(jobId, { type: "done" }).catch(() => {});
     await updateScrapeJobSnapshot({
       jobId,
       status: cancellation.isCancelled() ? "cancelled" : "failed",

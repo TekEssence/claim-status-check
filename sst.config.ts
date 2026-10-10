@@ -179,7 +179,7 @@
           resources: [inputsBucket.arn, outputsBucket.arn],
         },
         {
-          actions: ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+          actions: ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload"],
           resources: [
             $interpolate`${inputsBucket.arn}/*`,
             $interpolate`${outputsBucket.arn}/*`,
@@ -225,7 +225,7 @@
                 resources: ["*"],
               },
               {
-                actions: ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+                actions: ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload"],
                 resources: [
                   $interpolate`${inputsBucket.arn}/*`,
                   $interpolate`${outputsBucket.arn}/*`,

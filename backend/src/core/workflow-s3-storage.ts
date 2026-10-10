@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { createReadStream } from "node:fs";
 import path from "node:path";
 import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import type { WorkflowId } from "@/backend/src/workflows/types";
@@ -152,11 +153,15 @@ export async function uploadWorkflowArtifact(options: {
   }
 
   if (options.path) {
-    return uploadWorkflowObject({
-      key,
-      body: await fs.readFile(options.path),
-      contentType: options.mimeType || contentTypeForFilename(path.basename(options.path)),
-    });
+    const stat = await fs.stat(options.path);
+    await getS3Client().send(new PutObjectCommand({
+      Bucket: getBucketName(),
+      Key: key,
+      Body: createReadStream(options.path),
+      ContentLength: stat.size,
+      ContentType: options.mimeType || contentTypeForFilename(path.basename(options.path)),
+    }));
+    return key;
   }
 
   return "";

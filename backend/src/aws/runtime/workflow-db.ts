@@ -358,6 +358,7 @@ export async function listRecentOutputArtifactsForJob(jobId: string, limit = 10)
           or(
             eq(workflowJobArtifacts.artifactType, "file_download"),
             eq(workflowJobArtifacts.artifactType, "output_snapshot"),
+            eq(workflowJobArtifacts.artifactType, "pdf_download"),
           ),
         ),
       )

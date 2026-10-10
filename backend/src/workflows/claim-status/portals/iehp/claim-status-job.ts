@@ -640,6 +640,7 @@ export async function runIehpClaimStatusJob(jobId: string, formData: FormData, c
 
               if (claimRaCheckNumbers.length > 0) {
                 referRaDetails.push(...await processReferToRaDownloads({
+                  jobId,
                   page,
                   rowNumber: i + 1,
                   rowIndex,
@@ -655,6 +656,7 @@ export async function runIehpClaimStatusJob(jobId: string, formData: FormData, c
 
               if (coveredRaCheckNumbers.length > 0) {
                 referRaDetails.push(...await processCoveredRaDownloads({
+                  jobId,
                   page,
                   rowNumber: i + 1,
                   rowIndex,

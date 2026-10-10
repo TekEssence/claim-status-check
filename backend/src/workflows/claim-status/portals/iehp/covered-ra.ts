@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { getJobDataPath } from "@/backend/src/core/storage";
 import type { Download, Page } from "playwright-core";
 import { formatMmDdYyyy } from "./claims/dates";
 import { extractTextPagesFromPdf, rotatePdfBufferCounterClockwise } from "./claims/pdf";
@@ -205,6 +206,7 @@ export async function downloadCoveredRaPdf(page: Page, checkNumber: string, log:
 }
 
 type CoveredRaOptions = {
+  jobId: string;
   page: Page;
   rowNumber: number;
   rowIndex: number;
@@ -220,6 +222,7 @@ type CoveredRaOptions = {
 const COVERED_RA_FIXED_ROTATION: RotationCandidate = 270;
 
 export async function processCoveredRaDownloads({
+  jobId,
   page,
   rowNumber,
   rowIndex,
@@ -251,7 +254,7 @@ export async function processCoveredRaDownloads({
     const downloadsDir = path.join(os.tmpdir(), "downloads");
     if (!fs.existsSync(downloadsDir)) fs.mkdirSync(downloadsDir, { recursive: true });
     const cleanDos = formatMmDdYyyy(dosDate).replace(/\//g, "-");
-    const pdfFileName = `${rowIndex + 2}_${memberPolicyId}_${cleanDos}_${chk}.pdf`;
+    const pdfFileName = `covered_ra_${rowIndex + 2}_${memberPolicyId.replace(/[^a-zA-Z0-9_-]/g, "_")}_${cleanDos}_${chk.replace(/[^a-zA-Z0-9_-]/g, "_")}.pdf`;
     const pdfPath = path.join(downloadsDir, pdfFileName);
     await download.saveAs(pdfPath);
 
@@ -261,6 +264,9 @@ export async function processCoveredRaDownloads({
       */
       const originalPdfBuffer = fs.readFileSync(pdfPath);
       let matchedRecords: RaDetailRecord[] = [];
+      const retainedPath = path.join(getJobDataPath(jobId, "downloads"), pdfFileName);
+      fs.copyFileSync(pdfPath, retainedPath);
+      await sendEvent({ type: "pdf_download", filename: pdfFileName, path: retainedPath, mimeType: "application/pdf", index: rowIndex });
 
       await log(`Row ${rowNumber}: Best Covered RA PDF orientation selected as ${COVERED_RA_FIXED_ROTATION} degrees counterclockwise for the whole PDF.`);
       const candidatePdfBuffer = await rotatePdfBufferCounterClockwise(originalPdfBuffer, COVERED_RA_FIXED_ROTATION);
@@ -285,9 +291,6 @@ export async function processCoveredRaDownloads({
       /*
       ###New Code -Start###
       */
-      if (process.env.IEHP_EMIT_RA_PDFS === "true") {
-        await sendEvent({ type: "pdf_download", filename: pdfFileName, base64: candidatePdfBuffer.toString("base64") });
-      }
       /*
       ###New Code - End###
       */

@@ -3,7 +3,7 @@ import type { ScrapeJobSummary } from "../../../api/scrape-jobs-api";
 import { claimStatusPortalRegistry } from "../registry";
 import {
   formatRunTimestamp, formatShortJobId, formatUploadedJobFiles,
-  formatWorkflowLabel, hasExcelOutput, isExcelOutputArtifact, isLiveWorkflowStatus,
+  formatWorkflowLabel, hasDownloadableOutput, isExcelOutputArtifact, isLiveWorkflowStatus,
 } from "../shared/model";
 
 type JobAction = (job: ScrapeJobSummary) => void | Promise<void>;
@@ -77,7 +77,7 @@ export function WorkflowRunsPanel({
                   ? Math.min(100, Math.round((job.currentCompleted / job.totalRows) * 100))
                   : 0;
                 const isActiveStatus = isLiveWorkflowStatus(job.status);
-                const hasOutput = hasExcelOutput(job);
+                const hasOutput = hasDownloadableOutput(job);
                 const isSelected = selectedWorkflowRunId === job.jobId;
                 const statusClassName =
                   job.status === "completed"
@@ -148,7 +148,7 @@ export function WorkflowRunsPanel({
                           type="button"
                           onClick={() => void downloadWorkflowRun(job)}
                           disabled={!hasOutput || downloadingWorkflowJobId === job.jobId}
-                          title={hasOutput ? "Download the latest partial output workbook" : "No partial output workbook has been saved yet"}
+                          title={hasOutput ? (job.portalId === "iehp" ? "Download the latest IEHP files as a ZIP" : "Download the latest partial output workbook") : "No downloadable output has been saved yet"}
                           className="rounded-[0.75rem] border border-emerald-100 bg-white px-3 py-2 text-xs font-semibold text-emerald-700 transition hover:bg-emerald-50 disabled:cursor-not-allowed disabled:text-slate-300"
                         >
                           {downloadingWorkflowJobId === job.jobId ? "Preparing" : hasOutput ? "Partial" : "No partial"}
@@ -353,9 +353,9 @@ export function OutputsPanel({
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <p className="text-[0.7rem] font-semibold uppercase tracking-[0.22em] text-emerald-600">Outputs</p>
-          <h1 className="mt-1 text-xl font-semibold text-slate-950">Excel output files</h1>
+          <h1 className="mt-1 text-xl font-semibold text-slate-950">Output files</h1>
           <p className="mt-1 text-sm text-slate-600">
-            Completed workbooks remain available here after the browser is closed because downloads are created from S3.
+            Saved workbooks and IEHP ZIP files remain available here after the browser is closed because downloads are created from S3.
           </p>
         </div>
         <button
@@ -394,7 +394,9 @@ export function OutputsPanel({
             <tbody>
               {outputWorkflowRuns.map((job) => {
                 const portalName = claimStatusPortalRegistry.find((portal) => portal.id === job.portalId)?.name ?? job.portalId.toUpperCase();
-                const outputArtifact = (job.artifacts ?? []).find(isExcelOutputArtifact);
+                const outputArtifact = (job.artifacts ?? []).find(isExcelOutputArtifact)
+                  ?? (job.portalId === "iehp" ? (job.artifacts ?? []).find((artifact) => artifact.artifactType === "file_download" && artifact.filename.toLowerCase().endsWith(".zip")) : undefined);
+                const outputName = job.portalId === "iehp" ? (outputArtifact?.filename.endsWith(".zip") ? outputArtifact.filename : "IEHP files (ZIP)") : outputArtifact?.filename || "Output workbook";
                 const creator = job.createdByName && job.createdByName !== "unknown"
                   ? job.createdByName
                   : job.createdByEmail || job.userId || "unknown";
@@ -411,10 +413,10 @@ export function OutputsPanel({
                   <tr key={job.jobId} className="border-b border-emerald-50 last:border-0 hover:bg-emerald-50/35">
                     <td className="px-3 py-3">
                       <div className="flex min-w-[12rem] items-center gap-2">
-                        <FileSpreadsheet className="h-4 w-4 shrink-0 text-emerald-600" strokeWidth={2} />
+                        {job.portalId === "iehp" ? <Download className="h-4 w-4 shrink-0 text-emerald-600" strokeWidth={2} /> : <FileSpreadsheet className="h-4 w-4 shrink-0 text-emerald-600" strokeWidth={2} />}
                         <div className="min-w-0">
-                          <div className="truncate text-sm font-semibold text-slate-800" title={outputArtifact?.filename || "Output workbook"}>
-                            {outputArtifact?.filename || "Output workbook"}
+                          <div className="truncate text-sm font-semibold text-slate-800" title={outputName}>
+                            {outputName}
                           </div>
                           <div className="font-mono text-[0.7rem] text-slate-400">{formatShortJobId(job.jobId)}</div>
                         </div>

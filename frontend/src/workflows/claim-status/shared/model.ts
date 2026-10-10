@@ -137,6 +137,12 @@ export function hasExcelOutput(job: ScrapeJobSummary): boolean {
   return (job.artifacts ?? []).some(isExcelOutputArtifact);
 }
 
+export function hasDownloadableOutput(job: ScrapeJobSummary): boolean {
+  return hasExcelOutput(job) || (job.portalId === "iehp" && (job.artifacts ?? []).some((artifact) =>
+    artifact.artifactType === "pdf_download" ||
+    (artifact.artifactType === "file_download" && artifact.filename.toLowerCase().endsWith(".zip"))));
+}
+
 export function formatUserRole(role: AuthUser["role"]): string {
   if (role === "ADMIN") return "Administrator";
   if (role === "DEVELOPER") return "Developer";

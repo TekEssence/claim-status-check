@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { getJobDataPath } from "@/backend/src/core/storage";
 import type { Download, Page } from "playwright-core";
 import { formatMmDdYyyy } from "./claims/dates";
 import { extractTextFromPdf, extractTextPagesFromPdf } from "./claims/pdf";
@@ -10,6 +11,7 @@ import { IEHP_SELECTORS } from "./selectors";
 type StreamEvent = Record<string, unknown>;
 
 type ReferRaOptions = {
+  jobId: string;
   page: Page;
   rowNumber: number;
   rowIndex: number;
@@ -231,6 +233,7 @@ async function downloadClaimRaPdf(page: Page, checkNumber: string, log: (message
 }
 
 export async function processReferToRaDownloads({
+  jobId,
   page,
   rowNumber,
   rowIndex,
@@ -262,15 +265,15 @@ export async function processReferToRaDownloads({
     const downloadsDir = path.join(os.tmpdir(), "downloads");
     if (!fs.existsSync(downloadsDir)) fs.mkdirSync(downloadsDir, { recursive: true });
     const cleanDos = formatMmDdYyyy(dosDate).replace(/\//g, "-");
-    const pdfFileName = `${rowIndex + 2}_${memberPolicyId}_${cleanDos}_${chk}.pdf`;
+    const pdfFileName = `claim_ra_${rowIndex + 2}_${memberPolicyId.replace(/[^a-zA-Z0-9_-]/g, "_")}_${cleanDos}_${chk.replace(/[^a-zA-Z0-9_-]/g, "_")}.pdf`;
     const pdfPath = path.join(downloadsDir, pdfFileName);
     await download.saveAs(pdfPath);
 
     try {
       const pdfBuffer = fs.readFileSync(pdfPath);
-      if (process.env.IEHP_EMIT_RA_PDFS === "true") {
-        await sendEvent({ type: "pdf_download", filename: pdfFileName, base64: pdfBuffer.toString("base64") });
-      }
+      const retainedPath = path.join(getJobDataPath(jobId, "downloads"), pdfFileName);
+      fs.copyFileSync(pdfPath, retainedPath);
+      await sendEvent({ type: "pdf_download", filename: pdfFileName, path: retainedPath, mimeType: "application/pdf", index: rowIndex });
 
       const pdfText = await extractTextFromPdf(pdfBuffer);
       const pdfPages = await extractTextPagesFromPdf(pdfBuffer);

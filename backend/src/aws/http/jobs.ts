@@ -4,6 +4,7 @@ import { WORKFLOW_IDS, type WorkflowId } from "@/backend/src/workflows/types";
 import { jsonResponse, parseJsonBody, getAuthUserId, getAuthUserSnapshot, getJobId, createJobId, hasFullWorkflowAccess, type ApiEvent } from "../runtime/http";
 import { describeWorkerTask, runWorkerTask, stopWorkerTask } from "../runtime/ecs";
 import { buildWorkflowKey, createDownloadUrl, createUploadUrl } from "../runtime/s3";
+import { createIehpBundle } from "./iehp-bundle";
 import {
   appendWorkflowEvent,
   createWorkflowCommand,
@@ -291,6 +292,7 @@ export async function listJobs(event: ApiEvent) {
         const outputArtifacts = await listRecentOutputArtifactsForJob(job.jobId).catch(() => []);
         const outputArtifact = outputArtifacts.find((item) => isPreferredOutputArtifact(item.filename, item.mimeType))
           ?? outputArtifacts.find((item) => isDownloadableNonDiagnosticArtifact(item.filename, item.mimeType))
+          ?? (job.portalId === "iehp" ? outputArtifacts.find((item) => item.artifactType === "pdf_download") : undefined)
           ?? outputArtifacts[0];
         return toJobListSummary(job, outputArtifact ? [toJobListArtifact(outputArtifact)] : []);
       }),
@@ -389,6 +391,16 @@ export async function downloadJob(event: ApiEvent) {
     const job = hasFullWorkflowAccess(event) ? await getWorkflowJobById(jobId) : await getWorkflowJobForUser(jobId, userId);
     if (!job) return jsonResponse(404, { error: "Job not found." });
     const artifacts = await listArtifactsForJob(jobId);
+    if (job.workflowId === "claim-status" && job.portalId === "iehp") {
+      const bundle = await createIehpBundle({
+        jobId,
+        artifacts,
+        partial: job.status !== "completed",
+      });
+      if (!bundle) return jsonResponse(404, { error: "No IEHP output is available yet." });
+      const downloadUrl = await createDownloadUrl({ bucket: bundle.bucket, key: bundle.s3Key, filename: bundle.filename, contentType: "application/zip" });
+      return jsonResponse(200, { filename: bundle.filename, downloadUrl });
+    }
     const paymentEobZip = job.workflowId === "payment-eob-download"
       ? artifacts.find((item) => item.artifactType === "file_download" && isZipArtifact(item.filename, item.mimeType))
       : undefined;
