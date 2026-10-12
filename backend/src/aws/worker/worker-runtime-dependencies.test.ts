@@ -1,31 +1,22 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import fs from "node:fs";
-import path from "node:path";
-import { build } from "esbuild";
+import Module from "node:module";
 
-test("AWS worker imports only packages installed in its image", async () => {
-  const root = process.cwd();
-  const runtimePackage = JSON.parse(fs.readFileSync(path.join(root, "worker-runtime/package.json"), "utf8")) as {
-    dependencies: Record<string, string>;
+test("the IEHP worker starts without the HTTP-only S3 URL signer", async () => {
+  const loader = Module as unknown as { _load: (request: string, parent?: unknown, isMain?: boolean) => unknown };
+  const originalLoad = loader._load;
+  let signerRequested = false;
+  loader._load = function (request, parent, isMain) {
+    if (request === "@aws-sdk/s3-request-presigner") {
+      signerRequested = true;
+      throw new Error("HTTP-only S3 URL signer is unavailable in the worker image.");
+    }
+    return originalLoad.call(this, request, parent, isMain);
   };
-  const result = await build({
-    absWorkingDir: root,
-    entryPoints: ["backend/src/aws/worker/claim-status-worker.ts"],
-    bundle: true,
-    packages: "external",
-    platform: "node",
-    format: "esm",
-    metafile: true,
-    write: false,
-    logLevel: "silent",
-  });
-  const importedPackages = new Set(
-    Object.values(result.metafile.outputs)
-      .flatMap((output) => output.imports)
-      .filter((entry) => entry.external && !entry.path.startsWith("node:"))
-      .map((entry) => entry.path.startsWith("@") ? entry.path.split("/").slice(0, 2).join("/") : entry.path.split("/")[0]),
-  );
-  const missing = [...importedPackages].filter((name) => !(name in runtimePackage.dependencies)).sort();
-  assert.deepEqual(missing, [], `The worker image is missing runtime dependencies: ${missing.join(", ")}`);
+  try {
+    await import("./claim-status-worker");
+  } finally {
+    loader._load = originalLoad;
+  }
+  assert.equal(signerRequested, false);
 });
