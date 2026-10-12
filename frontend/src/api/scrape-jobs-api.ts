@@ -632,8 +632,9 @@ async function subscribeToAwsScrapeJobEvents(options: {
       await throwForAwsAuthResponse(response);
       if (response.ok) {
         const body = await response.json() as {
-          job?: { status?: string; errorMessage?: string | null };
+          job?: { status?: string; errorMessage?: string | null; portalId?: string };
           events?: Array<{ id: number; payload: ScrapeJobEvent }>;
+          artifacts?: Array<{ artifactType: string; filename: string; mimeType?: string; bucket?: string; s3Key?: string }>;
         };
         const jobStatus = body.job?.status;
         for (const event of body.events ?? []) {
@@ -655,7 +656,12 @@ async function subscribeToAwsScrapeJobEvents(options: {
           if (jobStatus === "failed") {
             await options.onEvent({ type: "error", message: body.job?.errorMessage || "Workflow failed." });
           }
-          if (jobStatus === "cancelled" || !downloadableEventSeen) {
+          const savedOutputAvailable = (body.artifacts ?? []).some((artifact) =>
+            Boolean(artifact.bucket && artifact.s3Key) && (
+              isDownloadableOutputEvent({ type: artifact.artifactType, filename: artifact.filename, mimeType: artifact.mimeType } as ScrapeJobEvent) ||
+              (body.job?.portalId === "iehp" && artifact.artifactType === "pdf_download")
+            ));
+          if (savedOutputAvailable && (jobStatus === "cancelled" || !downloadableEventSeen)) {
             try {
               const filename = await autoDownloadTerminalJobOutput(options.jobId);
               if (filename) {

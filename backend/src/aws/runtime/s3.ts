@@ -1,22 +1,12 @@
 import { GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+export { buildWorkflowKey } from "./s3-key";
 
 let client: S3Client | null = null;
 
 function s3(): S3Client {
   if (!client) client = new S3Client({});
   return client;
-}
-
-export function buildWorkflowKey(params: {
-  workflowId: string;
-  jobId: string;
-  area: "input" | "output";
-  filename: string;
-}) {
-  const safeName = params.filename.replace(/\\/g, "/").split("/").filter(Boolean).pop() || "file";
-  const date = new Date().toISOString().slice(0, 10);
-  return `${params.workflowId}/${date}/${params.jobId}/${params.area}/${safeName.replace(/[^a-zA-Z0-9._=-]+/g, "_")}`;
 }
 
 export async function createUploadUrl(params: {

@@ -2,7 +2,7 @@ import path from "node:path";
 import { PassThrough, Readable } from "node:stream";
 import { AbortMultipartUploadCommand, CompleteMultipartUploadCommand, CreateMultipartUploadCommand, GetObjectCommand, S3Client, UploadPartCommand } from "@aws-sdk/client-s3";
 import archiver from "archiver";
-import { buildWorkflowKey } from "../runtime/s3";
+import { buildWorkflowKey } from "../runtime/s3-key";
 import { appendWorkflowArtifact } from "../runtime/workflow-db";
 
 export type IehpArtifact = {

@@ -96,7 +96,7 @@ import {
   canRestoreCurrentJob, formatRunTimestamp, formatShortJobId, formatUploadedJobFiles,
   formatUserRole, formatWorkflowLabel, hasDownloadableOutput, hasFullWorkflowAccess,
   isExcelOutputArtifact, isLiveWorkflowStatus, isPortalId, isTerminalWorkflowStatus, persistCachedAuthUser,
-  type AuthUser, type DashboardStatsData, type DownloadableArtifact,
+  type AuthUser, type DownloadableArtifact,
   type ManagedUser, type PortalId,
 } from "./shared/model";
 import { PORTAL_UI_META, PORTAL_WORKSPACE_META } from "./portal-meta";
@@ -205,13 +205,6 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
   const [jobRestoreLoading, setJobRestoreLoading] = useState(true);
   const [pendingRegalRestoreJob, setPendingRegalRestoreJob] = useState<CurrentScrapeJob | null>(null);
   const [pendingBlueShieldRestoreJob, setPendingBlueShieldRestoreJob] = useState<CurrentScrapeJob | null>(null);
-  const [dashboardStatsData, setDashboardStatsData] = useState<DashboardStatsData>({
-    availablePortals: 0,
-    completedClaimsToday: 0,
-    failedJobsToday: 0,
-    portalsRunToday: 0,
-    runningJobs: 0,
-  });
 
   const isProtectedRoute = pathname !== "/";
   const {
@@ -854,13 +847,18 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
         });
       }
       if (isTerminalWorkflowStatus(details.status)) {
-        try {
-          const filename = await downloadStoredJobOutputOnce(details.jobId);
-          setStatus(filename
-            ? `${details.portalId.toUpperCase()} run finished. Download started for ${filename}.`
-            : `${details.portalId.toUpperCase()} run ${formatShortJobId(details.jobId)} is ${details.status.replace(/_/g, " ")}.`);
-        } catch (error) {
-          setStatus(`${details.portalId.toUpperCase()} run finished, but automatic output download failed: ${getErrorMessage(error)}`);
+        if (!hasDownloadableOutput(details)) {
+          const reason = details.errorMessage ? `: ${details.errorMessage}` : ".";
+          setStatus(`${details.portalId.toUpperCase()} run ${formatShortJobId(details.jobId)} ${details.status.replace(/_/g, " ")}${reason} No output was saved.`);
+        } else {
+          try {
+            const filename = await downloadStoredJobOutputOnce(details.jobId);
+            setStatus(filename
+              ? `${details.portalId.toUpperCase()} run finished. Download started for ${filename}.`
+              : `${details.portalId.toUpperCase()} run ${formatShortJobId(details.jobId)} is ${details.status.replace(/_/g, " ")}.`);
+          } catch (error) {
+            setStatus(`${details.portalId.toUpperCase()} run finished, but automatic output download failed: ${getErrorMessage(error)}`);
+          }
         }
         setIsProcessing(false);
       }
@@ -873,44 +871,6 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
       window.clearInterval(timer);
     };
   }, [activeJobId, isProcessing]);
-
-  useEffect(() => {
-    if (!authUser) {
-      setDashboardStatsData({
-        availablePortals: availablePortals.length,
-        completedClaimsToday: 0,
-        failedJobsToday: 0,
-        portalsRunToday: 0,
-        runningJobs: 0,
-      });
-      return;
-    }
-
-    let cancelled = false;
-
-    fetch("/api/dashboard/stats")
-      .then(async (response) => {
-        if (!response.ok) {
-          throw new Error(`Failed to load dashboard stats: ${response.status}`);
-        }
-        const data = (await response.json()) as { stats?: DashboardStatsData };
-        if (!cancelled && data.stats) {
-          setDashboardStatsData(data.stats);
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setDashboardStatsData((current) => ({
-            ...current,
-            availablePortals: availablePortals.length,
-          }));
-        }
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [authUser, availablePortals.length]);
 
   async function refreshWorkflowRuns(options?: { silent?: boolean }) {
     if (!workflowRunTrackingEnabled) {
@@ -927,10 +887,6 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
       const jobs = await listScrapeJobs(50);
       setWorkflowRuns(jobs);
       setWorkflowRunsError("");
-      setDashboardStatsData((current) => ({
-        ...current,
-        runningJobs: jobs.filter((job) => isLiveWorkflowStatus(job.status)).length,
-      }));
     } catch (error) {
       if (handleAwsAuthFailure(error)) return;
       setWorkflowRunsError(getErrorMessage(error));
@@ -1459,6 +1415,10 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
 
   async function downloadWorkflowRun(job: ScrapeJobSummary) {
     if (downloadingWorkflowJobId) return;
+    if (!hasDownloadableOutput(job)) {
+      setStatus(`No downloadable output was saved for ${job.portalId.toUpperCase()} run ${formatShortJobId(job.jobId)}${job.errorMessage ? `: ${job.errorMessage}` : "."}`);
+      return;
+    }
 
     setDownloadingWorkflowJobId(job.jobId);
     setStatus(`Preparing download for ${job.portalId.toUpperCase()} run ${formatShortJobId(job.jobId)}...`);
