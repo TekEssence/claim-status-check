@@ -49,12 +49,12 @@ export async function launchUhcEligibilityBrowser(
     const browser = await playwright.launch({
       args: Array.from(new Set([...chromium.args, ...OPTUM_STYLE_CHROMIUM_ARGS])),
       executablePath: await chromium.executablePath(),
-      headless: true,
+      headless: false,
     });
     return { browser, context: await prepareContext(await browser.newContext(contextOptions)) };
   }
 
-  const headless = true;
+  const headless = false;
   const executablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || "";
   await log(`Launching UHC eligibility with the Optum Pro Chromium configuration in ${headless ? "headless" : "headed"} mode.`);
 
