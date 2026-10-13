@@ -8,8 +8,8 @@ export type SelectPolicyResult = {
   selected: boolean;
   /** The page or frame where the selection happened (use for subsequent operations) */
   ctx: Page | Frame;
-  /** Which matching pass succeeded: "primary" (Medicaid fallback disabled) */
-  matchedBy?: "primary";
+  /** Which matching pass succeeded: "primary" | "medicaid" */
+  matchedBy?: "primary" | "medicaid";
 };
 
 /**
@@ -306,13 +306,14 @@ async function waitForResultsReady(ctx: Page | Frame, page: Page, timeoutMs = 20
  * Selection rules:
  * - Primary: isAllowedPlanType AND idMatches (if REQUIRED) AND payer=="primary" (if REQUIRED) AND coverage=="medical" (if REQUIRED)
  * - If multiple primary-qualify: take first in page order, warn
- * - Medicaid: NEVER selected (Medicaid fallback disabled)
+ * - Medicaid fallback: ONLY when NO card has allowed plan type. Requires payer=="primary" ONLY (no memberId, no coverage check)
  * - If allowed plan type present but no primary match: log failures per allowed-plan card, save no-match-results.png, return selected: false
+ * - If both allowed plan type and Medicaid exist: ALWAYS prefer allowed plan type
  */
 async function scanCards(
   ctx: Page | Frame,
   inputMemberId: string,
-): Promise<{ chosenBtn: Locator | null; matchedBy: "primary" | null; title: string }> {
+): Promise<{ chosenBtn: Locator | null; matchedBy: "primary" | "medicaid" | null; title: string }> {
   const selectBtns = ctx.getByRole("button", { name: "Select", exact: true });
   const count = await selectBtns.count();
   console.log(`[scanCards] Scanning ${count} Select button(s)`);
@@ -322,6 +323,7 @@ async function scanCards(
     btn: Locator;
     card: RawCard;
     planTypePrimary: boolean;
+    planTypeMedicaid: boolean;
     idOk: boolean;
     payerOk: boolean;
     coverageOk: boolean;
@@ -329,6 +331,7 @@ async function scanCards(
 
   const allCards: CardDecision[] = [];
   const allowedPlanCards: CardDecision[] = [];
+  const medicaidCards: CardDecision[] = [];
 
   for (let i = 0; i < count; i += 1) {
     const btn = selectBtns.nth(i);
@@ -341,6 +344,7 @@ async function scanCards(
 
     const normPlan = normalizeField(card.plan);
     const planTypePrimary = isAllowedPlanType(normPlan);
+    const planTypeMedicaid = isMedicaidPlanType(normPlan);
     const idOk = idMatches(card.id, inputMemberId);
     const payerOk = normalizeField(card.payer) === "primary";
     const coverageOk = normalizeField(card.coverage) === "medical";
@@ -348,19 +352,21 @@ async function scanCards(
     // Log per-card decision line
     console.log(
       `[decision card ${i}] title="${card.title}" plan="${card.plan}" payer="${card.payer}" coverage="${card.coverage}" ` +
-        `allowedPlan=${planTypePrimary} idOk=${idOk} payerOk=${payerOk} coverageOk=${coverageOk} ` +
+        `allowedPlan=${planTypePrimary} medicaid=${planTypeMedicaid} idOk=${idOk} payerOk=${payerOk} coverageOk=${coverageOk} ` +
         `| card id ${maskId(card.id)} vs wanted ${maskId(inputMemberId)}`,
     );
 
-    const decision: CardDecision = { btn, card, planTypePrimary, idOk, payerOk, coverageOk };
+    const decision: CardDecision = { btn, card, planTypePrimary, planTypeMedicaid, idOk, payerOk, coverageOk };
     allCards.push(decision);
     if (planTypePrimary) allowedPlanCards.push(decision);
+    if (planTypeMedicaid) medicaidCards.push(decision);
   }
 
   const hasAllowedPlan = allowedPlanCards.length > 0;
+  const hasMedicaid = medicaidCards.length > 0;
 
   // Log summary
-  console.log(`[scanCards] Summary: ${allCards.length} cards read, ${allowedPlanCards.length} with allowed plan type`);
+  console.log(`[scanCards] Summary: ${allCards.length} cards read, ${allowedPlanCards.length} with allowed plan type, ${medicaidCards.length} Medicaid`);
 
   // Helper: check if a card satisfies all primary rules
   function isPrimaryMatch(d: CardDecision): boolean {
@@ -386,6 +392,7 @@ async function scanCards(
   }
 
   // If allowed plan type exists but no primary match: log failures per allowed-plan card, screenshot, return no-match
+  // DO NOT fall back to Medicaid if allowed plan type cards exist
   if (!primaryMatch && hasAllowedPlan) {
     for (const d of allowedPlanCards) {
       const failed: string[] = [];
@@ -406,14 +413,30 @@ async function scanCards(
     return { chosenBtn: null, matchedBy: null, title: "" };
   }
 
-  // No allowed plan type cards at all
-  if (!primaryMatch && !hasAllowedPlan) {
+  // Pass 2: Medicaid fallback - ONLY when NO card has allowed plan type
+  // Requires ONLY payer == "primary" (no memberId check, no coverage check)
+  let medicaidMatch: CardDecision | null = null;
+  if (!primaryMatch && !hasAllowedPlan && hasMedicaid) {
+    for (const d of allCards) {
+      if (d.planTypeMedicaid && d.payerOk) {
+        medicaidMatch = d;
+        break;
+      }
+    }
+  }
+
+  // No allowed plan type cards at all, and no medicaid match either
+  if (!primaryMatch && !medicaidMatch && !hasAllowedPlan) {
     console.warn(`[scanCards] No cards with allowed plan type found. Plan types seen: ${allCards.map(d => `"${d.card.plan}"`).join(", ")}`);
   }
 
   if (primaryMatch) {
     console.log(`[MATCH primary] clicking Select on card "${primaryMatch.card.title}"`);
     return { chosenBtn: primaryMatch.btn, matchedBy: "primary", title: primaryMatch.card.title };
+  }
+  if (medicaidMatch) {
+    console.log(`[MATCH medicaid] clicking Select on card "${medicaidMatch.card.title}" (fallback: no allowed plan type, payer=primary)`);
+    return { chosenBtn: medicaidMatch.btn, matchedBy: "medicaid", title: medicaidMatch.card.title };
   }
   return { chosenBtn: null, matchedBy: null, title: "" };
 }
@@ -478,13 +501,14 @@ export async function selectPolicy(page: Page, arg2: unknown, arg3?: string): Pr
   const scanResult = await scanCards(ctx, memberId);
 
   if (scanResult.chosenBtn && scanResult.matchedBy) {
+    const passName = scanResult.matchedBy === "primary" ? "primary" : "medicaid (fallback: no allowed plan type)";
     console.log(
-      `[selectPolicy] Matched via primary pass: "${scanResult.title}"`,
+      `[selectPolicy] Matched via ${passName}: "${scanResult.title}"`,
     );
     await clickSelectButton(scanResult.chosenBtn);
     return { selected: true, ctx, matchedBy: scanResult.matchedBy };
   }
 
-  console.warn("[selectPolicy] No matching card found (primary pass only; Medicaid disabled)");
+  console.warn("[selectPolicy] No matching card found (primary pass + medicaid fallback)");
   return { selected: false, ctx };
 }

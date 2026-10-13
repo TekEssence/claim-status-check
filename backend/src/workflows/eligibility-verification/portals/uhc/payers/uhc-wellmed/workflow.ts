@@ -4,7 +4,7 @@ import path from "node:path";
 import type { BrowserContext, Frame, Locator, Page } from "playwright-core";
 import type { AutomationContext } from "../../../../../types";
 import { applyUhcResultLayout } from "./result-parser";
-import { isAllowedPlanType, selectPolicy, type SelectPolicyResult } from "./policy-selector";
+import { isAllowedPlanType, isMedicaidPlanType, selectPolicy, type SelectPolicyResult } from "./policy-selector";
 
 export const UHC_OUTPUT_HEADERS = [
   "Coverage Status",
@@ -935,10 +935,10 @@ async function searchAndExtractUhcRow(
     console.log("[searchAndExtractUhcRow] Landed on Eligibility Details page, skipping selectPolicy");
     await waitForFreshResult(page, isCancelled);
 
-    // Check Plan Type on details page - Medicaid NOT allowed
+    // Check Plan Type on details page - allow Medicaid as fallback
     const planType = await readDetailsPlanType(page);
     console.log(`[searchAndExtractUhcRow] Details page Plan Type: "${planType}"`);
-    if (!isAllowedPlanType(planType)) {
+    if (!isAllowedPlanType(planType) && !isMedicaidPlanType(planType)) {
       console.log(`No matching policy found for Member ID "${row.memberId}".`);
       throw new Error(`NO_MATCHING_PLAN_TYPE: Plan Type "${planType}" not in allowed list for Member ID "${row.memberId}".`);
     }
