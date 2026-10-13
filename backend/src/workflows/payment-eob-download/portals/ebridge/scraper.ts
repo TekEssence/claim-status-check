@@ -44,6 +44,10 @@ function documentTypeFolder(value: string): string {
   return safePart(value);
 }
 
+function dateFolder(value: string): string {
+  return safePart(value.replace(/\//g, "-"));
+}
+
 function cssAttributeValue(value: string): string {
   return value.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
 }
@@ -317,7 +321,7 @@ async function readPdfFromViewer(page: Page, context?: AutomationContext, row?: 
   return null;
 }
 
-async function openAndDownloadDocument(page: Page, searchFrame: Frame, row: EbridgeRuntimeRow, folder: string, context: AutomationContext, group?: string): Promise<string> {
+async function openAndDownloadDocument(page: Page, searchFrame: Frame, row: EbridgeRuntimeRow, folder: string, startDate: string, context: AutomationContext, group?: string): Promise<string> {
   await logEbridgeStep(context, row, "starting row download.");
   await dismissEbridgeModal(searchFrame);
   const portalRow = row.resultId
@@ -332,7 +336,7 @@ async function openAndDownloadDocument(page: Page, searchFrame: Frame, row: Ebri
   const viewer = popup ?? page;
   await logEbridgeStep(context, row, popup ? `viewer popup opened: ${viewer.url().slice(0, 160)}.` : "no popup event; using current page as viewer.", popup ? "info" : "warn");
   await viewer.waitForLoadState("domcontentloaded", { timeout: 30000 }).catch(() => {});
-  const documentFolder = path.join(folder, documentTypeFolder(row.documentType));
+  const documentFolder = path.join(folder, documentTypeFolder(row.documentType), dateFolder(startDate));
   await fs.mkdir(documentFolder, { recursive: true });
   const filename = await paymentFilename(documentFolder, {
     group,
@@ -386,7 +390,7 @@ async function runEbridge(credentials: EbridgeCredentials, context: AutomationCo
         continue;
       }
       try {
-        row.filename = await openAndDownloadDocument(page, await findResultsFrame(page), row, pdfFolder, context, credentials.clientName);
+        row.filename = await openAndDownloadDocument(page, await findResultsFrame(page), row, pdfFolder, credentials.startDate, context, credentials.clientName);
         row.status = "Downloaded";
         row.message = "Downloaded from eBridge viewer.";
       } catch (error) {
