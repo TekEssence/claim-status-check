@@ -913,7 +913,7 @@ async function searchAndExtractUhcRow(
   await enterSearch(page, row);
 
   // Detect which page we landed on after search
-  const landing = await detectLandingPage(page);
+  const landing = await detectLandingPage(page, 30_000, row.memberId);
   let ctx: Page | Frame = page;
 
   if (landing === "no-policies") {
@@ -1025,6 +1025,47 @@ async function readDetailsPlanType(page: Page, timeoutMs = 15_000): Promise<stri
 const NO_POLICY_TEXT = /No policies available for this member/i;
 
 /**
+ * Normalizes an ID by stripping non-alphanumerics and leading zeros.
+ */
+function normId(id?: string): string {
+  if (!id) return "";
+  return id.replace(/[^a-z0-9]/gi, "").replace(/^0+/, "") || "0";
+}
+
+/**
+ * Checks if two IDs refer to the same member.
+ * Equal after normalization, OR both lengths >= 6 and one contains the other.
+ */
+function sameMember(a?: string, b?: string): boolean {
+  const na = normId(a);
+  const nb = normId(b);
+  if (!na || !nb) return false;
+  if (na === nb) return true;
+  if (na.length >= 6 && nb.length >= 6) {
+    return na.includes(nb) || nb.includes(na);
+  }
+  return false;
+}
+
+/**
+ * Extracts memberId from URL payload (hash or query).
+ * Expected format: #/eligibility/search-results?memberId=... or similar.
+ */
+function readUrlPayload(url: string): { memberId?: string } {
+  try {
+    const hashIndex = url.indexOf("#");
+    const searchPart = hashIndex >= 0 ? url.slice(hashIndex + 1) : url;
+    const queryIndex = searchPart.indexOf("?");
+    if (queryIndex < 0) return {};
+    const params = new URLSearchParams(searchPart.slice(queryIndex + 1));
+    const memberId = params.get("memberId") ?? params.get("member_id") ?? params.get("id");
+    return { memberId: memberId ?? undefined };
+  } catch {
+    return {};
+  }
+}
+
+/**
  * Logs the URL and page headings so a hung landing can be diagnosed manually.
  */
 async function logLandingDiagnostics(page: Page): Promise<void> {
@@ -1068,65 +1109,105 @@ async function closeNoPolicyModal(page: Page): Promise<void> {
   console.log("[closeNoPolicyModal] closed modal");
 }
 
+type LandingPage = "results" | "details" | "no-policies";
+
 /**
  * Detects which page we landed on after clicking Search.
- * Checks every context (page + frames) in priority order each pass:
- *   a) "No policies available for this member" modal -> "no-policies"
- *   b) URL contains "search-results" -> "results" (strong signal)
- *   c) Select button (exact) present -> "results"
- *   d) plan-type element with a non-empty sibling value -> "details"
- * Returns "results" | "details" | "no-policies".
+ * Polls every 500ms over [page, ...page.frames()] and computes:
+ *   - modal: text /No policies available for this member/i exists
+ *   - selectCount: sum of getByRole("button", {name: "Select", exact: true}).count()
+ *   - planTypeValue: getByTestId("plan-type").first() -> trimmed textContent of nextElementSibling
+ *   - urlMatchesMember: readUrlPayload(page.url()).memberId exists AND matches input memberId via sameMember
+ * Decision order:
+ *   1) modal -> "no-policies"
+ *   2) selectCount > 0 -> "results"
+ *   3) planTypeValue non-empty AND urlMatchesMember -> wait 1500ms, re-check modal, else "details"
+ * A missing URL payload must NOT count as matching.
+ * Every 2s logs signals. On timeout saves screenshot and throws.
  */
-async function detectLandingPage(page: Page, timeoutMs = 30_000): Promise<"results" | "details" | "no-policies"> {
+async function detectLandingPage(page: Page, timeoutMs = 30_000, memberId?: string): Promise<LandingPage> {
   const deadline = Date.now() + timeoutMs;
-  let lastDiagnostics = 0;
+  let lastLog = 0;
 
   while (Date.now() < deadline) {
-    // Strong signal: URL indicates results page
-    const url = page.url();
-    if (url.includes("/eligibility/search-results")) {
-      console.log(`[detectLandingPage] URL indicates results page: ${url}`);
-      return "results";
-    }
-
     // Collect page + all frames
     const contexts: (Page | Frame)[] = [page];
     for (const frame of page.frames()) {
       if (frame !== page.mainFrame()) contexts.push(frame);
     }
 
+    // Compute signals across all contexts
+    let modal = false;
+    let selectCount = 0;
+    let planTypeValue = "";
+
     for (const ctx of contexts) {
-      // a) No policies modal sits on top of a half-loaded details page, so check it first
+      // modal: text /No policies available for this member/i exists
       const noPolicyCount = await ctx.getByText(NO_POLICY_TEXT).count().catch(() => 0);
-      if (noPolicyCount > 0) {
-        console.log("[workflow] landed on: no-policies");
-        return "no-policies";
-      }
+      if (noPolicyCount > 0) modal = true;
 
-      // b) Results page: exact Select button is the definitive indicator of Member Search Results
-      const selectCount = await ctx.getByRole("button", { name: "Select", exact: true }).count().catch(() => 0);
-      if (selectCount > 0) {
-        console.log(`[workflow] landed on: results (${selectCount} Select button(s))`);
-        return "results";
-      }
+      // selectCount: sum of exact Select buttons
+      const count = await ctx.getByRole("button", { name: "Select", exact: true }).count().catch(() => 0);
+      selectCount += count;
 
-      // c) Details page: plan-type exists and its sibling span has non-empty text
-      const planType = ctx.getByTestId("plan-type").first();
-      const planTypeCount = await planType.count().catch(() => 0);
-      if (planTypeCount > 0) {
-        const value = await planType
-          .evaluate((el) => el.nextElementSibling?.textContent?.trim() ?? "")
-          .catch(() => "");
-        if (value) {
-          console.log("[workflow] landed on: details");
-          return "details";
+      // planTypeValue: first plan-type with non-empty sibling
+      if (!planTypeValue) {
+        const planTypeCount = await ctx.getByTestId("plan-type").count().catch(() => 0);
+        if (planTypeCount > 0) {
+          const value = await ctx.getByTestId("plan-type").first()
+            .evaluate((el) => el.nextElementSibling?.textContent?.trim() ?? "")
+            .catch(() => "");
+          if (value) planTypeValue = value;
         }
       }
     }
 
-    if (Date.now() - lastDiagnostics >= 5_000) {
-      await logLandingDiagnostics(page);
-      lastDiagnostics = Date.now();
+    // urlMatchesMember: readUrlPayload(page.url()).memberId exists AND matches input memberId via sameMember
+    const urlPayload = readUrlPayload(page.url());
+    const urlHasPolicy = !!urlPayload.memberId;
+    const urlMatchesMember = urlHasPolicy && !!memberId && sameMember(urlPayload.memberId, memberId);
+
+    // Periodic logging every 2s
+    if (Date.now() - lastLog >= 2_000) {
+      console.log(
+        `[workflow] signals: modal=${modal} selectButtons=${selectCount} ` +
+        `planTypeHasValue=${!!planTypeValue} urlHasPolicy=${urlHasPolicy} urlMatchesMember=${urlMatchesMember}`
+      );
+      lastLog = Date.now();
+    }
+
+    // Decision order
+    // 1) modal -> "no-policies"
+    if (modal) {
+      console.log("[workflow] landed on: no-policies");
+      return "no-policies";
+    }
+
+    // 2) selectCount > 0 -> "results"
+    if (selectCount > 0) {
+      console.log(`[workflow] landed on: results (${selectCount} Select button(s))`);
+      return "results";
+    }
+
+    // 3) planTypeValue non-empty AND urlMatchesMember -> wait 1500ms, re-check modal, else "details"
+    if (planTypeValue && urlMatchesMember) {
+      await page.waitForTimeout(1_500);
+
+      // Re-check modal after wait
+      let modalAfterWait = false;
+      for (const ctx of contexts) {
+        const noPolicyCount = await ctx.getByText(NO_POLICY_TEXT).count().catch(() => 0);
+        if (noPolicyCount > 0) {
+          modalAfterWait = true;
+          break;
+        }
+      }
+      if (modalAfterWait) {
+        console.log("[workflow] landed on: no-policies (modal appeared after wait)");
+        return "no-policies";
+      }
+      console.log("[workflow] landed on: details");
+      return "details";
     }
 
     await page.waitForTimeout(500);
