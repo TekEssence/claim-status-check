@@ -1116,13 +1116,13 @@ type LandingPage = "results" | "details" | "no-policies";
  * Polls every 500ms over [page, ...page.frames()] and computes:
  *   - modal: text /No policies available for this member/i exists
  *   - selectCount: sum of getByRole("button", {name: "Select", exact: true}).count()
- *   - planTypeValue: getByTestId("plan-type").first() -> trimmed textContent of nextElementSibling
+ *   - planTypeValue: getByTestId("plan-type").first() -> trimmed textContent of nextElementSibling (with fallback)
  *   - urlMatchesMember: readUrlPayload(page.url()).memberId exists AND matches input memberId via sameMember
  * Decision order:
  *   1) modal -> "no-policies"
  *   2) selectCount > 0 -> "results"
- *   3) planTypeValue non-empty AND urlMatchesMember -> wait 1500ms, re-check modal, else "details"
- * A missing URL payload must NOT count as matching.
+ *   3) planTypeValue non-empty -> wait 1500ms, re-check modal, else "details"
+ * A missing URL payload must NOT count as matching for urlMatchesMember.
  * Every 2s logs signals. On timeout saves screenshot and throws.
  */
 async function detectLandingPage(page: Page, timeoutMs = 30_000, memberId?: string): Promise<LandingPage> {
@@ -1130,6 +1130,13 @@ async function detectLandingPage(page: Page, timeoutMs = 30_000, memberId?: stri
   let lastLog = 0;
 
   while (Date.now() < deadline) {
+    // Strong signal: URL indicates results page (check FIRST, before frames)
+    const url = page.url();
+    if (url.includes("/eligibility/search-results")) {
+      console.log(`[detectLandingPage] URL indicates results page: ${url}`);
+      return "results";
+    }
+
     // Collect page + all frames
     const contexts: (Page | Frame)[] = [page];
     for (const frame of page.frames()) {
@@ -1140,6 +1147,7 @@ async function detectLandingPage(page: Page, timeoutMs = 30_000, memberId?: stri
     let modal = false;
     let selectCount = 0;
     let planTypeValue = "";
+    let planTypeContext: Page | Frame | null = null;
 
     for (const ctx of contexts) {
       // modal: text /No policies available for this member/i exists
@@ -1150,14 +1158,23 @@ async function detectLandingPage(page: Page, timeoutMs = 30_000, memberId?: stri
       const count = await ctx.getByRole("button", { name: "Select", exact: true }).count().catch(() => 0);
       selectCount += count;
 
-      // planTypeValue: first plan-type with non-empty sibling
-      if (!planTypeValue) {
+      // planTypeValue: first plan-type with non-empty sibling (with fallback like readDetailsPlanType)
+      // ONLY record if we haven't found Select buttons yet (results page takes priority)
+      if (!planTypeValue && selectCount === 0) {
         const planTypeCount = await ctx.getByTestId("plan-type").count().catch(() => 0);
         if (planTypeCount > 0) {
           const value = await ctx.getByTestId("plan-type").first()
-            .evaluate((el) => el.nextElementSibling?.textContent?.trim() ?? "")
+            .evaluate((el) => {
+              const sibling = el.nextElementSibling;
+              if (sibling) return sibling.textContent?.trim() ?? "";
+              const parentSpan = el.parentElement?.querySelector(":scope > span");
+              return parentSpan?.textContent?.trim() ?? "";
+            })
             .catch(() => "");
-          if (value) planTypeValue = value;
+          if (value) {
+            planTypeValue = value;
+            planTypeContext = ctx;
+          }
         }
       }
     }
@@ -1176,35 +1193,39 @@ async function detectLandingPage(page: Page, timeoutMs = 30_000, memberId?: stri
       lastLog = Date.now();
     }
 
-    // Decision order
+    // Decision order - RESULTS PAGE TAKES PRIORITY OVER DETAILS
     // 1) modal -> "no-policies"
     if (modal) {
       console.log("[workflow] landed on: no-policies");
       return "no-policies";
     }
 
-    // 2) selectCount > 0 -> "results"
+    // 2) selectCount > 0 -> "results" (RESULTS PAGE CHECKED BEFORE DETAILS)
     if (selectCount > 0) {
       console.log(`[workflow] landed on: results (${selectCount} Select button(s))`);
       return "results";
     }
 
-    // 3) planTypeValue non-empty AND urlMatchesMember -> wait 1500ms, re-check modal, else "details"
-    if (planTypeValue && urlMatchesMember) {
+    // 3) planTypeValue non-empty AND no Select buttons found -> wait 1500ms, re-check modal + Select buttons, else "details"
+    if (planTypeValue && selectCount === 0) {
       await page.waitForTimeout(1_500);
 
-      // Re-check modal after wait
+      // Re-check modal AND Select buttons after wait
       let modalAfterWait = false;
+      let selectCountAfterWait = 0;
       for (const ctx of contexts) {
         const noPolicyCount = await ctx.getByText(NO_POLICY_TEXT).count().catch(() => 0);
-        if (noPolicyCount > 0) {
-          modalAfterWait = true;
-          break;
-        }
+        if (noPolicyCount > 0) modalAfterWait = true;
+        const count = await ctx.getByRole("button", { name: "Select", exact: true }).count().catch(() => 0);
+        selectCountAfterWait += count;
       }
       if (modalAfterWait) {
         console.log("[workflow] landed on: no-policies (modal appeared after wait)");
         return "no-policies";
+      }
+      if (selectCountAfterWait > 0) {
+        console.log(`[workflow] landed on: results (Select buttons appeared after wait: ${selectCountAfterWait})`);
+        return "results";
       }
       console.log("[workflow] landed on: details");
       return "details";
