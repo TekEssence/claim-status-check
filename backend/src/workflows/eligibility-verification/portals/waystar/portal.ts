@@ -522,6 +522,7 @@ export async function submitWaystarInquiry(options: {
       }
     }
     await dismissWaystarDatePicker(inquiryPage);
+    console.log("[DEBUG] DOB filled, date picker dismissed, entering verification phase");
     if (options.projectConfig?.memberIdAndDobOnly && !requireSubscriberLookup) {
       if (options.projectConfig.repairPatientValueReset) {
         await repairWaystarMemberIdAndDob(inquiryPage, expectedMemberId, expectedDateOfBirth);
@@ -551,25 +552,31 @@ export async function submitWaystarInquiry(options: {
         skipDateOfBirth: !subscriberLookupNeedsDateOfBirth,
       });
     }
+    console.log("[DEBUG] fillPatientDetails completed");
   };
   await fillPatientDetails();
-  await humanPause(inquiryPage, 1800, 3000);
+  console.log("[DEBUG] After fillPatientDetails, before humanPause");
+  await humanPause(inquiryPage, 500, 1000);
+  console.log("[DEBUG] After humanPause, before ensureSelectedServiceType");
 
   // Waystar can rebuild the service-type dropdown after patient fields change.
-  // Re-apply the MedRevenue fixed value at the last possible moment so the
+  // Re-apply the selected value at the last possible moment so the
   // selection cannot be lost during the final pause before submission.
-  if (useMedRevenueMedicareFlow) {
-    await ensureSelectedServiceType(inquiryPage, expectedServiceType);
-  }
+  await ensureSelectedServiceType(inquiryPage, expectedServiceType);
+  console.log("[DEBUG] After ensureSelectedServiceType");
 
   // Payer, service-type and patient changes can reset Waystar's default dates.
   // Apply the row's DOS only after those updates, immediately before submit.
   if (options.projectConfig?.useDateOfServiceForPlanDates) {
+    console.log("[DEBUG] Before waitForBlockingOverlaysToClear (plan dates)");
     await waitForBlockingOverlaysToClear(inquiryPage, 30000);
+    console.log("[DEBUG] After waitForBlockingOverlaysToClear, before fillPlanDatesFromDateOfService");
     await fillPlanDatesFromDateOfService(inquiryPage, row.dateOfService || "", options.projectConfig);
+    console.log("[DEBUG] After fillPlanDatesFromDateOfService");
   }
 
   if (options.projectConfig?.restorePatientLookup) {
+    console.log("[DEBUG] restorePatientLookup enabled, entering verifyPatients");
     // Date and service changes can rebuild the demographic form. Refill once,
     // then check again after restoring DOS; never submit cleared patient data.
     const verifyPatients = () => options.projectConfig?.memberIdAndDobOnly
@@ -580,24 +587,39 @@ export async function submitWaystarInquiry(options: {
         firstName: expectedFirstName, dateOfBirth: expectedDateOfBirth,
       }, options.projectConfig?.exactCignaPlanDate ? "Cigna" : undefined);
     try {
+      console.log("[DEBUG] Before verifySelectedServiceType");
       await verifySelectedServiceType(inquiryPage, expectedServiceType);
+      console.log("[DEBUG] Before verifyPatients");
       await verifyPatients();
+      console.log("[DEBUG] verifyPatients completed");
     } catch {
+      console.log("[DEBUG] verifyPatients failed, retrying fillPatientDetails");
       await fillPatientDetails();
       await ensureSelectedServiceType(inquiryPage, expectedServiceType);
       await fillPlanDatesFromDateOfService(inquiryPage, row.dateOfService || "", options.projectConfig);
       await verifySelectedServiceType(inquiryPage, expectedServiceType);
       await verifyPatients();
+      console.log("[DEBUG] Retry verifyPatients completed");
     }
   }
 
   if (options.projectConfig?.settings?.verifyPayerBeforeSubmit) {
+    console.log("[DEBUG] Before verifyWaystarSelectedPayer");
     await verifyWaystarSelectedPayer(inquiryPage, payerName, options.projectConfig);
+    console.log("[DEBUG] After verifyWaystarSelectedPayer");
   }
+  // Ensure Submit button is ready
+  console.log("[DEBUG] Before submit button waitFor visible");
+  const submitBtn = inquiryPage.locator(WAYSTAR_SELECTORS.inquiry.submit).first();
+  await submitBtn.waitFor({ state: "visible", timeout: 10000 });
+  console.log("[DEBUG] Submit button visible, waiting for enabled");
+  await waitForEnabled(submitBtn, "Submit Inquiry");
+  console.log("[DEBUG] Submit button enabled, clicking");
   await Promise.all([
     inquiryPage.waitForLoadState("networkidle").catch(() => {}),
-    inquiryPage.locator(WAYSTAR_SELECTORS.inquiry.submit).click(),
+    submitBtn.click(),
   ]);
+  console.log("[DEBUG] Submit clicked");
 
   await inquiryPage.waitForTimeout(500);
   const outcome = await waitForWaystarEligibilityOutcome(
@@ -1245,6 +1267,7 @@ export function matchesConfiguredWaystarPayer(candidate: string, target: string,
 }
 
 export async function verifyWaystarSelectedPayer(page: Page, expected: string, config?: WaystarPayerProjectConfig): Promise<void> {
+  console.log("[DEBUG] verifyWaystarSelectedPayer started");
   await waitForBlockingOverlaysToClear(page, 30000);
   // Check again after change handlers have had time to reset the control.
   for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -1254,10 +1277,12 @@ export async function verifyWaystarSelectedPayer(page: Page, expected: string, c
     const actual = await input.isVisible().catch(() => false)
       ? await input.inputValue()
       : await select.locator("option:checked").innerText();
+    console.log(`[DEBUG] verifyWaystarSelectedPayer: expected=${expected}, actual=${actual}`);
     if (!matchesConfiguredWaystarPayer(actual, expected, config)) {
       throw new Error(`Waystar payer changed or was not selected. Expected ${expected}, found ${actual || "blank"}. Inquiry was not submitted.`);
     }
   }
+  console.log("[DEBUG] verifyWaystarSelectedPayer passed");
 }
 
 export function isExactWaystarPayerMatch(candidate: string, target: string): boolean {
@@ -1771,25 +1796,87 @@ async function selectPatientLookupOption(page: Page, lookupCode: string): Promis
 
 /** Configured flows require all four patient fields, regardless of the payer's default lookup. */
 export async function ensureWaystarSubscriberLookup(page: Page): Promise<void> {
+  console.log("[DEBUG] ensureWaystarSubscriberLookup started");
+  // Early exit: if all 4 fields are already visible AND the correct Look Up By option is selected
+  const fieldsAlreadyVisible = await Promise.all([
+    page.locator(WAYSTAR_SELECTORS.inquiry.memberId).first().isVisible().catch(() => false),
+    page.locator(WAYSTAR_SELECTORS.inquiry.lastName).first().isVisible().catch(() => false),
+    page.locator(WAYSTAR_SELECTORS.inquiry.firstName).first().isVisible().catch(() => false),
+    page.locator(WAYSTAR_SELECTORS.inquiry.dateOfBirth).first().isVisible().catch(() => false),
+  ]).then(([a, b, c, d]) => a && b && c && d);
+  console.log(`[DEBUG] ensureWaystarSubscriberLookup: fieldsAlreadyVisible=${fieldsAlreadyVisible}`);
+  
   const lookup = page.locator(WAYSTAR_SELECTORS.inquiry.patientLookup).first();
+  const lookupVisible = await lookup.isVisible().catch(() => false);
+  
+  if (fieldsAlreadyVisible) {
+    // Also verify the Look Up By dropdown has the correct option selected (if visible)
+    if (lookupVisible) {
+      const currentValue = await lookup.inputValue().catch(() => "");
+      const expected = findWaystarPatientLookupOption(await readWaystarSelectOptions(lookup), "10");
+      if (expected && currentValue === expected.value) {
+        console.log("[DEBUG] ensureWaystarSubscriberLookup: early exit - all fields visible AND correct option selected");
+        return;
+      }
+      console.log(`[DEBUG] ensureWaystarSubscriberLookup: fields visible but lookup value="${currentValue}" != expected="${expected?.value}", continuing to select`);
+    } else {
+      // Dropdown not visible but fields are present - this payer may not need the lookup selection
+      console.log("[DEBUG] ensureWaystarSubscriberLookup: early exit - all fields visible, lookup dropdown not visible (not required for this payer)");
+      return;
+    }
+  }
+
+  // If we get here, either fields aren't visible yet, or dropdown is visible but wrong value
+  if (!lookupVisible) {
+    // Dropdown not visible and fields not all visible - wait a bit for it to appear
+    console.log("[DEBUG] ensureWaystarSubscriberLookup: lookup dropdown not visible, waiting for it to appear");
+    try {
+      await lookup.waitFor({ state: "visible", timeout: 10000 });
+    } catch {
+      // Still not visible - check if fields appeared anyway
+      const fieldsNowVisible = await Promise.all([
+        page.locator(WAYSTAR_SELECTORS.inquiry.memberId).first().isVisible().catch(() => false),
+        page.locator(WAYSTAR_SELECTORS.inquiry.lastName).first().isVisible().catch(() => false),
+        page.locator(WAYSTAR_SELECTORS.inquiry.firstName).first().isVisible().catch(() => false),
+        page.locator(WAYSTAR_SELECTORS.inquiry.dateOfBirth).first().isVisible().catch(() => false),
+      ]).then(([a, b, c, d]) => a && b && c && d);
+      if (fieldsNowVisible) {
+        console.log("[DEBUG] ensureWaystarSubscriberLookup: fields appeared without lookup dropdown, success");
+        return;
+      }
+      throw new Error("Waystar Look Up By dropdown not visible and patient fields not all present.");
+    }
+  }
+
   for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
+      console.log(`[DEBUG] ensureWaystarSubscriberLookup: attempt ${attempt + 1}/3`);
       await waitForBlockingOverlaysToClear(page, 30000);
+      console.log("[DEBUG] ensureWaystarSubscriberLookup: overlays cleared, waiting for lookup visible");
       await lookup.waitFor({ state: "visible", timeout: 10000 });
+      console.log("[DEBUG] ensureWaystarSubscriberLookup: lookup visible, waiting for enabled");
       await waitForEnabled(lookup, "Waystar Look Up By");
+      console.log("[DEBUG] ensureWaystarSubscriberLookup: lookup enabled, finding option");
       const expected = findWaystarPatientLookupOption(await readWaystarSelectOptions(lookup), "10");
       if (!expected) throw new Error("Waystar Look Up By has no option exposing Member ID, Last Name, First Name and DOB.");
+      console.log(`[DEBUG] ensureWaystarSubscriberLookup: expected option value=${expected.value}, label=${expected.label}`);
       if (await lookup.inputValue() !== expected.value) {
+        console.log("[DEBUG] ensureWaystarSubscriberLookup: selecting option");
         await lookup.selectOption(expected.value, { timeout: 10000 });
       }
       await waitForBlockingOverlaysToClear(page, 30000);
+      console.log("[DEBUG] ensureWaystarSubscriberLookup: waiting for 4 fields visible");
       for (const selector of [WAYSTAR_SELECTORS.inquiry.memberId, WAYSTAR_SELECTORS.inquiry.lastName,
         WAYSTAR_SELECTORS.inquiry.firstName, WAYSTAR_SELECTORS.inquiry.dateOfBirth]) {
         await page.locator(selector).first().waitFor({ state: "visible", timeout: 3000 });
       }
       // A payer/service-type refresh can restore the default after the change event.
-      if (await lookup.inputValue() === expected.value) return;
+      if (await lookup.inputValue() === expected.value) {
+        console.log("[DEBUG] ensureWaystarSubscriberLookup: success");
+        return;
+      }
     } catch (error) {
+      console.log(`[DEBUG] ensureWaystarSubscriberLookup: attempt ${attempt + 1} failed: ${error instanceof Error ? error.message : error}`);
       if (page.isClosed()) throw error;
     }
   }
@@ -1945,9 +2032,13 @@ async function commitExactPayerSuggestion(
 }
 
 async function selectServiceTypeByValue(page: Page, value: string): Promise<void> {
+  console.log(`[DEBUG] selectServiceTypeByValue: ${value} started`);
   const serviceType = page.locator(WAYSTAR_SELECTORS.inquiry.serviceType).first();
+  console.log(`[DEBUG] selectServiceTypeByValue: waiting for visible`);
   await serviceType.waitFor({ state: "visible", timeout: 30000 });
+  console.log(`[DEBUG] selectServiceTypeByValue: visible, waiting for enabled`);
   await waitForEnabled(serviceType, "Waystar service type");
+  console.log(`[DEBUG] selectServiceTypeByValue: enabled, checking options`);
   const matchingOptions = serviceType.locator(`option[value="${value}"]`);
   if (await matchingOptions.count() === 0) {
     throw new Error(`Waystar service type value ${value} was not available in #ddlSTCCode.`);
@@ -1955,11 +2046,15 @@ async function selectServiceTypeByValue(page: Page, value: string): Promise<void
 
   let selectedValue = "";
   for (let attempt = 0; attempt < 3; attempt += 1) {
+    console.log(`[DEBUG] selectServiceTypeByValue: attempt ${attempt + 1}/3`);
     await serviceType.selectOption(value).catch(() => {});
     await serviceType.blur().catch(() => {});
     await page.waitForTimeout(200);
     selectedValue = await serviceType.inputValue().catch(() => "");
-    if (selectedValue === value) return;
+    if (selectedValue === value) {
+      console.log(`[DEBUG] selectServiceTypeByValue: ${value} selected successfully`);
+      return;
+    }
 
     // Waystar sometimes rebuilds this dropdown and discards Playwright's
     // selection. Apply the same option through the native select element and
@@ -1979,7 +2074,10 @@ async function selectServiceTypeByValue(page: Page, value: string): Promise<void
     }, value).catch(() => false);
     await page.waitForTimeout(300);
     selectedValue = await serviceType.inputValue().catch(() => "");
-    if (selectedValue === value) return;
+    if (selectedValue === value) {
+      console.log(`[DEBUG] selectServiceTypeByValue: ${value} selected successfully (eval)`);
+      return;
+    }
   }
 
   throw new Error(`Waystar service type selection did not stick after three attempts. Expected value ${value}, found ${selectedValue || "blank"}.`);
@@ -2002,11 +2100,14 @@ async function dismissWaystarDatePicker(page: Page): Promise<void> {
   await page.keyboard.press("Escape").catch(() => {});
 }
 async function fillVerifiedText(page: Page, selector: string, value: string, label: string, compareAsDate = false): Promise<void> {
+  console.log(`[DEBUG] fillVerifiedText: ${label} started, selector=${selector}, value=${value}`);
   const input = page.locator(selector).first();
   await input.waitFor({ state: "visible", timeout: 30000 }).catch(() => {
     throw new Error(`Waystar inquiry field ${label} was not visible after 30 seconds.`);
   });
+  console.log(`[DEBUG] fillVerifiedText: ${label} visible, waiting for enabled`);
   await waitForEnabled(input, `Waystar ${label}`);
+  console.log(`[DEBUG] fillVerifiedText: ${label} enabled, typing`);
   await humanType(input, value);
   await commitInputValue(input);
   await page.waitForTimeout(50);
@@ -2014,6 +2115,7 @@ async function fillVerifiedText(page: Page, selector: string, value: string, lab
   let actualValue = await input.inputValue().catch(() => "");
   let matches = compareAsDate ? waystarDatesMatch(actualValue, value) : actualValue.trim() === value.trim();
   if (!matches) {
+    console.log(`[DEBUG] fillVerifiedText: ${label} first attempt failed, actual=${actualValue}, retrying with typeIntoWaystarInput`);
     await typeIntoWaystarInput(input, value, randomBetween(25, 40));
     await commitInputValue(input);
     await page.waitForTimeout(150);
@@ -2021,6 +2123,7 @@ async function fillVerifiedText(page: Page, selector: string, value: string, lab
     matches = compareAsDate ? waystarDatesMatch(actualValue, value) : actualValue.trim() === value.trim();
   }
   if (!matches) {
+    console.log(`[DEBUG] fillVerifiedText: ${label} second attempt failed, actual=${actualValue}, retrying with fill`);
     await input.fill(value);
     await commitInputValue(input);
     await page.waitForTimeout(250);
@@ -2030,6 +2133,7 @@ async function fillVerifiedText(page: Page, selector: string, value: string, lab
   if (!matches) {
     throw new Error(`Waystar ${label} did not fill correctly. Expected ${value}, found ${actualValue || "blank"}.`);
   }
+  console.log(`[DEBUG] fillVerifiedText: ${label} filled successfully, actual=${actualValue}`);
 }
 
 async function commitInputValue(input: Locator): Promise<void> {
@@ -2037,17 +2141,22 @@ async function commitInputValue(input: Locator): Promise<void> {
 }
 
 export async function verifyWaystarMemberIdAndDob(page: Page, memberId: string, dateOfBirth: string): Promise<void> {
+  console.log("[DEBUG] verifyWaystarMemberIdAndDob started");
   const actualMemberId = await page.locator(WAYSTAR_SELECTORS.inquiry.memberId).first().inputValue();
   const actualDob = await page.locator(WAYSTAR_SELECTORS.inquiry.dateOfBirth).first().inputValue();
+  console.log(`[DEBUG] verifyWaystarMemberIdAndDob: expected memberId=${memberId}, actual=${actualMemberId}, expected DOB=${dateOfBirth}, actual=${actualDob}`);
   if (!memberId.trim() || actualMemberId.trim() !== memberId.trim() || !dateOfBirth || !waystarDatesMatch(actualDob, dateOfBirth)) {
     throw new Error("MedRevenue Member ID or Date of Birth did not retain the input value before submit.");
   }
+  console.log("[DEBUG] verifyWaystarMemberIdAndDob passed");
 }
 
 export async function repairWaystarMemberIdAndDob(page: Page, memberId: string, dateOfBirth: string): Promise<void> {
+  console.log("[DEBUG] repairWaystarMemberIdAndDob started");
   if (!memberId.trim() || !dateOfBirth.trim()) throw new Error("Blue Shield requires a nonempty Member ID and Date of Birth before submit.");
   let mismatches: string[] = [];
   for (let attempt = 0; attempt < 3; attempt += 1) {
+    console.log(`[DEBUG] repairWaystarMemberIdAndDob: attempt ${attempt + 1}/3`);
     await waitForBlockingOverlaysToClear(page, 30000);
     await restoreMedRevenuePatientLookup(page, true);
     // DOB blur can clear an ID that passed its individual fill check. Repair
@@ -2068,7 +2177,10 @@ export async function repairWaystarMemberIdAndDob(page: Page, memberId: string, 
     mismatches = [];
     if (actualMemberId.trim() !== memberId.trim()) mismatches.push(`Member ID ${actualMemberId.trim() ? "changed" : "was cleared"}`);
     if (!waystarDatesMatch(actualDob, dateOfBirth)) mismatches.push(`Date of Birth ${actualDob.trim() ? "changed" : "was cleared"}`);
-    if (!mismatches.length) return;
+    if (!mismatches.length) {
+      console.log("[DEBUG] repairWaystarMemberIdAndDob passed");
+      return;
+    }
   }
   throw new Error(`Blue Shield patient values did not remain stable after three repair attempts: ${mismatches.join("; ")}. Inquiry was not submitted.`);
 }
@@ -2078,9 +2190,11 @@ export async function repairMedRevenueAetnaUmrPatientFields(
   expected: { memberId: string; lastName: string; firstName?: string; dateOfBirth?: string },
   payerLabel = "Aetna/UMR",
 ): Promise<void> {
+  console.log(`[DEBUG] repairMedRevenueAetnaUmrPatientFields: ${payerLabel} started`);
   // Demographic blur handlers can clear fields filled earlier. Refill only
   // mismatches so a retained DOB does not repeatedly clear the Member ID.
   for (let attempt = 0; attempt < 3; attempt += 1) {
+    console.log(`[DEBUG] repairMedRevenueAetnaUmrPatientFields: attempt ${attempt + 1}/3`);
     await waitForBlockingOverlaysToClear(page, 30000);
     for (const [selector, value, label, date] of [
       [WAYSTAR_SELECTORS.inquiry.dateOfBirth, expected.dateOfBirth, "Date of Birth", true],
@@ -2091,6 +2205,7 @@ export async function repairMedRevenueAetnaUmrPatientFields(
       if (value === undefined) continue;
       const actual = await page.locator(selector).first().inputValue();
       if (date ? !waystarDatesMatch(actual, value) : actual.trim() !== value.trim()) {
+        console.log(`[DEBUG] repairMedRevenueAetnaUmrPatientFields: refilling ${label}, expected=${value}, actual=${actual}`);
         await fillVerifiedText(page, selector, value, label, date);
       }
     }
@@ -2098,6 +2213,7 @@ export async function repairMedRevenueAetnaUmrPatientFields(
     await page.waitForTimeout(350);
     try {
       await verifyMedRevenueMedicarePatientFields(page, expected);
+      console.log(`[DEBUG] repairMedRevenueAetnaUmrPatientFields: ${payerLabel} passed`);
       return;
     } catch {
       if (attempt === 2) throw new Error(`MedRevenue ${payerLabel} patient fields did not retain their input values after three repair attempts. Inquiry was not submitted.`);
@@ -2109,12 +2225,14 @@ async function verifyMedRevenueMedicarePatientFields(
   page: Page,
   expected: { memberId: string; lastName: string; firstName?: string; dateOfBirth?: string },
 ): Promise<void> {
+  console.log("[DEBUG] verifyMedRevenueMedicarePatientFields started");
   const actual = {
     memberId: await page.locator(WAYSTAR_SELECTORS.inquiry.memberId).first().inputValue().catch(() => ""),
     lastName: await page.locator(WAYSTAR_SELECTORS.inquiry.lastName).first().inputValue().catch(() => ""),
     firstName: await page.locator(WAYSTAR_SELECTORS.inquiry.firstName).first().inputValue().catch(() => ""),
     dateOfBirth: await page.locator(WAYSTAR_SELECTORS.inquiry.dateOfBirth).first().inputValue().catch(() => ""),
   };
+  console.log(`[DEBUG] verifyMedRevenueMedicarePatientFields: expected=${JSON.stringify(expected)}, actual=${JSON.stringify(actual)}`);
   const missing: string[] = [];
   if (actual.memberId.trim() !== expected.memberId.trim()) missing.push(`memberId=${actual.memberId || "blank"}`);
   if (actual.lastName.trim() !== expected.lastName.trim()) missing.push(`lastName=${actual.lastName || "blank"}`);
@@ -2125,26 +2243,34 @@ async function verifyMedRevenueMedicarePatientFields(
   if (missing.length) {
     throw new Error(`MedRevenue Medicare patient fields were not present before submit. ${missing.join(", ")}.`);
   }
+  console.log("[DEBUG] verifyMedRevenueMedicarePatientFields passed");
 }
 
 async function verifySelectedServiceType(page: Page, serviceTypeCode: string): Promise<void> {
+  console.log(`[DEBUG] verifySelectedServiceType: ${serviceTypeCode} started`);
   const selected = page.locator(WAYSTAR_SELECTORS.inquiry.serviceType).first().locator("option:checked").first();
   const option = {
     value: await selected.getAttribute("value").then((value) => value || "").catch(() => ""),
     label: (await selected.textContent().catch(() => "") || "").trim(),
   };
+  console.log(`[DEBUG] verifySelectedServiceType: current selection value="${option.value}", label="${option.label}"`);
   if (!findWaystarServiceTypeOption([option], serviceTypeCode)) {
     throw new Error(`Waystar Service Type ${serviceTypeCode} was not selected before submit.`);
   }
+  console.log(`[DEBUG] verifySelectedServiceType: ${serviceTypeCode} verified`);
 }
 
 async function ensureSelectedServiceType(page: Page, serviceTypeCode: string): Promise<void> {
+  console.log(`[DEBUG] ensureSelectedServiceType: ${serviceTypeCode} started`);
   try {
     await verifySelectedServiceType(page, serviceTypeCode);
+    console.log(`[DEBUG] ensureSelectedServiceType: ${serviceTypeCode} already selected`);
   } catch {
+    console.log(`[DEBUG] ensureSelectedServiceType: ${serviceTypeCode} not selected, re-selecting`);
     await waitForBlockingOverlaysToClear(page, 30000);
     await selectServiceTypeByValue(page, serviceTypeCode);
     await verifySelectedServiceType(page, serviceTypeCode);
+    console.log(`[DEBUG] ensureSelectedServiceType: ${serviceTypeCode} re-selected successfully`);
   }
 }
 
@@ -2163,7 +2289,9 @@ async function verifyInquiryFieldsBeforeSubmit(
   },
   retryCount = 0,
 ): Promise<void> {
+  console.log(`[DEBUG] verifyInquiryFieldsBeforeSubmit started, retryCount=${retryCount}`);
   const snapshot = await readInquirySnapshot(page);
+  console.log(`[DEBUG] verifyInquiryFieldsBeforeSubmit snapshot:`, snapshot);
   const missing: string[] = [];
 
   if (!findWaystarServiceTypeOption([
@@ -2171,7 +2299,10 @@ async function verifyInquiryFieldsBeforeSubmit(
   ], expected.serviceTypeCode)) {
     missing.push(`serviceType=${snapshot.serviceTypeLabel || snapshot.serviceTypeValue || "blank"}`);
   }
-  if ((expected.patientLookupCode || expected.requireSubscriberLookup) && !findWaystarPatientLookupOption([
+  // Only validate patientLookup if the dropdown is actually visible on the page
+  const patientLookupVisible = await page.locator(WAYSTAR_SELECTORS.inquiry.patientLookup).first().isVisible().catch(() => false);
+  console.log(`[DEBUG] verifyInquiryFieldsBeforeSubmit: patientLookupVisible=${patientLookupVisible}`);
+  if (patientLookupVisible && (expected.patientLookupCode || expected.requireSubscriberLookup) && !findWaystarPatientLookupOption([
     { value: snapshot.patientLookupValue, label: snapshot.patientLookupLabel },
   ], expected.patientLookupCode ?? "10")) {
     missing.push(`patientLookup=${snapshot.patientLookupLabel || snapshot.patientLookupValue || "blank"}`);
@@ -2190,6 +2321,7 @@ async function verifyInquiryFieldsBeforeSubmit(
   }
 
   if (missing.length > 0 && retryCount === 0) {
+    console.log(`[DEBUG] verifyInquiryFieldsBeforeSubmit: missing fields, retrying: ${missing.join(", ")}`);
     await dismissWaystarDatePicker(page);
     await selectServiceType(page, expected.serviceTypeCode);
     if (expected.patientLookupCode) {
@@ -2211,6 +2343,7 @@ async function verifyInquiryFieldsBeforeSubmit(
   if (missing.length > 0) {
     throw new Error(`Waystar inquiry fields were not present on the page before submit after one refill. ${missing.join(", ")}.`);
   }
+  console.log("[DEBUG] verifyInquiryFieldsBeforeSubmit passed");
 }
 
 function waystarDatesMatch(actual: string, expected: string): boolean {
@@ -2306,8 +2439,10 @@ export async function fillPlanDatesFromDateOfService(
   dateOfService: string,
   projectConfig: WaystarPayerProjectConfig,
 ): Promise<void> {
+  console.log("[DEBUG] fillPlanDatesFromDateOfService started");
   const planDate = normalizeWaystarDate(dateOfService);
   if (!planDate) throw new Error("DOS is missing for this row. Cannot submit Waystar eligibility using the default Plan Date.");
+  console.log(`[DEBUG] fillPlanDatesFromDateOfService: planDate=${planDate}`);
   const fromSelector = projectConfig.selectorFallbacks?.planDateFrom ?? "#txtPlanFrom";
   const toSelector = projectConfig.selectorFallbacks?.planDateTo ?? "#txtPlanTo";
   if (projectConfig.typePlanDate) {
@@ -2319,20 +2454,28 @@ export async function fillPlanDatesFromDateOfService(
       await fillVerifiedText(page, visibleToSelector, planDate, "Plan Date To", true);
     }
     await dismissWaystarDatePicker(page);
+    console.log("[DEBUG] fillPlanDatesFromDateOfService (typePlanDate) completed");
     return;
   }
   const fromInput = page.locator(fromSelector).first();
   const toInput = page.locator(toSelector).first();
+  console.log("[DEBUG] fillPlanDatesFromDateOfService: waiting for fromInput visible");
   await fromInput.waitFor({ state: "visible", timeout: 30000 });
+  console.log("[DEBUG] fillPlanDatesFromDateOfService: fromInput visible, waiting for enabled");
   await waitForEnabled(fromInput, "Waystar Plan Date From");
+  console.log("[DEBUG] fillPlanDatesFromDateOfService: fromInput enabled");
   const hasToInput = projectConfig.planDateToOptional
     ? await toInput.isVisible().catch(() => false)
     : true;
   if (hasToInput) {
+    console.log("[DEBUG] fillPlanDatesFromDateOfService: waiting for toInput visible");
     await toInput.waitFor({ state: "visible", timeout: 30000 });
+    console.log("[DEBUG] fillPlanDatesFromDateOfService: toInput visible, waiting for enabled");
     await waitForEnabled(toInput, "Waystar Plan Date To");
+    console.log("[DEBUG] fillPlanDatesFromDateOfService: toInput enabled");
   }
   for (let attempt = 0; attempt < 2; attempt += 1) {
+    console.log(`[DEBUG] fillPlanDatesFromDateOfService: attempt ${attempt + 1}/2`);
     await evaluateWaystarPage(page, (args) => {
       const from = document.querySelector<HTMLInputElement>(args.fromSelector);
       const to = args.hasToInput ? document.querySelector<HTMLInputElement>(args.toSelector) : null;
@@ -2353,11 +2496,16 @@ export async function fillPlanDatesFromDateOfService(
     await page.waitForTimeout(150);
     const actualFrom = await fromInput.inputValue().catch(() => "");
     const actualTo = hasToInput ? await toInput.inputValue().catch(() => "") : "";
-    if (waystarDatesMatch(actualFrom, planDate) && (!hasToInput || waystarDatesMatch(actualTo, planDate))) return;
+    console.log(`[DEBUG] fillPlanDatesFromDateOfService: actualFrom=${actualFrom}, actualTo=${actualTo}`);
+    if (waystarDatesMatch(actualFrom, planDate) && (!hasToInput || waystarDatesMatch(actualTo, planDate))) {
+      console.log("[DEBUG] fillPlanDatesFromDateOfService passed");
+      return;
+    }
   }
   if (projectConfig.retryPlanDatesWithKeyboard) {
     // UMR's widget may discard values assigned through script. Retry the same
     // input DOS via keyboard; response dates never participate in this step.
+    console.log("[DEBUG] fillPlanDatesFromDateOfService: retrying with keyboard");
     await waitForBlockingOverlaysToClear(page, 30000);
     await fillVerifiedText(page, `${fromSelector}:visible`, planDate, "Plan Date From", true);
     const visibleToInput = projectConfig.planDateToOptional
@@ -2373,7 +2521,11 @@ export async function fillPlanDatesFromDateOfService(
     : hasToInput;
   const actualFrom = await fromInput.inputValue().catch(() => "");
   const actualTo = finalHasToInput ? await toInput.inputValue().catch(() => "") : "";
-  if (waystarDatesMatch(actualFrom, planDate) && (!finalHasToInput || waystarDatesMatch(actualTo, planDate))) return;
+  console.log(`[DEBUG] fillPlanDatesFromDateOfService: final actualFrom=${actualFrom}, actualTo=${actualTo}`);
+  if (waystarDatesMatch(actualFrom, planDate) && (!finalHasToInput || waystarDatesMatch(actualTo, planDate))) {
+    console.log("[DEBUG] fillPlanDatesFromDateOfService passed (final check)");
+    return;
+  }
   throw new Error(
     `MedRevenue Plan Date(s) did not retain the input DOS ${planDate}. From=${actualFrom || "blank"}, To=${finalHasToInput ? actualTo || "blank" : "not shown"}.`,
   );
@@ -2407,16 +2559,25 @@ async function waitForWaystarEligibilityOutcome(
   isCancelled?: () => boolean,
   onWaiting?: (elapsedSeconds: number) => Promise<void>,
 ): Promise<"response" | "timeout" | "login" | "stalled" | "cancelled"> {
+  console.log(`[DEBUG] waitForWaystarEligibilityOutcome started, timeout=${timeoutMs}ms`);
   const startedAt = Date.now();
   const deadline = startedAt + timeoutMs;
   let nextHeartbeatAt = startedAt + 15000;
+  let pollCount = 0;
   while (Date.now() < deadline) {
-    if (isCancelled?.()) return "cancelled";
-    if (page.isClosed()) return "stalled";
+    if (isCancelled?.()) {
+      console.log("[DEBUG] waitForWaystarEligibilityOutcome: cancelled");
+      return "cancelled";
+    }
+    if (page.isClosed()) {
+      console.log("[DEBUG] waitForWaystarEligibilityOutcome: page closed");
+      return "stalled";
+    }
     if (onWaiting && Date.now() >= nextHeartbeatAt) {
       await onWaiting(Math.round((Date.now() - startedAt) / 1000));
       nextHeartbeatAt = Date.now() + 15000;
     }
+    pollCount++;
     const state = await evaluateWaystarPage(page, ({ overallStatusSelector, sectionStatusSelector }) => {
       const bodyText = document.body?.innerText || "";
       if (/Eligibility Inquiry Timed Out/i.test(bodyText)) return "timeout";
@@ -2438,16 +2599,33 @@ async function waitForWaystarEligibilityOutcome(
       sectionStatusSelector: sanitizeDomSelector(WAYSTAR_SELECTORS.inquiry.sectionStatus),
     }).catch(() => "waiting") as "response" | "timeout" | "login" | "waiting";
 
-    if (state !== "waiting") return state;
+    if (pollCount % 10 === 0) {
+      console.log(`[DEBUG] waitForWaystarEligibilityOutcome: poll ${pollCount}, state=${state}`);
+    }
+    if (state !== "waiting") {
+      console.log(`[DEBUG] waitForWaystarEligibilityOutcome: returning ${state}`);
+      return state;
+    }
     await page.waitForTimeout(1000);
   }
+  console.log("[DEBUG] waitForWaystarEligibilityOutcome: timed out, returning stalled");
   return "stalled";
 }
 async function waitForBlockingOverlaysToClear(page: Page, timeoutMs: number): Promise<void> {
+  console.log(`[DEBUG] waitForBlockingOverlaysToClear started, timeout=${timeoutMs}ms`);
   const overlays = page.locator(WAYSTAR_SELECTORS.inquiry.blockingOverlay);
   const deadline = Date.now() + timeoutMs;
+  let logged = false;
   while (Date.now() < deadline) {
-    if (await overlays.count().catch(() => 0) === 0) return;
+    const count = await overlays.count().catch(() => 0);
+    if (count === 0) {
+      console.log("[DEBUG] waitForBlockingOverlaysToClear completed - no overlays");
+      return;
+    }
+    if (!logged) {
+      console.log(`[DEBUG] waitForBlockingOverlaysToClear: ${count} overlay(s) present, waiting...`);
+      logged = true;
+    }
     await page.waitForTimeout(500);
   }
   throw new Error(`Waystar remained on its loading screen for ${Math.round(timeoutMs / 1000)} seconds.`);
@@ -2502,7 +2680,7 @@ async function setInputValueWithEvents(locator: Locator, value: string): Promise
 function isPlaywrightTimeout(error: unknown): boolean {
   return error instanceof Error && /timeout/i.test(error.message);
 }
-async function humanPause(page: Page, minimumMs = 800, maximumMs = 1400): Promise<void> {
+async function humanPause(page: Page, minimumMs = 300, maximumMs = 600): Promise<void> {
   if (authenticatedWaystarContexts.has(page.context())) return;
   await page.waitForTimeout(randomBetween(minimumMs, maximumMs));
 }
@@ -2549,10 +2727,19 @@ function sanitizeDomSelector(selector: string): string {
 }
 
 async function waitForEnabled(locator: Locator, label: string): Promise<void> {
+  console.log(`[DEBUG] waitForEnabled: ${label} started`);
   const deadline = Date.now() + 30000;
+  let logged = false;
   while (Date.now() < deadline) {
     const disabled = await locator.isDisabled().catch(() => true);
-    if (!disabled) return;
+    if (!disabled) {
+      console.log(`[DEBUG] waitForEnabled: ${label} enabled`);
+      return;
+    }
+    if (!logged) {
+      console.log(`[DEBUG] waitForEnabled: ${label} still disabled, waiting...`);
+      logged = true;
+    }
     await locator.page().waitForTimeout(250);
   }
 
