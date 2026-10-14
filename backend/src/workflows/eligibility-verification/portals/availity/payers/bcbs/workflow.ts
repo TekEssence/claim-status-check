@@ -24,8 +24,8 @@ export function resolveAvailityWellcarePatientName(row: Record<string, unknown>)
   firstName: string;
   lastName: string;
 } {
-  const firstName = findValue(row, ["Patient First Name", "Patient F Name", "First Name", "Pat First Name", "Member First Name"]);
-  const lastName = findValue(row, ["Patient Last Name", "Patient L Name", "Last Name", "Pat Last Name", "Member Last Name"]);
+  const firstName = findValue(row, ["Patient First Name", "Patient F Name", "First Name", "Pat First Name", "Pat F Name", "Member First Name"]);
+  const lastName = findValue(row, ["Patient Last Name", "Patient L Name", "Last Name", "Pat Last Name", "Pat L Name", "Member Last Name"]);
   if (firstName || lastName) return { firstName, lastName };
 
   const fullName = findValue(row, ["Patient Name", "Patient Full Name", "Member Name", "Subscriber Name", "Patient"])
@@ -50,7 +50,11 @@ function patientNameInput(page: PortalScope, label: "Patient First Name" | "Pati
   return labeled.or(page.locator(selector).first()).first();
 }
 
-async function enterText(locator: Locator, value: string): Promise<void> {
+async function enterText(
+  locator: Locator,
+  value: string,
+  options?: { typeDelay?: number; afterDelay?: number }
+): Promise<void> {
   try {
     await locator.click({ timeout: 5_000 });
   } catch (error) {
@@ -59,8 +63,8 @@ async function enterText(locator: Locator, value: string): Promise<void> {
     await locator.focus();
   }
   await locator.fill("");
-  await locator.pressSequentially(value, { delay: 80 });
-  await pause(350);
+  await locator.pressSequentially(value, { delay: options?.typeDelay ?? 80 });
+  await pause(options?.afterDelay ?? 350);
 }
 
 async function chooseAutocompleteInput(page: PortalScope, input: Locator, value: string): Promise<void> {
@@ -1018,8 +1022,8 @@ export async function runBcbsAvailityEligibilityWorkflow(
           throw new Error("Missing Patient First Name or Patient Last Name.");
         }
         if (patientNameSearchSelected || patientNameFieldsVisible) {
-          await enterText(lastName, patientName.lastName);
-          await enterText(firstName, patientName.firstName);
+          await enterText(lastName, patientName.lastName, { typeDelay: 150, afterDelay: 600 });
+          await enterText(firstName, patientName.firstName, { typeDelay: 150, afterDelay: 600 });
         }
       }
       await enterDob(portal, dob);
