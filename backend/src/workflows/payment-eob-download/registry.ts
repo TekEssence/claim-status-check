@@ -3,6 +3,7 @@ import { createOfficeAllyRunner } from "./portals/office-ally/scraper";
 import type { AutomationRunner } from "../types";
 import { createAvailityRemittanceRunner } from "./portals/availity-remittance/scraper";
 import { createEchoRemittanceRunner } from "./portals/echo-remittance/scraper";
+import { createEbridgeRunner } from "./portals/ebridge/scraper";
 import { createInstamedRemittanceRunner } from "./portals/instamed-remittance/scraper";
 import { createJopariRunner } from "./portals/jopari/scraper";
 import { createZelisRunner } from "./portals/zelis/scraper";
@@ -12,6 +13,7 @@ export const paymentEobPortalRegistry = {
   "office-ally": createOfficeAllyRunner,
   "availity-remittance": createAvailityRemittanceRunner,
   "echo-remittance": createEchoRemittanceRunner,
+  ebridge: createEbridgeRunner,
   "instamed-remittance": createInstamedRemittanceRunner,
   jopari: createJopariRunner,
   zelis: createZelisRunner,

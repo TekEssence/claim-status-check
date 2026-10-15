@@ -172,6 +172,13 @@ test("payment EOB resolves Jopari runner", () => {
   assert.equal(runner.name, "Jopari Payment EOB Download");
 });
 
+test("payment EOB resolves eBridge runner", () => {
+  const runner = getAutomationRunner("payment-eob-download", "ebridge");
+  assert.equal(runner.workflowId, "payment-eob-download");
+  assert.equal(runner.portalId, "ebridge");
+  assert.equal(runner.name, "eBridge Payment Document Download");
+});
+
 test("payment EOB rejects disabled Echo Remittance runner", () => {
   assert.throws(
     () => getAutomationRunner("payment-eob-download", "echo-remittance"),
