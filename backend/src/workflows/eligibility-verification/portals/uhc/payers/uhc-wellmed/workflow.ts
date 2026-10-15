@@ -777,7 +777,7 @@ class UhcCancellation extends Error {}
 async function waitForFreshResult(
   page: Page,
   isCancelled?: () => boolean,
-  timeout = 60_000,
+  timeout = 65_000,
 ): Promise<void> {
   const deadline = Date.now() + timeout;
   const policyBanner = page.locator("ul").filter({ hasText: /Policy Selected:/i });
@@ -960,7 +960,12 @@ async function goBackToSearch(ctx: Page | Frame, page: Page): Promise<void> {
   const backButton = ctx
     .getByTestId("header-back-button-abyss-button-root")
     .or(ctx.getByRole("button", { name: "Back", exact: true }))
+    .or(ctx.getByRole("button", { name: "<" }))
+    .or(ctx.getByRole("button", { name: "←" }))
+    .or(ctx.locator('button[aria-label="Back"], button[aria-label="back"], button[title="Back"], button[title="back"]'))
+    .or(ctx.locator('button:has-text("<")'))
     .first();
+  
   await backButton.waitFor({ state: "visible", timeout: 10_000 });
   await backButton.scrollIntoViewIfNeeded().catch(() => {});
   try {
@@ -970,7 +975,7 @@ async function goBackToSearch(ctx: Page | Frame, page: Page): Promise<void> {
   }
 
   // Poll until Select buttons are gone (back on search form)
-  const deadline = Date.now() + 15_000;
+  const deadline = Date.now() + 20_000;
   while (Date.now() < deadline) {
     const selectCount = await ctx.getByRole("button", { name: "Select", exact: true }).count().catch(() => 0);
     if (selectCount === 0) {
@@ -987,7 +992,7 @@ async function goBackToSearch(ctx: Page | Frame, page: Page): Promise<void> {
  * Polls page and all frames for getByTestId("plan-type"), returns the sibling span's text.
  * Throws on timeout.
  */
-async function readDetailsPlanType(page: Page, timeoutMs = 15_000): Promise<string> {
+async function readDetailsPlanType(page: Page, timeoutMs = 20_000): Promise<string> {
   const deadline = Date.now() + timeoutMs;
 
   while (Date.now() < deadline) {
@@ -1125,7 +1130,7 @@ type LandingPage = "results" | "details" | "no-policies";
  * A missing URL payload must NOT count as matching for urlMatchesMember.
  * Every 2s logs signals. On timeout saves screenshot and throws.
  */
-async function detectLandingPage(page: Page, timeoutMs = 30_000, memberId?: string): Promise<LandingPage> {
+async function detectLandingPage(page: Page, timeoutMs = 35_000, memberId?: string): Promise<LandingPage> {
   const deadline = Date.now() + timeoutMs;
   let lastLog = 0;
 

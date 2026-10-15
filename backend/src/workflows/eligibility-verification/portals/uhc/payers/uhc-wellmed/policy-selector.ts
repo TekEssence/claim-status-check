@@ -105,7 +105,7 @@ function idMatches(cardId: string, wantedId: string): boolean {
  * Returns the Page or Frame that contains the results.
  * Logs the URL (without hash) and Select button count.
  */
-async function findResultsContext(page: Page, timeoutMs = 30_000): Promise<Page | Frame> {
+async function findResultsContext(page: Page, timeoutMs = 35_000): Promise<Page | Frame> {
   const deadline = Date.now() + timeoutMs;
   const urlNoHash = page.url().split("#")[0];
   console.log(`[findResultsContext] Polling for results page. URL: ${urlNoHash}`);
@@ -248,7 +248,7 @@ async function showingCountMatches(ctx: Page | Frame, selectCount: number): Prom
  *   - if a "Showing X - Y of Z" text exists, the count equals Y - X + 1.
  * On timeout, logs a warning and continues.
  */
-async function waitForResultsReady(ctx: Page | Frame, page: Page, timeoutMs = 20_000): Promise<void> {
+async function waitForResultsReady(ctx: Page | Frame, page: Page, timeoutMs = 25_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   let selectCount = 0;
   let stableSince = Date.now();
