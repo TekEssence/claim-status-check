@@ -1,9 +1,10 @@
 import ExcelJS from "exceljs";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { Locator, Page } from "playwright-core";
+import type { BrowserContext, Frame, Locator, Page } from "playwright-core";
 import type { AutomationContext } from "../../../../../types";
 import { applyUhcResultLayout } from "./result-parser";
+import { isAllowedPlanType, isMedicaidPlanType, selectPolicy, type SelectPolicyResult } from "./policy-selector";
 
 export const UHC_OUTPUT_HEADERS = [
   "Coverage Status",
@@ -50,7 +51,7 @@ const SELECTORS = {
   eligibilityLink: "div[data-testid='eligibility-link']",
   memberId: "#eligibility-memberid-input, input[name='search.memberId'], input[data-testid='eligibility-search-member-id-abyss-text-input'], input[aria-label*='Member ID' i], input[placeholder*='Member ID' i]",
   dateOfBirth: "#eligibility-dateofbirth-input, input[name='search.dateOfBirth'], input[name='search.dob'], input[data-testid='eligibility-search-DOB-abyss-date-picker-input'], input[aria-label*='Date of Birth' i], input[placeholder*='Date of Birth' i], input[placeholder*='MM/DD/YYYY' i]",
-  submit: "button#submit-search-button, button:has-text('Verify Eligibility')",
+  submit: "button#submit-search-button, button:has-text('Verify Eligibility'), button[data-testid='submit-search-button-abyss-button-root']",
   newSearch: "button[data-testid='overview-new-search-button-abyss-button-root'], button:has-text('New Search')",
 } as const;
 
@@ -258,6 +259,128 @@ async function enterSearch(page: Page, row: UhcInputRow): Promise<void> {
   await page.waitForTimeout(1_000);
 }
 
+/**
+ * Validates UHC eligibility result cards and clicks the Select button
+ * on the unique card where all three conditions are met:
+ *   - Member ID matches the input row's member ID (trimmed, case-insensitive)
+ *   - Coverage Type is one of: Medical, HMO, Health Benefits
+ *   - Plan Type is exactly "Medicare Primary"
+ *
+ * If exactly one card matches, clicks that card's Select button and returns true.
+ * If no cards match, logs a message and returns false.
+ * If multiple cards match, reports ambiguity and returns false without clicking any button.
+ *
+ * @returns true if a unique matching card was found and selected, false otherwise.
+ */
+async function validateAndSelectUhcRow(page: Page, row: UhcInputRow, context: AutomationContext): Promise<boolean> {
+  // Scroll down to ensure plan cards are visible (they may render below the fold)
+  await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+  await page.waitForTimeout(500); // Allow any lazy-loaded content to render
+
+  // Find all eligibility result cards on the page
+  const cardClass = 'abyss-c-PJLV abyss-c-PJLV-ikfWlwY-css abyss-box-root';
+  const cards = page.locator(cardClass);
+  const cardCount = await cards.count();
+
+  if (cardCount === 0) {
+    await context.log({ level: "warn", message: `Row ${row.worksheetRow}: No eligibility result cards found on the page.`, rowIndex: row.worksheetRow, eventName: "eligibility_uhc_no_cards_found" });
+    await context.emit({ type: "eligibility_uhc_result", rowIndex: row.worksheetRow, update: { Error: "No eligibility result cards found." } });
+    return false;
+  }
+
+  // Label span class that identifies field labels
+  const LABEL_CLASS = 'abyss-c-PJLV abyss-c-PJLV-ieprGXN-css abyss-text-root';
+  const VALUE_CLASS = 'abyss-c-PJLV abyss-c-PJLV-iiXMgHe-css abyss-text-root';
+
+  // Collect all cards that pass all three validation conditions
+  const matchingCards: { card: Locator; cardIdx: number }[] = [];
+
+  // Normalize the input member ID once for comparison
+  const normalizedInputMemberId = row.memberId.trim().toLowerCase();
+
+  // Allowed coverage types (normalized to lowercase)
+  const allowedCoverageTypes = new Set(["medical", "hmo", "health benefits"]);
+
+  // Try each card and collect those that pass all validations
+  for (let cardIdx = 0; cardIdx < cardCount; cardIdx += 1) {
+    const card = cards.nth(cardIdx);
+
+    // Extract label-value pairs from this card
+    const labelSpans = card.locator(LABEL_CLASS);
+    const valueSpans = card.locator(VALUE_CLASS);
+    const spanCount = await valueSpans.count();
+
+    let cardCoverageType = "";
+    let cardPlanType = "";
+    let cardMemberId = "";
+
+    // Read all label-value pairs from this card
+    for (let i = 0; i < spanCount; i += 1) {
+      const labelText = await labelSpans.nth(i).innerText({ timeout: 2_000 });
+      const labelTrimmed = labelText.trim();
+      const valueText = await valueSpans.nth(i).innerText({ timeout: 2_000 });
+      const valueTrimmed = valueText.trim();
+
+      // Identify the field by its label and capture the value
+      // Supports optional trailing colon on label: "Coverage Type:" or "Coverage Type"
+      if (/^Coverage Type:?$/i.test(labelTrimmed)) {
+        cardCoverageType = valueTrimmed;
+      } else if (/^Plan Type:?$/i.test(labelTrimmed)) {
+        cardPlanType = valueTrimmed;
+      } else if (/^Member ID:?$/i.test(labelTrimmed)) {
+        cardMemberId = valueTrimmed;
+      }
+    }
+
+    // Normalize card values for comparison
+    const normalizedCardMemberId = cardMemberId.trim().toLowerCase();
+    const normalizedCardCoverageType = cardCoverageType.trim().toLowerCase();
+    const normalizedCardPlanType = cardPlanType.trim().toLowerCase();
+
+    // Check all three conditions
+    const coverageValid = allowedCoverageTypes.has(normalizedCardCoverageType);
+    const planTypeValid = normalizedCardPlanType === "medicare primary";
+    const memberIdValid = normalizedCardMemberId === normalizedInputMemberId;
+
+    if (coverageValid && planTypeValid && memberIdValid) {
+      matchingCards.push({ card, cardIdx: cardIdx + 1 }); // Use 1-based index for logging
+    }
+  }
+
+  // Decide action based on number of matching cards
+  if (matchingCards.length === 1) {
+    // Exactly one card matches - click its Select button
+    const { card } = matchingCards[0];
+    const selectButton = card.locator('button:has-text("Select")').first();
+    const selectButtonCount = await selectButton.count();
+    if (selectButtonCount === 0) {
+      await context.log({ level: "warn", message: `Row ${row.worksheetRow} Matching card Select button not found.`, rowIndex: row.worksheetRow, eventName: "eligibility_uhc_select_button_not_found" });
+      await context.emit({ type: "eligibility_uhc_result", rowIndex: row.worksheetRow, update: { Error: "Select button not found on matching card." } });
+      return false;
+    }
+
+    await selectButton.scrollIntoViewIfNeeded().catch(() => {});
+    await selectButton.waitFor({ state: "visible", timeout: 20_000 });
+    await selectButton.click({ timeout: 5_000 });
+
+    await page.waitForTimeout(1_000); // allow the selection to settle
+
+    await context.log({ level: "info", message: `Row ${row.worksheetRow}: Unique matching card found (Card ${matchingCards[0].cardIdx}). Select button clicked.`, rowIndex: row.worksheetRow, eventName: "eligibility_uhc_selection_passed" });
+    await context.emit({ type: "eligibility_uhc_result", rowIndex: row.worksheetRow, update: { Selection: "Passed" } });
+    return true;
+  } else if (matchingCards.length === 0) {
+    // No cards match - log and return false without clicking
+    await context.log({ level: "warn", message: `Row ${row.worksheetRow}: No eligibility result cards matched the validation criteria (Member ID, Coverage Type, Plan Type).`, rowIndex: row.worksheetRow, eventName: "eligibility_uhc_no_matching_card" });
+    await context.emit({ type: "eligibility_uhc_result", rowIndex: row.worksheetRow, update: { Error: "No matching eligibility result card found." } });
+    return false;
+  } else {
+    // Multiple cards match - report ambiguity, do not click any button
+    await context.log({ level: "warn", message: `Row ${row.worksheetRow}: Ambiguity - ${matchingCards.length} cards matched the validation criteria. Selection aborted.`, rowIndex: row.worksheetRow, eventName: "eligibility_uhc_ambiguous_match" });
+    await context.emit({ type: "eligibility_uhc_result", rowIndex: row.worksheetRow, update: { Error: `${matchingCards.length} matching cards found - selection ambiguous.` } });
+    return false;
+  }
+}
+
 async function firstVisibleLocator(
   page: Page,
   selector: string | Locator,
@@ -319,7 +442,7 @@ async function ancestorTextContaining(
   return "";
 }
 
-async function optionalVisibleText(page: Page, locator: Locator): Promise<string> {
+async function optionalVisibleText(page: Page | Frame, locator: Locator): Promise<string> {
   if (await locator.count().catch(() => 0) === 0) return "";
   await locator.scrollIntoViewIfNeeded().catch(() => {});
   await page.waitForTimeout(500);
@@ -327,7 +450,7 @@ async function optionalVisibleText(page: Page, locator: Locator): Promise<string
 }
 
 async function textAroundAnyLabel(
-  page: Page,
+  page: Page | Frame,
   candidates: Locator,
   required: RegExp[],
   maxDepth = 7,
@@ -347,7 +470,7 @@ async function textAroundAnyLabel(
   }
   return "";
 }
-async function firstVisibleCandidate(page: Page, candidates: Locator, timeout = 10_000): Promise<Locator | null> {
+async function firstVisibleCandidate(page: Page | Frame, candidates: Locator, timeout = 10_000): Promise<Locator | null> {
   const deadline = Date.now() + timeout;
   while (Date.now() < deadline) {
     const count = await candidates.count().catch(() => 0);
@@ -359,7 +482,7 @@ async function firstVisibleCandidate(page: Page, candidates: Locator, timeout = 
   }
   return null;
 }
-async function controlledSectionText(page: Page, trigger: Locator): Promise<string> {
+async function controlledSectionText(page: Page | Frame, trigger: Locator): Promise<string> {
   if (await trigger.count().catch(() => 0) === 0) return "";
   await trigger.scrollIntoViewIfNeeded().catch(() => {});
   await page.waitForTimeout(800);
@@ -423,7 +546,7 @@ async function controlledSectionText(page: Page, trigger: Locator): Promise<stri
   }
   return [...new Set(parts)].join(String.fromCharCode(10));
 }
-async function labeledRowText(page: Page, candidates: Locator, labels: RegExp): Promise<string> {
+async function labeledRowText(page: Page | Frame, candidates: Locator, labels: RegExp): Promise<string> {
   const count = await candidates.count().catch(() => 0);
   for (let index = 0; index < count; index += 1) {
     const candidate = candidates.nth(index);
@@ -440,7 +563,7 @@ async function labeledRowText(page: Page, candidates: Locator, labels: RegExp): 
   }
   return "";
 }
-async function readScopedUhcResultText(page: Page): Promise<string> {
+async function readScopedUhcResultText(page: Page | Frame): Promise<string> {
   const expandableSummarySections = page.locator("button[aria-expanded='false']").filter({
     hasText: /Member (?:Information|Details|Summary)|Coverage (?:Information|Details|Summary)|Eligibility Details|Policy (?:Information|Details)/i,
   });
@@ -533,7 +656,7 @@ async function hasVisibleSearchForm(page: Page): Promise<boolean> {
 
 async function visibleNewSearchButton(page: Page, timeout = 60_000): Promise<Locator> {
   const deadline = Date.now() + timeout;
-  const candidates = page.locator(SELECTORS.newSearch).filter({ hasText: /New Search/i });
+  const candidates = page.locator(SELECTORS.newSearch).filter({ hasText: /New or recent search/i });
   while (Date.now() < deadline) {
     const count = await candidates.count();
     for (let index = 0; index < count; index += 1) {
@@ -542,7 +665,7 @@ async function visibleNewSearchButton(page: Page, timeout = 60_000): Promise<Loc
     }
     await page.waitForTimeout(250);
   }
-  throw new Error("A visible UHC New Search button was not found after the eligibility response.");
+  throw new Error("A visible UHC New or recent search button was not found after the eligibility response.");
 }
 
 async function openNewSearchForm(page: Page): Promise<void> {
@@ -654,12 +777,13 @@ class UhcCancellation extends Error {}
 async function waitForFreshResult(
   page: Page,
   isCancelled?: () => boolean,
-  timeout = 60_000,
+  timeout = 65_000,
 ): Promise<void> {
   const deadline = Date.now() + timeout;
   const policyBanner = page.locator("ul").filter({ hasText: /Policy Selected:/i });
   let previous = "";
   let stableReads = 0;
+  let lastLog = 0;
 
   while (Date.now() < deadline) {
     if (isCancelled?.()) throw new UhcCancellation("UHC eligibility cancellation requested.");
@@ -677,18 +801,70 @@ async function waitForFreshResult(
       }
     }
 
-    if (!formVisible && policyVisible) {
+    // Also check for plan-type element as alternative stability indicator
+    let planTypeVisible = false;
+    const planTypeCount = await page.getByTestId("plan-type").count().catch(() => 0);
+    if (planTypeCount > 0) {
+      for (let index = 0; index < planTypeCount; index += 1) {
+        if (await page.getByTestId("plan-type").nth(index).isVisible().catch(() => false)) {
+          planTypeVisible = true;
+          break;
+        }
+      }
+    }
+
+    const isStable = !formVisible && (policyVisible || planTypeVisible);
+
+    if (isStable) {
       const current = await page.locator("body").innerText();
       stableReads = current === previous ? stableReads + 1 : 0;
       previous = current;
-      if (stableReads >= 2) return;
+      if (stableReads >= 2) {
+        console.log(`[waitForFreshResult] Stable after ${stableReads} reads (policyVisible=${policyVisible}, planTypeVisible=${planTypeVisible})`);
+        return;
+      }
     } else {
       previous = "";
       stableReads = 0;
     }
+
+    // Periodic logging
+    if (Date.now() - lastLog >= 10_000) {
+      console.log(`[waitForFreshResult] Waiting... formVisible=${formVisible} policyVisible=${policyVisible} planTypeVisible=${planTypeVisible} stableReads=${stableReads}`);
+      lastLog = Date.now();
+    }
+
+    // Scroll down to trigger lazy-loaded content
+    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight)).catch(() => {});
     await page.waitForTimeout(750);
   }
-  throw new Error("The UHC search form did not transition to a stable eligibility result page.");
+
+  // Diagnostic on timeout
+  const formVisible = await hasVisibleSearchForm(page);
+  let policyVisible = false;
+  const policyCount = await policyBanner.count();
+  for (let index = 0; index < policyCount; index += 1) {
+    if (await policyBanner.nth(index).isVisible().catch(() => false)) {
+      policyVisible = true;
+      break;
+    }
+  }
+  let planTypeVisible = false;
+  const planTypeCount = await page.getByTestId("plan-type").count().catch(() => 0);
+  if (planTypeCount > 0) {
+    for (let index = 0; index < planTypeCount; index += 1) {
+      if (await page.getByTestId("plan-type").nth(index).isVisible().catch(() => false)) {
+        planTypeVisible = true;
+        break;
+      }
+    }
+  }
+  await page.screenshot({ path: "waitForFreshResult-timeout.png", fullPage: true }).catch(() => {});
+  throw new Error(
+    `The UHC search form did not transition to a stable eligibility result page. ` +
+    `formVisible=${formVisible} policyVisible=${policyVisible} planTypeVisible=${planTypeVisible} ` +
+    `stableReads=${stableReads}`
+  );
 }
 
 function extractedFieldCount(result: Record<string, string>): number {
@@ -728,19 +904,345 @@ export function shouldRetryNoResult(message: string): boolean {
 
 async function searchAndExtractUhcRow(
   page: Page,
+  context: BrowserContext,
   row: UhcInputRow,
   openNewSearch: boolean,
   isCancelled?: () => boolean,
 ): Promise<UhcEligibilityOutput> {
   if (openNewSearch) await openNewSearchForm(page);
   await enterSearch(page, row);
-  await waitForFreshResult(page, isCancelled);
-  const result = parseUhcEligibilityResultText(await readScopedUhcResultText(page));
+
+  // Detect which page we landed on after search
+  const landing = await detectLandingPage(page, 30_000, row.memberId);
+  let ctx: Page | Frame = page;
+
+  if (landing === "no-policies") {
+    console.log(`No policies available for Member ID "${row.memberId}".`);
+    await closeNoPolicyModal(page);
+    throw new Error(`NO_POLICIES: No policies available for Member ID "${row.memberId}".`);
+  }
+
+  if (landing === "results") {
+    console.log("[searchAndExtractUhcRow] Landed on Member Search Results page, running selectPolicy");
+    const policyResult: SelectPolicyResult = await selectPolicy(page, context, row.memberId);
+    if (!policyResult.selected) {
+      console.log(`No matching policy found for Member ID "${row.memberId}".`);
+      await goBackToSearch(policyResult.ctx, page);
+      throw new Error(`NO_MATCHING_POLICY: No matching policy found for Member ID "${row.memberId}".`);
+    }
+    ctx = policyResult.ctx;
+  } else {
+    console.log("[searchAndExtractUhcRow] Landed on Eligibility Details page, skipping selectPolicy");
+    await waitForFreshResult(page, isCancelled);
+
+    // Check Plan Type on details page - allow Medicaid as fallback
+    const planType = await readDetailsPlanType(page);
+    console.log(`[searchAndExtractUhcRow] Details page Plan Type: "${planType}"`);
+    if (!isAllowedPlanType(planType) && !isMedicaidPlanType(planType)) {
+      console.log(`No matching policy found for Member ID "${row.memberId}".`);
+      throw new Error(`NO_MATCHING_PLAN_TYPE: Plan Type "${planType}" not in allowed list for Member ID "${row.memberId}".`);
+    }
+  }
+
+  const result = parseUhcEligibilityResultText(await readScopedUhcResultText(ctx));
   const extracted = extractedFieldCount(result);
   if (extracted === 0) {
     throw new Error("The result page loaded, but none of the requested UHC fields could be extracted.");
   }
   return result;
+}
+
+/**
+ * Click Back button to return from Member Search Results to search form.
+ * Clears old input values so the next member can be entered cleanly.
+ */
+async function goBackToSearch(ctx: Page | Frame, page: Page): Promise<void> {
+  const backButton = ctx
+    .getByTestId("header-back-button-abyss-button-root")
+    .or(ctx.getByRole("button", { name: "Back", exact: true }))
+    .or(ctx.getByRole("button", { name: "<" }))
+    .or(ctx.getByRole("button", { name: "←" }))
+    .or(ctx.locator('button[aria-label="Back"], button[aria-label="back"], button[title="Back"], button[title="back"]'))
+    .or(ctx.locator('button:has-text("<")'))
+    .first();
+  
+  await backButton.waitFor({ state: "visible", timeout: 10_000 });
+  await backButton.scrollIntoViewIfNeeded().catch(() => {});
+  try {
+    await backButton.click({ timeout: 5_000 });
+  } catch {
+    await backButton.evaluate((el) => (el as HTMLElement).click());
+  }
+
+  // Poll until Select buttons are gone (back on search form)
+  const deadline = Date.now() + 20_000;
+  while (Date.now() < deadline) {
+    const selectCount = await ctx.getByRole("button", { name: "Select", exact: true }).count().catch(() => 0);
+    if (selectCount === 0) {
+      console.log("[goBackToSearch] Returned to search form");
+      return;
+    }
+    await page.waitForTimeout(300);
+  }
+  throw new Error("goBackToSearch: Timed out waiting for Select buttons to disappear.");
+}
+
+/**
+ * Reads the Plan Type from the eligibility details page.
+ * Polls page and all frames for getByTestId("plan-type"), returns the sibling span's text.
+ * Throws on timeout.
+ */
+async function readDetailsPlanType(page: Page, timeoutMs = 20_000): Promise<string> {
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    const contexts: (Page | Frame)[] = [page];
+    for (const frame of page.frames()) {
+      if (frame !== page.mainFrame()) contexts.push(frame);
+    }
+
+    for (const ctx of contexts) {
+      const locator = ctx.getByTestId("plan-type").first();
+      const count = await locator.count().catch(() => 0);
+      if (count === 0) continue;
+
+      const value = await locator
+        .evaluate((el) => {
+          const sibling = el.nextElementSibling;
+          if (sibling) return sibling.textContent?.trim() ?? "";
+          const parentSpan = el.parentElement?.querySelector(":scope > span");
+          return parentSpan?.textContent?.trim() ?? "";
+        })
+        .catch(() => "");
+
+      if (value) return value;
+    }
+
+    await page.waitForTimeout(500);
+  }
+
+  throw new Error("Plan Type not found on eligibility details page");
+}
+
+/**
+ * Text shown in the "No policies available for this member" modal.
+ */
+const NO_POLICY_TEXT = /No policies available for this member/i;
+
+/**
+ * Normalizes an ID by stripping non-alphanumerics and leading zeros.
+ */
+function normId(id?: string): string {
+  if (!id) return "";
+  return id.replace(/[^a-z0-9]/gi, "").replace(/^0+/, "") || "0";
+}
+
+/**
+ * Checks if two IDs refer to the same member.
+ * Equal after normalization, OR both lengths >= 6 and one contains the other.
+ */
+function sameMember(a?: string, b?: string): boolean {
+  const na = normId(a);
+  const nb = normId(b);
+  if (!na || !nb) return false;
+  if (na === nb) return true;
+  if (na.length >= 6 && nb.length >= 6) {
+    return na.includes(nb) || nb.includes(na);
+  }
+  return false;
+}
+
+/**
+ * Extracts memberId from URL payload (hash or query).
+ * Expected format: #/eligibility/search-results?memberId=... or similar.
+ */
+function readUrlPayload(url: string): { memberId?: string } {
+  try {
+    const hashIndex = url.indexOf("#");
+    const searchPart = hashIndex >= 0 ? url.slice(hashIndex + 1) : url;
+    const queryIndex = searchPart.indexOf("?");
+    if (queryIndex < 0) return {};
+    const params = new URLSearchParams(searchPart.slice(queryIndex + 1));
+    const memberId = params.get("memberId") ?? params.get("member_id") ?? params.get("id");
+    return { memberId: memberId ?? undefined };
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Logs the URL and page headings so a hung landing can be diagnosed manually.
+ */
+async function logLandingDiagnostics(page: Page): Promise<void> {
+  const url = page.url();
+  const headings: string[] = [];
+  for (const tag of ["h1", "h2", "h3"]) {
+    const texts = await page.locator(tag).allInnerTexts().catch(() => []);
+    headings.push(...texts);
+  }
+  console.log(`[detectLandingPage] Polling: URL: ${url} | headings: ${headings.join(" | ")}`);
+}
+
+/**
+ * Closes the "No policies available for this member" modal via its X (Close) button.
+ * Throws if the modal is not found.
+ */
+async function closeNoPolicyModal(page: Page): Promise<void> {
+  const contexts: (Page | Frame)[] = [page];
+  for (const frame of page.frames()) {
+    if (frame !== page.mainFrame()) contexts.push(frame);
+  }
+
+  let modalCtx: Page | Frame | null = null;
+  for (const ctx of contexts) {
+    const count = await ctx.getByText(NO_POLICY_TEXT).count().catch(() => 0);
+    if (count > 0) {
+      modalCtx = ctx;
+      break;
+    }
+  }
+  if (!modalCtx) throw new Error("No policies modal was not found.");
+
+  const closeButton = modalCtx
+    .getByRole("dialog")
+    .getByRole("button", { name: "Close", exact: true })
+    .or(modalCtx.locator("button.abyss-modal-close-button"))
+    .first();
+  await closeButton.waitFor({ state: "visible", timeout: 10_000 });
+  await closeButton.click();
+  await modalCtx.getByText(NO_POLICY_TEXT).first().waitFor({ state: "hidden", timeout: 10_000 }).catch(() => {});
+  console.log("[closeNoPolicyModal] closed modal");
+}
+
+type LandingPage = "results" | "details" | "no-policies";
+
+/**
+ * Detects which page we landed on after clicking Search.
+ * Polls every 500ms over [page, ...page.frames()] and computes:
+ *   - modal: text /No policies available for this member/i exists
+ *   - selectCount: sum of getByRole("button", {name: "Select", exact: true}).count()
+ *   - planTypeValue: getByTestId("plan-type").first() -> trimmed textContent of nextElementSibling (with fallback)
+ *   - urlMatchesMember: readUrlPayload(page.url()).memberId exists AND matches input memberId via sameMember
+ * Decision order:
+ *   1) modal -> "no-policies"
+ *   2) selectCount > 0 -> "results"
+ *   3) planTypeValue non-empty -> wait 1500ms, re-check modal, else "details"
+ * A missing URL payload must NOT count as matching for urlMatchesMember.
+ * Every 2s logs signals. On timeout saves screenshot and throws.
+ */
+async function detectLandingPage(page: Page, timeoutMs = 35_000, memberId?: string): Promise<LandingPage> {
+  const deadline = Date.now() + timeoutMs;
+  let lastLog = 0;
+
+  while (Date.now() < deadline) {
+    // Strong signal: URL indicates results page (check FIRST, before frames)
+    const url = page.url();
+    if (url.includes("/eligibility/search-results")) {
+      console.log(`[detectLandingPage] URL indicates results page: ${url}`);
+      return "results";
+    }
+
+    // Collect page + all frames
+    const contexts: (Page | Frame)[] = [page];
+    for (const frame of page.frames()) {
+      if (frame !== page.mainFrame()) contexts.push(frame);
+    }
+
+    // Compute signals across all contexts
+    let modal = false;
+    let selectCount = 0;
+    let planTypeValue = "";
+    let planTypeContext: Page | Frame | null = null;
+
+    for (const ctx of contexts) {
+      // modal: text /No policies available for this member/i exists
+      const noPolicyCount = await ctx.getByText(NO_POLICY_TEXT).count().catch(() => 0);
+      if (noPolicyCount > 0) modal = true;
+
+      // selectCount: sum of exact Select buttons
+      const count = await ctx.getByRole("button", { name: "Select", exact: true }).count().catch(() => 0);
+      selectCount += count;
+
+      // planTypeValue: first plan-type with non-empty sibling (with fallback like readDetailsPlanType)
+      // ONLY record if we haven't found Select buttons yet (results page takes priority)
+      if (!planTypeValue && selectCount === 0) {
+        const planTypeCount = await ctx.getByTestId("plan-type").count().catch(() => 0);
+        if (planTypeCount > 0) {
+          const value = await ctx.getByTestId("plan-type").first()
+            .evaluate((el) => {
+              const sibling = el.nextElementSibling;
+              if (sibling) return sibling.textContent?.trim() ?? "";
+              const parentSpan = el.parentElement?.querySelector(":scope > span");
+              return parentSpan?.textContent?.trim() ?? "";
+            })
+            .catch(() => "");
+          if (value) {
+            planTypeValue = value;
+            planTypeContext = ctx;
+          }
+        }
+      }
+    }
+
+    // urlMatchesMember: readUrlPayload(page.url()).memberId exists AND matches input memberId via sameMember
+    const urlPayload = readUrlPayload(page.url());
+    const urlHasPolicy = !!urlPayload.memberId;
+    const urlMatchesMember = urlHasPolicy && !!memberId && sameMember(urlPayload.memberId, memberId);
+
+    // Periodic logging every 2s
+    if (Date.now() - lastLog >= 2_000) {
+      console.log(
+        `[workflow] signals: modal=${modal} selectButtons=${selectCount} ` +
+        `planTypeHasValue=${!!planTypeValue} urlHasPolicy=${urlHasPolicy} urlMatchesMember=${urlMatchesMember}`
+      );
+      lastLog = Date.now();
+    }
+
+    // Decision order - RESULTS PAGE TAKES PRIORITY OVER DETAILS
+    // 1) modal -> "no-policies"
+    if (modal) {
+      console.log("[workflow] landed on: no-policies");
+      return "no-policies";
+    }
+
+    // 2) selectCount > 0 -> "results" (RESULTS PAGE CHECKED BEFORE DETAILS)
+    if (selectCount > 0) {
+      console.log(`[workflow] landed on: results (${selectCount} Select button(s))`);
+      return "results";
+    }
+
+    // 3) planTypeValue non-empty AND no Select buttons found -> wait 1500ms, re-check modal + Select buttons, else "details"
+    if (planTypeValue && selectCount === 0) {
+      await page.waitForTimeout(1_500);
+
+      // Re-check modal AND Select buttons after wait
+      let modalAfterWait = false;
+      let selectCountAfterWait = 0;
+      for (const ctx of contexts) {
+        const noPolicyCount = await ctx.getByText(NO_POLICY_TEXT).count().catch(() => 0);
+        if (noPolicyCount > 0) modalAfterWait = true;
+        const count = await ctx.getByRole("button", { name: "Select", exact: true }).count().catch(() => 0);
+        selectCountAfterWait += count;
+      }
+      if (modalAfterWait) {
+        console.log("[workflow] landed on: no-policies (modal appeared after wait)");
+        return "no-policies";
+      }
+      if (selectCountAfterWait > 0) {
+        console.log(`[workflow] landed on: results (Select buttons appeared after wait: ${selectCountAfterWait})`);
+        return "results";
+      }
+      console.log("[workflow] landed on: details");
+      return "details";
+    }
+
+    await page.waitForTimeout(500);
+  }
+
+  // Timeout: dump diagnostics
+  await page.screenshot({ path: "landing-unknown.png", fullPage: true }).catch(() => {});
+  await logLandingDiagnostics(page);
+  throw new Error("detectLandingPage: Timed out waiting for results, details, or no-policies page.");
 }
 async function saveUhcWorkbook(
   workbook: ExcelJS.Workbook,
@@ -835,7 +1337,9 @@ export async function runUhcWellmedEligibilityWorkflow(options: {
 
     for (let attempt = 1; attempt <= 2; attempt += 1) {
       try {
-        result = await searchAndExtractUhcRow(options.page, row, index > 0 && attempt === 1, options.context.isCancelled);
+        // Get the browser context from the page
+        const browserContext = options.page.context();
+        result = await searchAndExtractUhcRow(options.page, browserContext, row, index > 0 && attempt === 1, options.context.isCancelled);
         const extracted = extractedFieldCount(result);
         await options.context.log({
           level: "info",
@@ -843,6 +1347,15 @@ export async function runUhcWellmedEligibilityWorkflow(options: {
           rowIndex: row.worksheetRow,
           eventName: "eligibility_uhc_row_extracted",
         });
+
+        // Validate the result and click Select if conditions pass
+        const validationPassed = await validateAndSelectUhcRow(options.page, row, options.context);
+        if (!validationPassed) {
+          // Validation failed - row should be skipped, don't proceed with selection
+          // The validateAndSelectUhcRow already emitted the error and result
+          break;
+        }
+
         await options.context.emit({ type: "eligibility_uhc_result", rowIndex: row.worksheetRow, update: result });
         break;
       } catch (error) {
@@ -851,6 +1364,24 @@ export async function runUhcWellmedEligibilityWorkflow(options: {
           break;
         }
         const message = error instanceof Error ? error.message : String(error);
+        // Handle "no matching policy" as a skip, not a failure
+        if (message.startsWith("NO_MATCHING_POLICY:") || message.startsWith("NO_MATCHING_PLAN_TYPE:")) {
+          const cleanMessage = message.replace(/^NO_MATCHING_(?:POLICY|PLAN_TYPE): /, "");
+          result.Error = cleanMessage;
+          await options.context.log({ level: "warn", message: `UHC row ${row.worksheetRow} skipped: ${cleanMessage}`, rowIndex: row.worksheetRow, eventName: "eligibility_uhc_no_matching_policy" });
+          await options.context.emit({ type: "eligibility_uhc_result", rowIndex: row.worksheetRow, update: result });
+          await options.context.log({ level: "warn", message: `Skipping UHC row ${row.worksheetRow} (no matching policy) and continuing with the next input row.`, rowIndex: row.worksheetRow, eventName: "eligibility_uhc_row_skipped" });
+          break;
+        }
+        // Handle "no policies" as a skip, not a failure
+        if (message.startsWith("NO_POLICIES:")) {
+          const cleanMessage = message.replace("NO_POLICIES: ", "");
+          result.Error = cleanMessage;
+          await options.context.log({ level: "warn", message: `UHC row ${row.worksheetRow} skipped: ${cleanMessage}`, rowIndex: row.worksheetRow, eventName: "eligibility_uhc_no_policies" });
+          await options.context.emit({ type: "eligibility_uhc_result", rowIndex: row.worksheetRow, update: result });
+          await options.context.log({ level: "warn", message: `Skipping UHC row ${row.worksheetRow} (no policies) and continuing with the next input row.`, rowIndex: row.worksheetRow, eventName: "eligibility_uhc_row_skipped" });
+          break;
+        }
         if (attempt === 1 && shouldRetryNoResult(message)) {
           await options.context.log({
             level: "warn",
