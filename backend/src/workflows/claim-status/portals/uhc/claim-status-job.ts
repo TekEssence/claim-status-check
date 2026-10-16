@@ -70,7 +70,12 @@ export async function runUhcClaimStatusJob(formData: FormData, context: ScraperC
   const startIndex = Number(getOptionalString(formData, "startIndex", "0"));
   const attempt = Number(getOptionalString(formData, "attempt", "1"));
   const browserType = getOptionalString(formData, "browserType", "chrome");
-  const clientType = getOptionalString(formData, "clientType", "minimax");
+  const rawClientType = getOptionalString(
+    formData,
+    "clientType",
+    getOptionalString(formData, "groupId", "minimax"),
+  ).toLowerCase();
+  const clientType = rawClientType === "medrevenu" ? "medrevenu" : "minimax";
   const providerMappings = parseProviderMappings(getOptionalString(formData, "providerMappings", ""));
 
   const sendEvent = async (event: SseEvent) => {
@@ -79,7 +84,7 @@ export async function runUhcClaimStatusJob(formData: FormData, context: ScraperC
 
   await context.log({
     level: "info",
-    message: `UHC input loaded: ${claims.length} row(s). Group: ${clientType}. Provider mappings: ${providerMappings.length}.`,
+    message: `UHC input loaded: ${claims.length} row(s). Group: ${clientType} (received clientType="${rawClientType || "<empty>"}"). Provider mappings: ${providerMappings.length}.`,
   });
 
   await runAutomation({

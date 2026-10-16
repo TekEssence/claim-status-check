@@ -187,6 +187,14 @@ export function useUhcController(p: {
       return;
     }
 
+    // Read the selected group from the submitted form as well as React state.
+    // This keeps the value tied to the visible MedRevenu/Minimax selection at
+    // submit time instead of relying only on a potentially stale closure.
+    const submittedClientType = String(new FormData(e.currentTarget).get("clientType") || uhcGroupId)
+      .trim()
+      .toLowerCase();
+    const clientType = submittedClientType === "medrevenu" ? "medrevenu" : "minimax";
+
     const formData = new FormData();
     formData.append("portalId", "uhc");
     formData.append("loginExcel", uhcLoginFile);
@@ -197,7 +205,7 @@ export function useUhcController(p: {
     formData.append("startIndex", "0");
     formData.append("attempt", "1");
     formData.append("browserType", uhcBrowserType);
-    formData.append("clientType", uhcGroupId);
+    formData.append("clientType", clientType);
 
     let hasError = false;
     let wasCancelled = false;

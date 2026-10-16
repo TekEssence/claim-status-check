@@ -43,6 +43,7 @@ export function UhcInputForm({
 
       <div className="rounded-[1.2rem] border border-sky-100 bg-white/90 p-4">
         <p className="text-sm font-semibold text-slate-900">Select Group</p>
+        <input type="hidden" name="clientType" value={groupId} readOnly />
         <div className="mt-3 grid gap-3 md:grid-cols-2">
           {groups.map((group) => {
             const isSelected = groupId === group.id;
