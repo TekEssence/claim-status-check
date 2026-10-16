@@ -171,7 +171,9 @@ export async function readClaimsExcel(buffer: ArrayBuffer): Promise<ClaimRow[]> 
   const dobCol     = findCol(headerRow, 'patient dob', 'dob', 'date of birth', 'birth');
   const svcDateCol = findExactCol(headerRow, 'dos') > 0
     ? findExactCol(headerRow, 'dos')
-    : findCol(headerRow, 'service date', 'dos', 'date of service');
+    : findExactCol(headerRow, 'service date', 'date of service') > 0
+      ? findExactCol(headerRow, 'service date', 'date of service')
+      : findCol(headerRow, 'service date', 'date of service', 'dos');
   const nameCol    = findExactCol(headerRow, 'patient') > 0
     ? findExactCol(headerRow, 'patient')
     : findCol(headerRow, 'patient name', 'subscriber name', 'name', 'member name');

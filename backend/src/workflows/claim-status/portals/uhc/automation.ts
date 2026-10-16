@@ -1768,7 +1768,9 @@ function normalizeUhcInputDate(value: unknown, options: { allowHistoricalSerial?
   if (!text) return '';
 
   const serial = Number(text);
-  if (/^\d+(\.\d+)?$/.test(text) && Number.isFinite(serial)) {
+  // Only treat as Excel serial if 5+ digits (modern dates are 40000+).
+  // Single-digit "6", "12" etc. are NOT serial dates — they're bad data.
+  if (/^\d{5,}(\.\d+)?$/.test(text) && Number.isFinite(serial)) {
     return normalizeUhcInputDate(serial, options);
   }
 

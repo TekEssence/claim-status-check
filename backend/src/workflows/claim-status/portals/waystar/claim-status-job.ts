@@ -463,8 +463,13 @@ export async function runWaystarClaimStatusJob(formData: FormData, context: Scra
             message: historyFailureMessage,
             captureScreenshot: true,
           });
-          addAudit(auditRows, row.inputRowId, "history", "abort", "Fail-fast triggered after History did not open. Stopping the Waystar run on this patient.");
-          throw new Error(`WAYSTAR_HISTORY_FAIL_FAST: ${historyFailureMessage}`);
+          addAudit(auditRows, row.inputRowId, "history", "skipped", `History popup failed after ${HISTORY_POPUP_RETRY_ATTEMPTS} attempts. Continuing to next row.`);
+          await context.log({ level: "warn", message: `Waystar row ${row.inputRowId} skipped: ${historyFailureMessage}`, rowIndex: row.inputRowId });
+          // Ensure we're back at claim search for next row
+          if (page) {
+            await navigateToWaystarClaimSearch(page).catch(() => {});
+          }
+          continue;
         }
 
         let extraction: WaystarClaimExtraction | null = null;
@@ -557,10 +562,6 @@ export async function runWaystarClaimStatusJob(formData: FormData, context: Scra
         addAudit(auditRows, row.inputRowId, "output", "completed", `Wrote ${extraction.procedureLines.length || 1} extracted EOB row(s) to the output workbook.`);
         await context.log({ level: "info", message: `Waystar row ${row.inputRowId} completed with extracted EOB data.`, rowIndex: row.inputRowId });
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        if (message.startsWith("WAYSTAR_HISTORY_FAIL_FAST:")) {
-          throw error;
-        }
         await markRowFailed({
           context,
           page,
