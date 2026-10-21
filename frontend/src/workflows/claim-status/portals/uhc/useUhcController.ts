@@ -167,6 +167,10 @@ export function useUhcController(p: {
 
   async function submitUhc(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
+    const submittedClientType = String(new FormData(e.currentTarget).get("clientType") || uhcGroupId)
+      .trim()
+      .toLowerCase();
+    const clientType = submittedClientType === "medrevenu" ? "medrevenu" : "minimax";
 
     if (!uhcLoginFile || !uhcClaimFile) {
       setStatus("Please provide both the UHC login Excel and claim Excel files.");
@@ -179,21 +183,13 @@ export function useUhcController(p: {
     let workbookBundle: UhcWorkbookBundle;
     let providerMappings: UhcProviderMapping[];
     try {
-      workbookBundle = await loadUhcWorkbookBundle(uhcClaimFile, uhcGroupId);
+      workbookBundle = await loadUhcWorkbookBundle(uhcClaimFile, clientType);
       providerMappings = await loadUhcProviderMappings();
     } catch (error) {
       setStatus(`Unable to read UHC input files: ${getErrorMessage(error)}`);
       setIsProcessing(false);
       return;
     }
-
-    // Read the selected group from the submitted form as well as React state.
-    // This keeps the value tied to the visible MedRevenu/Minimax selection at
-    // submit time instead of relying only on a potentially stale closure.
-    const submittedClientType = String(new FormData(e.currentTarget).get("clientType") || uhcGroupId)
-      .trim()
-      .toLowerCase();
-    const clientType = submittedClientType === "medrevenu" ? "medrevenu" : "minimax";
 
     const formData = new FormData();
     formData.append("portalId", "uhc");
