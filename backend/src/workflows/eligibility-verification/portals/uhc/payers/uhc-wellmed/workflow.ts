@@ -247,6 +247,81 @@ function formatDob(value: string): string {
   return match ? `${match[1].padStart(2, "0")}/${match[2].padStart(2, "0")}/${match[3]}` : value.trim();
 }
 
+/**
+ * Page-content fingerprints captured immediately before each Search click.
+ *
+ * UHC keeps the previous row's result DOM mounted while the next search is
+ * running, so the landing detector can otherwise read that leftover DOM as the
+ * new row's answer. Marking the content stale before every Search click lets
+ * the detector wait for the page to actually change instead.
+ */
+const staleFingerprints: Array<{ fingerprint: string; at: number }> = [];
+
+/**
+ * How long a stale fingerprint stays authoritative. Must outlive detectLandingPage's
+ * timeout, otherwise the guard expires mid-detection and a lingering previous-row
+ * panel gets classified again. Bounded so two rows with genuinely identical content
+ * are never blocked from being detected.
+ */
+const STALE_FINGERPRINT_TTL_MS = 45_000;
+
+/** Max retained snapshots: one per Search click in the current row. */
+const MAX_STALE_FINGERPRINTS = 4;
+
+/**
+ * How long a plan-type must be continuously present with no Select buttons
+ * before the detector accepts "details".
+ *
+ * A results page renders its Select buttons late; the previous row's details
+ * panel can be mounted meanwhile. Requiring a sustained hold means a
+ * late-arriving Select button resets the hold instead of being missed.
+ */
+const DETAILS_HOLD_MS = 6_000;
+
+/**
+ * Reads a normalized fingerprint of the page.
+ *
+ * Must span page + all frames, because every signal the detector reads comes
+ * from pageAndFrames. A main-frame-only fingerprint is blind to details
+ * content living in an iframe, which made the stale guard report stale=false
+ * while a previous row's details panel was still mounted in that frame.
+ */
+async function readFingerprint(page: Page): Promise<string> {
+  const parts: string[] = [];
+  for (const ctx of pageAndFrames(page)) {
+    const text = await ctx.locator("body").innerText({ timeout: 2_000 }).catch(() => "");
+    if (text.trim()) parts.push(text.trim());
+  }
+  return parts.join("\n").replace(/[^\S\n]+/g, " ").trim();
+}
+
+/**
+ * Records the current page content as stale. Call immediately before every
+ * Search click: the "New or recent search" button and the search submit button.
+ */
+async function markStale(page: Page): Promise<void> {
+  const fingerprint = await readFingerprint(page);
+  if (!fingerprint) return;
+  const last = staleFingerprints[staleFingerprints.length - 1];
+  if (last?.fingerprint === fingerprint) {
+    last.at = Date.now();
+    return;
+  }
+  staleFingerprints.push({ fingerprint, at: Date.now() });
+  if (staleFingerprints.length > MAX_STALE_FINGERPRINTS) staleFingerprints.shift();
+}
+
+/**
+ * True when the given page text still matches a snapshot taken before the
+ * current search, i.e. the DOM has not yet changed away from the old row.
+ */
+function isStaleFingerprint(fingerprint: string, now = Date.now()): boolean {
+  if (!fingerprint) return false;
+  return staleFingerprints.some(
+    (entry) => now - entry.at <= STALE_FINGERPRINT_TTL_MS && entry.fingerprint === fingerprint,
+  );
+}
+
 async function enterSearch(page: Page, row: UhcInputRow): Promise<void> {
   const member = await firstVisibleLocator(page, SELECTORS.memberId, 60_000, "Member ID field");
   const dob = await firstVisibleLocator(page, SELECTORS.dateOfBirth, 60_000, "date of birth field");
@@ -255,6 +330,9 @@ async function enterSearch(page: Page, row: UhcInputRow): Promise<void> {
   await dob.press("Tab");
   await page.waitForTimeout(800);
   const submit = await firstVisibleLocator(page, SELECTORS.submit, 30_000, "eligibility search button");
+  // Mark the outgoing page stale so detectLandingPage does not read the
+  // previous row's result DOM as this row's answer.
+  await markStale(page);
   await submit.click();
   await page.waitForTimeout(1_000);
 }
@@ -645,6 +723,18 @@ async function readScopedUhcResultText(page: Page | Frame): Promise<string> {
   ].filter(Boolean).join(String.fromCharCode(10));
 }
 
+/**
+ * The page plus every child frame. UHC renders eligibility details inside an
+ * iframe, so detectors must scan all contexts rather than the main frame only.
+ */
+function pageAndFrames(page: Page): Array<Page | Frame> {
+  const contexts: Array<Page | Frame> = [page];
+  for (const frame of page.frames()) {
+    if (frame !== page.mainFrame()) contexts.push(frame);
+  }
+  return contexts;
+}
+
 async function hasVisibleSearchForm(page: Page): Promise<boolean> {
   const candidates = page.locator(SELECTORS.memberId);
   const count = await candidates.count();
@@ -676,6 +766,9 @@ async function openNewSearchForm(page: Page): Promise<void> {
   const button = await visibleNewSearchButton(page);
   await button.scrollIntoViewIfNeeded().catch(() => {});
   await button.waitFor({ state: "visible" });
+  // Mark the outgoing result page stale before leaving it. UHC often keeps this
+  // DOM mounted while the next search runs.
+  await markStale(page);
   await button.click();
   // UHC replaces the initial panel DOM during its opening animation. Wait for
   // that replacement before resolving fresh input locators for the next row.
@@ -780,7 +873,6 @@ async function waitForFreshResult(
   timeout = 65_000,
 ): Promise<void> {
   const deadline = Date.now() + timeout;
-  const policyBanner = page.locator("ul").filter({ hasText: /Policy Selected:/i });
   let previous = "";
   let stableReads = 0;
   let lastLog = 0;
@@ -792,31 +884,56 @@ async function waitForFreshResult(
     if (portalError) throw new Error(portalError);
 
     const formVisible = await hasVisibleSearchForm(page);
-    let policyVisible = false;
-    const policyCount = await policyBanner.count();
-    for (let index = 0; index < policyCount; index += 1) {
-      if (await policyBanner.nth(index).isVisible().catch(() => false)) {
-        policyVisible = true;
-        break;
-      }
-    }
 
-    // Also check for plan-type element as alternative stability indicator
+    // Scan page + all frames: detectLandingPage and readDetailsPlanType both
+    // accept plan-type/policy rendered inside a frame, so stability must too.
+    // Checking only the main frame made every signal read false whenever the
+    // details page mounted in an iframe, which is what timed this out.
+    let policyVisible = false;
     let planTypeVisible = false;
-    const planTypeCount = await page.getByTestId("plan-type").count().catch(() => 0);
-    if (planTypeCount > 0) {
-      for (let index = 0; index < planTypeCount; index += 1) {
-        if (await page.getByTestId("plan-type").nth(index).isVisible().catch(() => false)) {
-          planTypeVisible = true;
-          break;
+    for (const ctx of pageAndFrames(page)) {
+      if (!policyVisible) {
+        const banner = ctx.locator("ul").filter({ hasText: /Policy Selected:/i });
+        const policyCount = await banner.count().catch(() => 0);
+        for (let index = 0; index < policyCount; index += 1) {
+          if (await banner.nth(index).isVisible().catch(() => false)) {
+            policyVisible = true;
+            break;
+          }
         }
       }
+      if (!planTypeVisible) {
+        const planTypeCount = await ctx.getByTestId("plan-type").count().catch(() => 0);
+        for (let index = 0; index < planTypeCount; index += 1) {
+          if (await ctx.getByTestId("plan-type").nth(index).isVisible().catch(() => false)) {
+            planTypeVisible = true;
+            break;
+          }
+        }
+      }
+      if (policyVisible && planTypeVisible) break;
     }
 
     const isStable = !formVisible && (policyVisible || planTypeVisible);
 
+    // A previous row's details panel can satisfy these signals on its own.
+    // Ignore it until the content has actually changed.
+    if (isStable && isStaleFingerprint(await readFingerprint(page))) {
+      stableReads = 0;
+      previous = "";
+      if (Date.now() - lastLog >= 5_000) {
+        console.log(
+          `[waitForFreshResult] Waiting... signals satisfied but content is stale ` +
+          `(previous row's result still mounted) frames=${page.frames().length - 1}`,
+        );
+        lastLog = Date.now();
+      }
+      await page.waitForTimeout(750);
+      continue;
+    }
+
     if (isStable) {
-      const current = await page.locator("body").innerText();
+      const current = await readFingerprint(page);
       stableReads = current === previous ? stableReads + 1 : 0;
       previous = current;
       if (stableReads >= 2) {
@@ -828,9 +945,31 @@ async function waitForFreshResult(
       stableReads = 0;
     }
 
+    // Fail fast when this function was reached for a page that is not a details
+      // page. The page itself is fine; the routing into this details-only branch
+      // was wrong, so report that instead of waiting out the full timeout.
+    if (!policyVisible && !planTypeVisible) {
+      let selectCount = 0;
+      for (const ctx of pageAndFrames(page)) {
+        selectCount += await ctx.getByRole("button", { name: "Select", exact: true }).count().catch(() => 0);
+      }
+      if (selectCount > 0) {
+        await page.screenshot({ path: "waitForFreshResult-misrouted-results.png", fullPage: true }).catch(() => {});
+        throw new Error(
+          `waitForFreshResult was called on a page showing ${selectCount} Select button(s) ` +
+          `(Member Search Results), so no Policy Selected banner can appear and this cannot stabilize. ` +
+          `detectLandingPage misclassified the landing as "details". ` +
+          `url=${page.url()} frames=${page.frames().length - 1}`,
+        );
+      }
+    }
+
     // Periodic logging
-    if (Date.now() - lastLog >= 10_000) {
-      console.log(`[waitForFreshResult] Waiting... formVisible=${formVisible} policyVisible=${policyVisible} planTypeVisible=${planTypeVisible} stableReads=${stableReads}`);
+    if (Date.now() - lastLog >= 5_000) {
+      console.log(
+        `[waitForFreshResult] Waiting... formVisible=${formVisible} policyVisible=${policyVisible} ` +
+        `planTypeVisible=${planTypeVisible} stableReads=${stableReads} frames=${page.frames().length - 1}`,
+      );
       lastLog = Date.now();
     }
 
@@ -842,28 +981,37 @@ async function waitForFreshResult(
   // Diagnostic on timeout
   const formVisible = await hasVisibleSearchForm(page);
   let policyVisible = false;
-  const policyCount = await policyBanner.count();
-  for (let index = 0; index < policyCount; index += 1) {
-    if (await policyBanner.nth(index).isVisible().catch(() => false)) {
-      policyVisible = true;
-      break;
-    }
-  }
   let planTypeVisible = false;
-  const planTypeCount = await page.getByTestId("plan-type").count().catch(() => 0);
-  if (planTypeCount > 0) {
-    for (let index = 0; index < planTypeCount; index += 1) {
-      if (await page.getByTestId("plan-type").nth(index).isVisible().catch(() => false)) {
-        planTypeVisible = true;
-        break;
+  let frameCount = 0;
+  for (const ctx of pageAndFrames(page)) {
+    if (ctx !== page) frameCount += 1;
+    if (!policyVisible) {
+      const banner = ctx.locator("ul").filter({ hasText: /Policy Selected:/i });
+      const policyCount = await banner.count().catch(() => 0);
+      for (let index = 0; index < policyCount; index += 1) {
+        if (await banner.nth(index).isVisible().catch(() => false)) {
+          policyVisible = true;
+          break;
+        }
       }
     }
+    if (!planTypeVisible) {
+      const planType = ctx.getByTestId("plan-type");
+      const planTypeCount = await planType.count().catch(() => 0);
+      for (let index = 0; index < planTypeCount; index += 1) {
+        if (await planType.nth(index).isVisible().catch(() => false)) {
+          planTypeVisible = true;
+          break;
+        }
+      }
+    }
+    if (policyVisible && planTypeVisible) break;
   }
   await page.screenshot({ path: "waitForFreshResult-timeout.png", fullPage: true }).catch(() => {});
   throw new Error(
     `The UHC search form did not transition to a stable eligibility result page. ` +
     `formVisible=${formVisible} policyVisible=${policyVisible} planTypeVisible=${planTypeVisible} ` +
-    `stableReads=${stableReads}`
+    `stableReads=${stableReads} frames=${frameCount} url=${page.url()}`
   );
 }
 
@@ -913,7 +1061,7 @@ async function searchAndExtractUhcRow(
   await enterSearch(page, row);
 
   // Detect which page we landed on after search
-  const landing = await detectLandingPage(page, 30_000, row.memberId);
+  const landing = await detectLandingPage(page, 45_000, row.memberId);
   let ctx: Page | Frame = page;
 
   if (landing === "no-policies") {
@@ -996,12 +1144,7 @@ async function readDetailsPlanType(page: Page, timeoutMs = 20_000): Promise<stri
   const deadline = Date.now() + timeoutMs;
 
   while (Date.now() < deadline) {
-    const contexts: (Page | Frame)[] = [page];
-    for (const frame of page.frames()) {
-      if (frame !== page.mainFrame()) contexts.push(frame);
-    }
-
-    for (const ctx of contexts) {
+    for (const ctx of pageAndFrames(page)) {
       const locator = ctx.getByTestId("plan-type").first();
       const count = await locator.count().catch(() => 0);
       if (count === 0) continue;
@@ -1123,30 +1266,42 @@ type LandingPage = "results" | "details" | "no-policies";
  *   - selectCount: sum of getByRole("button", {name: "Select", exact: true}).count()
  *   - planTypeValue: getByTestId("plan-type").first() -> trimmed textContent of nextElementSibling (with fallback)
  *   - urlMatchesMember: readUrlPayload(page.url()).memberId exists AND matches input memberId via sameMember
- * Decision order:
+ *   - stale: current page fingerprint still matches one captured by markStale() before this search
+ * Decision order (a "stale" page is never accepted):
  *   1) modal -> "no-policies"
  *   2) selectCount > 0 -> "results"
- *   3) planTypeValue non-empty -> wait 1500ms, re-check modal, else "details"
+ *   3) planTypeValue non-empty -> hold for DETAILS_HOLD_MS with no Select buttons,
+ *      re-checking the results URL each poll, then "details". Any Select button or
+ *      stale content resets the hold, so a late-rendering results page is never
+ *      misclassified as details.
  * A missing URL payload must NOT count as matching for urlMatchesMember.
+ * Stale DOM: UHC keeps the previous row's result mounted while the next search
+ * runs. Signals are still logged, but no verdict is committed while the page
+ * content matches a pre-search snapshot, so the detector waits for the real
+ * result instead of reading the previous row's page.
  * Every 2s logs signals. On timeout saves screenshot and throws.
  */
 async function detectLandingPage(page: Page, timeoutMs = 35_000, memberId?: string): Promise<LandingPage> {
   const deadline = Date.now() + timeoutMs;
   let lastLog = 0;
+  // Start of the uninterrupted window during which a plan-type has been present
+  // with no Select buttons. Zero means "no current candidate".
+  let detailsHoldSince = 0;
 
   while (Date.now() < deadline) {
+    // Stale check first: the previous row's DOM can still be mounted here.
+    const fingerprint = await readFingerprint(page);
+    const stale = isStaleFingerprint(fingerprint);
+
     // Strong signal: URL indicates results page (check FIRST, before frames)
     const url = page.url();
-    if (url.includes("/eligibility/search-results")) {
+    if (url.includes("/eligibility/search-results") && !stale) {
       console.log(`[detectLandingPage] URL indicates results page: ${url}`);
       return "results";
     }
 
     // Collect page + all frames
-    const contexts: (Page | Frame)[] = [page];
-    for (const frame of page.frames()) {
-      if (frame !== page.mainFrame()) contexts.push(frame);
-    }
+    const contexts = pageAndFrames(page);
 
     // Compute signals across all contexts
     let modal = false;
@@ -1193,56 +1348,83 @@ async function detectLandingPage(page: Page, timeoutMs = 35_000, memberId?: stri
     if (Date.now() - lastLog >= 2_000) {
       console.log(
         `[workflow] signals: modal=${modal} selectButtons=${selectCount} ` +
-        `planTypeHasValue=${!!planTypeValue} urlHasPolicy=${urlHasPolicy} urlMatchesMember=${urlMatchesMember}`
+        `planTypeHasValue=${!!planTypeValue} urlHasPolicy=${urlHasPolicy} urlMatchesMember=${urlMatchesMember} ` +
+        `stale=${stale}`
       );
       lastLog = Date.now();
+    }
+
+    // Stale guard: the page still shows the pre-search snapshot, so every
+    // signal above belongs to the previous row. Keep polling for real content.
+    if (stale) {
+      await page.waitForTimeout(500);
+      continue;
     }
 
     // Decision order - RESULTS PAGE TAKES PRIORITY OVER DETAILS
     // 1) modal -> "no-policies"
     if (modal) {
+      detailsHoldSince = 0;
       console.log("[workflow] landed on: no-policies");
       return "no-policies";
     }
 
     // 2) selectCount > 0 -> "results" (RESULTS PAGE CHECKED BEFORE DETAILS)
     if (selectCount > 0) {
+      detailsHoldSince = 0;
       console.log(`[workflow] landed on: results (${selectCount} Select button(s))`);
       return "results";
     }
 
-    // 3) planTypeValue non-empty AND no Select buttons found -> wait 1500ms, re-check modal + Select buttons, else "details"
-    if (planTypeValue && selectCount === 0) {
-      await page.waitForTimeout(1_500);
+    // 3) planTypeValue non-empty AND no Select buttons -> candidate for "details"
+    //
+    // A mounted plan-type alone is weak evidence. The previous row's details panel
+    // can stay mounted in a frame while the new results page renders, and the
+    // results URL has not updated yet, so first sighting is not proof.
+    //
+    // Require the candidate to hold continuously for DETAILS_HOLD_MS instead of a
+    // single fixed wait: any Select button resets the hold, which is exactly what a
+    // late-rendering results page does. Committing early routes a results page into
+    // waitForFreshResult, which then waits for a Policy Selected banner that a
+    // results page never has.
+    if (planTypeValue && !stale) {
+      if (!detailsHoldSince) detailsHoldSince = Date.now();
+      const heldMs = Date.now() - detailsHoldSince;
 
-      // Re-check modal AND Select buttons after wait
-      let modalAfterWait = false;
-      let selectCountAfterWait = 0;
-      for (const ctx of contexts) {
-        const noPolicyCount = await ctx.getByText(NO_POLICY_TEXT).count().catch(() => 0);
-        if (noPolicyCount > 0) modalAfterWait = true;
-        const count = await ctx.getByRole("button", { name: "Select", exact: true }).count().catch(() => 0);
-        selectCountAfterWait += count;
-      }
-      if (modalAfterWait) {
-        console.log("[workflow] landed on: no-policies (modal appeared after wait)");
-        return "no-policies";
-      }
-      if (selectCountAfterWait > 0) {
-        console.log(`[workflow] landed on: results (Select buttons appeared after wait: ${selectCountAfterWait})`);
+      // The results URL is decisive whenever it appears, including mid-hold.
+      const urlNow = page.url();
+      if (urlNow.includes("/eligibility/search-results")) {
+        console.log(`[detectLandingPage] URL indicates results page: ${urlNow}`);
         return "results";
       }
-      console.log("[workflow] landed on: details");
+
+      if (heldMs < DETAILS_HOLD_MS) {
+        console.log(
+          `[workflow] plan-type candidate holding ${heldMs}/${DETAILS_HOLD_MS}ms ` +
+          `with no Select buttons yet`,
+        );
+        await page.waitForTimeout(500);
+        continue;
+      }
+
+      console.log(`[workflow] landed on: details (plan-type held ${heldMs}ms with no Select buttons)`);
       return "details";
     }
 
+    detailsHoldSince = 0;
+
+    // 3) planTypeValue non-empty AND no Select buttons found -> require the page to settle
     await page.waitForTimeout(500);
   }
 
   // Timeout: dump diagnostics
   await page.screenshot({ path: "landing-unknown.png", fullPage: true }).catch(() => {});
   await logLandingDiagnostics(page);
-  throw new Error("detectLandingPage: Timed out waiting for results, details, or no-policies page.");
+  throw new Error(
+    `detectLandingPage: Timed out waiting for results, details, or no-policies page. ` +
+    `url=${page.url()} stale=${isStaleFingerprint(await readFingerprint(page))} ` +
+    `snapshots=${staleFingerprints.length}`,
+  );
 }
 async function saveUhcWorkbook(
   workbook: ExcelJS.Workbook,
