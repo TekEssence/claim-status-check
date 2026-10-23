@@ -37,7 +37,7 @@ function requiredString(value: unknown, label: string, maxLength = 500): string 
   return value.trim();
 }
 
-function validateClaims(value: unknown): PreparedClaim[] {
+export function validateServiceClaims(value: unknown): PreparedClaim[] {
   if (!Array.isArray(value) || value.length === 0 || value.length > 1000) {
     throw new Error("claims must contain between 1 and 1000 rows.");
   }
@@ -61,10 +61,16 @@ function validateClaims(value: unknown): PreparedClaim[] {
         throw new Error(`Claim ${index + 1} field ${key} must be scalar.`);
       }
     }
-    if (!String(data["Member Policy ID"] ?? "").trim() || !String(data["Date Of Service"] ?? "").trim()) {
+    return { client_row_ref: clientRowRef, data: data as PreparedClaim["data"] };
+  });
+}
+
+function validateIehpClaims(value: unknown): PreparedClaim[] {
+  return validateServiceClaims(value).map((claim, index) => {
+    if (!String(claim.data["Member Policy ID"] ?? "").trim() || !String(claim.data["Date Of Service"] ?? "").trim()) {
       throw new Error(`Claim ${index + 1} requires Member Policy ID and Date Of Service.`);
     }
-    return { client_row_ref: clientRowRef, data: data as PreparedClaim["data"] };
+    return claim;
   });
 }
 
@@ -77,7 +83,7 @@ export function validateIehpServiceInput(value: unknown): IehpServiceInput {
   }
   const credentials = credentialSource as Record<string, unknown>;
   return {
-    claims: validateClaims(source.claims),
+    claims: validateIehpClaims(source.claims),
     credentials: {
       login_url: requiredString(credentials.login_url, "credentials.login_url", 2048),
       username: requiredString(credentials.username, "credentials.username"),

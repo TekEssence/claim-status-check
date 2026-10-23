@@ -33,7 +33,7 @@ function s3(): S3Client {
   return client;
 }
 
-export async function loadIehpExpectedRefs(job: ServiceJob): Promise<string[]> {
+export async function loadServiceExpectedRefs(job: ServiceJob): Promise<string[]> {
   const metadata = job.metadata as { inputKeys?: { claimRows?: unknown } } | null;
   const key = metadata?.inputKeys?.claimRows;
   if (!job.inputBucket || typeof key !== "string" || !key) throw new Error("Integrated claim input reference is missing.");
@@ -52,7 +52,7 @@ export async function loadIehpServiceSnapshot(
   job: ServiceJob,
   options: { requireStatusColumns?: boolean } = {},
 ): Promise<{ expectedRefs: string[]; summary: ServiceResultSummary | null; artifact: ServiceWorkbookArtifact | null; recorded: boolean }> {
-  const [expectedRefs, artifacts] = await Promise.all([loadIehpExpectedRefs(job), listArtifactsForJob(job.jobId)]);
+  const [expectedRefs, artifacts] = await Promise.all([loadServiceExpectedRefs(job), listArtifactsForJob(job.jobId)]);
   const output = artifacts.find((item) => item.artifactType === "output_snapshot" && item.bucket && item.s3Key && item.filename.endsWith(".xlsx"));
   const fallback = serviceOutputWorkbookLocation(job);
   const bucket = output?.bucket || job.outputBucket;

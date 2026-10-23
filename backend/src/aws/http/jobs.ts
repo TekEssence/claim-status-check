@@ -5,7 +5,7 @@ import { jsonResponse, parseJsonBody, getAuthUserId, getAuthUserSnapshot, getJob
 import { describeWorkerTask, findWorkerTaskByJobId, runWorkerTask, stopWorkerTask, WorkerTaskLaunchRejectedError } from "../runtime/ecs";
 import { buildWorkflowKey, createDownloadUrl, createUploadUrl } from "../runtime/s3";
 import { createIehpBundle } from "./iehp-bundle";
-import { loadIehpServiceSnapshot } from "../service/iehp-snapshot";
+import { loadServiceSnapshot } from "../service/portal-dispatch";
 import {
   appendWorkflowEvent,
   appendWorkflowArtifact,
@@ -168,9 +168,9 @@ export async function reconcileAwsJobRuntime(job: Awaited<ReturnType<typeof getW
     let status: "cancelled" | "completed" | "partial_success" | "failed" = job.status === "cancelling" && !deadlineExceeded ? "cancelled" : exitCode === 0 ? "completed" : "failed";
     let outputError = "";
     if (job.clientSystem && status !== "cancelled") {
-      let snapshot: Awaited<ReturnType<typeof loadIehpServiceSnapshot>>;
+      let snapshot: Awaited<ReturnType<typeof loadServiceSnapshot>>;
       try {
-        snapshot = await loadIehpServiceSnapshot(job, { requireStatusColumns: false });
+        snapshot = await loadServiceSnapshot(job, { requireStatusColumns: false });
       } catch {
         // Keep the job active until the last S3 object can be read and reconciled.
         return job;

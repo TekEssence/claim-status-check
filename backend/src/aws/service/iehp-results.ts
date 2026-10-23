@@ -149,8 +149,10 @@ export async function normalizeIehpServiceWorkbook(
   };
 }
 
-export function pageIehpServiceResults(summary: ServiceResultSummary | null, cursor: number, limit: number, terminal: boolean) {
+export function pageServiceResults(summary: ServiceResultSummary | null, cursor: number, limit: number, terminal: boolean) {
   const available = summary ? terminal ? summary.row_results.length : summary.finalized_count : 0;
   const nextCursor = Math.min(available, cursor + limit);
   return { available, nextCursor, results: summary?.row_results.slice(cursor, nextCursor) ?? [] };
 }
+
+export const pageIehpServiceResults = pageServiceResults;

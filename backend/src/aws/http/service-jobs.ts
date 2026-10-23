@@ -9,9 +9,8 @@ import {
   updateWorkflowJob,
 } from "../runtime/workflow-db";
 import { launchQueuedWorkflowJob, reconcileAwsJobRuntime } from "./jobs";
-import { generateIehpServiceInput, maskIehpAccountLabel, validateIehpServiceInput } from "../service/iehp-input";
-import { pageIehpServiceResults } from "../service/iehp-results";
-import { loadIehpServiceSnapshot } from "../service/iehp-snapshot";
+import { pageServiceResults } from "../service/iehp-results";
+import { getServicePortal, loadServiceSnapshot } from "../service/portal-dispatch";
 
 type ServiceSubmitBody = {
   client_system?: unknown;
@@ -20,6 +19,7 @@ type ServiceSubmitBody = {
   deadline_at?: unknown;
   workflow?: unknown;
   portal?: unknown;
+  projectId?: unknown;
   claims?: unknown;
   credentials?: unknown;
 };
@@ -93,14 +93,15 @@ async function putWithRetry(bucket: string, key: string, body: Buffer | string, 
 }
 
 function requestHash(body: ServiceSubmitBody): string {
-  const credentials = body.credentials as { login_url?: unknown; username?: unknown; claim_status_url?: unknown };
+  const credentials = body.credentials as { login_url?: unknown; username?: unknown; claim_status_url?: unknown; success_url_fragment?: unknown };
   return createHash("sha256").update(JSON.stringify({
     client_execution_id: body.client_execution_id,
     deadline_at: body.deadline_at,
     workflow: body.workflow,
     portal: body.portal,
+    projectId: body.projectId,
     claims: body.claims,
-    credential_identity: { login_url: credentials.login_url, username: credentials.username, claim_status_url: credentials.claim_status_url },
+    credential_identity: { login_url: credentials.login_url, username: credentials.username, claim_status_url: credentials.claim_status_url, success_url_fragment: credentials.success_url_fragment },
   })).digest("hex");
 }
 
@@ -137,14 +138,15 @@ export async function submitServiceJob(event: ApiEvent) {
     if (!body || typeof body !== "object" || Array.isArray(body)) throw new ServiceRequestError(400, "Request body must be an object.");
     if (body.client_system !== clientSystem) throw new ServiceRequestError(400, "client_system must match X-Client-System.");
     if (body.workflow !== "CLAIM_STATUS") throw new ServiceRequestError(400, "workflow must be CLAIM_STATUS.");
-    if (body.portal !== "iehp") throw new ServiceRequestError(422, "This portal is not supported by the Phase 1 service API. Supported: iehp.");
+    const portal = getServicePortal(body.portal);
+    if (!portal) throw new ServiceRequestError(422, "This portal is not supported by the service API. Supported: iehp, availity.");
     const clientExecutionId = requiredId(body.client_execution_id, "client_execution_id");
     const idempotencyKey = requiredId(body.idempotency_key, "idempotency_key");
-    let input: ReturnType<typeof validateIehpServiceInput>;
+    let generated: Awaited<ReturnType<typeof portal.adapter.prepare>>;
     try {
-      input = validateIehpServiceInput(body);
+      generated = await portal.adapter.prepare(body);
     } catch (error) {
-      throw new ServiceRequestError(422, error instanceof Error ? error.message : "Invalid IEHP claim input.");
+      throw new ServiceRequestError(422, error instanceof Error ? error.message : "Invalid portal claim input.");
     }
     const fingerprint = requestHash(body);
     const existing = await getWorkflowJobByClientKey(clientSystem, idempotencyKey);
@@ -157,28 +159,27 @@ export async function submitServiceJob(event: ApiEvent) {
 
     const deadlineAt = requiredDeadline(body.deadline_at);
 
-    const generated = await generateIehpServiceInput(input);
     const jobId = createJobId();
     const inputBucket = requiredEnv("WORKFLOW_INPUTS_BUCKET");
     const outputBucket = requiredEnv("WORKFLOW_OUTPUTS_BUCKET");
-    const inputKeys = {
-      claimExcel: buildWorkflowKey({ workflowId: "claim-status", jobId, area: "input", filename: "claimExcel-claims.xlsx" }),
-      loginExcel: buildWorkflowKey({ workflowId: "claim-status", jobId, area: "input", filename: "loginExcel-login.xlsx" }),
-      claimRows: buildWorkflowKey({ workflowId: "claim-status", jobId, area: "input", filename: "claimRows.json" }),
-    };
+    const inputKeys: Record<string, string> = Object.fromEntries(generated.files.map((file) => [
+      file.field,
+      buildWorkflowKey({ workflowId: "claim-status", jobId, area: "input", filename: `${file.field}-${file.filename}` }),
+    ]));
+    inputKeys.claimRows = buildWorkflowKey({ workflowId: "claim-status", jobId, area: "input", filename: "claimRows.json" });
     try {
       await createWorkflowJob({
-        jobId, userId: `service:${clientSystem}`, workflowId: "claim-status", portalId: "iehp",
+        jobId, userId: `service:${clientSystem}`, workflowId: "claim-status", portalId: portal.id,
         clientSystem, clientExecutionId, idempotencyKey, initialStatus: "preparing",
         inputBucket, outputBucket,
-        inputPrefix: inputKeys.claimExcel.slice(0, inputKeys.claimExcel.lastIndexOf("/")),
-        outputPrefix: inputKeys.claimExcel.slice(0, inputKeys.claimExcel.lastIndexOf("/")).replace(/\/input$/, "/output"),
-        claimFileName: "claims.xlsx", loginFileName: "login.xlsx",
+        inputPrefix: inputKeys.claimRows.slice(0, inputKeys.claimRows.lastIndexOf("/")),
+        outputPrefix: inputKeys.claimRows.slice(0, inputKeys.claimRows.lastIndexOf("/")).replace(/\/input$/, "/output"),
+        claimFileName: generated.claimFileName, loginFileName: generated.loginFileName,
         createdByUserId: `service:${clientSystem}`, createdByEmail: "service", createdByName: clientSystem,
         metadata: {
-          integrationMode: "service", requestHash: fingerprint, deadlineAt, expectedRowCount: input.claims.length, inputKeys,
-          accountLabel: maskIehpAccountLabel(input.credentials.username),
-          formFields: { integrationMode: "service", claimFileName: "claims.xlsx", loginFileName: "login.xlsx", startIndex: "0" },
+          integrationMode: "service", requestHash: fingerprint, deadlineAt, expectedRowCount: generated.claimCount, inputKeys,
+          accountLabel: generated.accountLabel,
+          formFields: generated.formFields,
         },
       });
     } catch (error) {
@@ -193,8 +194,9 @@ export async function submitServiceJob(event: ApiEvent) {
     }
 
     try {
-      await putWithRetry(inputBucket, inputKeys.claimExcel, generated.claimWorkbook, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-      await putWithRetry(inputBucket, inputKeys.loginExcel, generated.loginWorkbook, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+      for (const file of generated.files) {
+        await putWithRetry(inputBucket, inputKeys[file.field], file.buffer, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+      }
       await putWithRetry(inputBucket, inputKeys.claimRows, generated.claimRowsJson, "application/json");
       if (!await markWorkflowJobReady(jobId)) throw new Error("Job was not in the preparing state after input upload.");
       await appendWorkflowEvent(jobId, "inputs_ready", { type: "log", message: "Integrated Claim Status inputs are ready." });
@@ -235,14 +237,14 @@ export async function getServiceJobResult(event: ApiEvent) {
       throw new ServiceRequestError(400, "cursor must be a safe integer and limit must be at most 200.");
     }
     const terminal = ["completed", "partial_success", "failed", "cancelled"].includes(job.status);
-    let snapshot: Awaited<ReturnType<typeof loadIehpServiceSnapshot>> | null = null;
+    let snapshot: Awaited<ReturnType<typeof loadServiceSnapshot>> | null = null;
     let total = 0;
     try {
-      snapshot = await loadIehpServiceSnapshot(job, { requireStatusColumns: false });
+      snapshot = await loadServiceSnapshot(job, { requireStatusColumns: false });
       total = snapshot.expectedRefs.length;
     } catch {
       const artifacts = await listArtifactsForJob(job.jobId);
-      const noOutput = !artifacts.some((item) => item.artifactType === "output_snapshot");
+      const noOutput = !artifacts.some((item) => item.artifactType === "output_snapshot" || (item.artifactType === "file_download" && item.filename.endsWith(".xlsx")));
       const expectedRowCount = (job.metadata as { expectedRowCount?: unknown } | null)?.expectedRowCount;
       if (!terminal || !["failed", "cancelled"].includes(job.status) || !noOutput || typeof expectedRowCount !== "number") {
         throw new ServiceRequestError(503, "Current Claim Status workbook is unavailable or invalid; retry this poll.");
@@ -259,7 +261,7 @@ export async function getServiceJobResult(event: ApiEvent) {
       throw new ServiceRequestError(503, "Final Claim Status workbook does not match job status; retry this poll.");
     }
     if (!summary && cursor > 0) throw new ServiceRequestError(503, "Previously visible Claim Status workbook is unavailable; retry this poll.");
-    const { available, nextCursor, results } = pageIehpServiceResults(summary, cursor, limit, terminal);
+    const { available, nextCursor, results } = pageServiceResults(summary, cursor, limit, terminal);
     if (cursor > available) throw new ServiceRequestError(503, "Previously finalized Claim Status rows are unavailable; retry this poll.");
     let actionRequired: Record<string, unknown> | null = null;
     if (job.status === "waiting_otp") {
@@ -328,7 +330,8 @@ export async function getServiceJobDownload(event: ApiEvent) {
   try {
     const job = await ownedJob(event);
     const artifacts = await listArtifactsForJob(job.jobId);
-    const output = artifacts.find((item) => item.artifactType === "output_snapshot" && item.bucket && item.s3Key);
+    const output = artifacts.find((item) => item.artifactType === "output_snapshot" && item.bucket && item.s3Key)
+      ?? artifacts.find((item) => item.artifactType === "file_download" && item.bucket && item.s3Key && item.filename.endsWith(".xlsx"));
     if (!output?.bucket) throw new ServiceRequestError(404, "No output workbook is available yet.");
     const head = await s3().send(new HeadObjectCommand({ Bucket: output.bucket, Key: output.s3Key }));
     if (!head.ContentLength) throw new ServiceRequestError(404, "Output workbook is empty.");

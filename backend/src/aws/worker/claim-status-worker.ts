@@ -36,6 +36,7 @@ import {
 import { publishWorkflowEvent } from "@/backend/src/aws/runtime/websocket-publisher";
 import { createIehpBundle } from "@/backend/src/aws/http/iehp-bundle";
 import { loadIehpServiceSnapshot, serviceOutputWorkbookLocation } from "@/backend/src/aws/service/iehp-snapshot";
+import { loadServiceSnapshot } from "@/backend/src/aws/service/portal-dispatch";
 import {
   appendScrapeJobArtifact,
   createPersistentScrapeJob,
@@ -310,7 +311,7 @@ function appendIfSet(formData: FormData, key: string, value: string): void {
   if (value) formData.set(key, value);
 }
 
-async function persistEvent(jobId: string, data: Record<string, unknown>): Promise<void> {
+async function persistEvent(jobId: string, data: Record<string, unknown>, options: { requireArtifactUpload?: boolean } = {}): Promise<void> {
   if (!hasDatabase()) return;
 
   const eventId = isPersistentWorkflowEvent(data)
@@ -373,9 +374,10 @@ async function persistEvent(jobId: string, data: Record<string, unknown>): Promi
       mimeType: typeof data.mimeType === "string" ? data.mimeType : undefined,
     }).catch((error) => {
       console.error("Worker artifact upload failed", error);
-      if (data.type === "pdf_download" && data.path) throw error;
+      if ((data.type === "pdf_download" && data.path) || options.requireArtifactUpload) throw error;
       return "";
     });
+    if (options.requireArtifactUpload && !s3Key) throw new Error("Integrated Availity output workbook could not be saved to S3.");
     if (data.type === "pdf_download" && data.path && !s3Key) {
       throw new Error("IEHP RA PDF could not be saved to S3.");
     }
@@ -397,7 +399,7 @@ async function persistEvent(jobId: string, data: Record<string, unknown>): Promi
         s3Key,
         mimeType: typeof data.mimeType === "string" ? data.mimeType : undefined,
       }).catch((error) => {
-        if (data.type === "pdf_download" && data.path) throw error;
+        if ((data.type === "pdf_download" && data.path) || options.requireArtifactUpload) throw error;
       });
     }
   }
@@ -900,7 +902,9 @@ export async function main(): Promise<void> {
         uhcRowsUpdated += 1;
       }
       try {
-        await persistEvent(job.id, event);
+        await persistEvent(job.id, event, {
+          requireArtifactUpload: isServiceJob && portalId === "availity" && (event.type === "output_snapshot" || event.type === "file_download"),
+        });
       } catch (error) {
         if (portalId === "iehp" && event.type === "pdf_download") {
           scraperErrorMessage = `IEHP RA PDF storage failed: ${error instanceof Error ? error.message : String(error)}`;
@@ -1009,11 +1013,12 @@ export async function main(): Promise<void> {
         portalId: "uhc", finalize: runResult !== "cancelled", recordOnce: true,
       });
     }
-    const serviceJob = isServiceJob && portalId === "iehp" && uploadedIehpOutput ? await getWorkflowJobById(jobId) : null;
+    const serviceJob = isServiceJob && (portalId === "availity" || (portalId === "iehp" && uploadedIehpOutput))
+      ? await getWorkflowJobById(jobId) : null;
     const serviceSummary = serviceJob
-      ? (await loadIehpServiceSnapshot(serviceJob, { requireStatusColumns: true })).summary
+      ? (await loadServiceSnapshot(serviceJob, { requireStatusColumns: true })).summary
       : null;
-    if (isServiceJob && uploadedIehpOutput && !serviceSummary) {
+    if (isServiceJob && (portalId === "availity" || uploadedIehpOutput) && !serviceSummary) {
       throw new Error("Integrated output workbook could not be validated.");
     }
     const status: PersistentScrapeJobStatus = runResult === "cancelled" || cancellation.isCancelled()
@@ -1060,6 +1065,16 @@ export async function main(): Promise<void> {
       await createIehpBundle({ jobId, artifacts: await listArtifactsForJob(jobId), partial: true }).catch((bundleError) => {
         console.error("IEHP partial ZIP upload failed", bundleError);
       });
+    }
+    if (isServiceJob && portalId === "availity") {
+      const summary = await (async () => {
+        const serviceJob = await getWorkflowJobById(jobId);
+        return serviceJob ? (await loadServiceSnapshot(serviceJob, { requireStatusColumns: false })).summary : null;
+      })().catch((resultError) => {
+        console.error("Integrated Availity partial result storage failed", resultError);
+        return null;
+      });
+      partialServiceResult = Boolean(summary && summary.counts.success > 0);
     }
     if (portalId === "uhc" && uhcOutputWorkbook && uhcRowsUpdated > 0) {
       await uploadClaimOutputWorkbook(jobId, uhcOutputWorkbook, { portalId: "uhc", finalize: false, recordOnce: true }).catch((uploadError) => {
