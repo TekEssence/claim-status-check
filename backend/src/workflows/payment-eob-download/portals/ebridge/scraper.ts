@@ -1,4 +1,3 @@
-import { paymentFilename } from "../../filename";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { Download, Frame, Page } from "playwright-core";
@@ -279,7 +278,7 @@ async function clickViewerDownload(page: Page, context: AutomationContext, row: 
   return null;
 }
 
-async function readViewerDownloadFrame(page: Page, context: AutomationContext, row: EbridgeRuntimeRow): Promise<Buffer | null> {
+async function readViewerDownloadFrame(page: Page, context: AutomationContext, row: EbridgeRuntimeRow): Promise<{ body: Buffer; filename: string | null } | null> {
   await logEbridgeStep(context, row, "checking eBridge hidden download iframe fallback.");
   const src = await page.waitForFunction(() => {
     const iframe = document.querySelector<HTMLIFrameElement>("iframe#download");
@@ -298,7 +297,37 @@ async function readViewerDownloadFrame(page: Page, context: AutomationContext, r
   }
   const body = Buffer.from(await response.body());
   await logEbridgeStep(context, row, `hidden iframe response size: ${body.length} bytes.`);
-  return body.length ? body : null;
+  const headerFilename = filenameFromContentDisposition(response.headers()["content-disposition"]);
+  const urlFilename = path.basename(new URL(url).pathname);
+  return body.length ? { body, filename: headerFilename || (urlFilename.toLowerCase().endsWith(".pdf") ? urlFilename : null) } : null;
+}
+
+function filenameFromContentDisposition(value: string | undefined): string | null {
+  const match = value?.match(/filename\*?=(?:UTF-8''|\")?([^;\"]+)/i);
+  if (!match) return null;
+  try {
+    return safePart(decodeURIComponent(match[1].trim()));
+  } catch {
+    return safePart(match[1].trim());
+  }
+}
+
+async function uniqueEbridgePath(folder: string, filename: string): Promise<{ filename: string; path: string }> {
+  const original = filename || "download.pdf";
+  const extension = path.extname(original);
+  const stem = extension ? original.slice(0, -extension.length) : original;
+  let candidate = original;
+  let suffix = 2;
+  while (true) {
+    const candidatePath = path.join(folder, candidate);
+    try {
+      await fs.access(candidatePath);
+      candidate = `${stem} (${suffix})${extension}`;
+      suffix += 1;
+    } catch {
+      return { filename: candidate, path: candidatePath };
+    }
+  }
 }
 
 async function readPdfFromViewer(page: Page, context?: AutomationContext, row?: EbridgeRuntimeRow): Promise<Buffer | null> {
@@ -321,7 +350,7 @@ async function readPdfFromViewer(page: Page, context?: AutomationContext, row?: 
   return null;
 }
 
-async function openAndDownloadDocument(page: Page, searchFrame: Frame, row: EbridgeRuntimeRow, folder: string, startDate: string, context: AutomationContext, group?: string): Promise<string> {
+async function openAndDownloadDocument(page: Page, searchFrame: Frame, row: EbridgeRuntimeRow, folder: string, startDate: string, context: AutomationContext): Promise<string> {
   await logEbridgeStep(context, row, "starting row download.");
   await dismissEbridgeModal(searchFrame);
   const portalRow = row.resultId
@@ -338,31 +367,28 @@ async function openAndDownloadDocument(page: Page, searchFrame: Frame, row: Ebri
   await viewer.waitForLoadState("domcontentloaded", { timeout: 30000 }).catch(() => {});
   const documentFolder = path.join(folder, documentTypeFolder(row.documentType), dateFolder(startDate));
   await fs.mkdir(documentFolder, { recursive: true });
-  const filename = await paymentFilename(documentFolder, {
-    group,
-    payer: row.insuranceCompany || row.documentType,
-    mode: row.documentType,
-    number: row.batchLabel || row.rowNumber,
-    date: row.date || row.indexedDate,
-  });
-  const outputPath = path.join(documentFolder, filename);
   try {
     const download = await clickViewerDownload(viewer, context, row);
     if (download) {
-      await logEbridgeStep(context, row, `browser download event received; saving as ${filename}.`);
-      await download.saveAs(outputPath);
+      const saved = await uniqueEbridgePath(documentFolder, download.suggestedFilename());
+      await logEbridgeStep(context, row, `browser download event received; saving as ${saved.filename}.`);
+      await download.saveAs(saved.path);
+      row.filename = saved.filename;
     } else {
       await logEbridgeStep(context, row, "browser download event was not received; trying fallbacks.", "warn");
-      const pdf = await readViewerDownloadFrame(viewer, context, row) ?? await readPdfFromViewer(viewer, context, row);
+      const fallback = await readViewerDownloadFrame(viewer, context, row);
+      const pdf = fallback?.body ?? await readPdfFromViewer(viewer, context, row);
       if (!pdf) throw new Error("eBridge viewer opened, but the PDF download/content could not be accessed.");
-      await fs.writeFile(outputPath, pdf);
+      const saved = await uniqueEbridgePath(documentFolder, fallback?.filename || "download.pdf");
+      await fs.writeFile(saved.path, pdf);
+      row.filename = saved.filename;
     }
-    await logEbridgeStep(context, row, `saved PDF ${filename}.`);
+    await logEbridgeStep(context, row, `saved PDF ${row.filename}.`);
   } finally {
     await logEbridgeStep(context, row, "closing viewer popup.");
     if (popup) await popup.close().catch(() => {});
   }
-  return filename;
+  return row.filename;
 }
 
 async function runEbridge(credentials: EbridgeCredentials, context: AutomationContext): Promise<void> {
@@ -390,7 +416,7 @@ async function runEbridge(credentials: EbridgeCredentials, context: AutomationCo
         continue;
       }
       try {
-        row.filename = await openAndDownloadDocument(page, await findResultsFrame(page), row, pdfFolder, credentials.startDate, context, credentials.clientName);
+        row.filename = await openAndDownloadDocument(page, await findResultsFrame(page), row, pdfFolder, credentials.startDate, context);
         row.status = "Downloaded";
         row.message = "Downloaded from eBridge viewer.";
       } catch (error) {
