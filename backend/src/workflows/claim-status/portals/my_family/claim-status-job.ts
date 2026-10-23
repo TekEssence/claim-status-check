@@ -4,6 +4,7 @@ import type { Browser, Locator, Page } from "playwright-core";
 import { closeAutomationResources } from "@/backend/src/core/runtime-config";
 import { getJobDataPath } from "@/backend/src/core/storage";
 import type { ScraperContext } from "../../types";
+import { emitPartialOutputSnapshot } from "../../partial-output";
 import { launchMyFamilyBrowser } from "./browser";
 import { myFamilyConfig } from "./config";
 import {
@@ -756,6 +757,7 @@ export async function runMyFamilyClaimStatusJob(formData: FormData, context: Scr
       }
       completed += 1;
       await context.emit({ type: "progress", completed, total: rows.length });
+      await emitPartialOutputSnapshot(context, "my_family_output_snapshot.xlsx", () => createMyFamilyOutputWorkbookBuffer(state), completed, rows.length);
       await page.waitForTimeout(myFamilyConfig.timing.betweenRowsMs);
     }
 

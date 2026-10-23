@@ -101,7 +101,7 @@ async function dismissRegalPasswordExpiryWarningIfPresent(
   stageLog: (level: RegalLogEntry["level"], stage: string, message: string, currentPage?: Page) => Promise<void>,
 ): Promise<boolean> {
   const warningTitle = page.locator(regalConfig.selectors.passwordExpiryTitle).first();
-  const warningVisible = await warningTitle.waitFor({ state: "visible", timeout: 15000 }).then(() => true, () => false);
+  const warningVisible = await warningTitle.waitFor({ state: "visible", timeout: 5000 }).then(() => true, () => false);
   if (!warningVisible) {
     return false;
   }
@@ -146,18 +146,13 @@ function downloadableWorkbookEvent(filename: string, buffer: Buffer, options: { 
   };
 }
 
-async function assertRegalDashboard(
-  page: Page,
-  stageLog?: (level: RegalLogEntry["level"], stage: string, message: string, currentPage?: Page) => Promise<void>,
-): Promise<void> {
-  if (stageLog) {
-    await dismissRegalPasswordExpiryWarningIfPresent(page, stageLog);
-  }
+async function assertRegalDashboard(page: Page): Promise<void> {
   await Promise.race([
     page.locator(regalConfig.selectors.dashboardHeading).first().waitFor({ state: "visible", timeout: 30000 }),
     page.locator(regalConfig.selectors.dashboardText).first().waitFor({ state: "visible", timeout: 30000 }),
     page.locator(regalConfig.selectors.myAppsHeading).first().waitFor({ state: "visible", timeout: 30000 }),
     page.locator(regalConfig.selectors.myAppsText).first().waitFor({ state: "visible", timeout: 30000 }),
+    page.locator(regalConfig.selectors.regalExpressAccessApp).first().waitFor({ state: "visible", timeout: 30000 }),
   ]);
   await page.locator(regalConfig.selectors.signOut).first().waitFor({ state: "attached", timeout: 30000 });
 }
@@ -461,11 +456,115 @@ async function submitRegalOtp(page: Page, code: string): Promise<void> {
 }
 
 async function isPastRegalMfa(page: Page): Promise<boolean> {
-  return Promise.race([
-    findRegalLocator(page, regalConfig.selectors.siteSelect, { state: "visible", timeout: 1500 }).then(() => true, () => false),
-    findRegalLocator(page, regalConfig.selectors.viewClaimsLink, { state: "attached", timeout: 1500 }).then(() => true, () => false),
-    page.locator(regalConfig.selectors.mainIframe).first().waitFor({ state: "attached", timeout: 1500 }).then(() => true, () => false),
-  ]);
+  for (const frame of page.frames()) {
+    try {
+      if (await frame.locator(regalConfig.selectors.siteSelect).count()) return true;
+      if (await frame.locator("span[id$='_header_lblSite'], span[id*='lblSite']").count()) return true;
+      if (await frame.locator(regalConfig.selectors.viewClaimsLink).count()) return true;
+      if (await frame.locator(regalConfig.selectors.mainIframe).count()) return true;
+    } catch (error) {
+      if (/frame was detached/i.test(errorMessage(error))) continue;
+      throw error;
+    }
+  }
+  return false;
+}
+
+type RegalAuthState = "dashboard" | "mfa" | "rea";
+
+async function isRegalDashboardVisible(page: Page): Promise<boolean> {
+  return await isVisible(page, regalConfig.selectors.dashboardHeading) ||
+    await isVisible(page, regalConfig.selectors.dashboardText) ||
+    await isVisible(page, regalConfig.selectors.myAppsHeading) ||
+    await isVisible(page, regalConfig.selectors.myAppsText) ||
+    await isVisible(page, regalConfig.selectors.regalExpressAccessApp);
+}
+
+async function waitForRegalAuthState(page: Page, timeout = 60000): Promise<RegalAuthState> {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    if (await isPastRegalMfa(page)) return "rea";
+    if (await isRegalDashboardVisible(page)) return "dashboard";
+    if (
+      await isVisible(page, ".authenticator-verify-list .authenticator-row") ||
+      await isVisible(page, regalConfig.selectors.googleAuthenticatorCode) ||
+      await isVisible(page, regalConfig.selectors.switchAuthenticator) ||
+      await isVisible(page, regalConfig.selectors.emailSendSubmit) ||
+      await isVisible(page, regalConfig.selectors.emailEnterCodeInstead) ||
+      await isVisible(page, regalConfig.selectors.phoneSendSubmit) ||
+      await isVisible(page, "h2[data-se='o-form-head']:has-text('Verify it')")
+    ) return "mfa";
+    await page.waitForTimeout(500);
+  }
+  throw new Error(`Regal did not reach REA, the Okta dashboard, or a verification page after ${Math.round(timeout / 1000)} seconds. Current URL: ${page.url()}`);
+}
+
+export function expectsDirectRegalRedirect(page: Page): boolean {
+  try {
+    const redirectUri = new URL(page.url()).searchParams.get("redirect_uri");
+    return Boolean(redirectUri && new URL(redirectUri).hostname === "rea.regalmed.com");
+  } catch {
+    return false;
+  }
+}
+
+export async function waitForRegalAfterMfa(
+  currentPage: Page,
+  browserContext: BrowserContext,
+  dashboardGraceMs: number,
+  previousDashboardPage?: Page,
+): Promise<{ page: Page; state: "rea" | "dashboard" }> {
+  const deadline = Date.now() + 60000;
+  let dashboardSeenAt = 0;
+  while (Date.now() < deadline) {
+    const pages = [currentPage, ...browserContext.pages().filter((candidate) => candidate !== currentPage)]
+      .filter((candidate) => !candidate.isClosed());
+    for (const candidate of pages) {
+      if (await isPastRegalMfa(candidate)) return { page: candidate, state: "rea" };
+    }
+    let dashboard: Page | null = null;
+    for (const candidate of pages) {
+      if (candidate === previousDashboardPage && candidate !== currentPage) continue;
+      if (await isRegalDashboardVisible(candidate)) {
+        dashboard = candidate;
+        break;
+      }
+    }
+    if (dashboard) {
+      if (!dashboardSeenAt) dashboardSeenAt = Date.now();
+      if (Date.now() - dashboardSeenAt >= dashboardGraceMs) return { page: dashboard, state: "dashboard" };
+    } else {
+      dashboardSeenAt = 0;
+    }
+    if (!currentPage.isClosed()) {
+      const mfaError = await detectVisibleError(currentPage, 500);
+      if (mfaError) throw new Error(`Regal OTP step failed: ${mfaError}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  throw new Error(`Regal did not reach REA or the Okta dashboard after verification. Current URL: ${currentPage.url()}`);
+}
+
+async function completeRegalMfa(
+  page: Page,
+  context: ScraperContext,
+  stageLog: (level: RegalLogEntry["level"], stage: string, message: string, currentPage?: Page) => Promise<void>,
+): Promise<void> {
+  const otpLabel = await selectRegalOtpIfNeeded(page, context, stageLog);
+  if (!(await isPastRegalMfa(page)) && !(await isRegalDashboardVisible(page))) {
+    const regalOtp = await requestRegalOtpFromUser(context, stageLog, page, otpLabel);
+    if (await isPastRegalMfa(page) || await isRegalDashboardVisible(page)) {
+      await stageLog("info", "mfa", "Regal MFA already completed in the automation browser; continuing.", page);
+    } else {
+      await stageLog("info", "mfa", "Submitting Regal OTP provided from frontend.", page);
+      await submitRegalOtp(page, regalOtp);
+    }
+  } else {
+    await stageLog("info", "mfa", "Regal MFA already completed; continuing.", page);
+  }
+  const mfaStepError = await detectVisibleError(page, 5000);
+  if (mfaStepError) throw new Error(`Regal OTP step failed: ${mfaStepError}`);
+  await stageLog("info", "mfa", "Regal OTP submitted; checking next page.", page);
 }
 
 type RegalClaimSearchRow = {
@@ -632,14 +731,14 @@ function groupRegalClaimRows(rows: RegalClaimSearchInput[]): Array<{ group: stri
 async function selectRegalGroupSite(page: Page, group: string, stageLog: (level: RegalLogEntry["level"], stage: string, message: string, currentPage?: Page) => Promise<void>): Promise<void> {
   const groupName = resolveRegalGroupName(group);
   await waitForRegalSiteHeader(page, 30000);
-  const siteSelect =
-    await findRegalLocator(page, regalConfig.selectors.siteSelect, { state: "visible", timeout: 5000 }).catch(() => null) ??
-    await findRegalLocator(page, regalConfig.selectors.siteSelect, { state: "attached", timeout: 5000 }).catch(() => null);
   const visibleSiteText = await getVisibleRegalSiteText(page);
   if (normalizeRegalSiteText(visibleSiteText).includes(normalizeRegalSiteText(groupName))) {
     await stageLog("info", "group", `Regal group ${group} confirmed from site text: ${groupName}.`, page);
     return;
   }
+  const siteSelect =
+    await findRegalLocator(page, regalConfig.selectors.siteSelect, { state: "visible", timeout: 5000 }).catch(() => null) ??
+    await findRegalLocator(page, regalConfig.selectors.siteSelect, { state: "attached", timeout: 5000 }).catch(() => null);
 
   if (!siteSelect) {
     if (["USA", "MAIN"].includes(normalizeText(group).replace(/\s+/g, "").toUpperCase())) {
@@ -1238,33 +1337,29 @@ export async function runRegalLoginJob(formData: FormData, context: ScraperConte
     if (passwordStepError) {
       throw new Error(`Regal password step failed: ${passwordStepError}`);
     }
-    await stageLog("info", "password", "Password accepted; checking Okta dashboard.");
+    await stageLog("info", "password", "Password accepted; checking the next Okta or REA page.");
 
-    await assertRegalDashboard(page, stageLog);
-    dashboardPage = page;
-    await stageLog("info", "dashboard", "Confirmed Okta dashboard by Dashboard heading and Sign out link.");
-
-    await stageLog("info", "launch-rea", "Finding and clicking Regal Express Access (REA).");
-    page = await launchRegalExpressAccess(page, browserContext);
-    await stageLog("info", "launch-rea", "Regal Express Access click completed; checking reached page.", page);
-
-    const otpLabel = await selectRegalOtpIfNeeded(page, context, stageLog);
-    if (!(await isPastRegalMfa(page))) {
-      const regalOtp = await requestRegalOtpFromUser(context, stageLog, page, otpLabel);
-      if (await isPastRegalMfa(page)) {
-        await stageLog("info", "mfa", "Regal MFA already completed in the automation browser; continuing.", page);
+    let authState: RegalAuthState = await waitForRegalAuthState(page);
+    for (let transition = 0; authState !== "rea" && transition < 4; transition += 1) {
+      if (authState === "dashboard") {
+        await assertRegalDashboard(page);
+        dashboardPage = page;
+        await stageLog("info", "dashboard", "Confirmed Okta dashboard by Dashboard heading and Sign out link.");
+        await stageLog("info", "launch-rea", "Finding and clicking Regal Express Access (REA).");
+        page = await launchRegalExpressAccess(page, browserContext);
+        await stageLog("info", "launch-rea", "Regal Express Access click completed; checking reached page.", page);
+        authState = await waitForRegalAuthState(page);
       } else {
-        await stageLog("info", "mfa", "Submitting Regal OTP provided from frontend.", page);
-        await submitRegalOtp(page, regalOtp);
+        const dashboardGraceMs = expectsDirectRegalRedirect(page) ? 30000 : 8000;
+        await completeRegalMfa(page, context, stageLog);
+        const destination = await waitForRegalAfterMfa(page, browserContext, dashboardGraceMs, dashboardPage);
+        page = destination.page;
+        authState = destination.state;
       }
-    } else {
-      await stageLog("info", "mfa", "Regal MFA already completed; continuing.", page);
     }
-    const mfaStepError = await detectVisibleError(page, 5000);
-    if (mfaStepError) {
-      throw new Error(`Regal OTP step failed: ${mfaStepError}`);
+    if (authState !== "rea") {
+      throw new Error(`Regal verification did not reach REA. Current URL: ${page.url()}`);
     }
-    await stageLog("info", "mfa", "Regal OTP submitted; checking next page.", page);
 
     let totalSearchResults = 0;
     const groupedClaimRows = groupRegalClaimRows(input.claimRows);

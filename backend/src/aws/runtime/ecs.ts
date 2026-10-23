@@ -1,4 +1,4 @@
-import { DescribeTasksCommand, ECSClient, RunTaskCommand, StopTaskCommand } from "@aws-sdk/client-ecs";
+import { DescribeTasksCommand, ECSClient, ListTasksCommand, RunTaskCommand, StopTaskCommand } from "@aws-sdk/client-ecs";
 
 let client: ECSClient | null = null;
 
@@ -12,6 +12,8 @@ function env(name: string): string {
   if (!value) throw new Error(`${name} must be configured.`);
   return value;
 }
+
+export class WorkerTaskLaunchRejectedError extends Error {}
 
 function parseAwsIdList(value: string | undefined, name: string): string[] {
   const raw = value?.trim();
@@ -73,6 +75,8 @@ export async function runWorkerTask(params: {
   const result = await ecs().send(new RunTaskCommand({
     cluster: env("WORKER_CLUSTER_ARN"),
     taskDefinition: env("WORKER_TASK_DEFINITION_ARN"),
+    clientToken: params.jobId,
+    startedBy: params.jobId,
     launchType: "FARGATE",
     count: 1,
     enableECSManagedTags: true,
@@ -96,7 +100,7 @@ export async function runWorkerTask(params: {
 
   const failure = result.failures?.[0];
   if (failure) {
-    throw new Error(`ECS RunTask failed: ${failure.reason || failure.detail || "unknown failure"}`);
+    throw new WorkerTaskLaunchRejectedError(`ECS RunTask failed: ${failure.reason || failure.detail || "unknown failure"}`);
   }
 
   const taskArn = result.tasks?.[0]?.taskArn;
@@ -118,4 +122,13 @@ export async function describeWorkerTask(taskArn: string) {
     tasks: [taskArn],
   }));
   return result.tasks?.[0] ?? null;
+}
+
+export async function findWorkerTaskByJobId(jobId: string): Promise<string | null> {
+  const cluster = env("WORKER_CLUSTER_ARN");
+  for (const desiredStatus of ["RUNNING", "STOPPED"] as const) {
+    const result = await ecs().send(new ListTasksCommand({ cluster, startedBy: jobId, desiredStatus }));
+    if (result.taskArns?.[0]) return result.taskArns[0];
+  }
+  return null;
 }

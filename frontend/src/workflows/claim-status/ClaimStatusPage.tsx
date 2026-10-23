@@ -259,6 +259,8 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
       ),
     [workflowRuns],
   );
+  const selectedUhcOutputRun = workflowRuns.find((job) =>
+    job.portalId === "uhc" && job.jobId === selectedWorkflowRunId && hasDownloadableOutput(job));
   const userDisplayName = useMemo(() => {
     const raw = authUser?.email || authUser?.username || "Afrin";
     const candidate = raw.split("@")[0].replace(/[._-]+/g, " ").trim();
@@ -329,7 +331,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     canStartAnotherRun,
     resetRunState,
     setSelectedPortalId,
-    setActiveJobId,
+    setActiveJobId: setActiveAndSelectedJobId,
     setIsProcessing,
     setStatus,
     setLogs,
@@ -3633,8 +3635,11 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
                   "uhc": (
 <div className="mt-5">
                   <UhcResultView
+                    canDownloadOutput={Boolean(selectedUhcOutputRun)}
+                    downloadingOutput={downloadingWorkflowJobId === selectedUhcOutputRun?.jobId}
                     errorScreenshots={errorScreenshots}
                     logs={logs}
+                    onOutputDownload={() => { if (selectedUhcOutputRun) void downloadWorkflowRun(selectedUhcOutputRun); }}
                     onOtpChange={setUhcOtpValue}
                     onOtpSubmit={submitUhcOtp}
                     onProviderChange={(value) => setUhcProviderPrompt((current) => current ? { ...current, value } : current)}

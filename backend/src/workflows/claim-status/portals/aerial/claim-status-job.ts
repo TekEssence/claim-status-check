@@ -3,6 +3,7 @@ import path from "node:path";
 import type { Browser, Page } from "playwright-core";
 import { closeAutomationResources } from "@/backend/src/core/runtime-config";
 import type { ScraperContext } from "../../types";
+import { emitPartialOutputSnapshot } from "../../partial-output";
 import { launchAerialBrowser } from "./browser";
 import { AERIAL_SUBPORTAL_LABELS, parseAerialInput, type AerialInput } from "./input";
 import { createAerialOutputWorkbookBuffer, readAerialInputWorkbookFromBuffer, type AerialInputRow } from "./workbook";
@@ -469,6 +470,9 @@ export async function runAerialClaimStatusJob(formData: FormData, context: Scrap
       state.outputRows.push({ ...baseOutputRow(invalidRow), result: "failed", notes: validationMessage });
       completed += 1;
       await context.emit({ type: "progress", completed, total: rows.length });
+      await emitPartialOutputSnapshot(context, "aerial_output_snapshot.xlsx", () => createAerialOutputWorkbookBuffer(state.outputRows, {
+        errorRows: state.errorRows, auditRows: state.auditRows,
+      }), completed, rows.length);
     }
 
     const normalizeGroup = (value: string) => value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "");
@@ -503,6 +507,9 @@ export async function runAerialClaimStatusJob(formData: FormData, context: Scrap
           }
           completed += 1;
           await context.emit({ type: "progress", completed, total: rows.length });
+          await emitPartialOutputSnapshot(context, "aerial_output_snapshot.xlsx", () => createAerialOutputWorkbookBuffer(state.outputRows, {
+            errorRows: state.errorRows, auditRows: state.auditRows,
+          }), completed, rows.length);
         }
       } finally {
         await closeAutomationResources({ browser, page, log: (message) => context.log({ level: "info", message }) });

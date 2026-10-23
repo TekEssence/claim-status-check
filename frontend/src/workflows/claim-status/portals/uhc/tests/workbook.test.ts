@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import ExcelJS from "exceljs";
-import { applyUhcRowUpdateToWorksheet, parseUhcClaimRows } from "../workbook";
+import { applyUhcRowUpdateToWorksheet, parseUhcClaimRows, postProcessUhcWorksheet } from "../workbook";
 
 async function buildWorksheet(headers: string[], rows: Record<string, unknown>[]) {
   const workbook = new ExcelJS.Workbook();
@@ -132,4 +132,47 @@ test("UHC writer stores accounting credit amounts as negative Excel numbers", as
   assert.equal(worksheet.getRow(2).getCell(paidCol).value, -51);
   assert.equal(worksheet.getRow(2).getCell(billedCol).value, 100);
   assert.equal(worksheet.getRow(2).getCell(paidCol).numFmt, "$#,##0.00;-$#,##0.00");
+});
+
+test("UHC partial workbook keeps completed rows and leaves remaining rows open", async () => {
+  const workbook = new ExcelJS.Workbook();
+  const worksheet = workbook.addWorksheet("Claims");
+  worksheet.addRow(["Group", "Subscriber ID", "DOS"]);
+  worksheet.addRow(["BZA", "member-1", "04/16/2026"]);
+  worksheet.addRow(["BZA", "member-2", "04/17/2026"]);
+  applyUhcRowUpdateToWorksheet(worksheet, {
+    index: 0, rowIndex: 2,
+    update: { BotClaimStatus: "Paid", BotPaidAmount: "$25.00" },
+  });
+  postProcessUhcWorksheet(worksheet);
+
+  const saved = new ExcelJS.Workbook();
+  await saved.xlsx.load(await workbook.xlsx.writeBuffer());
+  const result = saved.worksheets[0];
+  const headers = result.getRow(1).values as ExcelJS.CellValue[];
+  const statusCol = headers.findIndex((value) => value === "BotClaimStatus");
+  const paidCol = headers.findIndex((value) => value === "BotPaidAmount");
+  assert.equal(result.getRow(2).getCell(statusCol).value, "Paid");
+  assert.equal(result.getRow(2).getCell(paidCol).value, 25);
+  assert.equal(result.getRow(3).getCell(statusCol).value, null);
+});
+
+test("UHC partial workbook keeps a completed duplicate when an earlier duplicate is pending", async () => {
+  const worksheet = await buildWorksheet(
+    ["Group", "Subscriber ID", "DOS"],
+    [
+      { Group: "BZA", "Subscriber ID": "member-1", DOS: "04/16/2026" },
+      { Group: "BZA", "Subscriber ID": "member-1", DOS: "04/16/2026" },
+    ],
+  );
+  applyUhcRowUpdateToWorksheet(worksheet, {
+    rowIndex: 3,
+    update: { BotClaimStatus: "Paid", BotPaidAmount: "$25.00" },
+  });
+  postProcessUhcWorksheet(worksheet);
+
+  const headers = worksheet.getRow(1).values as ExcelJS.CellValue[];
+  const statusCol = headers.findIndex((value) => value === "BotClaimStatus");
+  assert.equal(worksheet.getRow(2).getCell(statusCol).value, "Paid");
+  assert.equal(worksheet.getRow(3).getCell(statusCol).value, "Paid");
 });

@@ -4,6 +4,7 @@ import ExcelJS from "exceljs";
 import type { Frame, Page } from "playwright-core";
 import { getJobDataPath } from "@/backend/src/core/storage";
 import type { ScraperContext } from "../../workflows/claim-status/types";
+import { emitPartialOutputSnapshot } from "../../workflows/claim-status/partial-output";
 import type { OptumProInputRow } from "./input";
 
 type StageLog = (level: "info" | "warn" | "error", stage: string, message: string, currentPage?: Page) => Promise<void>;
@@ -2040,6 +2041,7 @@ export async function runOptumProClaimSearch(
       await stageLog("info", "claim-search", `Partial result saved after row ${row.rowNumber}`);
       await emitMetadata(finalWorkbook.metadata);
       await context.emit({ type: "progress", completed: processedRows, total: rows.length });
+      await emitPartialOutputSnapshot(context, "optum_pro_output_snapshot.xlsx", finalWorkbook.buffer, processedRows, rows.length);
 
       if (stopped) {
         await stageLog("warn", "claim-search", "Stop requested; finalizing partial workbook");

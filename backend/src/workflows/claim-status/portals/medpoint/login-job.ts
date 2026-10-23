@@ -2,6 +2,7 @@ import * as XLSX from "xlsx";
 import { closeAutomationResources } from "@/backend/src/core/runtime-config";
 import { getAutomationRuntimeConfig } from "@/backend/src/core/runtime-config";
 import type { ScraperContext } from "../../types";
+import { emitPartialOutputSnapshot } from "../../partial-output";
 import { launchMedpointBrowser } from "./browser";
 import { parseMedpointInput } from "./input";
 import { buildOutputRows, detectCurrentIpa, expectedIpaForRow, extractClaimDetail, loginToMedpoint, openClaimDetail, openClaimsSearch, searchClaims } from "./portal";
@@ -136,6 +137,7 @@ export async function runMedpointLoginHandoffJob(formData: FormData, context: Sc
         if (page) await emitScreenshot(context, page, row.inputRowNumber, "row-error");
       }
       await context.emit({ type: "progress", completed: index + 1, total: input.rows.length });
+      await emitPartialOutputSnapshot(context, "medpoint_output_snapshot.xlsx", () => buildWorkbookBuffer(outputRows, auditRows, errorRows), index + 1, input.rows.length);
     }
 
     const workbookBuffer = buildWorkbookBuffer(outputRows, auditRows, errorRows);

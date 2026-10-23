@@ -1,7 +1,7 @@
 import { useMemo, useState, type Dispatch, type FormEvent, type SetStateAction } from "react";
 import ExcelJS from "exceljs";
 import {
-  startScrapeJob,
+  isAwsWorkflowMode, startScrapeJob,
   submitScrapeJobInput, subscribeToScrapeJobEvents,
 } from "../../../../api/scrape-jobs-api";
 import type { ErrorScreenshot, JobProgressValue, ScrapeJobEvent } from "../../../../types/job";
@@ -103,7 +103,7 @@ export function useUhcController(p: {
   canStartAnotherRun: boolean;
   resetRunState: (message: string) => void;
   setSelectedPortalId: Setter<PortalId | null>;
-  setActiveJobId: Setter<string>; setIsProcessing: Setter<boolean>;
+  setActiveJobId: (jobId: string) => void; setIsProcessing: Setter<boolean>;
   setStatus: Setter<string>; setLogs: Setter<string[]>;
   setProgress: Setter<JobProgressValue | null>; setErrorScreenshots: Setter<ErrorScreenshot[]>;
   refreshRuns: () => void;
@@ -194,6 +194,7 @@ export function useUhcController(p: {
     const formData = new FormData();
     formData.append("portalId", "uhc");
     formData.append("loginExcel", uhcLoginFile);
+    formData.append("claimExcel", uhcClaimFile);
     formData.append("loginFileName", uhcLoginFile.name);
     formData.append("claimFileName", uhcClaimFile.name);
     formData.append("claimRows", JSON.stringify(workbookBundle.claimRows));
@@ -218,7 +219,7 @@ export function useUhcController(p: {
       } else if (eventData.type === "row_update") {
         applyUhcRowUpdateToWorksheet(workbookBundle.worksheet, eventData);
         uhcRowsSinceCheckpoint += 1;
-        const shouldDownloadFullUhcCheckpoint = uhcRowsSinceCheckpoint >= 10;
+        const shouldDownloadFullUhcCheckpoint = !isAwsWorkflowMode() && uhcRowsSinceCheckpoint >= 10;
         if (shouldDownloadFullUhcCheckpoint) {
           uhcRowsSinceCheckpoint = 0;
           try {
@@ -277,6 +278,7 @@ export function useUhcController(p: {
       setActiveJobId(jobId);
       setUhcJobId(jobId);
       setUhcLoginFile(null);
+      setUhcClaimFile(null);
       setIsProcessing(false);
       void refreshWorkflowRuns();
       await subscribeToScrapeJobEvents({
@@ -292,11 +294,13 @@ export function useUhcController(p: {
         },
       });
 
-      if (!hasError && !wasCancelled) {
-        await downloadUhcWorkbook("uhc_output.xlsx", workbookBundle);
-      } else if (uhcRowsSinceCheckpoint > 0) {
-        await downloadUhcWorkbook("uhc_partial_output.xlsx", workbookBundle);
-        uhcRowsSinceCheckpoint = 0;
+      if (!isAwsWorkflowMode()) {
+        if (!hasError && !wasCancelled) {
+          await downloadUhcWorkbook("uhc_output.xlsx", workbookBundle);
+        } else if (uhcRowsSinceCheckpoint > 0) {
+          await downloadUhcWorkbook("uhc_partial_output.xlsx", workbookBundle);
+          uhcRowsSinceCheckpoint = 0;
+        }
       }
 
       setStatus(

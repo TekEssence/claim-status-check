@@ -48,6 +48,7 @@
     const databaseUrl = process.env.DATABASE_URL || deployEnv.DATABASE_URL || "";
     const dbSsl = process.env.DB_SSL || deployEnv.DB_SSL || "true";
     const workerImageUriOverride = process.env.WORKER_IMAGE_URI || deployEnv.WORKER_IMAGE_URI || "";
+    const serviceTokensJson = process.env.CLAIM_STATUS_SERVICE_TOKENS_JSON || deployEnv.CLAIM_STATUS_SERVICE_TOKENS_JSON || "";
     const skipFrontendBuild = (process.env.SST_SKIP_FRONTEND_BUILD || deployEnv.SST_SKIP_FRONTEND_BUILD || "").toLowerCase() === "true";
     if (!databaseUrl) {
       throw new Error("DATABASE_URL must be set in the shell or .env.local before deploying AWS workflow APIs.");
@@ -206,6 +207,7 @@
             args.environment.DB_SSL = dbSsl;
             args.environment.WORKFLOW_INPUTS_BUCKET = inputsBucket.name;
             args.environment.WORKFLOW_OUTPUTS_BUCKET = outputsBucket.name;
+            args.environment.CLAIM_STATUS_SERVICE_TOKENS_JSON = serviceTokensJson;
             args.environment.WORKER_CLUSTER_ARN = cluster.id;
             args.environment.WORKER_TASK_DEFINITION_ARN = workerTask.nodes.taskDefinition.arn;
             args.environment.WORKER_CONTAINER_NAME = "worker";
@@ -217,7 +219,7 @@
             args.permissions ??= [];
             args.permissions.push(
               {
-                actions: ["ecs:RunTask", "ecs:StopTask", "ecs:DescribeTasks", "ecs:TagResource"],
+                actions: ["ecs:RunTask", "ecs:StopTask", "ecs:DescribeTasks", "ecs:ListTasks", "ecs:TagResource"],
                 resources: ["*"],
               },
               {
@@ -268,12 +270,17 @@
     httpApi.route("POST /jobs/{jobId}/cancel", "backend/src/aws/http/cancel-job.handler", { auth: httpAuth });
     httpApi.route("POST /jobs/{jobId}/force-stop", "backend/src/aws/http/force-stop-job.handler", { auth: httpAuth });
     httpApi.route("GET /jobs/{jobId}/download", "backend/src/aws/http/download-job.handler", { auth: httpAuth });
+    httpApi.route("POST /service/jobs", "backend/src/aws/http/service-create-job.handler");
+    httpApi.route("GET /service/jobs/{jobId}/result", "backend/src/aws/http/service-get-result.handler");
+    httpApi.route("GET /service/jobs/{jobId}/results", "backend/src/aws/http/service-get-result.handler");
+    httpApi.route("POST /service/jobs/{jobId}/input", "backend/src/aws/http/service-submit-input.handler");
+    httpApi.route("GET /service/jobs/{jobId}/download", "backend/src/aws/http/service-download-job.handler");
 
     new sst.aws.Cron("StalledJobWatchdog", {
       schedule: "rate(1 minute)",
       function: {
         handler: "backend/src/aws/cron/stalled-job-watchdog.handler",
-        memory: "128 MB",
+        memory: "512 MB",
         timeout: "60 seconds",
         environment: {
           DATABASE_URL: databaseUrl,
@@ -287,8 +294,15 @@
         },
         permissions: [
           {
-            actions: ["ecs:StopTask", "ecs:DescribeTasks"],
+            actions: ["ecs:StopTask", "ecs:DescribeTasks", "ecs:ListTasks"],
             resources: ["*"],
+          },
+          {
+            actions: ["s3:GetObject"],
+            resources: [
+              $interpolate`${inputsBucket.arn}/*`,
+              $interpolate`${outputsBucket.arn}/*`,
+            ],
           },
         ],
       },

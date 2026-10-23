@@ -1,4 +1,4 @@
-import { bigserial, index, integer, jsonb, pgTable, text, timestamp, varchar } from "drizzle-orm/pg-core";
+import { bigserial, index, integer, jsonb, pgTable, text, timestamp, uniqueIndex, varchar } from "drizzle-orm/pg-core";
 
 export const workflowJobs = pgTable(
   "workflow_jobs",
@@ -7,6 +7,9 @@ export const workflowJobs = pgTable(
     userId: varchar("user_id", { length: 100 }).notNull(),
     workflowId: varchar("workflow_id", { length: 80 }).notNull(),
     portalId: varchar("portal_id", { length: 80 }).notNull(),
+    clientSystem: varchar("client_system", { length: 80 }),
+    clientExecutionId: varchar("client_execution_id", { length: 160 }),
+    idempotencyKey: varchar("idempotency_key", { length: 160 }),
     status: varchar("status", { length: 40 }).notNull(),
     ecsTaskArn: text("ecs_task_arn"),
     inputBucket: text("input_bucket"),
@@ -29,6 +32,7 @@ export const workflowJobs = pgTable(
   },
   (table) => ({
     userStatusUpdatedIdx: index("workflow_jobs_user_status_updated_idx").on(table.userId, table.status, table.updatedAt),
+    clientIdempotencyIdx: uniqueIndex("workflow_jobs_client_idempotency_idx").on(table.clientSystem, table.idempotencyKey),
   }),
 );
 

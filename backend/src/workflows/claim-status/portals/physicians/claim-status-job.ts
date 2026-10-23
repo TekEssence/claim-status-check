@@ -4,6 +4,7 @@ import type { Browser, Frame, Locator, Page } from "playwright-core";
 import { closeAutomationResources } from "@/backend/src/core/runtime-config";
 import { getJobDataPath } from "@/backend/src/core/storage";
 import type { ScraperContext } from "../../types";
+import { emitPartialOutputSnapshot } from "../../partial-output";
 import { launchPhysiciansBrowser } from "./browser";
 import { physiciansConfig } from "./config";
 import {
@@ -919,6 +920,7 @@ export async function runPhysiciansClaimStatusJob(formData: FormData, context: S
       }
       completed += 1;
       await context.emit({ type: "progress", completed, total: rows.length });
+      await emitPartialOutputSnapshot(context, "physicians_output_snapshot.xlsx", () => createPhysiciansOutputWorkbookBuffer(state), completed, rows.length);
       await page.waitForTimeout(physiciansConfig.timing.betweenRowsMs);
     }
 

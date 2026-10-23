@@ -32,6 +32,7 @@ function shouldPublish(event: Record<string, unknown>): boolean {
     "cancellation_acknowledged",
     "cancelled",
     "completed",
+    "partial_success",
     "failed",
     "output_ready",
     "done",

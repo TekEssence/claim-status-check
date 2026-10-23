@@ -5,6 +5,7 @@ import { closeAutomationResources } from "@/backend/src/core/runtime-config";
 import { saveScreenshotForJob } from "@/backend/src/core/screenshots";
 import type { Page } from "playwright-core";
 import type { ScraperContext } from "../../types";
+import { emitPartialOutputSnapshot } from "../../partial-output";
 import { launchWaystarBrowser } from "./browser";
 import { parseWaystarInput } from "./input";
 import { createWaystarOutputWorkbookBuffer } from "./output-writer";
@@ -380,6 +381,9 @@ export async function runWaystarClaimStatusJob(formData: FormData, context: Scra
     await context.log({ level: "warn", message: `Waystar row ${invalidRow.inputRowId} skipped: ${invalidRow.error}` });
     completed += 1;
     await context.emit({ type: "progress", completed, total: input.totalRows });
+    await emitPartialOutputSnapshot(context, "waystar_output_snapshot.xlsx", () => createWaystarOutputWorkbookBuffer({
+      outputRows, errorRows, auditRows,
+    }), completed, input.totalRows);
   }
 
   try {
@@ -570,12 +574,15 @@ export async function runWaystarClaimStatusJob(formData: FormData, context: Scra
           auditRows,
           errorType: "row_processing",
           step: "row_processing",
-          message,
+          message: getFailureMessage(error),
           captureScreenshot: true,
         });
       } finally {
         completed += 1;
         await context.emit({ type: "progress", completed, total: input.totalRows });
+        await emitPartialOutputSnapshot(context, "waystar_output_snapshot.xlsx", () => createWaystarOutputWorkbookBuffer({
+          outputRows, errorRows, auditRows,
+        }), completed, input.totalRows);
         if (page) {
           await navigateToWaystarClaimSearch(page).catch(() => {});
         }

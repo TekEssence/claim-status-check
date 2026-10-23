@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright-core";
 import type { ScraperContext } from "../../types";
+import { emitPartialOutputSnapshot } from "../../partial-output";
 import { launchBlueShieldPersistentContext } from "./browser";
 import {
   BlueShieldSecurityDetectionError,
@@ -411,6 +412,13 @@ export async function runBlueShieldClaimStatusJob(formData: FormData, context: S
   let page: Page | null = null;
   let contextHandle: Awaited<ReturnType<typeof launchBlueShieldPersistentContext>> | null = null;
   const workbookFilename = outputWorkbookFilename("BlueShield");
+  const emitProgress = async () => {
+    const completed = completedWorkItems.size;
+    await context.emit({ type: "progress", completed, total: totalWorkItems });
+    if (state.outputRows.length || state.errorRows.length) {
+      await emitPartialOutputSnapshot(context, "blue_shield_output_snapshot.xlsx", () => createBlueShieldOutputWorkbookBuffer(state), completed, totalWorkItems);
+    }
+  };
 
   const log = async (message: string) => context.log({ level: "info", message });
   await log(`Blue Shield input loaded: ${rows.length} row(s), ${batches.length} unique credential login(s), ${totalWorkItems} unique member/DOS search(es).`);
@@ -454,7 +462,7 @@ export async function runBlueShieldClaimStatusJob(formData: FormData, context: S
     await log(`Blue Shield found an old checkpoint after member ${checkpoint.lastCompletedMember}. Cleared it so this run will reprocess every member.`);
   }
 
-  await context.emit({ type: "progress", completed: completedWorkItems.size, total: totalWorkItems });
+  await emitProgress();
 
   try {
     if (batches.length === 0) {
@@ -515,7 +523,7 @@ export async function runBlueShieldClaimStatusJob(formData: FormData, context: S
                 ? `Blue Shield member ${member.memberId} completed and checkpoint saved.`
                 : `Blue Shield member ${member.memberId} completed.`,
             );
-            await context.emit({ type: "progress", completed: completedWorkItems.size, total: totalWorkItems });
+            await emitProgress();
           } catch (error) {
             const message = errorMessage(error);
             const isSecurity = error instanceof BlueShieldSecurityDetectionError;
@@ -534,7 +542,7 @@ export async function runBlueShieldClaimStatusJob(formData: FormData, context: S
 
             if (isSecurity) {
               addAudit(state, member.memberId, "member_failed", "failed", memberStartedAt, message);
-              await context.emit({ type: "progress", completed: completedWorkItems.size, total: totalWorkItems });
+              await emitProgress();
 
               if (batchRecoveryCount >= BLUE_SHIELD_MAX_BATCH_RECOVERIES) {
                 batchSecurityFailure = message;
@@ -561,7 +569,7 @@ export async function runBlueShieldClaimStatusJob(formData: FormData, context: S
             }
 
             addAudit(state, member.memberId, "member_failed", "failed", memberStartedAt, message);
-            await context.emit({ type: "progress", completed: completedWorkItems.size, total: totalWorkItems });
+            await emitProgress();
           }
         }
 
@@ -574,11 +582,7 @@ export async function runBlueShieldClaimStatusJob(formData: FormData, context: S
             addMemberFailureOutput(state, batch.rows, skippedMember, message);
             completedWorkItems.add(skippedKey);
           }
-          await context.emit({
-            type: "progress",
-            completed: completedWorkItems.size,
-            total: totalWorkItems,
-          });
+          await emitProgress();
         }
       } catch (error) {
         const failure = errorMessage(error);
@@ -602,11 +606,7 @@ export async function runBlueShieldClaimStatusJob(formData: FormData, context: S
           type: "warning",
           message: `Blue Shield could not process the ${batch.groups.join(", ")} credential batch and will continue with the next login: ${failure}`,
         });
-        await context.emit({
-          type: "progress",
-          completed: completedWorkItems.size,
-          total: totalWorkItems,
-        });
+        await emitProgress();
       }
     }
 
@@ -620,7 +620,10 @@ export async function runBlueShieldClaimStatusJob(formData: FormData, context: S
   } catch (error) {
     const message = errorMessage(error);
     addError(state, null, page, "job_failure", message);
-    await saveWorkbook(context.jobId, state, workbookFilename).catch(() => {});
+    const partialWorkbook = await saveWorkbook(context.jobId, state, workbookFilename).catch(() => null);
+    if (partialWorkbook) {
+      await context.emit(downloadableFileEvent(workbookFilename, partialWorkbook.buffer, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")).catch(() => {});
+    }
     await emitErrorArtifacts(context, state).catch(() => {});
     await context.emit({ type: "error", message });
   } finally {

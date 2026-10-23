@@ -1,11 +1,13 @@
 import {
   appendWorkflowEvent,
   createWorkflowCommand,
+  expirePendingWorkflowCommands,
   listWatchdogWorkflowJobs,
   updateWorkflowJob,
   updateWorkflowJobMetadata,
 } from "./workflow-db";
 import { describeWorkerTask, stopWorkerTask } from "./ecs";
+import { reconcileAwsJobRuntime } from "../http/jobs";
 
 const DEFAULT_STALL_TIMEOUT_MS = 20 * 60 * 1000;
 const DEFAULT_CANCEL_RETRY_DELAY_MS = 60 * 1000;
@@ -43,21 +45,38 @@ function watchdogState(job: WorkflowJob): WatchdogState {
   return state as WatchdogState;
 }
 
-function withWatchdogState(job: WorkflowJob, state: WatchdogState): Record<string, unknown> {
-  const metadata = job.metadata && typeof job.metadata === "object" && !Array.isArray(job.metadata)
-    ? { ...(job.metadata as Record<string, unknown>) }
-    : {};
-  metadata.watchdog = state;
-  return metadata;
-}
-
 function parseTime(value: string | null | undefined): number {
   const parsed = value ? Date.parse(value) : Number.NaN;
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
 function terminalStatus(status: string): boolean {
-  return status === "completed" || status === "failed" || status === "cancelled";
+  return status === "completed" || status === "partial_success" || status === "failed" || status === "cancelled";
+}
+
+async function handleServiceDeadline(job: WorkflowJob, now: number, nowIso: string): Promise<boolean> {
+  if (!job.clientSystem) return false;
+  const metadata = job.metadata as { deadlineAt?: unknown; deadlineStopRequestedAt?: unknown } | null;
+  const deadline = typeof metadata?.deadlineAt === "string" ? Date.parse(metadata.deadlineAt) : Number.NaN;
+  if (!Number.isFinite(deadline) || now < deadline) return false;
+  const requestedAt = typeof metadata?.deadlineStopRequestedAt === "string" ? metadata.deadlineStopRequestedAt : null;
+  if (!requestedAt) await updateWorkflowJobMetadata(job.jobId, { deadlineStopRequestedAt: nowIso });
+  const current = await reconcileAwsJobRuntime({
+    ...job,
+    metadata: { ...(job.metadata as Record<string, unknown>), deadlineStopRequestedAt: requestedAt ?? nowIso },
+  });
+  if (!current || terminalStatus(current.status)) return true;
+  if (current.ecsTaskArn) {
+    const task = await describeWorkerTask(current.ecsTaskArn);
+    if (task?.lastStatus === "STOPPED") {
+      await reconcileAwsJobRuntime(current);
+    } else if (task && task.lastStatus !== "STOPPING") {
+      await stopWorkerTask(current.ecsTaskArn, "Execution deadline exceeded.");
+    }
+  } else if (current.status !== "starting" || now - Date.parse(requestedAt ?? nowIso) > 2 * 60_000) {
+    await updateWorkflowJob({ jobId: job.jobId, status: "failed", errorMessage: "Execution deadline exceeded before the worker started." });
+  }
+  return true;
 }
 
 async function jobStillActive(job: WorkflowJob): Promise<boolean> {
@@ -68,7 +87,7 @@ async function jobStillActive(job: WorkflowJob): Promise<boolean> {
 }
 
 async function updateState(job: WorkflowJob, state: WatchdogState): Promise<void> {
-  await updateWorkflowJobMetadata(job.jobId, withWatchdogState(job, state));
+  await updateWorkflowJobMetadata(job.jobId, { watchdog: state });
 }
 
 async function requestCancel(job: WorkflowJob, state: WatchdogState, attempt: number, totalAttempts: number, nowIso: string): Promise<void> {
@@ -107,6 +126,7 @@ async function forceStop(job: WorkflowJob, state: WatchdogState, nowIso: string)
 }
 
 export async function runStalledJobWatchdog(): Promise<WatchdogResult> {
+  await expirePendingWorkflowCommands();
   const stallTimeoutMs = numberEnv("WORKFLOW_STALL_TIMEOUT_MS", DEFAULT_STALL_TIMEOUT_MS);
   const cancelRetryDelayMs = numberEnv("WORKFLOW_STALL_CANCEL_RETRY_DELAY_MS", DEFAULT_CANCEL_RETRY_DELAY_MS);
   const cancelAttempts = Math.max(1, Math.floor(numberEnv("WORKFLOW_STALL_CANCEL_ATTEMPTS", DEFAULT_CANCEL_ATTEMPTS)));
@@ -118,6 +138,23 @@ export async function runStalledJobWatchdog(): Promise<WatchdogResult> {
   for (const job of jobs) {
     try {
       if (terminalStatus(job.status)) {
+        result.skipped += 1;
+        continue;
+      }
+
+      if (await handleServiceDeadline(job, now, nowIso)) {
+        result.skipped += 1;
+        continue;
+      }
+
+      // Integrated jobs use their explicit deadline so polling never sees a
+      // terminal status before the worker has stopped and S3 is reconciled.
+      if (job.clientSystem) {
+        result.skipped += 1;
+        continue;
+      }
+
+      if (job.status === "waiting_otp") {
         result.skipped += 1;
         continue;
       }

@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, isNull, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, getTableColumns, isNull, lte, or, sql } from "drizzle-orm";
 import { runDbWithRetry } from "@/db";
 import {
   workflowJobArtifacts,
@@ -8,9 +8,41 @@ import {
   workflowJobs,
 } from "@/db/schema/workflow-runtime";
 
-export type AwsWorkflowJobStatus = "queued" | "running" | "waiting_otp" | "cancelling" | "completed" | "failed" | "cancelled";
+export type AwsWorkflowJobStatus = "preparing" | "queued" | "starting" | "running" | "waiting_otp" | "cancelling" | "completed" | "partial_success" | "failed" | "cancelled";
 
-const protectedStatuses = new Set<AwsWorkflowJobStatus>(["cancelling", "completed", "failed", "cancelled"]);
+const protectedStatuses = new Set<AwsWorkflowJobStatus>(["cancelling", "completed", "partial_success", "failed", "cancelled"]);
+
+// Read new integration fields from the row JSON so existing manual jobs remain
+// readable until the forward migration is applied to the target database.
+const workflowJobColumns = getTableColumns(workflowJobs);
+const workflowJobReadColumns = {
+  jobId: workflowJobColumns.jobId,
+  userId: workflowJobColumns.userId,
+  workflowId: workflowJobColumns.workflowId,
+  portalId: workflowJobColumns.portalId,
+  clientSystem: sql<string | null>`to_jsonb("workflow_jobs")->>'client_system'`.as("client_system"),
+  clientExecutionId: sql<string | null>`to_jsonb("workflow_jobs")->>'client_execution_id'`.as("client_execution_id"),
+  idempotencyKey: sql<string | null>`to_jsonb("workflow_jobs")->>'idempotency_key'`.as("idempotency_key"),
+  status: workflowJobColumns.status,
+  ecsTaskArn: workflowJobColumns.ecsTaskArn,
+  inputBucket: workflowJobColumns.inputBucket,
+  outputBucket: workflowJobColumns.outputBucket,
+  inputPrefix: workflowJobColumns.inputPrefix,
+  outputPrefix: workflowJobColumns.outputPrefix,
+  claimFileName: workflowJobColumns.claimFileName,
+  loginFileName: workflowJobColumns.loginFileName,
+  createdByUserId: workflowJobColumns.createdByUserId,
+  createdByEmail: workflowJobColumns.createdByEmail,
+  createdByName: workflowJobColumns.createdByName,
+  currentCompleted: workflowJobColumns.currentCompleted,
+  totalRows: workflowJobColumns.totalRows,
+  errorMessage: workflowJobColumns.errorMessage,
+  metadata: workflowJobColumns.metadata,
+  createdAt: workflowJobColumns.createdAt,
+  updatedAt: workflowJobColumns.updatedAt,
+  startedAt: workflowJobColumns.startedAt,
+  finishedAt: workflowJobColumns.finishedAt,
+};
 
 function isProtectedStatus(status: string): boolean {
   return protectedStatuses.has(status as AwsWorkflowJobStatus);
@@ -21,6 +53,10 @@ export async function createWorkflowJob(params: {
   userId: string;
   workflowId: string;
   portalId: string;
+  clientSystem?: string;
+  clientExecutionId?: string;
+  idempotencyKey?: string;
+  initialStatus?: AwsWorkflowJobStatus;
   inputBucket: string;
   outputBucket: string;
   inputPrefix: string;
@@ -39,7 +75,12 @@ export async function createWorkflowJob(params: {
       userId: params.userId,
       workflowId: params.workflowId,
       portalId: params.portalId,
-      status: "queued",
+      ...(params.clientSystem ? {
+        clientSystem: params.clientSystem,
+        clientExecutionId: params.clientExecutionId,
+        idempotencyKey: params.idempotencyKey,
+      } : {}),
+      status: params.initialStatus ?? "queued",
       inputBucket: params.inputBucket,
       outputBucket: params.outputBucket,
       inputPrefix: params.inputPrefix,
@@ -56,16 +97,41 @@ export async function createWorkflowJob(params: {
   );
 }
 
+export async function getWorkflowJobByClientKey(clientSystem: string, idempotencyKey: string) {
+  const rows = await runDbWithRetry((db) =>
+    db.select(workflowJobReadColumns).from(workflowJobs).where(and(eq(workflowJobs.clientSystem, clientSystem), eq(workflowJobs.idempotencyKey, idempotencyKey))).limit(1),
+  );
+  return rows[0] ?? null;
+}
+
+export async function claimWorkflowJobLaunch(jobId: string): Promise<boolean> {
+  const rows = await runDbWithRetry((db) =>
+    db.update(workflowJobs).set({ status: "starting", updatedAt: new Date().toISOString() })
+      .where(and(eq(workflowJobs.jobId, jobId), eq(workflowJobs.status, "queued")))
+      .returning({ jobId: workflowJobs.jobId }),
+  );
+  return rows.length === 1;
+}
+
+export async function markWorkflowJobReady(jobId: string): Promise<boolean> {
+  const rows = await runDbWithRetry((db) =>
+    db.update(workflowJobs).set({ status: "queued", updatedAt: new Date().toISOString() })
+      .where(and(eq(workflowJobs.jobId, jobId), eq(workflowJobs.status, "preparing")))
+      .returning({ jobId: workflowJobs.jobId }),
+  );
+  return rows.length === 1;
+}
+
 export async function getWorkflowJobForUser(jobId: string, userId: string) {
   const rows = await runDbWithRetry((db) =>
-    db.select().from(workflowJobs).where(and(eq(workflowJobs.jobId, jobId), eq(workflowJobs.userId, userId))).limit(1),
+    db.select(workflowJobReadColumns).from(workflowJobs).where(and(eq(workflowJobs.jobId, jobId), eq(workflowJobs.userId, userId))).limit(1),
   );
   return rows[0] ?? null;
 }
 
 export async function getWorkflowJobById(jobId: string) {
   const rows = await runDbWithRetry((db) =>
-    db.select().from(workflowJobs).where(eq(workflowJobs.jobId, jobId)).limit(1),
+    db.select(workflowJobReadColumns).from(workflowJobs).where(eq(workflowJobs.jobId, jobId)).limit(1),
   );
   return rows[0] ?? null;
 }
@@ -73,13 +139,15 @@ export async function getWorkflowJobById(jobId: string) {
 export async function getActiveWorkflowJobForUser(userId: string) {
   const rows = await runDbWithRetry((db) =>
     db
-      .select()
+      .select(workflowJobReadColumns)
       .from(workflowJobs)
       .where(
         and(
           eq(workflowJobs.userId, userId),
           or(
             eq(workflowJobs.status, "queued"),
+            eq(workflowJobs.status, "preparing"),
+            eq(workflowJobs.status, "starting"),
             eq(workflowJobs.status, "running"),
             eq(workflowJobs.status, "waiting_otp"),
           ),
@@ -95,7 +163,7 @@ export async function listWorkflowJobsForUser(userId: string, limit = 25) {
   const safeLimit = Math.max(1, Math.min(limit, 100));
   return runDbWithRetry((db) =>
     db
-      .select()
+      .select(workflowJobReadColumns)
       .from(workflowJobs)
       .where(eq(workflowJobs.userId, userId))
       .orderBy(desc(workflowJobs.updatedAt))
@@ -107,9 +175,9 @@ export async function listRunningWorkflowJobs(limit = 50) {
   const safeLimit = Math.max(1, Math.min(limit, 100));
   return runDbWithRetry((db) =>
     db
-      .select()
+      .select(workflowJobReadColumns)
       .from(workflowJobs)
-      .where(or(eq(workflowJobs.status, "queued"), eq(workflowJobs.status, "running"), eq(workflowJobs.status, "waiting_otp"), eq(workflowJobs.status, "cancelling")))
+      .where(or(eq(workflowJobs.status, "preparing"), eq(workflowJobs.status, "queued"), eq(workflowJobs.status, "starting"), eq(workflowJobs.status, "running"), eq(workflowJobs.status, "waiting_otp"), eq(workflowJobs.status, "cancelling")))
       .orderBy(desc(workflowJobs.updatedAt))
       .limit(safeLimit),
   );
@@ -119,9 +187,9 @@ export async function listWatchdogWorkflowJobs(limit = 100) {
   const safeLimit = Math.max(1, Math.min(limit, 500));
   return runDbWithRetry((db) =>
     db
-      .select()
+      .select(workflowJobReadColumns)
       .from(workflowJobs)
-      .where(or(eq(workflowJobs.status, "queued"), eq(workflowJobs.status, "running"), eq(workflowJobs.status, "cancelling")))
+      .where(or(eq(workflowJobs.status, "preparing"), eq(workflowJobs.status, "queued"), eq(workflowJobs.status, "starting"), eq(workflowJobs.status, "running"), eq(workflowJobs.status, "waiting_otp"), eq(workflowJobs.status, "cancelling")))
       .orderBy(asc(workflowJobs.updatedAt))
       .limit(safeLimit),
   );
@@ -132,7 +200,7 @@ export async function updateWorkflowJobMetadata(jobId: string, metadata: Record<
     db
       .update(workflowJobs)
       .set({
-        metadata,
+        metadata: sql`${workflowJobs.metadata} || ${JSON.stringify(metadata)}::jsonb`,
         updatedAt: new Date().toISOString(),
       })
       .where(eq(workflowJobs.jobId, jobId)),
@@ -150,7 +218,7 @@ export async function updateWorkflowJob(params: {
 }) {
   const now = new Date().toISOString();
   const status = params.status;
-  const terminal = status === "completed" || status === "failed" || status === "cancelled";
+  const terminal = status === "completed" || status === "partial_success" || status === "failed" || status === "cancelled";
   const values: Partial<typeof workflowJobs.$inferInsert> = { updatedAt: now };
 
   const existingRows = await runDbWithRetry((db) =>
@@ -168,6 +236,7 @@ export async function updateWorkflowJob(params: {
   const allowStatusUpdate = params.status !== undefined
     && !(existingStatus === "cancelling" && params.status !== "cancelled")
     && !(existingStatus === "completed" && params.status !== "completed")
+    && !(existingStatus === "partial_success" && params.status !== "partial_success")
     && !(existingStatus === "failed" && params.status !== "failed")
     && !(existingStatus === "cancelled" && params.status !== "cancelled")
     && !(isProtectedStatus(existingStatus) && params.status === "running");
@@ -183,7 +252,7 @@ export async function updateWorkflowJob(params: {
     db
       .update(workflowJobs)
       .set(values)
-      .where(eq(workflowJobs.jobId, params.jobId)),
+      .where(and(eq(workflowJobs.jobId, params.jobId), eq(workflowJobs.status, existingStatus))),
   );
 }
 
@@ -208,6 +277,15 @@ export async function listWorkflowEvents(jobId: string, afterId = 0) {
       .orderBy(asc(workflowJobEvents.id))
       .limit(500),
   );
+}
+
+export async function getLatestWorkflowInputRequest(jobId: string) {
+  const rows = await runDbWithRetry((db) =>
+    db.select().from(workflowJobEvents)
+      .where(and(eq(workflowJobEvents.jobId, jobId), eq(workflowJobEvents.eventType, "input_request")))
+      .orderBy(desc(workflowJobEvents.id)).limit(1),
+  );
+  return rows[0] ?? null;
 }
 
 export async function createWorkflowCommand(params: {
@@ -239,6 +317,10 @@ export async function createWorkflowCommand(params: {
 
 export async function consumePendingWorkflowCommands(jobId: string) {
   const now = new Date().toISOString();
+  await runDbWithRetry((db) =>
+    db.update(workflowJobCommands).set({ status: "expired", payload: {} })
+      .where(and(eq(workflowJobCommands.jobId, jobId), eq(workflowJobCommands.status, "pending"), lte(workflowJobCommands.expiresAt, now))),
+  );
   const commands = await runDbWithRetry((db) =>
     db
       .select()
@@ -254,19 +336,30 @@ export async function consumePendingWorkflowCommands(jobId: string) {
       .limit(20),
   );
 
+  const consumed: typeof commands = [];
   for (const command of commands) {
-    await runDbWithRetry((db) =>
+    const claimed = await runDbWithRetry((db) =>
       db
         .update(workflowJobCommands)
         .set({
           status: "consumed",
           consumedAt: now,
+          payload: {},
         })
-        .where(eq(workflowJobCommands.id, command.id)),
+        .where(and(eq(workflowJobCommands.id, command.id), eq(workflowJobCommands.status, "pending")))
+        .returning({ id: workflowJobCommands.id }),
     );
+    if (claimed.length === 1) consumed.push(command);
   }
 
-  return commands;
+  return consumed;
+}
+
+export async function expirePendingWorkflowCommands(): Promise<void> {
+  await runDbWithRetry((db) =>
+    db.update(workflowJobCommands).set({ status: "expired", payload: {} })
+      .where(and(eq(workflowJobCommands.status, "pending"), lte(workflowJobCommands.expiresAt, new Date().toISOString()))),
+  );
 }
 
 export async function registerConnection(params: { connectionId: string; userId: string; jobId?: string }) {

@@ -2,7 +2,7 @@ import { fetchEventSource } from "@microsoft/fetch-event-source";
 import type { ScrapeJobEvent } from "../types/job";
 import { getCognitoAccessToken } from "./cognito-auth";
 
-export type ScrapeJobStatus = "queued" | "running" | "waiting_otp" | "waiting_resume" | "cancelling" | "completed" | "failed" | "cancelled";
+export type ScrapeJobStatus = "preparing" | "queued" | "starting" | "running" | "waiting_otp" | "waiting_resume" | "cancelling" | "completed" | "partial_success" | "failed" | "cancelled";
 
 export type CurrentScrapeJob = {
   jobId: string;
@@ -139,12 +139,15 @@ function normalizeJobStatus(status: unknown): ScrapeJobSummary["status"] {
   if (status === "done") return "completed";
   if (status === "error") return "failed";
   if (
+    status === "preparing" ||
     status === "queued" ||
+    status === "starting" ||
     status === "running" ||
     status === "waiting_otp" ||
     status === "waiting_resume" ||
     status === "cancelling" ||
     status === "completed" ||
+    status === "partial_success" ||
     status === "failed" ||
     status === "cancelled"
   ) {
@@ -655,7 +658,7 @@ async function subscribeToAwsScrapeJobEvents(options: {
           }
           await options.onEvent(event.payload);
         }
-        if (jobStatus === "completed" || jobStatus === "failed" || jobStatus === "cancelled") {
+        if (jobStatus === "completed" || jobStatus === "partial_success" || jobStatus === "failed" || jobStatus === "cancelled") {
           terminal = true;
           if (jobStatus === "failed") {
             await options.onEvent({ type: "error", message: body.job?.errorMessage || "Workflow failed." });

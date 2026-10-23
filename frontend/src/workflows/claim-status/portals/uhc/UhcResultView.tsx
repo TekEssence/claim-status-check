@@ -15,8 +15,11 @@ export type UhcProviderPrompt = {
 };
 
 export function UhcResultView({
+  canDownloadOutput,
+  downloadingOutput,
   errorScreenshots,
   logs,
+  onOutputDownload,
   onOtpChange,
   onOtpSubmit,
   onProviderChange,
@@ -27,8 +30,11 @@ export function UhcResultView({
   providerPrompt,
   status,
 }: {
+  canDownloadOutput: boolean;
+  downloadingOutput: boolean;
   errorScreenshots: ErrorScreenshot[];
   logs: string[];
+  onOutputDownload: () => void;
   onOtpChange: (value: string) => void;
   onOtpSubmit: () => void;
   onProviderChange: (value: string) => void;
@@ -104,6 +110,19 @@ export function UhcResultView({
       ) : null}
       <JobProgress progress={progress} />
       <StatusMessage status={status} />
+      {canDownloadOutput ? (
+        <div className="mb-4 rounded-[1.2rem] border border-blue-100 bg-white p-4 shadow-sm">
+          <p className="text-sm text-slate-600">Latest saved UHC results are ready to download.</p>
+          <button
+            type="button"
+            onClick={onOutputDownload}
+            disabled={downloadingOutput}
+            className="mt-3 rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-400"
+          >
+            {downloadingOutput ? "Preparing..." : "Download current results"}
+          </button>
+        </div>
+      ) : null}
       <ScreenshotViewer screenshots={errorScreenshots} />
       <LogsPanel logs={logs} />
     </>

@@ -4,6 +4,7 @@ import type { Browser, Locator, Page } from "playwright-core";
 import { closeAutomationResources } from "@/backend/src/core/runtime-config";
 import { getJobDataPath } from "@/backend/src/core/storage";
 import type { ScraperContext } from "../../types";
+import { emitPartialOutputSnapshot } from "../../partial-output";
 import { launchKaiserBrowser } from "./browser";
 import { kaiserConfig } from "./config";
 import { candidateStagesByReceivedDateAndStatus, matchKaiserName, selectKaiserCandidate, serviceDatesMatch, type SelectionCandidate } from "./selection";
@@ -2109,6 +2110,7 @@ export async function runKaiserClaimStatusJob(formData: FormData, context: Scrap
             addAudit(state, row, "session", "failed", "Portal session unavailable");
             completed += 1;
             await context.emit({ type: "progress", completed, total: rows.length });
+            await emitPartialOutputSnapshot(context, "kaiser_output_snapshot.xlsx", () => createKaiserOutputWorkbookBuffer(state), completed, rows.length);
             continue;
           }
         }
@@ -2137,6 +2139,7 @@ export async function runKaiserClaimStatusJob(formData: FormData, context: Scrap
 
       completed += 1;
       await context.emit({ type: "progress", completed, total: rows.length });
+      await emitPartialOutputSnapshot(context, "kaiser_output_snapshot.xlsx", () => createKaiserOutputWorkbookBuffer(state), completed, rows.length);
       await context.log({ level: "info", message: "Applying controlled delay before next row.", rowIndex: row.inputRowId });
       await page.waitForTimeout(kaiserConfig.timing.betweenRowsMs);
     }

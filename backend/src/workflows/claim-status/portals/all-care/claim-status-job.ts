@@ -1,6 +1,7 @@
 import type { Browser, BrowserContext, Page } from "playwright-core";
 import { closeAutomationResources } from "@/backend/src/core/runtime-config";
 import type { ScraperContext } from "../../types";
+import { emitPartialOutputSnapshot } from "../../partial-output";
 import { launchAllCareBrowser } from "./browser";
 import { parseAllCareInput, readAllCareCredentials, readAllCareInputRows, routeAllCareRows } from "./input";
 import { allCareClaimDobMatches, allCareClaimNameMatches, allCareServiceLinesForDosAndCpt, extractAllCareClaimDetails, getAllCareClaimCount, getAllCareClaimNumbersForRow, goToAllCareClaims, goToNextAllCareClaimsPage, loginToAllCare, openAllCareClaimByNumber, returnToAllCareResults, searchAllCareClaims, signOutAllCare } from "./portal";
@@ -142,6 +143,7 @@ export async function runAllCareClaimStatusJob(formData: FormData, context: Scra
       outputRows.push(...allCareOutputRows(row, blankDetails(), "failed", row.validationMessage));
       completed += 1;
       await context.emit({ type: "progress", completed, total });
+      await emitPartialOutputSnapshot(context, "allCare_output_snapshot.xlsx", () => createAllCareWorkbook(outputRows, errorRows, auditRows), completed, total);
     }
     for (const row of routing.unmappedRows) {
       const message = `No AllCare credentials matched Group ${row.group} and Payer ${row.payer}.`;
@@ -149,6 +151,7 @@ export async function runAllCareClaimStatusJob(formData: FormData, context: Scra
       outputRows.push(...allCareOutputRows(row, blankDetails(), "failed", message));
       completed += 1;
       await context.emit({ type: "progress", completed, total });
+      await emitPartialOutputSnapshot(context, "allCare_output_snapshot.xlsx", () => createAllCareWorkbook(outputRows, errorRows, auditRows), completed, total);
     }
 
     for (const batch of routing.batches) {
@@ -180,6 +183,7 @@ export async function runAllCareClaimStatusJob(formData: FormData, context: Scra
           completed += 1;
           batchCompleted += 1;
           await context.emit({ type: "progress", completed, total });
+          await emitPartialOutputSnapshot(context, "allCare_output_snapshot.xlsx", () => createAllCareWorkbook(outputRows, errorRows, auditRows), completed, total);
         }
       } catch (error) {
         const message = errorMessage(error);
@@ -189,6 +193,7 @@ export async function runAllCareClaimStatusJob(formData: FormData, context: Scra
           outputRows.push(...allCareOutputRows(row, blankDetails(), "failed", message));
           completed += 1;
           await context.emit({ type: "progress", completed, total });
+          await emitPartialOutputSnapshot(context, "allCare_output_snapshot.xlsx", () => createAllCareWorkbook(outputRows, errorRows, auditRows), completed, total);
         }
         await context.log({ level: "error", message: `AllCare ${batch.credentials.group}/${batch.credentials.payer} batch failed: ${message}` });
       } finally {

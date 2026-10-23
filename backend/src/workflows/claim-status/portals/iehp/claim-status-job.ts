@@ -1,10 +1,10 @@
 import type { BrowserContext, Page } from "playwright-core";
 import { closeAutomationResources } from "@/backend/src/core/runtime-config";
 import type { ScraperContext } from "../../types";
-import { emitScrapeJobEvent } from "@/backend/src/jobs/job-store";
+import { emitScrapeJobEvent, waitForScrapeJobInput } from "@/backend/src/jobs/job-store";
 import { processCoveredRaDownloads, extractCheckNumbersFromClaimDetailText } from "./covered-ra";
 import { processReferToRaDownloads } from "./refer-ra";
-import { detectLoginStatus, logoutIehp } from "./auth";
+import { completeIehpLoginAfterCredentials, detectLoginStatus, logoutIehp } from "./auth";
 import { launchIehpBrowser } from "./browser";
 import { parseIehpClaimStatusInput } from "./input";
 import { navigateToClaimStatusWithRetry } from "./claim-status";
@@ -125,13 +125,11 @@ export async function runIehpClaimStatusJob(jobId: string, formData: FormData, c
             log("Waiting for navigation after login...");
             await page.waitForNavigation({ waitUntil: "networkidle", timeout: 15000 }).catch(() => log("waitForNavigation timeout, continuing..."));
 
-            const loginOutcome = await detectLoginStatus(page, 15000);
-            if (loginOutcome.status === "failed") {
-              throw new Error(`Login failed: ${loginOutcome.message}`);
-            }
-            if (loginOutcome.status !== "signed-in") {
-              throw new Error("Login verification failed: could not find Sign Out, Eligibility, Welcome, or My account after submitting credentials.");
-            }
+            await completeIehpLoginAfterCredentials(
+              page,
+              (inputName, timeoutMs) => waitForScrapeJobInput(jobId, inputName, timeoutMs),
+              sendEvent,
+            );
             await log("Login verification successful (signed-in indicator found).");
           }
 

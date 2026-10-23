@@ -5,6 +5,7 @@ import { closeAutomationResources } from "@/backend/src/core/runtime-config";
 import { getJobDataPath } from "@/backend/src/core/storage";
 import { waitForScrapeJobInput } from "@/backend/src/jobs/job-store";
 import type { ScraperContext } from "../../types";
+import { emitPartialOutputSnapshot } from "../../partial-output";
 import { launchCignaBrowser } from "./browser";
 import { cignaConfig } from "./config";
 import { normalizeCptCode, parseCignaInput, readCignaInputWorkbook, type CignaInputRow } from "./input";
@@ -1217,6 +1218,7 @@ export async function runCignaClaimStatusJob(formData: FormData, context: Scrape
 
       completed += 1;
       await context.emit({ type: "progress", completed, total: rows.length });
+      await emitPartialOutputSnapshot(context, "cigna_output_snapshot.xlsx", () => createCignaOutputWorkbookBuffer(state), completed, rows.length);
       await page.waitForTimeout(cignaConfig.timing.betweenRowsMs);
     }
 

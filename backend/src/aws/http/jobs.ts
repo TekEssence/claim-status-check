@@ -2,11 +2,14 @@ import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { CloudWatchLogsClient, FilterLogEventsCommand } from "@aws-sdk/client-cloudwatch-logs";
 import { WORKFLOW_IDS, type WorkflowId } from "@/backend/src/workflows/types";
 import { jsonResponse, parseJsonBody, getAuthUserId, getAuthUserSnapshot, getJobId, createJobId, hasFullWorkflowAccess, type ApiEvent } from "../runtime/http";
-import { describeWorkerTask, runWorkerTask, stopWorkerTask } from "../runtime/ecs";
+import { describeWorkerTask, findWorkerTaskByJobId, runWorkerTask, stopWorkerTask, WorkerTaskLaunchRejectedError } from "../runtime/ecs";
 import { buildWorkflowKey, createDownloadUrl, createUploadUrl } from "../runtime/s3";
 import { createIehpBundle } from "./iehp-bundle";
+import { loadIehpServiceSnapshot } from "../service/iehp-snapshot";
 import {
   appendWorkflowEvent,
+  appendWorkflowArtifact,
+  claimWorkflowJobLaunch,
   createWorkflowCommand,
   createWorkflowJob,
   getWorkflowJobForUser,
@@ -29,7 +32,7 @@ type CreateJobBody = {
 const uploadFields = new Set(["claimExcel", "loginExcel", "inputExcel", "credentialExcel", "inputFile", "credentialFile", "referenceExcel", "selectionRulesFile", "claimRows"]);
 let s3Client: S3Client | null = null;
 let cloudWatchLogsClient: CloudWatchLogsClient | null = null;
-const activeJobStatuses = new Set(["queued", "running", "waiting_otp", "cancelling"]);
+const activeJobStatuses = new Set(["preparing", "queued", "starting", "running", "waiting_otp", "cancelling"]);
 
 type WorkflowArtifact = Awaited<ReturnType<typeof listArtifactsForJob>>[number];
 type WorkflowListArtifact = Pick<WorkflowArtifact, "id" | "rowIndex" | "artifactType" | "filename" | "mimeType" | "createdAt">;
@@ -129,13 +132,25 @@ async function listCloudWatchJobLogs(job: Awaited<ReturnType<typeof getWorkflowJ
     .filter((line): line is string => Boolean(line));
 }
 
-async function reconcileAwsJobRuntime(job: Awaited<ReturnType<typeof getWorkflowJobForUser>>) {
+export async function reconcileAwsJobRuntime(job: Awaited<ReturnType<typeof getWorkflowJobForUser>>) {
   if (!job || !isActiveJobStatus(job.status)) return job;
 
   const updatedAtMs = Date.parse(String(job.updatedAt));
   const ageMs = Number.isFinite(updatedAtMs) ? Date.now() - updatedAtMs : 0;
+  if (!job.ecsTaskArn && job.status === "starting") {
+    const recoveredArn = await findWorkerTaskByJobId(job.jobId).catch(() => null);
+    if (recoveredArn) {
+      await updateWorkflowJob({ jobId: job.jobId, ecsTaskArn: recoveredArn });
+      return reconcileAwsJobRuntime(await getWorkflowJobById(job.jobId));
+    }
+  }
   if (!job.ecsTaskArn) {
-    if ((job.status === "queued" || job.status === "running") && ageMs > 15 * 60 * 1000) {
+    if (job.clientSystem && (job.metadata as { deadlineStopRequestedAt?: string } | null)?.deadlineStopRequestedAt && job.status !== "starting") {
+      const message = "Execution deadline exceeded before the worker started.";
+      await updateWorkflowJob({ jobId: job.jobId, status: "failed", errorMessage: message });
+      return await getWorkflowJobById(job.jobId);
+    }
+    if ((job.status === "preparing" || job.status === "queued" || job.status === "starting" || job.status === "running") && ageMs > 15 * 60 * 1000) {
       const message = "AWS worker task was not started or no longer exists for this job.";
       await updateWorkflowJob({ jobId: job.jobId, status: "failed", errorMessage: message });
       await appendWorkflowEvent(job.jobId, "failed", { type: "failed", message }).catch(() => {});
@@ -149,10 +164,43 @@ async function reconcileAwsJobRuntime(job: Awaited<ReturnType<typeof getWorkflow
   if (task.lastStatus === "STOPPED") {
     const stoppedReason = task.stoppedReason || task.containers?.find((container) => container.reason)?.reason || "";
     const exitCode = task.containers?.find((container) => typeof container.exitCode === "number")?.exitCode;
-    const status = job.status === "cancelling" ? "cancelled" : exitCode === 0 ? "completed" : "failed";
-    const message = status === "completed"
-      ? undefined
-      : stoppedReason || `AWS worker task stopped${typeof exitCode === "number" ? ` with exit code ${exitCode}` : ""}.`;
+    const deadlineExceeded = Boolean((job.metadata as { deadlineStopRequestedAt?: string } | null)?.deadlineStopRequestedAt);
+    let status: "cancelled" | "completed" | "partial_success" | "failed" = job.status === "cancelling" && !deadlineExceeded ? "cancelled" : exitCode === 0 ? "completed" : "failed";
+    let outputError = "";
+    if (job.clientSystem && status !== "cancelled") {
+      let snapshot: Awaited<ReturnType<typeof loadIehpServiceSnapshot>>;
+      try {
+        snapshot = await loadIehpServiceSnapshot(job, { requireStatusColumns: false });
+      } catch {
+        // Keep the job active until the last S3 object can be read and reconciled.
+        return job;
+      }
+      if (!snapshot.summary || !snapshot.artifact) {
+        status = "failed";
+        outputError = "Integrated worker stopped without an output workbook.";
+      } else if (deadlineExceeded) {
+        status = snapshot.summary.counts.success > 0 ? "partial_success" : "failed";
+      } else if (snapshot.summary.outcome === "SUCCESS" && exitCode === 0) {
+        status = "completed";
+      } else if (snapshot.summary.counts.success > 0) {
+        status = "partial_success";
+      } else {
+        status = "failed";
+        outputError = "All integrated claim rows failed or remain incomplete.";
+      }
+      if (snapshot.artifact && !snapshot.recorded) {
+        await appendWorkflowArtifact({
+          jobId: job.jobId, artifactType: "output_snapshot",
+          filename: snapshot.artifact.filename, bucket: snapshot.artifact.bucket,
+          s3Key: snapshot.artifact.object_key,
+          mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        });
+      }
+    }
+    const message = deadlineExceeded ? "Execution deadline exceeded."
+      : status === "partial_success" && exitCode !== 0 ? "Worker stopped after producing usable partial output."
+        : status === "completed" || status === "partial_success" ? undefined
+          : outputError || stoppedReason || `AWS worker task stopped${typeof exitCode === "number" ? ` with exit code ${exitCode}` : ""}.`;
     await updateWorkflowJob({ jobId: job.jobId, status, errorMessage: message });
     await appendWorkflowEvent(job.jobId, status, { type: status, ...(message ? { message } : {}) }).catch(() => {});
     return {
@@ -233,10 +281,22 @@ export async function confirmJob(event: ApiEvent) {
     jobId = getJobId(event);
     const job = await getWorkflowJobForUser(jobId, userId);
     if (!job) return jsonResponse(404, { error: "Job not found." });
-    if (job.status !== "queued") return jsonResponse(409, { error: `Job is already ${job.status}.` });
+    const taskArn = await launchQueuedWorkflowJob(jobId, userId);
+    return jsonResponse(200, { jobId, taskArn });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to start job.";
+    return jsonResponse(message.startsWith("Job is already ") ? 409 : 500, { error: message });
+  }
+}
 
-    const metadata = job.metadata as { inputKeys?: Record<string, string>; formFields?: Record<string, unknown> };
-    const taskArn = await runWorkerTask({
+export async function launchQueuedWorkflowJob(jobId: string, userId: string): Promise<string> {
+  const job = await getWorkflowJobById(jobId);
+  if (!job || job.userId !== userId) throw new Error("Job not found.");
+  if (!await claimWorkflowJobLaunch(jobId)) throw new Error(`Job is already ${job.status}.`);
+  const metadata = job.metadata as { inputKeys?: Record<string, string>; formFields?: Record<string, unknown> };
+  let taskArn: string;
+  try {
+    taskArn = await runWorkerTask({
       jobId,
       userId,
       workflowId: job.workflowId,
@@ -246,17 +306,24 @@ export async function confirmJob(event: ApiEvent) {
       inputKeys: metadata.inputKeys ?? {},
       formFields: metadata.formFields ?? {},
     });
-    await updateWorkflowJob({ jobId, status: "running", ecsTaskArn: taskArn, startedAt: new Date().toISOString() });
-    await appendWorkflowEvent(jobId, "task_started", { type: "task_starting", taskArn });
-    return jsonResponse(200, { jobId, taskArn });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Failed to start job.";
-    if (jobId) {
-      await updateWorkflowJob({ jobId, status: "failed", errorMessage: message });
-      await appendWorkflowEvent(jobId, "task_start_failed", { type: "failed", message });
+    const recoveredArn = await findWorkerTaskByJobId(jobId).catch(() => null);
+    if (recoveredArn) {
+      taskArn = recoveredArn;
+    } else {
+      const message = error instanceof Error ? error.message : "Failed to launch ECS task.";
+      if (error instanceof WorkerTaskLaunchRejectedError) {
+        await updateWorkflowJob({ jobId, status: "failed", errorMessage: message }).catch(() => {});
+        await appendWorkflowEvent(jobId, "task_start_failed", { type: "failed", message }).catch(() => {});
+      } else {
+        await appendWorkflowEvent(jobId, "task_start_uncertain", { type: "log", message: "ECS launch response was inconclusive; checking for a task before failing the job." }).catch(() => {});
+      }
+      throw error;
     }
-    return jsonResponse(500, { error: error instanceof Error ? error.message : "Failed to start job." });
   }
+  await updateWorkflowJob({ jobId, status: "running", ecsTaskArn: taskArn, startedAt: new Date().toISOString() });
+  await appendWorkflowEvent(jobId, "task_started", { type: "task_starting", taskArn });
+  return taskArn;
 }
 
 export async function getJob(event: ApiEvent) {
@@ -406,6 +473,7 @@ export async function downloadJob(event: ApiEvent) {
       : undefined;
     const artifact = paymentEobZip
       ?? artifacts.find((item) => item.artifactType === "file_download" && isPreferredOutputArtifact(item.filename, item.mimeType))
+      ?? artifacts.find((item) => item.artifactType === "output_snapshot" && isPreferredOutputArtifact(item.filename, item.mimeType))
       ?? artifacts.find((item) => item.artifactType === "file_download" && isDownloadableNonDiagnosticArtifact(item.filename, item.mimeType))
       ?? artifacts.find((item) => item.artifactType === "output_snapshot");
     if (!artifact) return jsonResponse(404, { error: "No output is available yet." });

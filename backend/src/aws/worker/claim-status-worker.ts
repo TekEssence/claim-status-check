@@ -18,11 +18,16 @@ import {
   postProcessWorksheet,
   type ClaimRowUpdateEvent,
 } from "@/backend/src/workflows/claim-status/portals/iehp/workbook-output";
+import {
+  applyUhcRowUpdateToWorksheet,
+  postProcessUhcWorksheet,
+} from "@/backend/src/workflows/claim-status/portals/uhc/workbook-output";
 import { runDbWithRetry } from "@/db";
 import { workflowJobs } from "@/db/schema/workflow-runtime";
 import {
   appendWorkflowEvent,
   appendWorkflowArtifact,
+  getWorkflowJobById,
   listArtifactsForJob,
   consumePendingWorkflowCommands,
   updateWorkflowJob,
@@ -30,6 +35,7 @@ import {
 } from "@/backend/src/aws/runtime/workflow-db";
 import { publishWorkflowEvent } from "@/backend/src/aws/runtime/websocket-publisher";
 import { createIehpBundle } from "@/backend/src/aws/http/iehp-bundle";
+import { loadIehpServiceSnapshot, serviceOutputWorkbookLocation } from "@/backend/src/aws/service/iehp-snapshot";
 import {
   appendScrapeJobArtifact,
   createPersistentScrapeJob,
@@ -46,16 +52,20 @@ type FileInputSpec = {
   fallbackName: string;
 };
 
-type IehpOutputWorkbook = {
+type ClaimOutputWorkbook = {
   workbook: ExcelJS.Workbook;
   worksheet: ExcelJS.Worksheet;
   claimFileName: string;
   changed: boolean;
+  outputKey?: string;
+  artifactRecorded?: boolean;
 };
 
-type UploadIehpOutputWorkbookOptions = {
+type UploadClaimOutputWorkbookOptions = {
+  portalId: "iehp" | "uhc";
   finalize?: boolean;
   announce?: boolean;
+  recordOnce?: boolean;
 };
 
 const fileInputs: FileInputSpec[] = [
@@ -262,7 +272,7 @@ async function buildFormData(portalId: string): Promise<FormData> {
   return formData;
 }
 
-async function buildIehpOutputWorkbook(formData: FormData): Promise<IehpOutputWorkbook | null> {
+async function buildIehpOutputWorkbook(formData: FormData): Promise<ClaimOutputWorkbook | null> {
   const claimFile = formData.get("claimExcel");
   if (!(claimFile instanceof File) || claimFile.size === 0) return null;
 
@@ -271,6 +281,23 @@ async function buildIehpOutputWorkbook(formData: FormData): Promise<IehpOutputWo
   const worksheet = workbook.worksheets[0];
   if (!worksheet) throw new Error("IEHP claim workbook does not contain a worksheet.");
 
+  return {
+    workbook,
+    worksheet,
+    claimFileName: stringField(formData, "claimFileName") || claimFile.name || "claim.xlsx",
+    changed: false,
+  };
+}
+
+async function buildUhcOutputWorkbook(formData: FormData): Promise<ClaimOutputWorkbook> {
+  const claimFile = formData.get("claimExcel");
+  if (!(claimFile instanceof File) || claimFile.size === 0) {
+    throw new Error("UHC claim workbook is required to save partial output.");
+  }
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(await claimFile.arrayBuffer());
+  const worksheet = workbook.worksheets[0];
+  if (!worksheet) throw new Error("UHC claim workbook does not contain a worksheet.");
   return {
     workbook,
     worksheet,
@@ -443,9 +470,10 @@ async function persistAutomationEvent(jobId: string, workflowId: AutomationWorkf
   }
 }
 
-async function buildIehpOutputBuffer(outputWorkbook: IehpOutputWorkbook, finalize: boolean): Promise<Buffer> {
+async function buildClaimOutputBuffer(outputWorkbook: ClaimOutputWorkbook, finalize: boolean, portalId: "iehp" | "uhc"): Promise<Buffer> {
+  const postProcess = portalId === "uhc" ? postProcessUhcWorksheet : postProcessWorksheet;
   if (finalize) {
-    postProcessWorksheet(outputWorkbook.worksheet);
+    postProcess(outputWorkbook.worksheet);
     return Buffer.from(await outputWorkbook.workbook.xlsx.writeBuffer());
   }
 
@@ -453,31 +481,32 @@ async function buildIehpOutputBuffer(outputWorkbook: IehpOutputWorkbook, finaliz
   await clone.xlsx.load(await outputWorkbook.workbook.xlsx.writeBuffer());
   const worksheet = clone.worksheets[0];
   if (worksheet) {
-    postProcessWorksheet(worksheet);
+    postProcess(worksheet);
   }
   return Buffer.from(await clone.xlsx.writeBuffer());
 }
 
-async function uploadIehpOutputWorkbook(
+async function uploadClaimOutputWorkbook(
   jobId: string,
-  outputWorkbook: IehpOutputWorkbook | null,
-  options: UploadIehpOutputWorkbookOptions = {},
+  outputWorkbook: ClaimOutputWorkbook | null,
+  options: UploadClaimOutputWorkbookOptions,
 ): Promise<boolean> {
   if (!outputWorkbook) return false;
 
-  const buffer = await buildIehpOutputBuffer(outputWorkbook, options.finalize ?? true);
+  const buffer = await buildClaimOutputBuffer(outputWorkbook, options.finalize ?? true, options.portalId);
   const outputBucket = process.env.WORKFLOW_OUTPUTS_BUCKET;
-  if (!outputBucket) throw new Error("WORKFLOW_OUTPUTS_BUCKET must be set to upload IEHP output.");
+  if (!outputBucket) throw new Error("WORKFLOW_OUTPUTS_BUCKET must be set to upload claim output.");
 
   const parsedName = path.parse(outputWorkbook.claimFileName);
-  const filename = `${parsedName.name || "iehp_claims"}_output.xlsx`;
-  const key = [
+  const filename = `${parsedName.name || `${options.portalId}_claims`}_output.xlsx`;
+  const key = outputWorkbook.outputKey ?? [
     "claim-status",
     new Date().toISOString().slice(0, 10),
     jobId,
     "output",
     filename,
   ].join("/");
+  outputWorkbook.outputKey = key;
 
   await getS3Client().send(new PutObjectCommand({
     Bucket: outputBucket,
@@ -486,22 +515,25 @@ async function uploadIehpOutputWorkbook(
     ContentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   }));
 
-  await appendWorkflowArtifact({
-    jobId,
-    artifactType: "output_snapshot",
-    filename,
-    bucket: outputBucket,
-    s3Key: key,
-    mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-  });
-  await appendScrapeJobArtifact({
-    jobId,
-    rowIndex: null,
-    artifactType: "output_snapshot",
-    filename,
-    mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    pathOrKey: key,
-  }).catch(() => {});
+  if (!options.recordOnce || !outputWorkbook.artifactRecorded) {
+    await appendWorkflowArtifact({
+      jobId,
+      artifactType: "output_snapshot",
+      filename,
+      bucket: outputBucket,
+      s3Key: key,
+      mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    });
+    await appendScrapeJobArtifact({
+      jobId,
+      rowIndex: null,
+      artifactType: "output_snapshot",
+      filename,
+      mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      pathOrKey: key,
+    }).catch(() => {});
+    outputWorkbook.artifactRecorded = true;
+  }
   if (options.announce ?? true) {
     await appendWorkflowEvent(jobId, "output_ready", { type: "output_ready", filename }).catch(() => {});
     await publishWorkflowEvent(jobId, { type: "output_ready", filename }).catch(() => {});
@@ -539,6 +571,7 @@ function isPersistentWorkflowEvent(data: Record<string, unknown>): boolean {
     type === "cancellation_acknowledged" ||
     type === "cancelled" ||
     type === "completed" ||
+    type === "partial_success" ||
     type === "failed" ||
     type === "output_ready"
   );
@@ -567,7 +600,10 @@ function persistentWorkflowEventPayload(data: Record<string, unknown>): Record<s
     return payload;
   }
   if (type === "input_request" || type === "otp_request") {
-    const { value: _value, otp: _otp, secret: _secret, ...payload } = data;
+    const payload = { ...data };
+    delete payload.value;
+    delete payload.otp;
+    delete payload.secret;
     return payload;
   }
   return data;
@@ -817,7 +853,18 @@ export async function main(): Promise<void> {
   const job = createScrapeJob(jobId);
   const cancellation = startCancellationPoll(jobId);
   const iehpOutputWorkbook = portalId === "iehp" ? await buildIehpOutputWorkbook(formData) : null;
+  let uhcOutputWorkbook: ClaimOutputWorkbook | null = null;
+  const isServiceJob = formData.get("integrationMode") === "service";
+  if (isServiceJob && iehpOutputWorkbook) {
+    const serviceJob = await getWorkflowJobById(jobId);
+    if (!serviceJob) throw new Error("Integrated job metadata is missing.");
+    iehpOutputWorkbook.outputKey = serviceOutputWorkbookLocation(serviceJob).key;
+  }
   let lastIehpSnapshotCompleted = 0;
+  let lastIehpSnapshotAt = 0;
+  let lastUhcSnapshotCompleted = 0;
+  let lastUhcSnapshotAt = 0;
+  let uhcRowsUpdated = 0;
   let scraperErrorMessage = "";
 
   await createOrUpdateJob(jobId, userId, portalId, formData);
@@ -847,6 +894,11 @@ export async function main(): Promise<void> {
         applyClaimRowUpdateToWorksheet(iehpOutputWorkbook.worksheet, event as ClaimRowUpdateEvent);
         iehpOutputWorkbook.changed = true;
       }
+      if (uhcOutputWorkbook && isClaimRowUpdateEvent(event as Record<string, unknown>)) {
+        applyUhcRowUpdateToWorksheet(uhcOutputWorkbook.worksheet, event);
+        uhcOutputWorkbook.changed = true;
+        uhcRowsUpdated += 1;
+      }
       try {
         await persistEvent(job.id, event);
       } catch (error) {
@@ -867,15 +919,37 @@ export async function main(): Promise<void> {
         event.type === "progress"
       ) {
         const completed = getScrapeJob(job.id)?.currentCompleted ?? 0;
-        if (completed > lastIehpSnapshotCompleted) {
-          await uploadIehpOutputWorkbook(jobId, iehpOutputWorkbook, {
+        if (completed > lastIehpSnapshotCompleted && Date.now() - lastIehpSnapshotAt >= 10_000) {
+          const saved = await uploadClaimOutputWorkbook(jobId, iehpOutputWorkbook, {
+            portalId: "iehp",
             finalize: false,
             announce: false,
+            recordOnce: isServiceJob,
           }).catch((uploadError) => {
             console.error("IEHP partial workbook snapshot upload failed", uploadError);
+            return false;
           });
-          lastIehpSnapshotCompleted = completed;
-          iehpOutputWorkbook.changed = false;
+          if (saved) {
+            lastIehpSnapshotCompleted = completed;
+            lastIehpSnapshotAt = Date.now();
+            iehpOutputWorkbook.changed = false;
+          }
+        }
+      }
+      if (portalId === "uhc" && uhcOutputWorkbook?.changed && event.type === "progress") {
+        const completed = getScrapeJob(job.id)?.currentCompleted ?? 0;
+        if (completed > lastUhcSnapshotCompleted && Date.now() - lastUhcSnapshotAt >= 10_000) {
+          const saved = await uploadClaimOutputWorkbook(jobId, uhcOutputWorkbook, {
+            portalId: "uhc", finalize: false, announce: false, recordOnce: true,
+          }).catch((uploadError) => {
+            console.error("UHC partial workbook snapshot upload failed", uploadError);
+            return false;
+          });
+          if (saved) {
+            lastUhcSnapshotCompleted = completed;
+            lastUhcSnapshotAt = Date.now();
+            uhcOutputWorkbook.changed = false;
+          }
         }
       }
     },
@@ -898,7 +972,7 @@ export async function main(): Promise<void> {
         rowIndex: event.rowIndex,
         meta: event.meta,
       });
-      if (event.level === "error" && !scraperErrorMessage) {
+      if (event.level === "error" && event.rowIndex === undefined && !scraperErrorMessage) {
         scraperErrorMessage = event.message;
       }
       emitScrapeJobEvent(job.id, payload);
@@ -907,6 +981,9 @@ export async function main(): Promise<void> {
   };
 
   try {
+    if (portalId === "uhc") {
+      uhcOutputWorkbook = await buildUhcOutputWorkbook(formData);
+    }
     const runResult = await waitForRunWithCancellation(
       scraper.run(input, context).then(() => "completed" as const),
       cancellation,
@@ -921,9 +998,24 @@ export async function main(): Promise<void> {
     const currentJob = getScrapeJob(job.id);
     const completed = currentJob?.currentCompleted ?? 0;
     const total = currentJob?.totalRows ?? 0;
+    if (portalId === "uhc" && completed > 0 && uhcRowsUpdated === 0) {
+      throw new Error("UHC reported completed rows without any claim output updates.");
+    }
     const uploadedIehpOutput = portalId === "iehp"
-      ? await uploadIehpOutputWorkbook(jobId, iehpOutputWorkbook)
+      ? await uploadClaimOutputWorkbook(jobId, iehpOutputWorkbook, { portalId: "iehp", recordOnce: isServiceJob })
       : false;
+    if (portalId === "uhc" && uhcOutputWorkbook && uhcRowsUpdated > 0) {
+      await uploadClaimOutputWorkbook(jobId, uhcOutputWorkbook, {
+        portalId: "uhc", finalize: runResult !== "cancelled", recordOnce: true,
+      });
+    }
+    const serviceJob = isServiceJob && portalId === "iehp" && uploadedIehpOutput ? await getWorkflowJobById(jobId) : null;
+    const serviceSummary = serviceJob
+      ? (await loadIehpServiceSnapshot(serviceJob, { requireStatusColumns: true })).summary
+      : null;
+    if (isServiceJob && uploadedIehpOutput && !serviceSummary) {
+      throw new Error("Integrated output workbook could not be validated.");
+    }
     const status: PersistentScrapeJobStatus = runResult === "cancelled" || cancellation.isCancelled()
       ? "cancelled"
       : total > 0 && completed < total
@@ -935,10 +1027,12 @@ export async function main(): Promise<void> {
     if (portalId === "iehp") {
       await createIehpBundle({ jobId, artifacts: await listArtifactsForJob(jobId), partial: status !== "completed" });
     }
-    const awsStatus: AwsWorkflowJobStatus = status === "waiting_resume" ? "failed" : status;
+    const awsStatus: AwsWorkflowJobStatus = status === "cancelled" ? "cancelled" : serviceSummary
+      ? serviceSummary.outcome === "SUCCESS" ? "completed" : serviceSummary.outcome === "PARTIAL_SUCCESS" ? "partial_success" : "failed"
+      : status === "waiting_resume" ? "failed" : status;
     await updateWorkflowJob({ jobId, status: awsStatus, currentCompleted: completed, totalRows: total }).catch(() => {});
     await updateScrapeJobSnapshot({ jobId, status, currentCompleted: completed, totalRows: total }).catch(() => {});
-    const finalEvent = { type: status === "cancelled" ? "cancelled" : "completed" };
+    const finalEvent = { type: awsStatus === "cancelled" ? "cancelled" : awsStatus === "failed" ? "failed" : awsStatus === "partial_success" ? "partial_success" : "completed" };
     const finalEventId = await appendWorkflowEvent(jobId, finalEvent.type, finalEvent).catch(() => null);
     await publishWorkflowEvent(jobId, finalEvent, finalEventId).catch(() => {});
     const doneEvent = { type: "done" };
@@ -947,23 +1041,40 @@ export async function main(): Promise<void> {
     console.log(`Worker finished for ${portalId} job ${jobId} with status ${status}.`);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unexpected worker error.";
+    let partialServiceResult = false;
     if (portalId === "iehp") {
-      await uploadIehpOutputWorkbook(jobId, iehpOutputWorkbook).catch((uploadError) => {
+      const partialOutputSaved = await uploadClaimOutputWorkbook(jobId, iehpOutputWorkbook, { portalId: "iehp", recordOnce: isServiceJob }).catch((uploadError) => {
         console.error("IEHP partial workbook upload failed", uploadError);
+        return false;
       });
+      if (isServiceJob && partialOutputSaved) {
+        const summary = await (async () => {
+          const serviceJob = await getWorkflowJobById(jobId);
+          return serviceJob ? (await loadIehpServiceSnapshot(serviceJob, { requireStatusColumns: false })).summary : null;
+        })().catch((resultError) => {
+          console.error("Integrated partial result storage failed", resultError);
+          return null;
+        });
+        partialServiceResult = Boolean(summary && summary.counts.success > 0);
+      }
       await createIehpBundle({ jobId, artifacts: await listArtifactsForJob(jobId), partial: true }).catch((bundleError) => {
         console.error("IEHP partial ZIP upload failed", bundleError);
       });
     }
+    if (portalId === "uhc" && uhcOutputWorkbook && uhcRowsUpdated > 0) {
+      await uploadClaimOutputWorkbook(jobId, uhcOutputWorkbook, { portalId: "uhc", finalize: false, recordOnce: true }).catch((uploadError) => {
+        console.error("UHC partial workbook upload failed", uploadError);
+      });
+    }
     await updateWorkflowJob({
       jobId,
-      status: cancellation.isCancelled() ? "cancelled" : "failed",
+      status: cancellation.isCancelled() ? "cancelled" : partialServiceResult ? "partial_success" : "failed",
       currentCompleted: getScrapeJob(job.id)?.currentCompleted ?? 0,
       totalRows: getScrapeJob(job.id)?.totalRows ?? 0,
       errorMessage: message,
     }).catch(() => {});
-    const failedEvent = { type: "failed", message };
-    const failedEventId = await appendWorkflowEvent(jobId, "failed", failedEvent).catch(() => null);
+    const failedEvent = { type: cancellation.isCancelled() ? "cancelled" : partialServiceResult ? "partial_success" : "failed", message };
+    const failedEventId = await appendWorkflowEvent(jobId, failedEvent.type, failedEvent).catch(() => null);
     await publishWorkflowEvent(jobId, failedEvent, failedEventId).catch(() => {});
     await publishWorkflowEvent(jobId, { type: "done" }).catch(() => {});
     await updateScrapeJobSnapshot({
