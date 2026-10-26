@@ -56,6 +56,8 @@ function toJobListSummary(job: WorkflowJobSummarySource, artifacts: ReturnType<t
   return {
     jobId: job.jobId,
     userId: job.userId,
+    clientSystem: job.clientSystem,
+    clientExecutionId: job.clientExecutionId,
     workflowId: job.workflowId,
     portalId: job.portalId,
     status: job.status,

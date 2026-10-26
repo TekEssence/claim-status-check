@@ -3378,6 +3378,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
                 stepIndex={portalWorkflowStepIndex}
                 workflowRunsPanel={workflowRunsPanel}
               />
+              {operationsRunningJobsPanel}
 
               <div className="mt-5">
                 <div className="rounded-[1.7rem] border border-indigo-200 bg-gradient-to-br from-white via-white to-indigo-50/60 p-5 shadow-[0_18px_42px_rgba(79,70,229,0.10)] ring-1 ring-indigo-100/70">

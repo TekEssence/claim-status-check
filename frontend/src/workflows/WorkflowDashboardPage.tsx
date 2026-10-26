@@ -68,7 +68,7 @@ function formatUploadedJobFiles(job: ScrapeJobSummary): string {
 }
 
 function isLiveWorkflowStatus(status: string): boolean {
-  return status === "queued" || status === "running" || status === "waiting_otp" || status === "waiting_resume" || status === "cancelling";
+  return status === "preparing" || status === "queued" || status === "starting" || status === "running" || status === "waiting_otp" || status === "waiting_resume" || status === "cancelling";
 }
 
 const workflows = [
@@ -375,7 +375,7 @@ export function WorkflowDashboardPage() {
                             {formatShortJobId(job.jobId)}
                           </td>
                           <td className="whitespace-nowrap px-3 py-3 text-xs text-slate-600">
-                            {job.createdByName && job.createdByName !== "unknown" ? job.createdByName : job.createdByEmail || job.userId || "unknown"}
+                            {job.clientSystem === "AR_WORKFLOW" ? "AR Workflow" : job.clientSystem?.replaceAll("_", " ") || (job.createdByName && job.createdByName !== "unknown" ? job.createdByName : job.createdByEmail || job.userId || "unknown")}
                           </td>
                           <td className="whitespace-nowrap px-3 py-3 text-slate-700">{formatWorkflowLabel(job.workflowId || "claim-status")}</td>
                           <td className="px-3 py-3">

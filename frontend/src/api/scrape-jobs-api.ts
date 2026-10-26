@@ -34,6 +34,8 @@ export type CurrentScrapeJob = {
 export type ScrapeJobSummary = {
   jobId: string;
   userId?: string;
+  clientSystem?: string | null;
+  clientExecutionId?: string | null;
   workflowId?: string;
   portalId: string;
   status: ScrapeJobStatus;

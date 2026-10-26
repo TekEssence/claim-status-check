@@ -266,8 +266,9 @@ export function OperationsRunningJobsPanel({
                       </button>
                     </td>
                     <td className="whitespace-nowrap px-3 py-3">
-                      <div className="max-w-[12rem] truncate text-xs text-slate-600" title={job.createdByEmail || job.userId || "unknown"}>
-                        {job.createdByName && job.createdByName !== "unknown" ? job.createdByName : job.createdByEmail || job.userId || "unknown"}
+                      <div className="max-w-[12rem] text-xs text-slate-600" title={job.clientExecutionId || job.createdByEmail || job.userId || "unknown"}>
+                        <div className="truncate">{job.clientSystem === "AR_WORKFLOW" ? "AR Workflow" : job.clientSystem?.replaceAll("_", " ") || (job.createdByName && job.createdByName !== "unknown" ? job.createdByName : job.createdByEmail || job.userId || "unknown")}</div>
+                        {job.clientExecutionId && <div className="truncate font-mono text-[0.65rem] text-slate-400">Execution {job.clientExecutionId.slice(0, 8)}</div>}
                       </div>
                     </td>
                     <td className="whitespace-nowrap px-3 py-3 text-slate-700">{formatWorkflowLabel(job.workflowId)}</td>

@@ -80,7 +80,7 @@ export function isTerminalWorkflowStatus(status: string): boolean {
 }
 
 export function isLiveWorkflowStatus(status: string): boolean {
-  return status === "queued" || status === "running" || status === "waiting_otp" || status === "waiting_resume" || status === "cancelling";
+  return status === "preparing" || status === "queued" || status === "starting" || status === "running" || status === "waiting_otp" || status === "waiting_resume" || status === "cancelling";
 }
 
 const WORKFLOW_LABELS: Record<string, string> = {
