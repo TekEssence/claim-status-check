@@ -1,6 +1,5 @@
-import { createHash } from "node:crypto";
 import { HeadObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
-import { authenticateService, ServiceAuthError } from "../runtime/service-auth";
+import { authenticateService, authenticateServiceWithToken, ServiceAuthError } from "../runtime/service-auth";
 import { buildWorkflowKey, createDownloadUrl } from "../runtime/s3";
 import { jsonResponse, parseJsonBody, createJobId, type ApiEvent } from "../runtime/http";
 import {
@@ -8,9 +7,11 @@ import {
   getWorkflowJobByClientKey, getWorkflowJobById, listArtifactsForJob, markWorkflowJobReady,
   updateWorkflowJob,
 } from "../runtime/workflow-db";
-import { launchQueuedWorkflowJob, reconcileAwsJobRuntime } from "./jobs";
+import { cancelIntegratedWorkflowJob, launchQueuedWorkflowJob, reconcileAwsJobRuntime } from "./jobs";
 import { pageServiceResults } from "../service/iehp-results";
 import { getServicePortal, loadServiceSnapshot } from "../service/portal-dispatch";
+import { lookupServiceSubmission, reserveServiceSubmission, ServiceSubmissionConflict } from "../service/service-submission";
+import { ServiceCancellationConflict } from "../service/service-cancellation";
 
 type ServiceSubmitBody = {
   client_system?: unknown;
@@ -62,7 +63,9 @@ function errorResponse(error: unknown) {
   if (hasPostgresCode(error, "42703")) {
     return jsonResponse(503, { error: "Claim Status service database migration 0007 has not been applied." });
   }
-  const status = error instanceof ServiceAuthError || error instanceof ServiceRequestError ? error.statusCode : error instanceof SyntaxError ? 400 : 500;
+  const status = error instanceof ServiceAuthError || error instanceof ServiceRequestError ? error.statusCode
+    : error instanceof ServiceSubmissionConflict ? 409
+      : error instanceof ServiceCancellationConflict ? 503 : error instanceof SyntaxError ? 400 : 500;
   const message = error instanceof Error ? error.message : "Claim Status service request failed.";
   return jsonResponse(status, { error: status === 500 ? "Claim Status service request failed." : message });
 }
@@ -92,19 +95,6 @@ async function putWithRetry(bucket: string, key: string, body: Buffer | string, 
   }
 }
 
-function requestHash(body: ServiceSubmitBody): string {
-  const credentials = body.credentials as { login_url?: unknown; username?: unknown; claim_status_url?: unknown; success_url_fragment?: unknown };
-  return createHash("sha256").update(JSON.stringify({
-    client_execution_id: body.client_execution_id,
-    deadline_at: body.deadline_at,
-    workflow: body.workflow,
-    portal: body.portal,
-    projectId: body.projectId,
-    claims: body.claims,
-    credential_identity: { login_url: credentials.login_url, username: credentials.username, claim_status_url: credentials.claim_status_url, success_url_fragment: credentials.success_url_fragment },
-  })).digest("hex");
-}
-
 function statusName(status: string): string {
   return status === "completed" ? "SUCCESS" : status === "partial_success" ? "PARTIAL_SUCCESS" : status.toUpperCase();
 }
@@ -122,76 +112,74 @@ function errorCategory(message: string | null, status: string): string | null {
   return "PORTAL_ERROR";
 }
 
-async function ownedJob(event: ApiEvent) {
+async function ownedJob(event: ApiEvent, reconcile = true) {
   const clientSystem = authenticateService(event);
   const jobId = event.pathParameters?.jobId?.trim();
   if (!jobId) throw new ServiceRequestError(400, "Missing jobId.");
   const job = await getWorkflowJobById(jobId);
   if (!job || job.clientSystem !== clientSystem) throw new ServiceRequestError(404, "Job not found.");
-  return await reconcileAwsJobRuntime(job) ?? job;
+  return reconcile ? await reconcileAwsJobRuntime(job) ?? job : job;
 }
 
 export async function submitServiceJob(event: ApiEvent) {
   try {
-    const clientSystem = authenticateService(event);
+    const { clientSystem, token } = authenticateServiceWithToken(event);
     const body = parseJsonBody<ServiceSubmitBody>(event);
     if (!body || typeof body !== "object" || Array.isArray(body)) throw new ServiceRequestError(400, "Request body must be an object.");
     if (body.client_system !== clientSystem) throw new ServiceRequestError(400, "client_system must match X-Client-System.");
-    if (body.workflow !== "CLAIM_STATUS") throw new ServiceRequestError(400, "workflow must be CLAIM_STATUS.");
-    const portal = getServicePortal(body.portal);
-    if (!portal) throw new ServiceRequestError(422, "This portal is not supported by the service API. Supported: iehp, availity.");
     const clientExecutionId = requiredId(body.client_execution_id, "client_execution_id");
     const idempotencyKey = requiredId(body.idempotency_key, "idempotency_key");
-    let generated: Awaited<ReturnType<typeof portal.adapter.prepare>>;
-    try {
-      generated = await portal.adapter.prepare(body);
-    } catch (error) {
-      throw new ServiceRequestError(422, error instanceof Error ? error.message : "Invalid portal claim input.");
-    }
-    const fingerprint = requestHash(body);
-    const existing = await getWorkflowJobByClientKey(clientSystem, idempotencyKey);
-    if (existing) {
-      if (existing.clientExecutionId !== clientExecutionId || existing.portalId !== body.portal || (existing.metadata as { requestHash?: string }).requestHash !== fingerprint) {
-        throw new ServiceRequestError(409, "Idempotency key was already used for a different execution or claim payload.");
-      }
-      return jsonResponse(200, { job_id: existing.jobId, status: statusName(existing.status), existing: true });
-    }
-
-    const deadlineAt = requiredDeadline(body.deadline_at);
-
-    const jobId = createJobId();
-    const inputBucket = requiredEnv("WORKFLOW_INPUTS_BUCKET");
-    const outputBucket = requiredEnv("WORKFLOW_OUTPUTS_BUCKET");
-    const inputKeys: Record<string, string> = Object.fromEntries(generated.files.map((file) => [
-      file.field,
-      buildWorkflowKey({ workflowId: "claim-status", jobId, area: "input", filename: `${file.field}-${file.filename}` }),
-    ]));
-    inputKeys.claimRows = buildWorkflowKey({ workflowId: "claim-status", jobId, area: "input", filename: "claimRows.json" });
-    try {
-      await createWorkflowJob({
-        jobId, userId: `service:${clientSystem}`, workflowId: "claim-status", portalId: portal.id,
-        clientSystem, clientExecutionId, idempotencyKey, initialStatus: "preparing",
-        inputBucket, outputBucket,
-        inputPrefix: inputKeys.claimRows.slice(0, inputKeys.claimRows.lastIndexOf("/")),
-        outputPrefix: inputKeys.claimRows.slice(0, inputKeys.claimRows.lastIndexOf("/")).replace(/\/input$/, "/output"),
-        claimFileName: generated.claimFileName, loginFileName: generated.loginFileName,
-        createdByUserId: `service:${clientSystem}`, createdByEmail: "service", createdByName: clientSystem,
-        metadata: {
-          integrationMode: "service", requestHash: fingerprint, deadlineAt, expectedRowCount: generated.claimCount, inputKeys,
-          accountLabel: generated.accountLabel,
-          formFields: generated.formFields,
-        },
-      });
-    } catch (error) {
-      if (hasPostgresCode(error, "23505")) {
-        const winner = await getWorkflowJobByClientKey(clientSystem, idempotencyKey);
-        if (winner && winner.clientExecutionId === clientExecutionId && winner.portalId === body.portal && (winner.metadata as { requestHash?: string }).requestHash === fingerprint) {
-          return jsonResponse(200, { job_id: winner.jobId, status: statusName(winner.status), existing: true });
+    const reservation = await reserveServiceSubmission({
+      clientSystem, clientExecutionId, idempotencyKey,
+      portalId: typeof body.portal === "string" ? body.portal : "",
+      body: body as Record<string, unknown>, authenticatedToken: token,
+      find: getWorkflowJobByClientKey,
+      prepare: async () => {
+        if (body.workflow !== "CLAIM_STATUS") throw new ServiceRequestError(400, "workflow must be CLAIM_STATUS.");
+        const portal = getServicePortal(body.portal);
+        if (!portal) throw new ServiceRequestError(422, "This portal is not supported by the service API. Supported: iehp, availity.");
+        const deadlineAt = requiredDeadline(body.deadline_at);
+        try {
+          return { portal, deadlineAt, generated: await portal.adapter.prepare(body) };
+        } catch (error) {
+          throw new ServiceRequestError(422, error instanceof Error ? error.message : "Invalid portal claim input.");
         }
-        throw new ServiceRequestError(409, "Idempotency key was already used for a different execution or claim payload.");
-      }
-      throw error;
+      },
+      createJobId,
+      isUniqueViolation: (error) => hasPostgresCode(error, "23505"),
+      create: async (jobId, prepared, fingerprint, salt) => {
+        const { portal, deadlineAt, generated } = prepared;
+        const inputBucket = requiredEnv("WORKFLOW_INPUTS_BUCKET");
+        const outputBucket = requiredEnv("WORKFLOW_OUTPUTS_BUCKET");
+        const inputKeys: Record<string, string> = Object.fromEntries(generated.files.map((file) => [
+          file.field,
+          buildWorkflowKey({ workflowId: "claim-status", jobId, area: "input", filename: `${file.field}-${file.filename}` }),
+        ]));
+        inputKeys.claimRows = buildWorkflowKey({ workflowId: "claim-status", jobId, area: "input", filename: "claimRows.json" });
+        await createWorkflowJob({
+          jobId, userId: `service:${clientSystem}`, workflowId: "claim-status", portalId: portal.id,
+          clientSystem, clientExecutionId, idempotencyKey, initialStatus: "preparing",
+          inputBucket, outputBucket,
+          inputPrefix: inputKeys.claimRows.slice(0, inputKeys.claimRows.lastIndexOf("/")),
+          outputPrefix: inputKeys.claimRows.slice(0, inputKeys.claimRows.lastIndexOf("/")).replace(/\/input$/, "/output"),
+          claimFileName: generated.claimFileName, loginFileName: generated.loginFileName,
+          createdByUserId: `service:${clientSystem}`, createdByEmail: "service", createdByName: clientSystem,
+          metadata: {
+            integrationMode: "service", requestHash: fingerprint, requestHashVersion: 3, requestHashSalt: salt,
+            deadlineAt, expectedRowCount: generated.claimCount, inputKeys,
+            accountLabel: generated.accountLabel, formFields: generated.formFields,
+          },
+        });
+      },
+    });
+    if (reservation.existing) {
+      return jsonResponse(200, { job_id: reservation.job.jobId, status: statusName(reservation.job.status), existing: true });
     }
+    const { jobId, prepared: { generated } } = reservation;
+    const saved = await getWorkflowJobById(jobId);
+    if (!saved) throw new ServiceRequestError(503, "Accepted job was not found after creation; retry with the same idempotency key.");
+    const inputBucket = saved.inputBucket || requiredEnv("WORKFLOW_INPUTS_BUCKET");
+    const inputKeys = (saved.metadata as { inputKeys: Record<string, string> }).inputKeys;
 
     try {
       for (const file of generated.files) {
@@ -218,6 +206,36 @@ export async function submitServiceJob(event: ApiEvent) {
     }
     const current = await getWorkflowJobById(jobId);
     return jsonResponse(202, { job_id: jobId, status: current ? statusName(current.status) : "RUNNING", existing: false });
+  } catch (error) {
+    return errorResponse(error);
+  }
+}
+
+export async function lookupServiceJob(event: ApiEvent) {
+  try {
+    const clientSystem = authenticateService(event);
+    const clientExecutionId = requiredId(event.queryStringParameters?.client_execution_id, "client_execution_id");
+    const idempotencyKey = requiredId(event.queryStringParameters?.idempotency_key, "idempotency_key");
+    const lookup = await lookupServiceSubmission({
+      clientSystem, clientExecutionId, idempotencyKey,
+      find: getWorkflowJobByClientKey,
+    });
+    if (!lookup.found) return jsonResponse(200, { found: false });
+    const current = lookup.job;
+    return jsonResponse(200, {
+      found: true, job_id: current.jobId, status: statusName(current.status),
+      client_execution_id: current.clientExecutionId, idempotency_key: idempotencyKey,
+    });
+  } catch (error) {
+    return errorResponse(error);
+  }
+}
+
+export async function cancelServiceJob(event: ApiEvent) {
+  try {
+    const job = await ownedJob(event, false);
+    const result = await cancelIntegratedWorkflowJob(job.jobId, job.clientSystem!, `service:${job.clientSystem}`);
+    return jsonResponse(200, { job_id: result.jobId, status: statusName(result.status), terminal: result.terminal });
   } catch (error) {
     return errorResponse(error);
   }
@@ -278,12 +296,6 @@ export async function getServiceJobResult(event: ApiEvent) {
         account_label: typeof (job.metadata as { accountLabel?: unknown } | null)?.accountLabel === "string"
           ? (job.metadata as { accountLabel: string }).accountLabel : null,
         action_url: null,
-      };
-    } else if (job.status === "failed" && job.errorMessage && /otp|mfa|captcha|verification required|action required/i.test(job.errorMessage)) {
-      actionRequired = {
-        type: "MANUAL_ACTION_REQUIRED", portal: job.portalId, job_id: job.jobId,
-        input_name: null, label: "Portal verification required",
-        message: job.errorMessage, expires_at: null, action_url: null,
       };
     }
     const rowFailureCategory = job.status === "failed" && summary

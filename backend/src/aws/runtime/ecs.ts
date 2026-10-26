@@ -126,7 +126,7 @@ export async function describeWorkerTask(taskArn: string) {
 
 export async function findWorkerTaskByJobId(jobId: string): Promise<string | null> {
   const cluster = env("WORKER_CLUSTER_ARN");
-  for (const desiredStatus of ["RUNNING", "STOPPED"] as const) {
+  for (const desiredStatus of ["PENDING", "RUNNING", "STOPPED"] as const) {
     const result = await ecs().send(new ListTasksCommand({ cluster, startedBy: jobId, desiredStatus }));
     if (result.taskArns?.[0]) return result.taskArns[0];
   }

@@ -1032,12 +1032,12 @@ export async function main(): Promise<void> {
     if (portalId === "iehp") {
       await createIehpBundle({ jobId, artifacts: await listArtifactsForJob(jobId), partial: status !== "completed" });
     }
-    const awsStatus: AwsWorkflowJobStatus = status === "cancelled" ? "cancelled" : serviceSummary
+    const awsStatus: AwsWorkflowJobStatus = status === "cancelled" ? (isServiceJob ? "cancelling" : "cancelled") : serviceSummary
       ? serviceSummary.outcome === "SUCCESS" ? "completed" : serviceSummary.outcome === "PARTIAL_SUCCESS" ? "partial_success" : "failed"
       : status === "waiting_resume" ? "failed" : status;
     await updateWorkflowJob({ jobId, status: awsStatus, currentCompleted: completed, totalRows: total }).catch(() => {});
     await updateScrapeJobSnapshot({ jobId, status, currentCompleted: completed, totalRows: total }).catch(() => {});
-    const finalEvent = { type: awsStatus === "cancelled" ? "cancelled" : awsStatus === "failed" ? "failed" : awsStatus === "partial_success" ? "partial_success" : "completed" };
+    const finalEvent = { type: awsStatus === "cancelling" ? "cancelling" : awsStatus === "cancelled" ? "cancelled" : awsStatus === "failed" ? "failed" : awsStatus === "partial_success" ? "partial_success" : "completed" };
     const finalEventId = await appendWorkflowEvent(jobId, finalEvent.type, finalEvent).catch(() => null);
     await publishWorkflowEvent(jobId, finalEvent, finalEventId).catch(() => {});
     const doneEvent = { type: "done" };
@@ -1081,14 +1081,15 @@ export async function main(): Promise<void> {
         console.error("UHC partial workbook upload failed", uploadError);
       });
     }
+    const cancellationStatus = cancellation.isCancelled() ? (isServiceJob ? "cancelling" : "cancelled") : partialServiceResult ? "partial_success" : "failed";
     await updateWorkflowJob({
       jobId,
-      status: cancellation.isCancelled() ? "cancelled" : partialServiceResult ? "partial_success" : "failed",
+      status: cancellationStatus,
       currentCompleted: getScrapeJob(job.id)?.currentCompleted ?? 0,
       totalRows: getScrapeJob(job.id)?.totalRows ?? 0,
       errorMessage: message,
     }).catch(() => {});
-    const failedEvent = { type: cancellation.isCancelled() ? "cancelled" : partialServiceResult ? "partial_success" : "failed", message };
+    const failedEvent = { type: cancellationStatus, message };
     const failedEventId = await appendWorkflowEvent(jobId, failedEvent.type, failedEvent).catch(() => null);
     await publishWorkflowEvent(jobId, failedEvent, failedEventId).catch(() => {});
     await publishWorkflowEvent(jobId, { type: "done" }).catch(() => {});

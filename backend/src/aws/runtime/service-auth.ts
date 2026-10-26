@@ -12,7 +12,7 @@ function header(event: ApiEvent, name: string): string {
   return entry?.[1]?.trim() ?? "";
 }
 
-export function authenticateService(event: ApiEvent): string {
+export function authenticateServiceWithToken(event: ApiEvent): { clientSystem: string; token: string } {
   const rawConfig = process.env.CLAIM_STATUS_SERVICE_TOKENS_JSON?.trim();
   if (!rawConfig) throw new ServiceAuthError(503, "Claim Status service authentication is not configured.");
   let configured: Record<string, unknown>;
@@ -31,5 +31,9 @@ export function authenticateService(event: ApiEvent): string {
   const actualDigest = createHash("sha256").update(provided).digest();
   const expectedDigest = createHash("sha256").update(expected).digest();
   if (!timingSafeEqual(actualDigest, expectedDigest)) throw new ServiceAuthError(401, "Invalid service credentials.");
-  return clientSystem;
+  return { clientSystem, token: provided };
+}
+
+export function authenticateService(event: ApiEvent): string {
+  return authenticateServiceWithToken(event).clientSystem;
 }

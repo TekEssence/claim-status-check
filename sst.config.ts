@@ -271,8 +271,10 @@
     httpApi.route("POST /jobs/{jobId}/force-stop", "backend/src/aws/http/force-stop-job.handler", { auth: httpAuth });
     httpApi.route("GET /jobs/{jobId}/download", "backend/src/aws/http/download-job.handler", { auth: httpAuth });
     httpApi.route("POST /service/jobs", "backend/src/aws/http/service-create-job.handler");
+    httpApi.route("GET /service/jobs/lookup", "backend/src/aws/http/service-lookup-job.handler");
     httpApi.route("GET /service/jobs/{jobId}/result", "backend/src/aws/http/service-get-result.handler");
     httpApi.route("GET /service/jobs/{jobId}/results", "backend/src/aws/http/service-get-result.handler");
+    httpApi.route("POST /service/jobs/{jobId}/cancel", "backend/src/aws/http/service-cancel-job.handler");
     httpApi.route("POST /service/jobs/{jobId}/input", "backend/src/aws/http/service-submit-input.handler");
     httpApi.route("GET /service/jobs/{jobId}/download", "backend/src/aws/http/service-download-job.handler");
 

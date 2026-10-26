@@ -1,17 +1,20 @@
 import {
   appendWorkflowEvent,
   createWorkflowCommand,
+  confirmUnstartedServiceCancellation,
   expirePendingWorkflowCommands,
   listWatchdogWorkflowJobs,
   updateWorkflowJob,
   updateWorkflowJobMetadata,
 } from "./workflow-db";
-import { describeWorkerTask, stopWorkerTask } from "./ecs";
+import { describeWorkerTask, findWorkerTaskByJobId, stopWorkerTask } from "./ecs";
 import { reconcileAwsJobRuntime } from "../http/jobs";
 
 const DEFAULT_STALL_TIMEOUT_MS = 20 * 60 * 1000;
 const DEFAULT_CANCEL_RETRY_DELAY_MS = 60 * 1000;
 const DEFAULT_CANCEL_ATTEMPTS = 3;
+const SERVICE_CANCEL_GRACE_MS = 2 * 60 * 1000;
+const SERVICE_UNSTARTED_CONFIRM_MS = 15 * 60 * 1000;
 
 type WorkflowJob = Awaited<ReturnType<typeof listWatchdogWorkflowJobs>>[number];
 
@@ -79,6 +82,31 @@ async function handleServiceDeadline(job: WorkflowJob, now: number, nowIso: stri
   return true;
 }
 
+async function handleServiceCancellation(job: WorkflowJob, now: number): Promise<boolean> {
+  if (!job.clientSystem || job.status !== "cancelling") return false;
+  const current = await reconcileAwsJobRuntime(job);
+  if (!current || terminalStatus(current.status)) return true;
+  const requestedAt = parseTime((current.metadata as { serviceCancellationRequestedAt?: string } | null)?.serviceCancellationRequestedAt);
+  let taskArn = current.ecsTaskArn;
+  if (!taskArn) {
+    taskArn = await findWorkerTaskByJobId(current.jobId);
+    if (taskArn) await updateWorkflowJob({ jobId: current.jobId, ecsTaskArn: taskArn });
+  }
+  if (!taskArn) {
+    if (requestedAt && now - requestedAt >= SERVICE_UNSTARTED_CONFIRM_MS) {
+      await confirmUnstartedServiceCancellation(current.jobId, new Date(now - SERVICE_UNSTARTED_CONFIRM_MS).toISOString());
+    }
+    return true;
+  }
+  const task = await describeWorkerTask(taskArn);
+  if (task?.lastStatus === "STOPPED") {
+    await reconcileAwsJobRuntime({ ...current, ecsTaskArn: taskArn });
+  } else if (task && task.lastStatus !== "STOPPING" && requestedAt && now - requestedAt >= SERVICE_CANCEL_GRACE_MS) {
+    await stopWorkerTask(taskArn, "Integrated job cancellation grace period elapsed.");
+  }
+  return true;
+}
+
 async function jobStillActive(job: WorkflowJob): Promise<boolean> {
   if (!job.ecsTaskArn) return false;
   const task = await describeWorkerTask(job.ecsTaskArn).catch(() => null);
@@ -142,7 +170,7 @@ export async function runStalledJobWatchdog(): Promise<WatchdogResult> {
         continue;
       }
 
-      if (await handleServiceDeadline(job, now, nowIso)) {
+      if (await handleServiceCancellation(job, now) || await handleServiceDeadline(job, now, nowIso)) {
         result.skipped += 1;
         continue;
       }

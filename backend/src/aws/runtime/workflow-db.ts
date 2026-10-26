@@ -122,6 +122,40 @@ export async function markWorkflowJobReady(jobId: string): Promise<boolean> {
   return rows.length === 1;
 }
 
+export async function cancelUnstartedServiceJob(jobId: string, clientSystem: string): Promise<boolean> {
+  const now = new Date().toISOString();
+  const rows = await runDbWithRetry((db) => db.update(workflowJobs)
+    .set({ status: "cancelled", updatedAt: now, finishedAt: now })
+    .where(and(eq(workflowJobs.jobId, jobId), eq(workflowJobs.clientSystem, clientSystem),
+      or(eq(workflowJobs.status, "preparing"), eq(workflowJobs.status, "queued"))))
+    .returning({ jobId: workflowJobs.jobId }));
+  return rows.length === 1;
+}
+
+export async function requestServiceJobCancellation(jobId: string, clientSystem: string): Promise<boolean> {
+  const now = new Date().toISOString();
+  const rows = await runDbWithRetry((db) => db.update(workflowJobs)
+    .set({
+      status: "cancelling", updatedAt: now,
+      metadata: sql`${workflowJobs.metadata} || ${JSON.stringify({ serviceCancellationRequestedAt: now })}::jsonb`,
+    })
+    .where(and(eq(workflowJobs.jobId, jobId), eq(workflowJobs.clientSystem, clientSystem),
+      or(eq(workflowJobs.status, "starting"), eq(workflowJobs.status, "running"), eq(workflowJobs.status, "waiting_otp"))))
+    .returning({ jobId: workflowJobs.jobId }));
+  return rows.length === 1;
+}
+
+export async function confirmUnstartedServiceCancellation(jobId: string, requestedBefore: string): Promise<boolean> {
+  const now = new Date().toISOString();
+  const rows = await runDbWithRetry((db) => db.update(workflowJobs)
+    .set({ status: "cancelled", updatedAt: now, finishedAt: now })
+    .where(and(eq(workflowJobs.jobId, jobId), eq(workflowJobs.status, "cancelling"),
+      isNull(workflowJobs.ecsTaskArn),
+      sql`(${workflowJobs.metadata}->>'serviceCancellationRequestedAt')::timestamptz <= ${requestedBefore}::timestamptz`))
+    .returning({ jobId: workflowJobs.jobId }));
+  return rows.length === 1;
+}
+
 export async function getWorkflowJobForUser(jobId: string, userId: string) {
   const rows = await runDbWithRetry((db) =>
     db.select(workflowJobReadColumns).from(workflowJobs).where(and(eq(workflowJobs.jobId, jobId), eq(workflowJobs.userId, userId))).limit(1),

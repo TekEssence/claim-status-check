@@ -6,9 +6,11 @@ import { describeWorkerTask, findWorkerTaskByJobId, runWorkerTask, stopWorkerTas
 import { buildWorkflowKey, createDownloadUrl, createUploadUrl } from "../runtime/s3";
 import { createIehpBundle } from "./iehp-bundle";
 import { loadServiceSnapshot } from "../service/portal-dispatch";
+import { cancelServiceExecution } from "../service/service-cancellation";
 import {
   appendWorkflowEvent,
   appendWorkflowArtifact,
+  cancelUnstartedServiceJob,
   claimWorkflowJobLaunch,
   createWorkflowCommand,
   createWorkflowJob,
@@ -19,6 +21,7 @@ import {
   listRunningWorkflowJobs,
   listWorkflowJobsForUser,
   listWorkflowEvents,
+  requestServiceJobCancellation,
   updateWorkflowJob,
 } from "../runtime/workflow-db";
 
@@ -167,6 +170,23 @@ export async function reconcileAwsJobRuntime(job: Awaited<ReturnType<typeof getW
     const deadlineExceeded = Boolean((job.metadata as { deadlineStopRequestedAt?: string } | null)?.deadlineStopRequestedAt);
     let status: "cancelled" | "completed" | "partial_success" | "failed" = job.status === "cancelling" && !deadlineExceeded ? "cancelled" : exitCode === 0 ? "completed" : "failed";
     let outputError = "";
+    if (job.clientSystem && status === "cancelled") {
+      // The worker may have saved a final partial workbook during its graceful
+      // cancellation window. Record it after ECS confirms the worker stopped.
+      try {
+        const snapshot = await loadServiceSnapshot(job, { requireStatusColumns: false });
+        if (snapshot.artifact && !snapshot.recorded) {
+          await appendWorkflowArtifact({
+            jobId: job.jobId, artifactType: "output_snapshot",
+            filename: snapshot.artifact.filename, bucket: snapshot.artifact.bucket,
+            s3Key: snapshot.artifact.object_key,
+            mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          });
+        }
+      } catch {
+        // Cancellation still completes when the worker produced no valid output.
+      }
+    }
     if (job.clientSystem && status !== "cancelled") {
       let snapshot: Awaited<ReturnType<typeof loadServiceSnapshot>>;
       try {
@@ -293,6 +313,10 @@ export async function launchQueuedWorkflowJob(jobId: string, userId: string): Pr
   const job = await getWorkflowJobById(jobId);
   if (!job || job.userId !== userId) throw new Error("Job not found.");
   if (!await claimWorkflowJobLaunch(jobId)) throw new Error(`Job is already ${job.status}.`);
+  if (job.clientSystem) {
+    const claimed = await getWorkflowJobById(jobId);
+    if (claimed?.status !== "starting") throw new Error(`Job is already ${claimed?.status ?? "unavailable"}.`);
+  }
   const metadata = job.metadata as { inputKeys?: Record<string, string>; formFields?: Record<string, unknown> };
   let taskArn: string;
   try {
@@ -416,12 +440,37 @@ export async function submitOtp(event: ApiEvent) {
   }
 }
 
+export async function cancelIntegratedWorkflowJob(jobId: string, clientSystem: string, actor: string) {
+  return cancelServiceExecution({
+    find: async () => {
+      const current = await getWorkflowJobById(jobId);
+      if (!current || current.clientSystem !== clientSystem) throw new Error("Integrated job not found.");
+      return current;
+    },
+    cancelBeforeLaunch: async (job) => {
+      const cancelled = await cancelUnstartedServiceJob(job.jobId, clientSystem);
+      if (cancelled) await appendWorkflowEvent(job.jobId, "cancel_requested", { type: "cancellation_acknowledged" }).catch(() => {});
+      return cancelled;
+    },
+    markCancelling: (job) => requestServiceJobCancellation(job.jobId, clientSystem),
+    requestWorkerCancel: async (job) => {
+      await createWorkflowCommand({ jobId: job.jobId, commandType: "cancel", createdBy: actor }).catch(() => {});
+      await appendWorkflowEvent(job.jobId, "cancel_requested", { type: "cancellation_acknowledged" }).catch(() => {});
+    },
+    reconcile: reconcileAwsJobRuntime,
+  });
+}
+
 export async function cancelJob(event: ApiEvent) {
   try {
     const userId = getAuthUserId(event);
     const jobId = getJobId(event);
     const job = hasFullWorkflowAccess(event) ? await getWorkflowJobById(jobId) : await getWorkflowJobForUser(jobId, userId);
     if (!job) return jsonResponse(404, { error: "Job not found." });
+    if (job.clientSystem) {
+      await cancelIntegratedWorkflowJob(jobId, job.clientSystem, userId);
+      return jsonResponse(200, { ok: true });
+    }
     await createWorkflowCommand({ jobId, commandType: "cancel", createdBy: userId });
     const hasRunningWorker = Boolean(job.ecsTaskArn) && job.status !== "queued";
     await updateWorkflowJob({ jobId, status: hasRunningWorker ? "cancelling" : "cancelled" });
@@ -440,6 +489,15 @@ export async function forceStopJob(event: ApiEvent) {
     if (!hasFullWorkflowAccess(event)) return jsonResponse(403, { error: "Force stop requires admin or developer access." });
     const job = await getWorkflowJobById(jobId);
     if (!job) return jsonResponse(404, { error: "Job not found." });
+    if (job.clientSystem) {
+      const result = await cancelIntegratedWorkflowJob(jobId, job.clientSystem, userId);
+      if (!result.terminal) {
+        const current = await getWorkflowJobById(jobId);
+        const taskArn = current?.ecsTaskArn || await findWorkerTaskByJobId(jobId);
+        if (taskArn) await stopWorkerTask(taskArn, body.reason || `Force-stopped by ${userId}`);
+      }
+      return jsonResponse(200, { ok: true });
+    }
     if (!job.ecsTaskArn) return jsonResponse(409, { error: "Job does not have an ECS task ARN." });
     const reason = body.reason || `Force-stopped by ${userId}`;
     await stopWorkerTask(job.ecsTaskArn, reason);
