@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, getTableColumns, isNull, lte, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, exists, getTableColumns, isNull, lte, or, sql } from "drizzle-orm";
 import { runDbWithRetry } from "@/db";
 import {
   workflowJobArtifacts,
@@ -212,6 +212,31 @@ export async function listRunningWorkflowJobs(limit = 50) {
       .select(workflowJobReadColumns)
       .from(workflowJobs)
       .where(or(eq(workflowJobs.status, "preparing"), eq(workflowJobs.status, "queued"), eq(workflowJobs.status, "starting"), eq(workflowJobs.status, "running"), eq(workflowJobs.status, "waiting_otp"), eq(workflowJobs.status, "cancelling")))
+      .orderBy(desc(workflowJobs.updatedAt))
+      .limit(safeLimit),
+  );
+}
+
+export async function listArWorkflowOutputJobs(limit = 50) {
+  const safeLimit = Math.max(1, Math.min(limit, 100));
+  return runDbWithRetry((db) =>
+    db
+      .select(workflowJobReadColumns)
+      .from(workflowJobs)
+      .where(and(
+        eq(workflowJobs.userId, "service:AR_WORKFLOW"),
+        exists(db
+          .select({ id: workflowJobArtifacts.id })
+          .from(workflowJobArtifacts)
+          .where(and(
+            eq(workflowJobArtifacts.jobId, workflowJobs.jobId),
+            or(
+              eq(workflowJobArtifacts.artifactType, "file_download"),
+              eq(workflowJobArtifacts.artifactType, "output_snapshot"),
+              eq(workflowJobArtifacts.artifactType, "pdf_download"),
+            ),
+          ))),
+      ))
       .orderBy(desc(workflowJobs.updatedAt))
       .limit(safeLimit),
   );

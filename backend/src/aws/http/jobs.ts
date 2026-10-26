@@ -17,6 +17,7 @@ import {
   getWorkflowJobForUser,
   getWorkflowJobById,
   listArtifactsForJob,
+  listArWorkflowOutputJobs,
   listRecentOutputArtifactsForJob,
   listRunningWorkflowJobs,
   listWorkflowJobsForUser,
@@ -374,11 +375,15 @@ export async function listJobs(event: ApiEvent) {
     const userId = getAuthUserId(event);
     const rawLimit = Number(event.queryStringParameters?.limit || 25);
     const scope = event.queryStringParameters?.scope || "";
-    const canSeeAll = scope === "all-running" && hasFullWorkflowAccess(event);
+    if ((scope === "all-running" || scope === "ar-workflow-outputs") && !hasFullWorkflowAccess(event)) {
+      return jsonResponse(403, { error: "Admin or developer access is required." });
+    }
     const jobs = await reconcileAwsJobsRuntime(
-      canSeeAll
+      scope === "all-running"
         ? await listRunningWorkflowJobs(Number.isFinite(rawLimit) ? rawLimit : 50)
-        : await listWorkflowJobsForUser(userId, Number.isFinite(rawLimit) ? rawLimit : 25),
+        : scope === "ar-workflow-outputs"
+          ? await listArWorkflowOutputJobs(Number.isFinite(rawLimit) ? rawLimit : 50)
+          : await listWorkflowJobsForUser(userId, Number.isFinite(rawLimit) ? rawLimit : 25),
     );
     const jobsWithArtifacts = await Promise.all(
       jobs.map(async (job) => {

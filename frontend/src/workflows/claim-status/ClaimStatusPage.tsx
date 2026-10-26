@@ -195,6 +195,9 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
   const [workflowRuns, setWorkflowRuns] = useState<ScrapeJobSummary[]>([]);
   const [workflowRunsLoading, setWorkflowRunsLoading] = useState(false);
   const [workflowRunsError, setWorkflowRunsError] = useState("");
+  const [arWorkflowOutputRuns, setArWorkflowOutputRuns] = useState<ScrapeJobSummary[]>([]);
+  const [arWorkflowOutputsLoading, setArWorkflowOutputsLoading] = useState(false);
+  const [arWorkflowOutputsError, setArWorkflowOutputsError] = useState("");
   const [operationsRunningJobs, setOperationsRunningJobs] = useState<ScrapeJobSummary[]>([]);
   const [operationsRunningJobsLoading, setOperationsRunningJobsLoading] = useState(false);
   const [operationsRunningJobsError, setOperationsRunningJobsError] = useState("");
@@ -252,13 +255,14 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     () => visibleWorkflowRuns.length,
     [visibleWorkflowRuns],
   );
-  const outputWorkflowRuns = useMemo(
-    () =>
-      workflowRuns.filter((job) =>
-        hasDownloadableOutput(job),
-      ),
-    [workflowRuns],
-  );
+  const outputWorkflowRuns = useMemo(() => {
+    const jobs = canViewOperationsRunningJobs && awsWorkflowMode
+      ? [...workflowRuns, ...arWorkflowOutputRuns]
+      : workflowRuns;
+    const unique = new Map(jobs.filter(hasDownloadableOutput).map((job) => [job.jobId, job]));
+    return [...unique.values()].sort((left, right) =>
+      (Date.parse(right.updatedAt) || 0) - (Date.parse(left.updatedAt) || 0));
+  }, [workflowRuns, arWorkflowOutputRuns, canViewOperationsRunningJobs, awsWorkflowMode]);
   const selectedUhcOutputRun = workflowRuns.find((job) =>
     job.portalId === "uhc" && job.jobId === selectedWorkflowRunId && hasDownloadableOutput(job));
   const userDisplayName = useMemo(() => {
@@ -899,6 +903,31 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     }
   }
 
+  async function refreshArWorkflowOutputs(options?: { silent?: boolean }) {
+    if (!canViewOperationsRunningJobs || !awsWorkflowMode) {
+      setArWorkflowOutputRuns([]);
+      setArWorkflowOutputsError("");
+      return;
+    }
+    if (!options?.silent) {
+      setArWorkflowOutputsLoading(true);
+      setArWorkflowOutputsError("");
+    }
+    try {
+      setArWorkflowOutputRuns(await listScrapeJobs(50, { scope: "ar-workflow-outputs" }));
+      setArWorkflowOutputsError("");
+    } catch (error) {
+      if (handleAwsAuthFailure(error)) return;
+      setArWorkflowOutputsError(getErrorMessage(error));
+    } finally {
+      if (!options?.silent) setArWorkflowOutputsLoading(false);
+    }
+  }
+
+  async function refreshOutputRuns() {
+    await Promise.all([refreshWorkflowRuns(), refreshArWorkflowOutputs()]);
+  }
+
   async function refreshOperationsRunningJobs(options?: { silent?: boolean }) {
     if (!canViewOperationsRunningJobs) {
       setOperationsRunningJobs([]);
@@ -944,6 +973,20 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
       window.clearInterval(interval);
     };
   }, [workflowRunTrackingEnabled, authUser?.userId]);
+
+  useEffect(() => {
+    if (activeView !== "outputs" || !canViewOperationsRunningJobs || !awsWorkflowMode) return;
+    let cancelled = false;
+    const load = async (silent: boolean) => {
+      if (!cancelled) await refreshArWorkflowOutputs({ silent });
+    };
+    void load(false);
+    const interval = window.setInterval(() => void load(true), 15000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [activeView, canViewOperationsRunningJobs, awsWorkflowMode, authUser?.userId]);
 
   useEffect(() => {
     if (!canViewOperationsRunningJobs) {
@@ -3180,10 +3223,10 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     <OutputsPanel
       enabled={workflowRunTrackingEnabled}
       jobs={outputWorkflowRuns}
-      loading={workflowRunsLoading}
-      error={workflowRunsError}
+      loading={workflowRunsLoading || arWorkflowOutputsLoading}
+      error={workflowRunsError || arWorkflowOutputsError}
       downloadingJobId={downloadingWorkflowJobId}
-      onRefresh={refreshWorkflowRuns}
+      onRefresh={refreshOutputRuns}
       onDownload={downloadWorkflowRun}
     />
   );

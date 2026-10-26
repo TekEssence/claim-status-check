@@ -32,10 +32,26 @@ function normalizeRole(value: unknown): AuthRole {
 }
 
 function getClaimGroups(claims: Record<string, string | undefined> | undefined): string[] {
-  const rawGroups = claims?.["cognito:groups"] || claims?.groups || "";
-  return rawGroups
-    .split(",")
-    .map((group) => group.trim().toUpperCase())
+  const rawGroups: unknown = claims?.["cognito:groups"] || claims?.groups || "";
+  let groups: unknown;
+  if (Array.isArray(rawGroups)) {
+    groups = rawGroups;
+  } else if (typeof rawGroups === "string") {
+    const value = rawGroups.trim();
+    if (value.startsWith("[") && value.endsWith("]")) {
+      try {
+        groups = JSON.parse(value);
+      } catch {
+        groups = value.slice(1, -1).split(",");
+      }
+    } else {
+      groups = value.split(",");
+    }
+  }
+  if (!Array.isArray(groups)) return [];
+  return groups
+    .filter((group): group is string => typeof group === "string")
+    .map((group) => group.trim().replace(/^['"]|['"]$/g, "").toUpperCase())
     .filter(Boolean);
 }
 

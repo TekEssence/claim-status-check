@@ -368,11 +368,12 @@ export function OutputsPanel({
         </button>
       </div>
 
-      {workflowRunsError ? (
+      {workflowRunsError && (
         <div className="mt-5 rounded-[1rem] border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-700">
           Failed to load outputs: {workflowRunsError}
         </div>
-      ) : outputWorkflowRuns.length === 0 ? (
+      )}
+      {outputWorkflowRuns.length === 0 ? (
         <div className="mt-5 rounded-[1rem] border border-dashed border-emerald-200 bg-emerald-50/60 px-4 py-8 text-center text-sm text-slate-500">
           No Excel outputs are available yet.
         </div>
@@ -398,9 +399,10 @@ export function OutputsPanel({
                 const outputArtifact = (job.artifacts ?? []).find(isExcelOutputArtifact)
                   ?? (job.portalId === "iehp" ? (job.artifacts ?? []).find((artifact) => artifact.artifactType === "file_download" && artifact.filename.toLowerCase().endsWith(".zip")) : undefined);
                 const outputName = job.portalId === "iehp" ? (outputArtifact?.filename.endsWith(".zip") ? outputArtifact.filename : "IEHP files (ZIP)") : outputArtifact?.filename || "Output workbook";
-                const creator = job.createdByName && job.createdByName !== "unknown"
-                  ? job.createdByName
-                  : job.createdByEmail || job.userId || "unknown";
+                const creator = job.clientSystem === "AR_WORKFLOW" ? "AR Workflow"
+                  : job.createdByName && job.createdByName !== "unknown"
+                    ? job.createdByName
+                    : job.createdByEmail || job.userId || "unknown";
                 const statusClassName =
                   job.status === "completed"
                     ? "bg-emerald-50 text-emerald-700"
@@ -431,8 +433,9 @@ export function OutputsPanel({
                       </div>
                     </td>
                     <td className="px-3 py-3">
-                      <div className="max-w-[12rem] truncate text-xs text-slate-600" title={job.createdByEmail || creator}>
-                        {creator}
+                      <div className="max-w-[12rem] text-xs text-slate-600" title={job.clientExecutionId || job.createdByEmail || creator}>
+                        <div className="truncate">{creator}</div>
+                        {job.clientExecutionId && <div className="truncate font-mono text-[0.65rem] text-slate-400">Execution {job.clientExecutionId.slice(0, 8)}</div>}
                       </div>
                     </td>
                     <td className="whitespace-nowrap px-3 py-3">

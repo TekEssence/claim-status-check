@@ -418,7 +418,7 @@ export async function subscribeToScrapeJobEvents(options: {
   });
 }
 
-export async function listScrapeJobs(limit = 25, options?: { scope?: "mine" | "all-running" }): Promise<ScrapeJobSummary[]> {
+export async function listScrapeJobs(limit = 25, options?: { scope?: "mine" | "all-running" | "ar-workflow-outputs" }): Promise<ScrapeJobSummary[]> {
   const scope = options?.scope && options.scope !== "mine" ? `&scope=${encodeURIComponent(options.scope)}` : "";
   if (!isAwsMode()) {
     const response = await fetch(`/api/scrape-jobs/list?limit=${encodeURIComponent(String(limit))}${scope}`);
