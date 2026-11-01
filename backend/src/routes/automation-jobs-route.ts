@@ -8,6 +8,7 @@
 } from "@/backend/src/jobs/job-store";
 import { patchPlaywrightBrowserEvalHelpers } from "@/backend/src/core/playwright-browser-eval-helpers";
 import { getAutomationRunner } from "@/backend/src/workflows/registry";
+import { createEligibilityPartialOutput } from "@/backend/src/workflows/eligibility-verification/partial-output";
 import { isAutomationWorkflowId, type AutomationWorkflowId } from "@/backend/src/workflows/types";
 import { getSessionFromCookies } from "@/lib/auth/session";
 import { isAuthDbConnectionError } from "@/lib/auth/db";
@@ -15,7 +16,6 @@ import {
   appendAutomationJobArtifact,
   appendAutomationJobLog,
   createPersistentAutomationJob,
-  getActiveAutomationJobForUser,
   getAutomationJobForUser,
   updateAutomationJob,
 } from "@/lib/automation-jobs/db";
@@ -63,16 +63,43 @@ export async function POST(req: Request) {
     }
     const automationWorkflowId: AutomationWorkflowId = workflowId;
 
-    const activeJob = await getActiveAutomationJobForUser(session.userId);
-    if (activeJob && activeJob.workflowId === automationWorkflowId && activeJob.portalId === portalId) {
-      return Response.json({ error: `A ${automationWorkflowId}/${portalId} job is already active.`, jobId: activeJob.jobId }, { status: 409 });
-    }
-
     const runner = getAutomationRunner(automationWorkflowId, portalId, payerId);
     const input = runner.validateInput(formData);
     const job = createScrapeJob(undefined, automationWorkflowId);
     const inputFile = getFirstFile(formData, ["inputFile", "inputExcel", "referenceExcel"]);
     const credentialFile = getFirstFile(formData, ["credentialFile", "credentialExcel"]);
+    const partialOutput = automationWorkflowId === "eligibility-verification" && portalId !== "medical" && inputFile
+      ? await createEligibilityPartialOutput(inputFile, portalId).catch((error) => {
+        console.error("Eligibility partial workbook initialization failed", error);
+        return null;
+      })
+      : null;
+    let partialArtifactRecorded = false;
+    const partialOutputDate = new Date();
+    const savePartialOutput = async () => {
+      if (!partialOutput?.hasUnsavedRows()) return;
+      const key = await uploadWorkflowArtifact({
+        workflowId: automationWorkflowId,
+        jobId: job.id,
+        artifactType: "output_snapshot",
+        filename: partialOutput.filename,
+        base64: partialOutput.build().toString("base64"),
+        mimeType: partialOutput.mimeType,
+        now: partialOutputDate,
+      });
+      if (!key) return;
+      if (!partialArtifactRecorded) {
+        await appendAutomationJobArtifact({
+          jobId: job.id,
+          artifactType: "output_snapshot",
+          filename: partialOutput.filename,
+          mimeType: partialOutput.mimeType,
+          pathOrKey: key,
+        });
+        partialArtifactRecorded = true;
+      }
+      partialOutput.markSaved();
+    };
     await createPersistentAutomationJob({
       jobId: job.id,
       userId: session.userId,
@@ -97,13 +124,19 @@ export async function POST(req: Request) {
       portalId,
       payerId,
       projectId: projectId || undefined,
-      emit: async (event) => emitScrapeJobEvent(job.id, event),
+      emit: async (event) => {
+        emitScrapeJobEvent(job.id, event);
+        if (partialOutput?.record(event)) {
+          await savePartialOutput().catch((error) => console.error("Eligibility partial workbook upload failed", error));
+        }
+      },
       log: async (event) => emitScrapeJobEvent(job.id, { type: "log", ...event }),
       isCancelled: () => {
         const current = getScrapeJob(job.id);
         return current?.cancelRequested === true || current?.status === "cancelled";
       },
     }).then(async () => {
+      await savePartialOutput().catch((error) => console.error("Eligibility partial workbook upload failed", error));
       const current = getScrapeJob(job.id);
       const cancelled = current?.cancelRequested || current?.status === "cancelled";
       if (cancelled) {
@@ -119,6 +152,7 @@ export async function POST(req: Request) {
       }).catch(() => {});
       scheduleTaskShutdownAfterWorkflow(`${automationWorkflowId}:${cancelled ? "cancelled" : "completed"}`);
     }).catch(async (error) => {
+      await savePartialOutput().catch((snapshotError) => console.error("Eligibility partial workbook upload failed", snapshotError));
       const cancelled = getScrapeJob(job.id)?.cancelRequested === true;
       const message = error instanceof Error ? error.message : "Automation workflow failed.";
       emitScrapeJobEvent(job.id, { type: cancelled ? "cancelled" : "error", message: cancelled ? "Automation workflow cancelled." : message });

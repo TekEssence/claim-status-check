@@ -1,4 +1,5 @@
 import ExcelJS from "exceljs";
+import { appendClaimStatusOutputColumns } from "../../output-columns";
 
 export type MyFamilyOutputRow = {
   inputData: Record<string, unknown>;
@@ -124,6 +125,7 @@ export async function createMyFamilyOutputWorkbookBuffer(state: MyFamilyWorkbook
       ...Object.fromEntries(outputColumns.map((column) => [String(column.key), row[column.key] ?? ""])),
     });
   }
+  appendClaimStatusOutputColumns(outputSheet, "my-family");
 
   const auditSheet = workbook.addWorksheet("Audit_Log");
   auditSheet.views = [{ state: "frozen", ySplit: 1 }];

@@ -1,4 +1,5 @@
 import ExcelJS from "exceljs";
+import { appendClaimStatusOutputColumns } from "../../output-columns";
 import type { BlueShieldAuditRow, BlueShieldErrorRow, BlueShieldOutputRow } from "./types";
 
 export type BlueShieldWorkbookState = {
@@ -176,6 +177,7 @@ export async function createBlueShieldOutputWorkbookBuffer(state: BlueShieldWork
 
   const orderedOutputRows = [...state.outputRows].sort((left, right) => left.inputRowId - right.inputRowId);
   addOutputSheet(workbook, orderedOutputRows);
+  appendClaimStatusOutputColumns(workbook.getWorksheet("Output")!, "blue-shield");
   addSheet(workbook, "Error", state.errorRows, errorColumns);
   addSheet(workbook, "Audit_Log", state.auditRows, auditColumns);
 

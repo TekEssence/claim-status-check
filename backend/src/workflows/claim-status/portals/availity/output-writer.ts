@@ -1,4 +1,5 @@
 import ExcelJS from "exceljs";
+import { appendClaimStatusOutputColumns } from "../../output-columns";
 import type { AvailityAuditRow, AvailityErrorRow, AvailityOutputRow } from "./types";
 
 const BOT_COLUMNS = [
@@ -60,6 +61,7 @@ export async function createAvailityOutputWorkbookBuffer(options: {
   const workbook = new ExcelJS.Workbook();
   addSheet(workbook, "Input", ["input_row_id", ...options.inputHeaders, "validation_status", "validation_message"], options.inputRows);
   addSheet(workbook, "Output", ["input_row_id", ...options.inputHeaders, ...BOT_COLUMNS], options.outputRows);
+  appendClaimStatusOutputColumns(workbook.getWorksheet("Output")!, "availity");
   addSheet(workbook, "Error", ERROR_COLUMNS, options.errorRows);
   addSheet(workbook, "Audit_Log", AUDIT_COLUMNS, options.auditRows);
   return Buffer.from(await workbook.xlsx.writeBuffer());

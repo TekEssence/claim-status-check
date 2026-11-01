@@ -1,4 +1,5 @@
 import * as XLSX from "xlsx";
+import { CLAIM_STATUS_OUTPUT_HEADERS, claimStatusOutputRows } from "../../output-columns";
 import type { AstronaClaimDetails, AstronaInputRow, AstronaServiceLine } from "./types";
 
 function amount(value: string): number | null {
@@ -78,7 +79,8 @@ export function astronaOutputRow(row: AstronaInputRow, details: AstronaClaimDeta
 
 export function createAstronaWorkbook(outputRows: Record<string, unknown>[], errorRows: Record<string, unknown>[], auditRows: Record<string, unknown>[]): Buffer {
   const workbook = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(outputRows), "Output");
+  const rows = claimStatusOutputRows("astrona", outputRows);
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(rows, { header: [...new Set([...rows.flatMap(Object.keys), ...CLAIM_STATUS_OUTPUT_HEADERS])] }), "Output");
   XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(errorRows), "Error");
   XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(auditRows), "Audit_Log");
   return XLSX.write(workbook, { type: "buffer", bookType: "xlsx" }) as Buffer;

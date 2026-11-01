@@ -1,20 +1,6 @@
 import ExcelJS from "exceljs";
-
-export type ServiceRowStatus = "SUCCESS" | "FAILED" | "NO_MATCH" | "ACTION_REQUIRED" | "INCOMPLETE";
-export type ServiceOutcome = "SUCCESS" | "PARTIAL_SUCCESS" | "FAILED";
-export type ServiceRowResult = {
-  client_row_ref: string;
-  status: ServiceRowStatus;
-  result: { claim_status: string; claim_details: string; detail_rows?: Array<Record<string, string>> };
-  error_category: string | null;
-  error_message: string | null;
-};
-export type ServiceResultSummary = {
-  outcome: ServiceOutcome;
-  counts: { total: number; success: number; no_match: number; failed: number; action_required: number; incomplete: number };
-  row_results: ServiceRowResult[];
-  finalized_count: number;
-};
+import type { ServiceResultSummary, ServiceRowResult, ServiceRowStatus } from "./service-contract";
+export type { ServiceOutcome, ServiceResultSummary, ServiceRowResult, ServiceRowStatus } from "./service-contract";
 
 function cellText(value: ExcelJS.CellValue): string {
   if (value === null || value === undefined) return "";
@@ -30,13 +16,16 @@ const detailHeaders = new Set([
   "RA Status", "RA Reason", "RA Denial Reason", "Final Status",
 ]);
 
-type ParsedDetailRow = { normalized: ServiceRowResult; detail: Record<string, string> };
+type ClaimServiceRowResult = ServiceRowResult & {
+  result: { claim_status: string; claim_details: string; detail_rows?: Array<Record<string, string>> };
+};
+type ParsedDetailRow = { normalized: ClaimServiceRowResult; detail: Record<string, string> };
 
 function uniqueNonempty(values: Array<string | null>): string[] {
   return [...new Set(values.filter((value): value is string => Boolean(value)))];
 }
 
-function groupClaimRows(ref: string, rows: ParsedDetailRow[]): ServiceRowResult {
+function groupClaimRows(ref: string, rows: ParsedDetailRow[]): ClaimServiceRowResult {
   if (rows.length === 1) return rows[0].normalized;
 
   const statuses = new Set(rows.map((row) => row.normalized.status));
@@ -112,7 +101,7 @@ export async function normalizeIehpServiceWorkbook(
       status = "INCOMPLETE";
       errorCategory = "INCOMPLETE";
     }
-    const normalized: ServiceRowResult = {
+    const normalized: ClaimServiceRowResult = {
       client_row_ref: ref,
       status,
       result: { claim_status: claimStatus, claim_details: claimDetails },

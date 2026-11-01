@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { cancelScrapeJob, getScrapeJobDownload, listScrapeJobs, type ScrapeJobSummary } from "../../api/scrape-jobs-api";
-import { cancelAutomationJob } from "../../api/automation-jobs-api";
+import { cancelScrapeJob, getScrapeJobDownload, isAwsWorkflowMode, listScrapeJobs, type ScrapeJobSummary } from "../../api/scrape-jobs-api";
+import { cancelAutomationJob, listAutomationJobs } from "../../api/automation-jobs-api";
 
 type WorkflowRun = {
   jobId: string;
@@ -126,11 +126,26 @@ export function ActiveWorkflowRunsPanel({
     }
 
     try {
-      const claimJobs = await listScrapeJobs(50);
+      const [claimJobs, automationJobs] = await Promise.all([
+        listScrapeJobs(50),
+        isAwsWorkflowMode() ? Promise.resolve([]) : listAutomationJobs(50),
+      ]);
 
       setRuns(
-        claimJobs
-          .map(normalizeClaimJob)
+        [
+          ...claimJobs.map(normalizeClaimJob),
+          ...automationJobs.map((job) => ({
+            jobId: job.jobId,
+            workflowId: job.workflowId,
+            portalId: job.portalId,
+            status: job.status,
+            completed: job.currentCompleted,
+            total: job.totalItems,
+            fileNames: uploadedFiles(job.credentialFileName, job.primaryInputFileName),
+            createdAt: job.createdAt,
+            updatedAt: job.updatedAt,
+          })),
+        ]
           .filter((job) => isLiveStatus(job.status))
           .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt)),
       );

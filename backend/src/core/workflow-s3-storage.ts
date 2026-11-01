@@ -125,6 +125,7 @@ export async function uploadWorkflowArtifact(options: {
   base64?: string;
   text?: string;
   mimeType?: string;
+  now?: Date;
 }): Promise<string> {
   if (!isWorkflowS3StorageEnabled()) return "";
 
@@ -134,6 +135,7 @@ export async function uploadWorkflowArtifact(options: {
     jobId: options.jobId,
     area: "output",
     filename,
+    now: options.now,
   });
 
   if (options.base64) {

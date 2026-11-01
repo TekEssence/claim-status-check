@@ -1,4 +1,5 @@
 import * as XLSX from "xlsx";
+import { CLAIM_STATUS_OUTPUT_HEADERS, claimStatusOutputRows } from "../../output-columns";
 import type { AllCareClaimDetails, AllCareInputRow, AllCareServiceLine } from "./types";
 
 function amount(value: string): number | null {
@@ -107,7 +108,8 @@ export function allCareOutputRow(row: AllCareInputRow, details: AllCareClaimDeta
 
 export function createAllCareWorkbook(outputRows: Record<string, unknown>[], errorRows: Record<string, unknown>[], auditRows: Record<string, unknown>[]): Buffer {
   const workbook = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(outputRows), "Output");
+  const rows = claimStatusOutputRows("all-care", outputRows);
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(rows, { header: [...new Set([...rows.flatMap(Object.keys), ...CLAIM_STATUS_OUTPUT_HEADERS])] }), "Output");
   XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(errorRows), "Error");
   XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(auditRows), "Audit_Log");
   return XLSX.write(workbook, { type: "buffer", bookType: "xlsx" }) as Buffer;

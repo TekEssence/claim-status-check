@@ -1,4 +1,5 @@
 import ExcelJS from "exceljs";
+import { appendClaimStatusOutputColumns } from "../../output-columns";
 import type { WaystarAuditRow, WaystarErrorRow, WaystarOutputRow } from "./types";
 
 const OUTPUT_COLUMNS: Array<{ key: keyof WaystarOutputRow; header: string; width: number }> = [
@@ -142,6 +143,7 @@ export async function createWaystarOutputWorkbookBuffer(options: {
   workbook.created = new Date();
   workbook.modified = new Date();
   addOutputSheet(workbook, options.outputRows);
+  appendClaimStatusOutputColumns(workbook.getWorksheet("Output")!, "waystar");
   addSimpleSheet(workbook, "Error", options.errorRows, ERROR_COLUMNS);
   addSimpleSheet(workbook, "Audit_Log", options.auditRows, AUDIT_COLUMNS);
   const buffer = await workbook.xlsx.writeBuffer();

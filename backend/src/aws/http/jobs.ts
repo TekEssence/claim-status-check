@@ -5,7 +5,7 @@ import { jsonResponse, parseJsonBody, getAuthUserId, getAuthUserSnapshot, getJob
 import { describeWorkerTask, findWorkerTaskByJobId, runWorkerTask, stopWorkerTask, WorkerTaskLaunchRejectedError } from "../runtime/ecs";
 import { buildWorkflowKey, createDownloadUrl, createUploadUrl } from "../runtime/s3";
 import { createIehpBundle } from "./iehp-bundle";
-import { loadServiceSnapshot } from "../service/portal-dispatch";
+import { loadIntegratedServiceSnapshot } from "../service/workflow-registry";
 import { cancelServiceExecution } from "../service/service-cancellation";
 import {
   appendWorkflowEvent,
@@ -177,7 +177,7 @@ export async function reconcileAwsJobRuntime(job: Awaited<ReturnType<typeof getW
       // The worker may have saved a final partial workbook during its graceful
       // cancellation window. Record it after ECS confirms the worker stopped.
       try {
-        const snapshot = await loadServiceSnapshot(job, { requireStatusColumns: false });
+        const snapshot = await loadIntegratedServiceSnapshot(job, { requireStatusColumns: false });
         if (snapshot.artifact && !snapshot.recorded) {
           await appendWorkflowArtifact({
             jobId: job.jobId, artifactType: "output_snapshot",
@@ -191,9 +191,9 @@ export async function reconcileAwsJobRuntime(job: Awaited<ReturnType<typeof getW
       }
     }
     if (job.clientSystem && status !== "cancelled") {
-      let snapshot: Awaited<ReturnType<typeof loadServiceSnapshot>>;
+      let snapshot: Awaited<ReturnType<typeof loadIntegratedServiceSnapshot>>;
       try {
-        snapshot = await loadServiceSnapshot(job, { requireStatusColumns: false });
+        snapshot = await loadIntegratedServiceSnapshot(job, { requireStatusColumns: false });
       } catch {
         // Keep the job active until the last S3 object can be read and reconciled.
         return job;

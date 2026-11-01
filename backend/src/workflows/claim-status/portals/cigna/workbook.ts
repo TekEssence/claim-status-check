@@ -1,4 +1,5 @@
 import ExcelJS from "exceljs";
+import { appendClaimStatusOutputColumns } from "../../output-columns";
 
 export type CignaOutputRow = {
   inputData: Record<string, unknown>;
@@ -177,6 +178,7 @@ export async function createCignaOutputWorkbookBuffer(state: CignaWorkbookState)
   workbook.created = new Date();
   workbook.modified = new Date();
   addOutputSheet(workbook, [...state.outputRows].sort((left, right) => left.inputRowId - right.inputRowId));
+  appendClaimStatusOutputColumns(workbook.getWorksheet("Output")!, "cigna");
   addAuditSheet(workbook, state.auditRows);
   const buffer = await workbook.xlsx.writeBuffer();
   return Buffer.from(buffer);

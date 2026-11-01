@@ -1,4 +1,5 @@
 import type ExcelJS from "exceljs";
+import { appendClaimStatusOutputColumns } from "../../output-columns";
 
 export type UhcClaimRow = {
   rowIndex: number;
@@ -284,7 +285,10 @@ export function postProcessUhcWorksheet(worksheet: ExcelJS.Worksheet): void {
     if (cellText(cell.value).startsWith("Bot")) botColumns.push(colNum);
   });
 
-  if (!subscriberCol || !serviceDateCol || botColumns.length === 0) return;
+  if (!subscriberCol || !serviceDateCol || botColumns.length === 0) {
+    appendClaimStatusOutputColumns(worksheet, "uhc");
+    return;
+  }
 
   const groups = new Map<string, number[]>();
   worksheet.eachRow((row, rowNum) => {
@@ -311,4 +315,5 @@ export function postProcessUhcWorksheet(worksheet: ExcelJS.Worksheet): void {
       targetRow.commit();
     }
   }
+  appendClaimStatusOutputColumns(worksheet, "uhc");
 }

@@ -5,34 +5,52 @@ import {
   ServiceSubmissionConflict, type ExistingServiceJob,
 } from "./service-submission";
 import { cancelServiceExecution, type CancellableServiceJob } from "./service-cancellation";
+import { SERVICE_WORKFLOW_IDS, supportedServiceWorkflowIds } from "./workflow-registry";
 
 const token = "test-service-token-longer-than-thirty-two-characters";
 const original = {
   client_system: "AR_WORKFLOW", client_execution_id: "E100", idempotency_key: "K100",
-  deadline_at: "2026-10-24T00:00:00Z", workflow: "CLAIM_STATUS", portal: "iehp",
+  deadline_at: "2026-10-24T00:00:00Z", workflow: SERVICE_WORKFLOW_IDS.CLAIM_STATUS, portal: "iehp",
   credentials: { username: "account", password: "password-never-persist", totp_secret: "totp-never-persist" },
   claims: [{ client_row_ref: "R1", data: { member_id: "M1" } }],
 };
 
-function submissionHarness() {
+function submissionHarness(initial: Record<string, unknown> = original) {
   let job: ExistingServiceJob | null = null;
   let created = 0;
   let prepared = 0;
-  const submit = (body: Record<string, unknown> = original, authenticatedToken = token) => reserveServiceSubmission({
-    clientSystem: "AR_WORKFLOW", clientExecutionId: String(body.client_execution_id), idempotencyKey: "K100", portalId: "iehp",
+  const submit = (body: Record<string, unknown> = initial, authenticatedToken = token) => reserveServiceSubmission({
+    clientSystem: "AR_WORKFLOW", clientExecutionId: String(body.client_execution_id), idempotencyKey: "K100", portalId: String(body.portal),
     body, authenticatedToken,
     find: async () => job,
     prepare: async () => { prepared += 1; return "prepared-input"; },
     createJobId: () => `J${created + 1}`,
     create: async (jobId, _prepared, fingerprint, salt) => {
       created += 1;
-      job = { jobId, status: "preparing", clientExecutionId: "E100", portalId: "iehp",
+      job = { jobId, status: "preparing", clientExecutionId: "E100", portalId: String(body.portal),
         metadata: { requestHash: fingerprint, requestHashVersion: 3, requestHashSalt: salt } };
     },
     isUniqueViolation: () => false,
   });
   return { submit, find: async () => job, counts: () => ({ created, prepared }) };
 }
+
+test("each enabled workflow uses the same submission idempotency and lookup behavior", async () => {
+  for (const workflow of supportedServiceWorkflowIds()) {
+    const body = { ...original, workflow, portal: workflow === SERVICE_WORKFLOW_IDS.CLAIM_STATUS ? "iehp" : "availity" };
+    const harness = submissionHarness(body);
+    const first = await harness.submit();
+    assert.equal(first.existing, false);
+    const repeated = await harness.submit();
+    assert.equal(repeated.existing, true);
+    assert.deepEqual(harness.counts(), { created: 1, prepared: 1 });
+    const lookup = await lookupServiceSubmission({
+      clientSystem: "AR_WORKFLOW", clientExecutionId: "E100", idempotencyKey: "K100", find: harness.find,
+    });
+    assert.equal(lookup.found, true);
+    await assert.rejects(harness.submit({ ...body, workflow: "OTHER" }), ServiceSubmissionConflict);
+  }
+});
 
 test("first submission reserves one job; identical and repeated retries reuse it before preparing inputs", async () => {
   const harness = submissionHarness();

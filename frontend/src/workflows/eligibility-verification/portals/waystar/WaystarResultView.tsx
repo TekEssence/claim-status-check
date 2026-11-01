@@ -15,6 +15,7 @@ export function WaystarResultView(props: {
   downloads: Array<{ filename: string; base64: string; mimeType: string }>;
   resultRows?: Array<Record<string, string>>;
   onDownload: (filename: string, base64: string, mimeType: string) => void;
+  onDownloadSaved?: () => void;
 }) {
   const visibleResultHeaders = props.resultRows?.[0]
     ? Object.keys(props.resultRows[0]).filter((header) => !header.startsWith("__"))
@@ -57,6 +58,7 @@ export function WaystarResultView(props: {
         </div>
       ) : <JobProgress progress={props.progress} />}
       <StatusMessage status={props.status} />
+      {props.onDownloadSaved ? <button type="button" onClick={props.onDownloadSaved} className="mt-4 rounded-lg border border-blue-200 px-4 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-50">Download latest saved output</button> : null}
       {props.downloads.length > 0 ? (
         <div className="mt-4 flex flex-wrap gap-2">
           {props.downloads.map((download) => (

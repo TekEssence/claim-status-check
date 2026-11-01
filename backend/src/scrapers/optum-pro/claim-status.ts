@@ -5,6 +5,7 @@ import type { Frame, Page } from "playwright-core";
 import { getJobDataPath } from "@/backend/src/core/storage";
 import type { ScraperContext } from "../../workflows/claim-status/types";
 import { emitPartialOutputSnapshot } from "../../workflows/claim-status/partial-output";
+import { appendClaimStatusOutputColumns, CLAIM_STATUS_OUTPUT_HEADERS, claimStatusOutputValues } from "../../workflows/claim-status/output-columns";
 import type { OptumProInputRow } from "./input";
 
 type StageLog = (level: "info" | "warn" | "error", stage: string, message: string, currentPage?: Page) => Promise<void>;
@@ -2157,6 +2158,23 @@ async function createOptumProOutputWorkbookBuffer(results: OptumProSearchResult[
   worksheet.columns.forEach((column, index) => {
     const header = worksheetRows[0][index];
     column.width = Math.max(12, Math.min(String(header || "").length + 4, 32));
+  });
+  appendClaimStatusOutputColumns(worksheet, "optum-pro");
+  const standardColumns = new Map<string, number>();
+  worksheet.getRow(1).eachCell((cell, column) => {
+    if (CLAIM_STATUS_OUTPUT_HEADERS.some((header) => header === cell.value)) standardColumns.set(String(cell.value), column);
+  });
+  results.forEach((result, index) => {
+    const values = claimStatusOutputValues("optum-pro", {
+      ...botRows[index],
+      __denialCode: result.explanationCode,
+      Copay: result.copayAmount,
+      Coinsurance: result.coinsuranceAmount,
+      Deductible: result.deductibleAmount,
+    });
+    for (const header of CLAIM_STATUS_OUTPUT_HEADERS) {
+      worksheet.getRow(index + 2).getCell(standardColumns.get(header)!).value = values[header];
+    }
   });
   const buffer = await workbook.xlsx.writeBuffer();
   return Buffer.from(buffer);

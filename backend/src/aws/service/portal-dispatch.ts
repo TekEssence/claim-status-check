@@ -15,7 +15,7 @@ export type PreparedServiceInput = {
   accountLabel: string;
 };
 
-type PortalAdapter = {
+export type PortalAdapter = {
   prepare: (body: unknown) => Promise<PreparedServiceInput>;
   loadSnapshot: typeof loadIehpServiceSnapshot;
 };

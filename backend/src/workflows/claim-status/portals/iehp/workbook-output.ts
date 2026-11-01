@@ -1,4 +1,5 @@
 import type ExcelJS from "exceljs";
+import { appendClaimStatusOutputColumns } from "../../output-columns";
 import { parseSerializedRaRecords, type RaDetailRecord } from "@/backend/src/workflows/claim-status/portals/iehp/claims/ra";
 
 type ClaimUpdate = {
@@ -802,4 +803,5 @@ export function postProcessWorksheet(worksheet: ExcelJS.Worksheet): void {
 
     r += N;
   }
+  appendClaimStatusOutputColumns(worksheet, "iehp");
 }

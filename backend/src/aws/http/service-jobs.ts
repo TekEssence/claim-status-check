@@ -9,21 +9,10 @@ import {
 } from "../runtime/workflow-db";
 import { cancelIntegratedWorkflowJob, launchQueuedWorkflowJob, reconcileAwsJobRuntime } from "./jobs";
 import { pageServiceResults } from "../service/iehp-results";
-import { getServicePortal, loadServiceSnapshot } from "../service/portal-dispatch";
+import { getServiceWorkflowForJob, loadIntegratedServiceSnapshot, resolveServiceWorkflowRoute, ServiceWorkflowDispatchError } from "../service/workflow-registry";
 import { lookupServiceSubmission, reserveServiceSubmission, ServiceSubmissionConflict } from "../service/service-submission";
 import { ServiceCancellationConflict } from "../service/service-cancellation";
-
-type ServiceSubmitBody = {
-  client_system?: unknown;
-  client_execution_id?: unknown;
-  idempotency_key?: unknown;
-  deadline_at?: unknown;
-  workflow?: unknown;
-  portal?: unknown;
-  projectId?: unknown;
-  claims?: unknown;
-  credentials?: unknown;
-};
+import type { ServiceSubmitBody } from "../service/service-contract";
 
 class ServiceRequestError extends Error {
   constructor(public readonly statusCode: number, message: string) { super(message); }
@@ -63,7 +52,7 @@ function errorResponse(error: unknown) {
   if (hasPostgresCode(error, "42703")) {
     return jsonResponse(503, { error: "Claim Status service database migration 0007 has not been applied." });
   }
-  const status = error instanceof ServiceAuthError || error instanceof ServiceRequestError ? error.statusCode
+  const status = error instanceof ServiceAuthError || error instanceof ServiceRequestError || error instanceof ServiceWorkflowDispatchError ? error.statusCode
     : error instanceof ServiceSubmissionConflict ? 409
       : error instanceof ServiceCancellationConflict ? 503 : error instanceof SyntaxError ? 400 : 500;
   const message = error instanceof Error ? error.message : "Claim Status service request failed.";
@@ -135,12 +124,10 @@ export async function submitServiceJob(event: ApiEvent) {
       body: body as Record<string, unknown>, authenticatedToken: token,
       find: getWorkflowJobByClientKey,
       prepare: async () => {
-        if (body.workflow !== "CLAIM_STATUS") throw new ServiceRequestError(400, "workflow must be CLAIM_STATUS.");
-        const portal = getServicePortal(body.portal);
-        if (!portal) throw new ServiceRequestError(422, "This portal is not supported by the service API. Supported: iehp, availity.");
+        const { workflow, portalId, adapter } = resolveServiceWorkflowRoute(body.workflow, body.portal);
         const deadlineAt = requiredDeadline(body.deadline_at);
         try {
-          return { portal, deadlineAt, generated: await portal.adapter.prepare(body) };
+          return { workflow, portalId, deadlineAt, generated: await adapter.prepare(body) };
         } catch (error) {
           throw new ServiceRequestError(422, error instanceof Error ? error.message : "Invalid portal claim input.");
         }
@@ -148,16 +135,16 @@ export async function submitServiceJob(event: ApiEvent) {
       createJobId,
       isUniqueViolation: (error) => hasPostgresCode(error, "23505"),
       create: async (jobId, prepared, fingerprint, salt) => {
-        const { portal, deadlineAt, generated } = prepared;
+        const { workflow, portalId, deadlineAt, generated } = prepared;
         const inputBucket = requiredEnv("WORKFLOW_INPUTS_BUCKET");
         const outputBucket = requiredEnv("WORKFLOW_OUTPUTS_BUCKET");
         const inputKeys: Record<string, string> = Object.fromEntries(generated.files.map((file) => [
           file.field,
-          buildWorkflowKey({ workflowId: "claim-status", jobId, area: "input", filename: `${file.field}-${file.filename}` }),
+          buildWorkflowKey({ workflowId: workflow.runnerWorkflowId, jobId, area: "input", filename: `${file.field}-${file.filename}` }),
         ]));
-        inputKeys.claimRows = buildWorkflowKey({ workflowId: "claim-status", jobId, area: "input", filename: "claimRows.json" });
+        inputKeys.claimRows = buildWorkflowKey({ workflowId: workflow.runnerWorkflowId, jobId, area: "input", filename: "claimRows.json" });
         await createWorkflowJob({
-          jobId, userId: `service:${clientSystem}`, workflowId: "claim-status", portalId: portal.id,
+          jobId, userId: `service:${clientSystem}`, workflowId: workflow.runnerWorkflowId, portalId,
           clientSystem, clientExecutionId, idempotencyKey, initialStatus: "preparing",
           inputBucket, outputBucket,
           inputPrefix: inputKeys.claimRows.slice(0, inputKeys.claimRows.lastIndexOf("/")),
@@ -187,7 +174,7 @@ export async function submitServiceJob(event: ApiEvent) {
       }
       await putWithRetry(inputBucket, inputKeys.claimRows, generated.claimRowsJson, "application/json");
       if (!await markWorkflowJobReady(jobId)) throw new Error("Job was not in the preparing state after input upload.");
-      await appendWorkflowEvent(jobId, "inputs_ready", { type: "log", message: "Integrated Claim Status inputs are ready." });
+      await appendWorkflowEvent(jobId, "inputs_ready", { type: "log", message: `Integrated ${reservation.prepared.workflow.resultLabel} inputs are ready.` });
       await launchQueuedWorkflowJob(jobId, `service:${clientSystem}`);
     } catch (error) {
       const current = await getWorkflowJobById(jobId);
@@ -244,6 +231,7 @@ export async function cancelServiceJob(event: ApiEvent) {
 export async function getServiceJobResult(event: ApiEvent) {
   try {
     const job = await ownedJob(event);
+    const resultLabel = getServiceWorkflowForJob(job.workflowId)?.resultLabel ?? "Claim Status";
     const rawCursor = event.queryStringParameters?.cursor ?? "0";
     const rawLimit = event.queryStringParameters?.limit ?? "100";
     if (!/^(0|[1-9]\d*)$/.test(rawCursor) || !/^[1-9]\d*$/.test(rawLimit)) {
@@ -255,17 +243,17 @@ export async function getServiceJobResult(event: ApiEvent) {
       throw new ServiceRequestError(400, "cursor must be a safe integer and limit must be at most 200.");
     }
     const terminal = ["completed", "partial_success", "failed", "cancelled"].includes(job.status);
-    let snapshot: Awaited<ReturnType<typeof loadServiceSnapshot>> | null = null;
+    let snapshot: Awaited<ReturnType<typeof loadIntegratedServiceSnapshot>> | null = null;
     let total = 0;
     try {
-      snapshot = await loadServiceSnapshot(job, { requireStatusColumns: false });
+      snapshot = await loadIntegratedServiceSnapshot(job, { requireStatusColumns: false });
       total = snapshot.expectedRefs.length;
     } catch {
       const artifacts = await listArtifactsForJob(job.jobId);
       const noOutput = !artifacts.some((item) => item.artifactType === "output_snapshot" || (item.artifactType === "file_download" && item.filename.endsWith(".xlsx")));
       const expectedRowCount = (job.metadata as { expectedRowCount?: unknown } | null)?.expectedRowCount;
       if (!terminal || !["failed", "cancelled"].includes(job.status) || !noOutput || typeof expectedRowCount !== "number") {
-        throw new ServiceRequestError(503, "Current Claim Status workbook is unavailable or invalid; retry this poll.");
+        throw new ServiceRequestError(503, `Current ${resultLabel} workbook is unavailable or invalid; retry this poll.`);
       }
       total = expectedRowCount;
     }
@@ -273,14 +261,14 @@ export async function getServiceJobResult(event: ApiEvent) {
     const artifact = snapshot?.artifact ?? null;
     if (cursor > total) throw new ServiceRequestError(400, "cursor exceeds the submitted claim count.");
     if ((job.status === "completed" || job.status === "partial_success") && (!summary || !artifact)) {
-      throw new ServiceRequestError(503, "Final Claim Status workbook is missing; retry this poll.");
+      throw new ServiceRequestError(503, `Final ${resultLabel} workbook is missing; retry this poll.`);
     }
     if (job.status === "completed" && summary?.outcome !== "SUCCESS") {
-      throw new ServiceRequestError(503, "Final Claim Status workbook does not match job status; retry this poll.");
+      throw new ServiceRequestError(503, `Final ${resultLabel} workbook does not match job status; retry this poll.`);
     }
-    if (!summary && cursor > 0) throw new ServiceRequestError(503, "Previously visible Claim Status workbook is unavailable; retry this poll.");
+    if (!summary && cursor > 0) throw new ServiceRequestError(503, `Previously visible ${resultLabel} workbook is unavailable; retry this poll.`);
     const { available, nextCursor, results } = pageServiceResults(summary, cursor, limit, terminal);
-    if (cursor > available) throw new ServiceRequestError(503, "Previously finalized Claim Status rows are unavailable; retry this poll.");
+    if (cursor > available) throw new ServiceRequestError(503, `Previously finalized ${resultLabel} rows are unavailable; retry this poll.`);
     let actionRequired: Record<string, unknown> | null = null;
     if (job.status === "waiting_otp") {
       const challenge = await getLatestWorkflowInputRequest(job.jobId);

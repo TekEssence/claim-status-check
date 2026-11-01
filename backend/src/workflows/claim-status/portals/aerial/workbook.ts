@@ -1,4 +1,5 @@
 import * as XLSX from "xlsx";
+import { CLAIM_STATUS_OUTPUT_HEADERS, claimStatusOutputRows } from "../../output-columns";
 
 type AerialValidation = {
   valid: boolean;
@@ -154,7 +155,8 @@ export function createAerialOutputWorkbookBuffer(
   logs: { errorRows: Record<string, unknown>[]; auditRows: Record<string, unknown>[] },
 ): Buffer {
   const workbook = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(buildOutputRows(outputRows)), "Output");
+  const rows = claimStatusOutputRows("aerial", buildOutputRows(outputRows));
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(rows, { header: [...new Set([...rows.flatMap(Object.keys), ...CLAIM_STATUS_OUTPUT_HEADERS])] }), "Output");
   XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(buildErrorRows(logs.errorRows)), "Error");
   XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(buildAuditRows(logs.auditRows)), "Audit_Log");
   return XLSX.write(workbook, { type: "buffer", bookType: "xlsx" }) as Buffer;

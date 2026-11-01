@@ -3,9 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { PassThrough, Readable } from "node:stream";
 import archiver from "archiver";
+import { GetObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { getScrapeJob } from "@/backend/src/jobs/job-store";
 import { getSessionFromCookies } from "@/lib/auth/session";
 import { getScrapeJobById, getScrapeJobByIdForUser, isScrapeJobDbConnectionError } from "@/lib/scrape-jobs/db";
+import { getAutomationJobForUser } from "@/lib/automation-jobs/db";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -24,12 +26,13 @@ export async function GET(req: Request) {
     }
 
     const canSeeAnyJob = session.role === "ADMIN" || session.role === "DEVELOPER";
-    const job = canSeeAnyJob ? await getScrapeJobById(jobId) : await getScrapeJobByIdForUser(jobId, session.userId);
+    const scrapeJob = canSeeAnyJob ? await getScrapeJobById(jobId) : await getScrapeJobByIdForUser(jobId, session.userId);
+    const job = scrapeJob ?? await getAutomationJobForUser(jobId, session.userId);
     if (!job) {
       return Response.json({ error: "Run not found for this user." }, { status: 404 });
     }
 
-    if (job.portalId === "iehp") {
+    if (scrapeJob?.portalId === "iehp") {
       const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "iehp-download-"));
       let streaming = false;
       try {
@@ -89,6 +92,19 @@ export async function GET(req: Request) {
         'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
         'Content-Disposition': `attachment; filename="${String(snapshot.filename).replace(/["\r\n]/g, '')}"`,
       } });
+    }
+    if (!scrapeJob) {
+      const saved = artifacts.find((candidate) => candidate.artifactType === "file_download" && /\.xlsx?$/i.test(candidate.filename))
+        ?? artifacts.find((candidate) => candidate.artifactType === "output_snapshot" && /\.xlsx?$/i.test(candidate.filename));
+      const bucket = process.env.WORKFLOW_OUTPUTS_BUCKET;
+      if (saved?.pathOrKey && bucket) {
+        const object = await new S3Client({}).send(new GetObjectCommand({ Bucket: bucket, Key: saved.pathOrKey }));
+        const bytes = await object.Body?.transformToByteArray();
+        if (bytes) return new Response(Buffer.from(bytes), { headers: {
+          "Content-Type": saved.mimeType || "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          "Content-Disposition": `attachment; filename="${saved.filename.replace(/["\r\n]/g, "")}"`,
+        } });
+      }
     }
     const artifact = artifacts.find((candidate) =>
       candidate.artifactType === "output_snapshot" &&

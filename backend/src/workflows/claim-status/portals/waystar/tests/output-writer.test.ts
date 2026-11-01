@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import ExcelJS from "exceljs";
 import { createWaystarOutputWorkbookBuffer } from "../output-writer";
+import { CLAIM_STATUS_OUTPUT_HEADERS } from "../../../output-columns";
 
 async function loadWorkbook(buffer: Buffer): Promise<ExcelJS.Workbook> {
   const workbook = new ExcelJS.Workbook();
@@ -11,7 +12,7 @@ async function loadWorkbook(buffer: Buffer): Promise<ExcelJS.Workbook> {
 
 function rowValues(row: ExcelJS.Row): string[] {
   const values = row.values;
-  return (Array.isArray(values) ? values.slice(1) : []).map((value) => String(value ?? ""));
+  return Array.from(Array.isArray(values) ? values.slice(1) : [], (value) => String(value ?? ""));
 }
 
 test("Waystar output workbook matches the sample output structure", async () => {
@@ -81,6 +82,7 @@ test("Waystar output workbook matches the sample output structure", async () => 
     "status",
     "Final Status",
     "Remarks",
+    ...CLAIM_STATUS_OUTPUT_HEADERS,
   ]);
 
   const values = rowValues(outputSheet.getRow(2));
@@ -110,6 +112,11 @@ test("Waystar output workbook matches the sample output structure", async () => 
     "denial",
     "DOS 06/15/2026: Checked waystar portal denied on 06/16/26 denial reason Charge exceeds fee schedule.. Acnt# 269048.",
     "EOB extracted with denial codes.",
+    "CO-45; PR-3",
+    "",
+    "100.00",
+    "Coinsurance: 0.00; Deductible: 0.00",
+    "DOS 06/15/2026: Checked waystar portal denied on 06/16/26 denial reason Charge exceeds fee schedule.. Acnt# 269048.",
   ]);
 });
 

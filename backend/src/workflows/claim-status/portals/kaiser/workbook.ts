@@ -1,4 +1,5 @@
 import ExcelJS from "exceljs";
+import { appendClaimStatusOutputColumns } from "../../output-columns";
 
 export type KaiserOutputRow = {
   inputData: Record<string, unknown>;
@@ -162,6 +163,7 @@ export async function createKaiserOutputWorkbookBuffer(state: KaiserWorkbookStat
   workbook.created = new Date();
   workbook.modified = new Date();
   addOutputSheet(workbook, [...state.outputRows].sort((left, right) => left.inputRowId - right.inputRowId));
+  appendClaimStatusOutputColumns(workbook.getWorksheet("Output")!, "kaiser");
   addAuditSheet(workbook, state.auditRows);
   const buffer = await workbook.xlsx.writeBuffer();
   return Buffer.from(buffer);

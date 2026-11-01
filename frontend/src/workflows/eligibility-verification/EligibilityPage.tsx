@@ -33,6 +33,7 @@ import { AvailityInputForm } from "./portals/availity/AvailityInputForm";
 import { UhcInputForm } from "./portals/uhc/UhcInputForm";
 import { getCognitoAccessToken, isCognitoMode, redirectToCognitoLogin, redirectToCognitoLogout, storeCognitoTokenFromHash } from "../../api/cognito-auth";
 import { ActiveWorkflowRunsPanel } from "../../components/workflow-runs/ActiveWorkflowRunsPanel";
+import { getScrapeJobDownload } from "../../api/scrape-jobs-api";
 import { WorkflowOutputsPanel } from "../../components/workflow-runs/WorkflowOutputsPanel";
 import { HealthNetInputForm } from "./portals/healthnet/HealthNetInputForm";
 import { MediCalInputForm } from "./portals/medi-cal/MediCalInputForm";
@@ -97,6 +98,7 @@ export function EligibilityPage() {
   const [progress, setProgress] = useState<JobProgressValue | null>(null);
   const [hasCompleted, setHasCompleted] = useState(false);
   const [isRunning, setIsRunning] = useState(false);
+  const [isStarting, setIsStarting] = useState(false);
   const [showOutputs, setShowOutputs] = useState(false);
   const [otpRequest, setOtpRequest] = useState<{ inputName: string; label: string; message: string } | null>(null);
   const [otpValue, setOtpValue] = useState("");
@@ -104,7 +106,7 @@ export function EligibilityPage() {
   const jobFailed = useRef(false);
 
   const heading = portal?.name ?? "Eligibility Verification";
-  const canStart = Boolean(portal && projectId && inputFile && credentialFile && !isRunning);
+  const canStart = Boolean(portal && projectId && inputFile && credentialFile && !isStarting);
 
   function changeProject(nextProjectId: "minimax" | "medrevenue") {
     if (nextProjectId === projectId || isRunning) return;
@@ -254,16 +256,8 @@ export function EligibilityPage() {
 
   async function start(event: FormEvent) {
     event.preventDefault();
-    if (!portal || !inputFile || !credentialFile) return;
-    setIsRunning(true);
-    setLogs([]);
-    setErrorScreenshots([]);
-    setDownloads([]);
-    setResultRows([]);
-    setProgress(null);
-    setHasCompleted(false);
-    jobFailed.current = false;
-    setStatus("Starting eligibility verification...");
+    if (!portal || !inputFile || !credentialFile || isStarting) return;
+    setIsStarting(true);
     try {
       const formData = new FormData();
       formData.append("workflowId", "eligibility-verification");
@@ -273,11 +267,23 @@ export function EligibilityPage() {
       formData.append("inputFile", inputFile);
       formData.append("credentialFile", credentialFile);
       const nextJobId = await startAutomationJob(formData);
+      setLogs([]);
+      setErrorScreenshots([]);
+      setDownloads([]);
+      setResultRows([]);
+      setProgress(null);
+      setHasCompleted(false);
+      jobFailed.current = false;
+      setStatus("Starting eligibility verification...");
+      setIsRunning(true);
       setJobId(nextJobId);
+      setInputFile(null);
+      setCredentialFile(null);
       connect(nextJobId);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Unable to start eligibility verification.");
-      setIsRunning(false);
+    } finally {
+      setIsStarting(false);
     }
   }
 
@@ -288,6 +294,20 @@ export function EligibilityPage() {
       setStatus("Cancellation requested. Finalizing and downloading the partial workbook...");
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Unable to cancel.");
+    }
+  }
+
+  async function downloadSavedOutput() {
+    if (!jobId) return;
+    try {
+      const output = await getScrapeJobDownload(jobId);
+      const anchor = document.createElement("a");
+      anchor.href = output.downloadUrl;
+      anchor.download = output.filename;
+      anchor.click();
+      if (output.downloadUrl.startsWith("blob:")) window.setTimeout(() => URL.revokeObjectURL(output.downloadUrl), 1000);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "No partial workbook is available yet.");
     }
   }
 
@@ -477,10 +497,11 @@ export function EligibilityPage() {
                       })}
                     </div>
                   </div>
-                  {portal.id === "medical" ? <MediCalInputForm inputFile={inputFile} credentialFile={credentialFile} isRunning={isRunning} canStart={canStart && projectId === "medrevenue"} onInputFileChange={setInputFile} onCredentialFileChange={setCredentialFile} onSubmit={start} onCancel={cancel} /> : portal.id === "healthnet" ? <HealthNetInputForm inputFile={inputFile} credentialFile={credentialFile} isRunning={isRunning} canStart={canStart && projectId === "medrevenue"} onInputFileChange={setInputFile} onCredentialFileChange={setCredentialFile} onSubmit={start} onCancel={cancel} /> : portal.id === "iehp" ? <IehpInputForm inputFile={inputFile} credentialFile={credentialFile} isRunning={isRunning} canStart={canStart && projectId === "medrevenue"} onInputFileChange={setInputFile} onCredentialFileChange={setCredentialFile} onSubmit={start} onCancel={cancel} /> : portal.id === "trizetto" ? <TriZettoInputForm inputFile={inputFile} credentialFile={credentialFile} isRunning={isRunning} canStart={canStart && projectId === "medrevenue"} onInputFileChange={setInputFile} onCredentialFileChange={setCredentialFile} onSubmit={start} onCancel={cancel} /> : portal.id === "noridian" ? <NoridianInputForm inputFile={inputFile} credentialFile={credentialFile} isRunning={isRunning} canStart={canStart && projectId === "medrevenue"} onInputFileChange={setInputFile} onCredentialFileChange={setCredentialFile} onSubmit={start} onCancel={cancel} /> : portal.id === "uhc" ? <UhcInputForm inputFile={inputFile} credentialFile={credentialFile} isRunning={isRunning} canStart={canStart && projectId === "minimax"} onInputFileChange={setInputFile} onCredentialFileChange={setCredentialFile} onSubmit={start} onCancel={cancel} /> : portal.id === "availity" ? <AvailityInputForm projectId={projectId} inputFile={inputFile} credentialFile={credentialFile} isRunning={isRunning} canStart={canStart} onInputFileChange={setInputFile} onCredentialFileChange={setCredentialFile} onSubmit={start} onCancel={cancel} /> : <WaystarInputForm inputFile={inputFile} credentialFile={credentialFile} isRunning={isRunning} canStart={canStart} onInputFileChange={setInputFile} onCredentialFileChange={setCredentialFile} onSubmit={start} onCancel={cancel} />}
+                  {portal.id === "medical" ? <MediCalInputForm inputFile={inputFile} credentialFile={credentialFile} isRunning={isStarting} canStart={canStart && projectId === "medrevenue"} onInputFileChange={setInputFile} onCredentialFileChange={setCredentialFile} onSubmit={start} onCancel={cancel} /> : portal.id === "healthnet" ? <HealthNetInputForm inputFile={inputFile} credentialFile={credentialFile} isRunning={isStarting} canStart={canStart && projectId === "medrevenue"} onInputFileChange={setInputFile} onCredentialFileChange={setCredentialFile} onSubmit={start} onCancel={cancel} /> : portal.id === "iehp" ? <IehpInputForm inputFile={inputFile} credentialFile={credentialFile} isRunning={isStarting} canStart={canStart && projectId === "medrevenue"} onInputFileChange={setInputFile} onCredentialFileChange={setCredentialFile} onSubmit={start} onCancel={cancel} /> : portal.id === "trizetto" ? <TriZettoInputForm inputFile={inputFile} credentialFile={credentialFile} isRunning={isStarting} canStart={canStart && projectId === "medrevenue"} onInputFileChange={setInputFile} onCredentialFileChange={setCredentialFile} onSubmit={start} onCancel={cancel} /> : portal.id === "noridian" ? <NoridianInputForm inputFile={inputFile} credentialFile={credentialFile} isRunning={isStarting} canStart={canStart && projectId === "medrevenue"} onInputFileChange={setInputFile} onCredentialFileChange={setCredentialFile} onSubmit={start} onCancel={cancel} /> : portal.id === "uhc" ? <UhcInputForm inputFile={inputFile} credentialFile={credentialFile} isRunning={isStarting} canStart={canStart && projectId === "minimax"} onInputFileChange={setInputFile} onCredentialFileChange={setCredentialFile} onSubmit={start} onCancel={cancel} /> : portal.id === "availity" ? <AvailityInputForm projectId={projectId} inputFile={inputFile} credentialFile={credentialFile} isRunning={isStarting} canStart={canStart} onInputFileChange={setInputFile} onCredentialFileChange={setCredentialFile} onSubmit={start} onCancel={cancel} /> : <WaystarInputForm inputFile={inputFile} credentialFile={credentialFile} isRunning={isStarting} canStart={canStart} onInputFileChange={setInputFile} onCredentialFileChange={setCredentialFile} onSubmit={start} onCancel={cancel} />}
                 </div>
+                {isRunning && jobId ? <button type="button" onClick={() => void cancel()} className="mt-3 rounded-xl border border-red-200 bg-white px-4 py-2 text-sm font-semibold text-red-700 hover:bg-red-50">Cancel current run</button> : null}
                 {otpRequest ? <div className="mt-5 rounded-[1.4rem] border border-amber-200 bg-amber-50 p-5"><p className="font-semibold text-slate-950">{otpRequest.label}</p><p className="mt-1 text-sm text-slate-600">{otpRequest.message}</p><div className="mt-3 flex gap-3"><input value={otpValue} onChange={(event) => setOtpValue(event.target.value)} className="min-w-0 flex-1 rounded-xl border border-amber-300 bg-white px-3 py-2 text-sm" placeholder="Enter code" /><button type="button" onClick={submitOtp} disabled={!otpValue.trim()} className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">Submit code</button></div></div> : null}
-                <div className="mt-5"><WaystarResultView isWaystar={portal.id === "waystar"} isRunning={isRunning} hasCompleted={hasCompleted} status={status} logs={logs} errorScreenshots={errorScreenshots} progress={progress} downloads={downloads} resultRows={resultRows} onDownload={downloadBase64File} /></div>
+                <div className="mt-5"><WaystarResultView isWaystar={portal.id === "waystar"} isRunning={isRunning} hasCompleted={hasCompleted} status={status} logs={logs} errorScreenshots={errorScreenshots} progress={progress} downloads={downloads} resultRows={resultRows} onDownload={downloadBase64File} onDownloadSaved={jobId && (progress?.completed || hasCompleted) ? downloadSavedOutput : undefined} /></div>
               </>
             )}
           </section>

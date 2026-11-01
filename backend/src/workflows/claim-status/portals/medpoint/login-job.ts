@@ -3,6 +3,7 @@ import { closeAutomationResources } from "@/backend/src/core/runtime-config";
 import { getAutomationRuntimeConfig } from "@/backend/src/core/runtime-config";
 import type { ScraperContext } from "../../types";
 import { emitPartialOutputSnapshot } from "../../partial-output";
+import { CLAIM_STATUS_OUTPUT_HEADERS, claimStatusOutputRows } from "../../output-columns";
 import { launchMedpointBrowser } from "./browser";
 import { parseMedpointInput } from "./input";
 import { buildOutputRows, detectCurrentIpa, expectedIpaForRow, extractClaimDetail, loginToMedpoint, openClaimDetail, openClaimsSearch, searchClaims } from "./portal";
@@ -27,7 +28,8 @@ function downloadableFileEvent(filename: string, buffer: Buffer, mimeType: strin
 
 function buildWorkbookBuffer(outputRows: MedpointOutputRow[], auditRows: MedpointAuditRow[], errorRows: MedpointErrorRow[]) {
   const workbook = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(outputRows), "Output");
+  const rows = claimStatusOutputRows("medpoint", outputRows);
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(rows, { header: [...new Set([...rows.flatMap(Object.keys), ...CLAIM_STATUS_OUTPUT_HEADERS])] }), "Output");
   XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(auditRows), "Audit Log");
   XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(errorRows), "Error Log");
   XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet([{

@@ -1,4 +1,5 @@
 import ExcelJS from "exceljs";
+import { appendClaimStatusOutputColumns } from "../../output-columns";
 
 export type PhysiciansOutputRow = {
   inputData: Record<string, unknown>;
@@ -166,6 +167,7 @@ export async function createPhysiciansOutputWorkbookBuffer(state: PhysiciansWork
       ...Object.fromEntries(outputColumns.map((column) => [String(column.key), row[column.key] ?? ""])),
     });
   }
+  appendClaimStatusOutputColumns(outputSheet, "physicians");
 
   const auditSheet = workbook.addWorksheet("Audit_Log");
   auditSheet.views = [{ state: "frozen", ySplit: 1 }];
