@@ -131,8 +131,7 @@ export function ActiveWorkflowRunsPanel({
         isAwsWorkflowMode() ? Promise.resolve([]) : listAutomationJobs(50),
       ]);
 
-      setRuns(
-        [
+      const combinedRuns: WorkflowRun[] = [
           ...claimJobs.map(normalizeClaimJob),
           ...automationJobs.map((job) => ({
             jobId: job.jobId,
@@ -145,7 +144,18 @@ export function ActiveWorkflowRunsPanel({
             createdAt: job.createdAt,
             updatedAt: job.updatedAt,
           })),
-        ]
+        ];
+      // Both endpoints can return the same job. Keep its newest snapshot,
+      // including terminal statuses, before deciding which runs are active.
+      const uniqueRuns = new Map<string, WorkflowRun>();
+      for (const run of combinedRuns) {
+        const existing = uniqueRuns.get(run.jobId);
+        if (!existing || Date.parse(run.updatedAt) >= Date.parse(existing.updatedAt)) {
+          uniqueRuns.set(run.jobId, run);
+        }
+      }
+      setRuns(
+        Array.from(uniqueRuns.values())
           .filter((job) => isLiveStatus(job.status))
           .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt)),
       );

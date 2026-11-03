@@ -12,6 +12,24 @@ import { createEbridgeWorkbook, type EbridgeDocumentRow } from "./output";
 
 const INCLUDED_DOCUMENT_TYPES = new Set(["INPATIENT BILLINGS", "FACESHEETS"]);
 
+class EbridgeSessionExpiredError extends Error {
+  constructor() { super("eBridge session ended; login is required."); }
+}
+
+async function hasExpiredSession(page: Page): Promise<boolean> {
+  for (const candidate of page.context().pages()) {
+    for (const frame of candidate.frames()) {
+      if (/\/app\/login\.html(?:[?#]|$)/i.test(frame.url())) return true;
+      if (await frame.getByText(/your session has ended/i).first().isVisible().catch(() => false)) return true;
+    }
+  }
+  return false;
+}
+
+async function requireSession(page: Page): Promise<void> {
+  if (await hasExpiredSession(page)) throw new EbridgeSessionExpiredError();
+}
+
 type EbridgeRuntimeRow = EbridgeDocumentRow & {
   resultId: string;
   sourceIndex: number;
@@ -105,6 +123,7 @@ async function login(page: Page, credentials: EbridgeCredentials, context: Autom
 async function findSearchFrame(page: Page): Promise<Frame> {
   const deadline = Date.now() + 60000;
   while (Date.now() < deadline) {
+    await requireSession(page);
     const frame = page.frames().find((candidate) => {
       const name = candidate.name().toLowerCase();
       const url = candidate.url().toLowerCase();
@@ -144,6 +163,7 @@ async function searchByScanDate(searchFrame: Frame, credentials: EbridgeCredenti
 async function findResultsFrame(page: Page): Promise<Frame> {
   const deadline = Date.now() + 60000;
   while (Date.now() < deadline) {
+    await requireSession(page);
     const frame = page.frames().find((candidate) => {
       const name = candidate.name().toLowerCase();
       const url = candidate.url().toLowerCase();
@@ -297,6 +317,12 @@ async function readViewerDownloadFrame(page: Page, context: AutomationContext, r
   }
   const body = Buffer.from(await response.body());
   await logEbridgeStep(context, row, `hidden iframe response size: ${body.length} bytes.`);
+  if (!body.subarray(0, 5).equals(Buffer.from("%PDF-"))) {
+    if (/\/app\/login\.html(?:[?#]|$)/i.test(response.url()) || /your session has ended/i.test(body.toString("utf8"))) {
+      throw new EbridgeSessionExpiredError();
+    }
+    return null;
+  }
   const headerFilename = filenameFromContentDisposition(response.headers()["content-disposition"]);
   const urlFilename = path.basename(new URL(url).pathname);
   return body.length ? { body, filename: headerFilename || (urlFilename.toLowerCase().endsWith(".pdf") ? urlFilename : null) } : null;
@@ -352,6 +378,9 @@ async function readPdfFromViewer(page: Page, context?: AutomationContext, row?: 
 
 async function openAndDownloadDocument(page: Page, searchFrame: Frame, row: EbridgeRuntimeRow, folder: string, startDate: string, context: AutomationContext): Promise<string> {
   await logEbridgeStep(context, row, "starting row download.");
+  const batchLabel = row.batchLabel.trim();
+  if (!batchLabel) throw new Error("Batch Label is empty; cannot name the PDF.");
+  const filename = `${safePart(batchLabel).replace(/[. ]+$/g, "").replace(/\.pdf$/i, "")}.pdf`;
   await dismissEbridgeModal(searchFrame);
   const portalRow = row.resultId
     ? searchFrame.locator(`#resultsTable #resultsBody tr[resultid='${cssAttributeValue(row.resultId)}']`).first()
@@ -370,7 +399,7 @@ async function openAndDownloadDocument(page: Page, searchFrame: Frame, row: Ebri
   try {
     const download = await clickViewerDownload(viewer, context, row);
     if (download) {
-      const saved = await uniqueEbridgePath(documentFolder, download.suggestedFilename());
+      const saved = await uniqueEbridgePath(documentFolder, filename);
       await logEbridgeStep(context, row, `browser download event received; saving as ${saved.filename}.`);
       await download.saveAs(saved.path);
       row.filename = saved.filename;
@@ -379,11 +408,16 @@ async function openAndDownloadDocument(page: Page, searchFrame: Frame, row: Ebri
       const fallback = await readViewerDownloadFrame(viewer, context, row);
       const pdf = fallback?.body ?? await readPdfFromViewer(viewer, context, row);
       if (!pdf) throw new Error("eBridge viewer opened, but the PDF download/content could not be accessed.");
-      const saved = await uniqueEbridgePath(documentFolder, fallback?.filename || "download.pdf");
+      const saved = await uniqueEbridgePath(documentFolder, filename);
       await fs.writeFile(saved.path, pdf);
       row.filename = saved.filename;
     }
     await logEbridgeStep(context, row, `saved PDF ${row.filename}.`);
+  } catch (error) {
+    // Inspect the popup before closing it: only the viewer may have been
+    // redirected to the expired-session login screen.
+    await requireSession(page);
+    throw error;
   } finally {
     await logEbridgeStep(context, row, "closing viewer popup.");
     if (popup) await popup.close().catch(() => {});
@@ -399,13 +433,41 @@ async function runEbridge(credentials: EbridgeCredentials, context: AutomationCo
   const audit: EbridgeDocumentRow[] = [];
   const session = await launchAutomationBrowser();
   const page = session.context.pages()[0] ?? await session.context.newPage();
+  let sessionRecoveries = 0;
+  async function withSessionRecovery<T>(operation: () => Promise<T>): Promise<T> {
+    for (;;) {
+      if (context.isCancelled?.()) throw new Error("eBridge stopped.");
+      try {
+        await requireSession(page);
+        return await operation();
+      } catch (error) {
+        if (!(error instanceof EbridgeSessionExpiredError) && !await hasExpiredSession(page)) throw error;
+        if (context.isCancelled?.()) throw error;
+        if (sessionRecoveries >= 3) throw new Error("eBridge session recovery failed: the session ended repeatedly after 3 login retries.");
+        sessionRecoveries += 1;
+        await context.log({ level: "warn", message: `eBridge session ended. Logging in again (${sessionRecoveries}/3) and restoring the Scan Date search.`, eventName: "ebridge_session_recovery" });
+        for (const popup of session.context.pages()) {
+          if (popup !== page) await popup.close().catch(() => {});
+        }
+        try {
+          await login(page, credentials, context);
+          await searchByScanDate(await openRetrieveSearch(page, context), credentials, context);
+        } catch (loginError) {
+          throw new Error(`eBridge session recovery login/search failed: ${loginError instanceof Error ? loginError.message : String(loginError)}`);
+        }
+        await context.log({ level: "info", message: "eBridge session restored. Resuming the interrupted operation.", eventName: "ebridge_session_restored" });
+      }
+    }
+  }
   try {
     page.setDefaultTimeout(30000);
     await login(page, credentials, context);
     if (context.isCancelled?.()) return;
-    const searchFrame = await openRetrieveSearch(page, context);
-    await searchByScanDate(searchFrame, credentials, context);
-    const rows = await readResultRows(await findResultsFrame(page));
+    const rows = await withSessionRecovery(async () => {
+      const searchFrame = await openRetrieveSearch(page, context);
+      await searchByScanDate(searchFrame, credentials, context);
+      return readResultRows(await findResultsFrame(page));
+    });
     audit.push(...rows);
     await context.log({ level: "info", message: `eBridge found ${rows.length} included document(s): INPATIENT BILLINGS and Facesheets.`, eventName: "ebridge_results_loaded" });
     await context.emit({ type: "progress", completed: 0, total: rows.length });
@@ -416,7 +478,21 @@ async function runEbridge(credentials: EbridgeCredentials, context: AutomationCo
         continue;
       }
       try {
-        row.filename = await openAndDownloadDocument(page, await findResultsFrame(page), row, pdfFolder, credentials.startDate, context);
+        row.filename = await withSessionRecovery(async () => {
+          const resultsFrame = await findResultsFrame(page);
+          // Result IDs/order can change when the search is restored. Match the
+          // original document rather than reusing its old position.
+          const currentRows = await readResultRows(resultsFrame);
+          const matches = currentRows.filter((candidate) =>
+            candidate.batchLabel === row.batchLabel && candidate.documentType === row.documentType &&
+            candidate.name === row.name && candidate.date === row.date &&
+            candidate.indexedDate === row.indexedDate && candidate.pages === row.pages);
+          const current = matches.length === 1 ? matches[0] : matches.find((candidate) => candidate.resultId && candidate.resultId === row.resultId);
+          if (!current) throw new Error("Cannot uniquely locate the original eBridge document in the restored results.");
+          row.resultId = current.resultId;
+          row.sourceIndex = current.sourceIndex;
+          return openAndDownloadDocument(page, resultsFrame, row, pdfFolder, credentials.startDate, context);
+        });
         row.status = "Downloaded";
         row.message = "Downloaded from eBridge viewer.";
       } catch (error) {
