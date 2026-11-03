@@ -22,6 +22,34 @@ const request = {
   ],
 };
 
+test("Availity service preparation retains all 10000 claim rows", { timeout: 120_000 }, async () => {
+  const portal = getServicePortal("availity");
+  assert.ok(portal);
+  const claims = Array.from({ length: 10000 }, (_, index) => ({
+    client_row_ref: `ar-${index + 1}`,
+    data: { ...request.claims[0].data, "Subscriber No": `M${index + 1}` },
+  }));
+  const prepared = await portal.adapter.prepare({ ...request, claims });
+  assert.equal(prepared.claimCount, 10000);
+  const refs = JSON.parse(prepared.claimRowsJson) as Array<{ "Client Row Ref": string }>;
+  assert.equal(refs.length, 10000);
+  assert.equal(refs.at(-1)?.["Client Row Ref"], "ar-10000");
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(prepared.files[0].buffer as unknown as Parameters<typeof workbook.xlsx.load>[0]);
+  assert.equal(workbook.worksheets[0].rowCount, 10001);
+  assert.equal(workbook.worksheets[0].getCell("A10001").value, "ar-10000");
+});
+
+test("Availity result normalization keeps all 10000 submitted claims", { timeout: 120_000 }, async () => {
+  const refs = Array.from({ length: 10000 }, (_, index) => `ar-${index + 1}`);
+  const rows: Array<[string, string, string, string]> = refs.map((ref) => [ref, "success", "Paid", ""]);
+  const summary = await normalizeAvailityServiceWorkbook(await makeOutput(rows), refs);
+  assert.equal(summary.row_results.length, 10000);
+  assert.equal(summary.finalized_count, 10000);
+  assert.equal(summary.row_results.at(-1)?.client_row_ref, "ar-10000");
+  assert.equal(pageServiceResults(summary, 9999, 100, true).nextCursor, 10000);
+});
+
 function makeOutput(rows: Array<[string, string, string, string]>) {
   const workbook = new ExcelJS.Workbook();
   const sheet = workbook.addWorksheet("Output");

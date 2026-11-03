@@ -1,8 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import ExcelJS from "exceljs";
-import { generateIehpServiceInput, maskIehpAccountLabel, validateIehpServiceInput } from "./iehp-input";
+import { generateIehpServiceInput, maskIehpAccountLabel, validateIehpServiceInput, validateServiceClaims } from "./iehp-input";
 import { normalizeIehpServiceWorkbook, pageIehpServiceResults } from "./iehp-results";
+import { getServicePortal } from "./portal-dispatch";
 import { postProcessWorksheet } from "../../workflows/claim-status/portals/iehp/workbook-output";
 
 const request = {
@@ -12,6 +13,55 @@ const request = {
     { client_row_ref: "ar-102", data: { "Member Policy ID": "M102", "Date Of Service": "10/02/2026", "Claim No": "C102" } },
   ],
 };
+
+function claimsForServiceJob(count: number) {
+  return Array.from({ length: count }, (_, index) => ({
+    client_row_ref: `ar-${index + 1}`,
+    data: { "Member Policy ID": `M${index + 1}`, "Date Of Service": "10/01/2026" },
+  }));
+}
+
+test("shared service claim validation accepts through 10000 rows without truncation", () => {
+  for (const count of [999, 1000, 1001, 9999, 10000]) {
+    const claims = validateServiceClaims(claimsForServiceJob(count));
+    assert.equal(claims.length, count);
+    assert.equal(claims.at(-1)?.client_row_ref, `ar-${count}`);
+  }
+  assert.throws(() => validateServiceClaims(claimsForServiceJob(10001)), /between 1 and 10000 rows/);
+  assert.throws(() => validateServiceClaims([]), /between 1 and 10000 rows/);
+  assert.throws(() => validateServiceClaims([{ client_row_ref: "ar-1", data: { invalid: [] } }]), /must be scalar/);
+});
+
+test("IEHP service preparation retains all 10000 claims in generated input artifacts", { timeout: 120_000 }, async () => {
+  const portal = getServicePortal("iehp");
+  assert.ok(portal);
+  const prepared = await portal.adapter.prepare({ ...request, claims: claimsForServiceJob(10000) });
+  assert.equal(prepared.claimCount, 10000);
+  const rows = JSON.parse(prepared.claimRowsJson) as Array<{ "Client Row Ref": string; __original_index: number }>;
+  assert.equal(rows.length, 10000);
+  assert.deepEqual(rows.at(-1), {
+    "Member Policy ID": "M10000", "Date Of Service": "10/01/2026",
+    "Client Row Ref": "ar-10000", __original_index: 9999,
+  });
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(prepared.files[0].buffer as unknown as Parameters<typeof workbook.xlsx.load>[0]);
+  assert.equal(workbook.worksheets[0].rowCount, 10001);
+  assert.equal(workbook.worksheets[0].getCell("A10001").value, "ar-10000");
+});
+
+test("IEHP result normalization keeps all 10000 submitted claims and pages the last one", { timeout: 120_000 }, async () => {
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet("Claims");
+  sheet.addRow(["Client Row Ref", "BotClaimStatusCheck", "BotClaimStatusCheckError"]);
+  const refs = claimsForServiceJob(10000).map((claim) => claim.client_row_ref);
+  for (const ref of refs) sheet.addRow([ref, "Success", ""]);
+  const summary = await normalizeIehpServiceWorkbook(new Uint8Array(await workbook.xlsx.writeBuffer()), refs);
+  assert.equal(summary.row_results.length, 10000);
+  assert.equal(summary.finalized_count, 10000);
+  const lastPage = pageIehpServiceResults(summary, 9999, 100, true);
+  assert.equal(lastPage.nextCursor, 10000);
+  assert.equal(lastPage.results[0]?.client_row_ref, "ar-10000");
+});
 
 test("IEHP service account label is useful without exposing the full username", () => {
   assert.equal(maskIehpAccountLabel("alice@example.test"), "a***@example.test");

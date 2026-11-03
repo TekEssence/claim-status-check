@@ -30,6 +30,8 @@ export type GeneratedIehpInput = {
   claimRowsJson: string;
 };
 
+const MAX_SERVICE_CLAIMS_PER_JOB = 10_000;
+
 function requiredString(value: unknown, label: string, maxLength = 500): string {
   if (typeof value !== "string" || !value.trim() || value.length > maxLength) {
     throw new Error(`${label} must be a non-empty string of at most ${maxLength} characters.`);
@@ -38,8 +40,8 @@ function requiredString(value: unknown, label: string, maxLength = 500): string 
 }
 
 export function validateServiceClaims(value: unknown): PreparedClaim[] {
-  if (!Array.isArray(value) || value.length === 0 || value.length > 1000) {
-    throw new Error("claims must contain between 1 and 1000 rows.");
+  if (!Array.isArray(value) || value.length === 0 || value.length > MAX_SERVICE_CLAIMS_PER_JOB) {
+    throw new Error(`claims must contain between 1 and ${MAX_SERVICE_CLAIMS_PER_JOB} rows.`);
   }
   const seen = new Set<string>();
   return value.map((claim, index) => {
