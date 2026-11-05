@@ -106,7 +106,9 @@ test("Charm aliases and project preprocessing retain the submitted references", 
       { client_row_ref: "ar-charm-2", data: charmData },
     ],
   };
-  const generated = await generateAvailityServiceInput(validateAvailityServiceInput(charm));
+  const normalizedInput = validateAvailityServiceInput({ ...charm, projectId: "  CHARM   HEALTH  " });
+  assert.equal(normalizedInput.projectId, "charm");
+  const generated = await generateAvailityServiceInput(normalizedInput);
   const formData = new FormData();
   formData.set("projectId", "charm");
   formData.set("inputExcel", new File([Uint8Array.from(generated.claimWorkbook)], "charm.xlsx"));

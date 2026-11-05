@@ -156,7 +156,7 @@ export function normalizeProjectId(value: unknown): string {
   const normalized = normalizeAlias(value || "minimax");
   if (!normalized || normalized === "minimax") return "minimax";
   if (normalized === "medrevenu" || normalized === "medrevenue") return "medrevenu";
-  if (normalized === "charm") return "charm";
+  if (normalized === "charm" || normalized === "charmhealth") return "charm";
   throw new Error(`Unsupported Availity project "${asText(value)}". Supported projects: Minimax, Medrevenu, Charm.`);
 }
 

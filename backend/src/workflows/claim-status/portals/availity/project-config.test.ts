@@ -108,8 +108,11 @@ describe("applyProjectPreprocessing", () => {
 });
 
 describe("Charm project config", () => {
-  it("normalizes Charm project id", () => {
-    assert.equal(normalizeProjectId("Charm"), "charm");
+  it("normalizes Charm and Charm Health project names", () => {
+    for (const name of ["Charm", "charm", " CHARM ", "Charm Health", "charm health", " CHARM   HEALTH "]) {
+      assert.equal(normalizeProjectId(name), "charm", name);
+    }
+    assert.throws(() => normalizeProjectId("Other Health"), /Unsupported Availity project/);
   });
 
   it("maps Charm input columns to Availity common fields", () => {

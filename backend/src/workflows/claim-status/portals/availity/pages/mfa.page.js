@@ -12,6 +12,29 @@ const SELECTORS = {
   invalidMessage: "text=/invalid|not valid|incorrect|expired|try again/i"
 };
 
+async function dismissPasswordExpiryReminderIfPresent(page, timeoutMs = 8000) {
+  const deferButton = page.getByRole("button", { name: /^I['’]ll change my password next time$/i }).first();
+  const methodOption = page.locator(SELECTORS.methodOption).first();
+  const codeInput = page.locator(SELECTORS.codeInput).first();
+  const deadline = Date.now() + timeoutMs;
+
+  do {
+    if (await deferButton.isVisible().catch(() => false)) {
+      await deferButton.click();
+      await deferButton.waitFor({ state: "hidden", timeout: 5000 });
+      logger.info("Dismissed Availity password expiry reminder.");
+      return true;
+    }
+    if (await codeInput.isVisible().catch(() => false) || await methodOption.isVisible().catch(() => false)) {
+      return false;
+    }
+    if (Date.now() >= deadline) break;
+    await wait(250);
+  } while (true);
+
+  return false;
+}
+
 async function isVisibleQuick(page, selector, timeoutMs = 3000) {
   try {
     await page.waitForSelector(selector, { state: "visible", timeout: timeoutMs });
@@ -46,6 +69,7 @@ async function waitForMfaSubmitOutcome(page, previousUrl, timeoutMs = 20000) {
 }
 
 async function handleMfa(page, totpSecret, maxAttempts, totpTimeOffsetSeconds = 0, totpMinValidSeconds = 20, mfaConfig = {}) {
+  await dismissPasswordExpiryReminderIfPresent(page);
   const directCodePage = await isVisibleQuick(page, SELECTORS.codeInput, 4000);
 
   if (!directCodePage) {
@@ -123,6 +147,7 @@ async function handleMfa(page, totpSecret, maxAttempts, totpTimeOffsetSeconds = 
 }
 
 async function openMfaCodePage(page) {
+  await dismissPasswordExpiryReminderIfPresent(page);
   const directCodePage = await isVisibleQuick(page, SELECTORS.codeInput, 4000);
 
   if (directCodePage) {
@@ -186,5 +211,6 @@ async function handleManualMfa(page, requestOtp, maxAttempts = 2) {
 module.exports = {
   handleMfa,
   handleManualMfa,
+  dismissPasswordExpiryReminderIfPresent,
   SELECTORS
 };

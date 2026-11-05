@@ -23,6 +23,7 @@ const rootDirs = [
 const extraSourcePaths = [
   "backend/src/workflows/claim-status/portals/iehp/claims",
   "backend/src/workflows/claim-status/portals/uhc/workbook-output.ts",
+  "backend/src/workflows/claim-status/output-columns.ts",
   "lib/auth/password-policy.ts",
 ];
 
