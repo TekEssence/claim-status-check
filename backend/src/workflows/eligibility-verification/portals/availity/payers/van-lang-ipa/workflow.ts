@@ -2,6 +2,7 @@ import * as XLSX from "xlsx";
 import type { Frame, Locator, Page } from "playwright-core";
 import type { AvailityEligibilityPayerWorkflowInput } from "../types";
 import { VAN_LANG_IPA_AVAILITY_ELIGIBILITY_SELECTORS as SELECTORS } from "./selectors";
+import { fillAvailityPatientName } from "../patient-name";
 
 const pause = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 const normalize = (value: unknown) => String(value ?? "").trim();
@@ -838,6 +839,7 @@ export async function runVanLangIpaAvailityEligibilityWorkflow({ page, inputFile
       await dismissFrequentlyUsedCodesTip(portal);
       await chooseAutocomplete(portal, SELECTORS.payerSelection.payer, findValue(row, ["Payer Portal", "Payer Code"]) || "Wellpoint");
       await ensureProviderSelected(portal, "DAO, THUAN DUC");
+      await fillAvailityPatientName(portal, row);
       await enterText(portal.locator(SELECTORS.inquiryForm.memberId).first(), memberId);
       await enterDob(portal, dob);
       await dismissFrequentlyUsedCodesTip(portal);

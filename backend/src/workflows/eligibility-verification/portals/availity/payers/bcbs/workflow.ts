@@ -2,6 +2,8 @@ import * as XLSX from "xlsx";
 import type { Frame, Locator, Page } from "playwright-core";
 import type { AvailityEligibilityPayerWorkflowInput } from "../types";
 import { BCBS_AVAILITY_ELIGIBILITY_SELECTORS as SELECTORS } from "./selectors";
+import { fillAvailityPatientName } from "../patient-name";
+export { resolveAvailityPatientName as resolveAvailityWellcarePatientName } from "../patient-name";
 
 const pause = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 const normalize = (value: unknown) => String(value ?? "").trim();
@@ -18,36 +20,6 @@ function findValue(row: Record<string, unknown>, aliases: string[]): string {
   const wanted = new Set(aliases.map((value) => value.toLowerCase().replace(/[^a-z0-9]/g, "")));
   const match = Object.entries(row).find(([key]) => wanted.has(key.toLowerCase().replace(/[^a-z0-9]/g, "")));
   return normalize(match?.[1]);
-}
-
-export function resolveAvailityWellcarePatientName(row: Record<string, unknown>): {
-  firstName: string;
-  lastName: string;
-} {
-  const firstName = findValue(row, ["Patient First Name", "Patient F Name", "First Name", "Pat First Name", "Pat F Name", "Member First Name"]);
-  const lastName = findValue(row, ["Patient Last Name", "Patient L Name", "Last Name", "Pat Last Name", "Pat L Name", "Member Last Name"]);
-  if (firstName || lastName) return { firstName, lastName };
-
-  const fullName = findValue(row, ["Patient Name", "Patient Full Name", "Member Name", "Subscriber Name", "Patient"])
-    .replace(/\s+/g, " ")
-    .trim();
-  if (!fullName) return { firstName: "", lastName: "" };
-  if (fullName.includes(",")) {
-    const [combinedLastName, combinedFirstName = ""] = fullName.split(",", 2).map((part) => part.trim());
-    return { firstName: combinedFirstName.split(" ")[0] || "", lastName: combinedLastName };
-  }
-
-  const parts = fullName.split(" ").filter(Boolean);
-  if (parts.length === 1) return { firstName: parts[0], lastName: "" };
-  if (parts.length >= 3 && parts[1].length === 1) {
-    return { firstName: parts[2], lastName: parts[0] };
-  }
-  return { firstName: parts[1], lastName: parts[0] };
-}
-
-function patientNameInput(page: PortalScope, label: "Patient First Name" | "Patient Last Name", selector: string): Locator {
-  const labeled = page.getByLabel(label, { exact: true }).first();
-  return labeled.or(page.locator(selector).first()).first();
 }
 
 async function enterText(
@@ -154,55 +126,6 @@ async function ensureHealthBenefitPlanCoverage(page: PortalScope): Promise<void>
   await serviceType.waitFor({ state: "visible" });
   if (await autocompleteSelectionIsPresent(page, SELECTORS.inquiryForm.serviceType, "Health Benefit Plan Coverage - 30")) return;
   await ensureAutocompleteSelected(page, SELECTORS.inquiryForm.serviceType, "Health Benefit Plan Coverage - 30");
-}
-
-async function selectedText(locator: Locator): Promise<string> {
-  return [
-    await locator.inputValue().catch(() => ""),
-    await locator.getAttribute("value").catch(() => ""),
-    await locator.getAttribute("aria-valuetext").catch(() => ""),
-    await locator.innerText({ timeout: 1_000 }).catch(() => ""),
-  ].join(" ");
-}
-
-async function tryChoosePatientNameSearchOption(page: PortalScope): Promise<boolean> {
-  const desired = "Patient ID, Patient Last Name, Patient First Name, Date of Birth";
-  let control = page.getByLabel("Patient Search Option", { exact: true }).first();
-
-  if (!await control.isVisible().catch(() => false)) {
-    const label = page.getByText("Patient Search Option", { exact: true }).first();
-    let container = label.locator("xpath=..");
-    for (let depth = 0; depth < 5; depth += 1) {
-      const candidate = container.locator("[role='combobox'], button, input").first();
-      if (await candidate.isVisible().catch(() => false)) {
-        control = candidate;
-        break;
-      }
-      container = container.locator("xpath=..");
-    }
-  }
-
-  if (!await control.isVisible().catch(() => false)) return false;
-  if ((await selectedText(control)).includes(desired)) return true;
-
-  await control.scrollIntoViewIfNeeded().catch(() => {});
-  await control.click({ timeout: 5_000 }).catch(() => {});
-  await pause(300);
-
-  const option = page.getByRole("option", { name: desired, exact: true }).first()
-    .or(page.getByText(desired, { exact: true }).first())
-    .first();
-  if (!await option.isVisible().catch(() => false)) {
-    await control.press("Escape").catch(() => {});
-    return false;
-  }
-
-  await option.click({ timeout: 5_000 }).catch(async () => {
-    await option.evaluate((element) => (element as HTMLElement).click());
-  });
-  await pause(500);
-  return (await selectedText(control)).includes(desired)
-    || await page.locator(SELECTORS.inquiryForm.patientLastName).first().isVisible().catch(() => false);
 }
 
 async function chooseProviderType(page: PortalScope, value: string): Promise<void> {
@@ -1008,24 +931,8 @@ export async function runBcbsAvailityEligibilityWorkflow(
       if (!options.skipProviderType) {
         await chooseProviderType(portal, findValue(row, ["Provider Type"]) || "Professional");
       }
-      const patientNameSearchSelected = options.requirePatientName
-        ? await tryChoosePatientNameSearchOption(portal)
-        : false;
+      await fillAvailityPatientName(portal, row, options.requirePatientName);
       await enterText(portal.locator(SELECTORS.inquiryForm.memberId).first(), memberId);
-      if (options.requirePatientName) {
-        const patientName = resolveAvailityWellcarePatientName(row);
-        const lastName = patientNameInput(portal, "Patient Last Name", SELECTORS.inquiryForm.patientLastName);
-        const firstName = patientNameInput(portal, "Patient First Name", SELECTORS.inquiryForm.patientFirstName);
-        const patientNameFieldsVisible = await lastName.isVisible().catch(() => false)
-          || await firstName.isVisible().catch(() => false);
-        if ((patientNameSearchSelected || patientNameFieldsVisible) && (!patientName.firstName || !patientName.lastName)) {
-          throw new Error("Missing Patient First Name or Patient Last Name.");
-        }
-        if (patientNameSearchSelected || patientNameFieldsVisible) {
-          await enterText(lastName, patientName.lastName, { typeDelay: 150, afterDelay: 600 });
-          await enterText(firstName, patientName.firstName, { typeDelay: 150, afterDelay: 600 });
-        }
-      }
       await enterDob(portal, dob);
       for (const tip of await portal.locator(SELECTORS.inquiryForm.dismissTips).all()) await tip.click().catch(() => {});
       if (!options.skipPlaceOfService) {
