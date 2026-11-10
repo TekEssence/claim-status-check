@@ -13,6 +13,7 @@ import { getServiceWorkflowForJob, loadIntegratedServiceSnapshot, resolveService
 import { lookupServiceSubmission, reserveServiceSubmission, ServiceSubmissionConflict } from "../service/service-submission";
 import { ServiceCancellationConflict } from "../service/service-cancellation";
 import type { ServiceSubmitBody } from "../service/service-contract";
+import { submissionValidationLog } from "../service/submission-validation-log";
 
 class ServiceRequestError extends Error {
   constructor(public readonly statusCode: number, message: string) { super(message); }
@@ -129,6 +130,7 @@ export async function submitServiceJob(event: ApiEvent) {
         try {
           return { workflow, portalId, deadlineAt, generated: await adapter.prepare(body) };
         } catch (error) {
+          console.warn(JSON.stringify(submissionValidationLog(error, body, clientSystem, clientExecutionId)));
           throw new ServiceRequestError(422, error instanceof Error ? error.message : "Invalid portal claim input.");
         }
       },
