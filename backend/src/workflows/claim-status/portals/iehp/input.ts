@@ -3,6 +3,13 @@ import { asText } from "./claims/dates";
 
 export type IehpGenericRow = Record<string, unknown>;
 
+export function getIehpClaimSearchFields(row: IehpGenericRow) {
+  return {
+    memberPolicyId: asText(row["Member Policy ID"] ?? row["member policy id"] ?? row["Member ID"] ?? row["member id"]),
+    dosValue: row["Date Of Service"] ?? row["DOS"] ?? row["date of service"] ?? row["dos"],
+  };
+}
+
 export type IehpClaimStatusInput = {
   loginUrl: string;
   claimStatusUrl: string;
@@ -16,9 +23,10 @@ export type IehpClaimStatusInput = {
 export async function parseIehpClaimStatusInput(formData: FormData): Promise<IehpClaimStatusInput> {
   const loginExcelFile = formData.get("loginExcel") as File | null;
   const claimRowsJson = formData.get("claimRows") as string | null;
+  const claimFile = formData.get("claimExcel");
   const startIndex = parseInt(formData.get("startIndex") as string || "0", 10);
 
-  if (!loginExcelFile || !(loginExcelFile instanceof File) || !claimRowsJson) {
+  if (!loginExcelFile || !(loginExcelFile instanceof File) || (!claimRowsJson && !(claimFile instanceof File))) {
     throw new Error("Missing login Excel file or claim rows.");
   }
 
@@ -43,13 +51,23 @@ export async function parseIehpClaimStatusInput(formData: FormData): Promise<Ieh
 
   const claimStatusUrl = asText(firstLoginRow["Claim Status URL"] ?? firstLoginRow["claim status url"] ?? firstLoginRow["claimUrl"]);
 
+  const claimWorkbook = claimFile instanceof File
+    ? XLSX.read(await claimFile.arrayBuffer(), { type: "array", cellDates: false }) : null;
+  const claimRows = claimFile instanceof File
+    ? (() => {
+        const rows = XLSX.utils.sheet_to_json<IehpGenericRow>(claimWorkbook!.Sheets[claimWorkbook!.SheetNames[0]]);
+        return rows.map((row, index) => ({ ...row, __original_index: index }));
+      })()
+    : JSON.parse(claimRowsJson!) as IehpGenericRow[];
+  if (!Array.isArray(claimRows) || !claimRows.length) throw new Error("Claim Excel file contains no rows to process.");
+
   return {
     loginUrl: rawUrl.startsWith("http") ? rawUrl : `https://${rawUrl}`,
     claimStatusUrl: claimStatusUrl || "https://providers.iehp.org/claims/status",
     claimStatusUrlWasProvided: Boolean(claimStatusUrl),
     userName,
     password,
-    claimRows: JSON.parse(claimRowsJson) as IehpGenericRow[],
+    claimRows,
     startIndex,
   };
 }

@@ -8,6 +8,7 @@ import regalGroups from "./groups.json";
 import { parseRegalInput, type RegalClaimSearchInput } from "./input";
 import { formatRegalLog, saveRegalLatestLog, type RegalLogEntry } from "./log-file";
 import { createRegalOutputWorkbookBuffer } from "./workbook";
+import { matchRegalPreference, regalPhoneMethod, type RegalMfaPreferences } from "./mfa-preferences";
 
 type DiagnosticEvent = {
   type: "debug_html" | "diagnostic_screenshot" | "error_screenshot";
@@ -218,12 +219,14 @@ async function openRegalEmailCodeEntryIfPresent(page: Page, stageLog: (level: Re
   return false;
 }
 
-async function openRegalPhoneCodeEntryIfPresent(page: Page, stageLog: (level: RegalLogEntry["level"], stage: string, message: string, currentPage?: Page) => Promise<void>): Promise<boolean> {
+export async function openRegalPhoneCodeEntryIfPresent(page: Page, stageLog: (level: RegalLogEntry["level"], stage: string, message: string, currentPage?: Page) => Promise<void>, context: ScraperContext, preferences: RegalMfaPreferences): Promise<boolean> {
   const sendCodeButton = page.locator(regalConfig.selectors.phoneSendSubmit).first();
   const codeInput = page.locator(regalConfig.selectors.googleAuthenticatorCode).first();
   const verifyButton = page.locator(regalConfig.selectors.googleAuthenticatorSubmit).first();
-  const startedAt = Date.now();
+  let startedAt = Date.now();
   let codeRequested = false;
+  let deliverySelected = false;
+  let requestButton = sendCodeButton;
 
   while (Date.now() - startedAt < 30000) {
     if (await codeInput.isVisible({ timeout: 500 }).catch(() => false)) {
@@ -232,11 +235,45 @@ async function openRegalPhoneCodeEntryIfPresent(page: Page, stageLog: (level: Re
     }
 
     if (!codeRequested && await sendCodeButton.isVisible({ timeout: 500 }).catch(() => false)) {
+      if (!deliverySelected) {
+        const radios = page.locator('input[type="radio"]');
+        const choices: RegalMfaMethodOption[] = [];
+        for (let index = 0; index < await radios.count(); index += 1) {
+          const radio = radios.nth(index);
+          if (!await radio.isEnabled().catch(() => false)) continue;
+          const label = await radio.evaluate(element => {
+            const input = element as HTMLInputElement;
+            return Array.from(input.labels || []).map(label => label.textContent || '').join(' ') || input.getAttribute('aria-label') || input.value;
+          });
+          if (!regalPhoneMethod(label)) continue;
+          choices.push({ value: `delivery__${index}`, methodKey: 'phone_number', rowIndex: index, label, description: '' });
+        }
+        // Some Okta pages expose delivery methods as separate request buttons.
+        if (!choices.length) {
+          const buttons = page.locator(regalConfig.selectors.phoneSendSubmit);
+          for (let index = 0; index < await buttons.count(); index += 1) {
+            const button = buttons.nth(index);
+            if (!await button.isVisible().catch(() => false)) continue;
+            const label = await button.evaluate(element => (element as HTMLInputElement).value || element.textContent || 'Request phone code');
+            choices.push({ value: `delivery_button__${index}`, methodKey: 'phone_submit', rowIndex: index, label, description: '' });
+          }
+        }
+        if (choices.length) {
+          const preference = matchRegalPreference(choices, preferences, 'delivery');
+          const selected = preference.option?.value || await requestRegalMfaMethodFromUser(context, stageLog, page, choices, preference.message);
+          const choice = choices.find(option => option.value === selected)!;
+          if (choice.methodKey === 'phone_submit') requestButton = page.locator(regalConfig.selectors.phoneSendSubmit).nth(choice.rowIndex);
+          else await radios.nth(choice.rowIndex).check();
+        }
+        deliverySelected = true;
+        // The manual selection wait is separate from the portal's code-field wait.
+        startedAt = Date.now();
+      }
       codeRequested = true;
-      await stageLog("info", "mfa", "Requesting Regal SMS verification code.", page);
+      await stageLog("info", "mfa", "Requesting Regal phone verification code.", page);
       await Promise.all([
         page.waitForLoadState("domcontentloaded").catch(() => {}),
-        sendCodeButton.click(),
+        requestButton.click(),
       ]);
       await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
       continue;
@@ -298,25 +335,27 @@ async function requestRegalMfaMethodFromUser(
   stageLog: (level: RegalLogEntry["level"], stage: string, message: string, currentPage?: Page) => Promise<void>,
   page: Page,
   options: RegalMfaMethodOption[],
+  message?: string,
 ): Promise<string> {
   const enabledOptions = options.filter((option) => !option.disabled);
   if (enabledOptions.length === 0) {
     throw new Error("Regal displayed MFA methods, but none of the available methods are supported yet.");
   }
 
-  await stageLog("info", "mfa", `Waiting for user to select Regal MFA method in frontend. Timeout: 1 minute. Options: ${options.map((option) => `${option.label}${option.description ? ` (${option.description})` : ""}`).join(", ")}.`, page);
+  if (message) await stageLog("warn", "mfa", message, page);
+  await stageLog("info", "mfa", "Waiting for user to select Regal MFA method in frontend. Timeout: 1 minute.", page);
   await context.emit({
     type: "input_request",
     inputName: "regal_mfa_method",
     label: "Select Regal verification method",
-    message: "Choose the Regal verification method to use. Push notification is shown for visibility but is not implemented.",
-    options,
+    message: message || "Choose the Regal verification method to use. Push notification is shown for visibility but is not implemented.",
+    options: options.map(option => ({ ...option, label: maskRegalPhone(option.label), description: maskRegalPhone(option.description) })),
     timeoutMs: 60000,
   });
   const selected = await waitForScrapeJobInput(context.jobId, "regal_mfa_method", 60000);
   const selectedOption = options.find((option) => option.value === selected);
   if (!selectedOption) {
-    throw new Error(`Unsupported Regal MFA selection "${selected}".`);
+    throw new Error("Unsupported Regal MFA selection.");
   }
   if (selectedOption.disabled) {
     throw new Error(`${selectedOption.label} is not implemented for Regal automation yet.`);
@@ -346,13 +385,28 @@ async function clickSelectedRegalMfaMethod(page: Page, methodValue: string): Pro
 function otpLabelForRegalMfaMethod(methodValue: string): string {
   const methodKey = getRegalMfaMethodKey(methodValue);
   if (methodKey === "okta_email") return "Regal email OTP";
-  if (methodKey === "phone_number") return "Regal SMS OTP";
+  if (methodKey === "phone_number") return "Regal phone OTP";
   if (methodKey === "google_otp") return "Regal Google Authenticator OTP";
   if (methodKey === "okta_verify-totp") return "Regal Okta Verify OTP";
   return "Regal OTP";
 }
 
-async function prepareSelectedRegalMfaMethod(page: Page, methodValue: string, stageLog: (level: RegalLogEntry["level"], stage: string, message: string, currentPage?: Page) => Promise<void>): Promise<string> {
+function maskRegalPhone(text: string): string {
+  return text.replace(/\+?[\dXx*][\dXx* ()-]{5,}\d/g, phone => {
+    const digits = phone.replace(/\D/g, '');
+    return `***${digits.slice(-4)}`;
+  });
+}
+
+async function chooseRegalMfaMethod(page: Page, context: ScraperContext, stageLog: (level: RegalLogEntry["level"], stage: string, message: string, currentPage?: Page) => Promise<void>, preferences: RegalMfaPreferences): Promise<string> {
+  const options = await extractRegalMfaOptions(page);
+  const preference = matchRegalPreference(options, preferences, 'authenticator');
+  const selected = preference.option?.value || await requestRegalMfaMethodFromUser(context, stageLog, page, options, preference.message);
+  await stageLog('info', 'mfa', preference.option ? 'Selected the configured Regal MFA option.' : 'Selected the user-chosen Regal MFA option.', page);
+  return prepareSelectedRegalMfaMethod(page, selected, stageLog, context, preferences);
+}
+
+async function prepareSelectedRegalMfaMethod(page: Page, methodValue: string, stageLog: (level: RegalLogEntry["level"], stage: string, message: string, currentPage?: Page) => Promise<void>, context: ScraperContext, preferences: RegalMfaPreferences): Promise<string> {
   const methodKey = getRegalMfaMethodKey(methodValue);
   await clickSelectedRegalMfaMethod(page, methodValue);
 
@@ -362,7 +416,7 @@ async function prepareSelectedRegalMfaMethod(page: Page, methodValue: string, st
       throw new Error("Regal email MFA was selected, but the verification code field did not appear.");
     }
   } else if (methodKey === "phone_number") {
-    if (!(await openRegalPhoneCodeEntryIfPresent(page, stageLog))) {
+    if (!(await openRegalPhoneCodeEntryIfPresent(page, stageLog, context, preferences))) {
       await stageLog("warn", "mfa", "Regal SMS MFA controls did not reach a visible verification code field within 30 seconds.", page);
       throw new Error("Regal SMS MFA was selected, but the verification code field did not appear.");
     }
@@ -373,7 +427,7 @@ async function prepareSelectedRegalMfaMethod(page: Page, methodValue: string, st
   return otpLabelForRegalMfaMethod(methodValue);
 }
 
-async function selectRegalOtpIfNeeded(page: Page, context: ScraperContext, stageLog: (level: RegalLogEntry["level"], stage: string, message: string, currentPage?: Page) => Promise<void>): Promise<string> {
+async function selectRegalOtpIfNeeded(page: Page, context: ScraperContext, stageLog: (level: RegalLogEntry["level"], stage: string, message: string, currentPage?: Page) => Promise<void>, preferences: RegalMfaPreferences): Promise<string> {
   const codeInputVisible = await isVisible(page, regalConfig.selectors.googleAuthenticatorCode);
   if (codeInputVisible) {
     await stageLog("info", "mfa", "OTP code page is already visible.", page);
@@ -398,10 +452,7 @@ async function selectRegalOtpIfNeeded(page: Page, context: ScraperContext, stage
 
   if (authenticatorListVisible) {
     await stageLog("info", "mfa", "Regal authenticator selection page reached; reading available methods for frontend selection.", page);
-    const options = await extractRegalMfaOptions(page);
-    const selectedMethod = await requestRegalMfaMethodFromUser(context, stageLog, page, options);
-    await stageLog("info", "mfa", `User selected Regal MFA method: ${selectedMethod}.`, page);
-    return prepareSelectedRegalMfaMethod(page, selectedMethod, stageLog);
+    return chooseRegalMfaMethod(page, context, stageLog, preferences);
   }
 
   const emailSendVisible = await isVisible(page, regalConfig.selectors.emailSendSubmit, 1000);
@@ -415,7 +466,7 @@ async function selectRegalOtpIfNeeded(page: Page, context: ScraperContext, stage
 
   const phoneSendVisible = await isVisible(page, regalConfig.selectors.phoneSendSubmit, 1000);
   if (phoneSendVisible) {
-    if (await openRegalPhoneCodeEntryIfPresent(page, stageLog)) {
+    if (await openRegalPhoneCodeEntryIfPresent(page, stageLog, context, preferences)) {
       return "Regal SMS OTP";
     }
     throw new Error("Regal SMS MFA page was visible, but the verification code field did not appear.");
@@ -423,23 +474,20 @@ async function selectRegalOtpIfNeeded(page: Page, context: ScraperContext, stage
 
   await page.locator(".authenticator-verify-list .authenticator-row").first().waitFor({ state: "visible", timeout: 30000 });
   await stageLog("info", "mfa", "Regal authenticator selection page reached after wait; reading available methods for frontend selection.", page);
-  const options = await extractRegalMfaOptions(page);
-  const selectedMethod = await requestRegalMfaMethodFromUser(context, stageLog, page, options);
-  await stageLog("info", "mfa", `User selected Regal MFA method: ${selectedMethod}.`, page);
-  return prepareSelectedRegalMfaMethod(page, selectedMethod, stageLog);
+  return chooseRegalMfaMethod(page, context, stageLog, preferences);
 }
 
 async function requestRegalOtpFromUser(context: ScraperContext, stageLog: (level: RegalLogEntry["level"], stage: string, message: string, currentPage?: Page) => Promise<void>, page: Page, otpLabel: string): Promise<string> {
-  await stageLog("info", "mfa", `Waiting for user to enter ${otpLabel} in frontend. Timeout: 2 minutes.`, page);
+  await stageLog("info", "mfa", `Waiting for user to enter ${otpLabel} in frontend. Timeout: 3 minutes.`, page);
   await context.emit({
     type: "input_request",
     inputName: "regal_otp",
     label: otpLabel,
-    message: `Enter the ${otpLabel} within 2 minutes.`,
-    timeoutMs: 120000,
+    message: `Enter the ${otpLabel} within 3 minutes.`,
+    timeoutMs: 180000,
   });
   await stageLog("info", "mfa", "Regal OTP input request sent to frontend.", page);
-  return waitForScrapeJobInput(context.jobId, "regal_otp", 120000);
+  return waitForScrapeJobInput(context.jobId, "regal_otp", 180000);
 }
 
 async function submitRegalOtp(page: Page, code: string): Promise<void> {
@@ -549,8 +597,9 @@ async function completeRegalMfa(
   page: Page,
   context: ScraperContext,
   stageLog: (level: RegalLogEntry["level"], stage: string, message: string, currentPage?: Page) => Promise<void>,
+  preferences: RegalMfaPreferences,
 ): Promise<void> {
-  const otpLabel = await selectRegalOtpIfNeeded(page, context, stageLog);
+  const otpLabel = await selectRegalOtpIfNeeded(page, context, stageLog, preferences);
   if (!(await isPastRegalMfa(page)) && !(await isRegalDashboardVisible(page))) {
     const regalOtp = await requestRegalOtpFromUser(context, stageLog, page, otpLabel);
     if (await isPastRegalMfa(page) || await isRegalDashboardVisible(page)) {
@@ -1351,7 +1400,7 @@ export async function runRegalLoginJob(formData: FormData, context: ScraperConte
         authState = await waitForRegalAuthState(page);
       } else {
         const dashboardGraceMs = expectsDirectRegalRedirect(page) ? 30000 : 8000;
-        await completeRegalMfa(page, context, stageLog);
+        await completeRegalMfa(page, context, stageLog, input.credentials);
         const destination = await waitForRegalAfterMfa(page, browserContext, dashboardGraceMs, dashboardPage);
         page = destination.page;
         authState = destination.state;

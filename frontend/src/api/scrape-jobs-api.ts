@@ -1,6 +1,7 @@
 import { fetchEventSource } from "@microsoft/fetch-event-source";
 import type { ScrapeJobEvent } from "../types/job";
 import { getCognitoAccessToken } from "./cognito-auth";
+import { isJobInputRequest, mergeJobLogs } from "./job-event-display";
 
 export type ScrapeJobStatus = "preparing" | "queued" | "starting" | "running" | "waiting_otp" | "waiting_resume" | "cancelling" | "completed" | "partial_success" | "failed" | "cancelled";
 
@@ -179,15 +180,6 @@ function normalizeJobDetails(job: Partial<ScrapeJobDetails>, logs: string[] = []
     artifacts: job.artifacts ?? [],
     logs,
   };
-}
-
-function eventPayloadToLog(payload: unknown): string {
-  if (!payload || typeof payload !== "object") return "";
-  const event = payload as { message?: unknown };
-  if (typeof event.message === "string" && event.message.trim()) {
-    return event.message.trim();
-  }
-  return "";
 }
 
 export function getActiveScrapeJobErrorId(error: unknown): string {
@@ -473,10 +465,7 @@ export async function getScrapeJobDetails(jobId: string): Promise<ScrapeJobDetai
     artifacts?: CurrentScrapeJob["artifacts"];
     logs?: string[];
   };
-  const eventLogs = (body.events ?? [])
-    .map((event) => eventPayloadToLog(event.payload))
-    .filter(Boolean);
-  const logs = body.logs && body.logs.length > 0 ? body.logs : eventLogs;
+  const logs = mergeJobLogs(body.events ?? [], body.logs ?? []);
   return normalizeJobDetails({ ...(body.job ?? {}), artifacts: body.artifacts ?? body.job?.artifacts }, logs);
 }
 
@@ -522,6 +511,7 @@ async function subscribeToAwsScrapeJobEvents(options: {
   onStreamError: (error: unknown) => void;
 }): Promise<void> {
   let after = 0;
+  const deliveredEventIds = new Set<number>();
   const apiUrl = requireAwsApiUrl();
   let socket: WebSocket | null = null;
   let reconnectTimer: number | null = null;
@@ -581,8 +571,13 @@ async function subscribeToAwsScrapeJobEvents(options: {
     socket.onmessage = async (message) => {
       try {
         const parsed = JSON.parse(String(message.data)) as ScrapeJobEvent & { id?: number; payload?: ScrapeJobEvent };
-        if (typeof parsed.id === "number") after = Math.max(after, parsed.id);
+        // Keep the polling cursor independent: a later socket event must not skip
+        // earlier saved events during reconnect or polling.
         const event = parsed.payload ?? parsed;
+        if (typeof parsed.id === "number") {
+          if (deliveredEventIds.has(parsed.id)) return;
+          deliveredEventIds.add(parsed.id);
+        }
         if (isDownloadableOutputEvent(event)) {
           downloadableEventSeen = true;
         }
@@ -648,6 +643,8 @@ async function subscribeToAwsScrapeJobEvents(options: {
         const jobStatus = body.job?.status;
         for (const event of body.events ?? []) {
           after = Math.max(after, event.id);
+          if (deliveredEventIds.has(event.id)) continue;
+          deliveredEventIds.add(event.id);
           if (isOtpReplayEvent(event.payload) && jobStatus !== "waiting_otp") {
             continue;
           }
@@ -695,7 +692,7 @@ async function subscribeToAwsScrapeJobEvents(options: {
 }
 
 function isOtpReplayEvent(event: ScrapeJobEvent): boolean {
-  return event.type === "input_request" || event.type === "otp_required";
+  return isJobInputRequest(event);
 }
 
 function isDownloadableOutputEvent(event: ScrapeJobEvent): boolean {

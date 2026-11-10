@@ -35,6 +35,13 @@ const FALLBACK_EXCEL_COLUMNS = {
   serviceDate: 10,
 };
 
+export const AERIAL_INPUT_COLUMN_ALIASES = {
+  Group: ["Group", "Group Name", "Medical Group"],
+  "Claim No": ["Claim No", "Claim Number"],
+  "Subscriber No": ["Subscriber No", "Subscriber Number", "Member ID"],
+  "Service Date": ["Service Date", "Date of Service", "DOS"],
+};
+
 function normalizeHeader(value: unknown): string {
   return String(value || "")
     .replace(/\u00a0/g, " ")
@@ -67,10 +74,10 @@ export function readAerialInputWorkbookFromBuffer(buffer: ArrayBuffer): AerialIn
   }) as unknown[][];
   const headerRow = matrix[0] ?? [];
   const columns = {
-    group: findHeaderIndex(headerRow, ["Group", "Group Name", "Medical Group"], FALLBACK_EXCEL_COLUMNS.group),
-    claimNo: findHeaderIndex(headerRow, ["Claim No", "Claim Number"], FALLBACK_EXCEL_COLUMNS.claimNo),
-    subscriberNo: findHeaderIndex(headerRow, ["Subscriber No", "Subscriber Number", "Member ID"], FALLBACK_EXCEL_COLUMNS.subscriberNo),
-    serviceDate: findHeaderIndex(headerRow, ["Service Date", "Date of Service", "DOS"], FALLBACK_EXCEL_COLUMNS.serviceDate),
+    group: findHeaderIndex(headerRow, AERIAL_INPUT_COLUMN_ALIASES.Group, FALLBACK_EXCEL_COLUMNS.group),
+    claimNo: findHeaderIndex(headerRow, AERIAL_INPUT_COLUMN_ALIASES["Claim No"], FALLBACK_EXCEL_COLUMNS.claimNo),
+    subscriberNo: findHeaderIndex(headerRow, AERIAL_INPUT_COLUMN_ALIASES["Subscriber No"], FALLBACK_EXCEL_COLUMNS.subscriberNo),
+    serviceDate: findHeaderIndex(headerRow, AERIAL_INPUT_COLUMN_ALIASES["Service Date"], FALLBACK_EXCEL_COLUMNS.serviceDate),
   };
 
   return matrix

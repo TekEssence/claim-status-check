@@ -327,15 +327,16 @@ export async function appendWorkflowEvent(jobId: string, eventType: string, payl
   return rows[0]?.id ?? null;
 }
 
-export async function listWorkflowEvents(jobId: string, afterId = 0) {
-  return runDbWithRetry((db) =>
+export async function listWorkflowEvents(jobId: string, afterId = 0, latest = false) {
+  const rows = await runDbWithRetry((db) =>
     db
       .select()
       .from(workflowJobEvents)
       .where(and(eq(workflowJobEvents.jobId, jobId), sql`${workflowJobEvents.id} > ${afterId}`))
-      .orderBy(asc(workflowJobEvents.id))
+      .orderBy(latest ? desc(workflowJobEvents.id) : asc(workflowJobEvents.id))
       .limit(500),
   );
+  return latest ? rows.reverse() : rows;
 }
 
 export async function getLatestWorkflowInputRequest(jobId: string) {
@@ -345,6 +346,16 @@ export async function getLatestWorkflowInputRequest(jobId: string) {
       .orderBy(desc(workflowJobEvents.id)).limit(1),
   );
   return rows[0] ?? null;
+}
+
+export async function resumeWorkflowJobAfterInput(jobId: string, inputName: string): Promise<void> {
+  // A late OTP acknowledgement must never overwrite cancellation or a terminal status.
+  await runDbWithRetry(db => db.update(workflowJobs)
+    .set({ status: "running", updatedAt: new Date().toISOString() })
+    .where(and(eq(workflowJobs.jobId, jobId), eq(workflowJobs.status, "waiting_otp"),
+      sql`(SELECT ${workflowJobEvents.payload}->>'inputName' FROM ${workflowJobEvents}
+        WHERE ${workflowJobEvents.jobId}=${jobId} AND ${workflowJobEvents.eventType}='input_request'
+        ORDER BY ${workflowJobEvents.id} DESC LIMIT 1) = ${inputName}`)));
 }
 
 export async function createWorkflowCommand(params: {

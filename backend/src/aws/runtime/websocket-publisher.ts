@@ -27,6 +27,8 @@ function shouldPublish(event: Record<string, unknown>): boolean {
     "input_required",
     "input_request",
     "input_submitted",
+    "input_consumed",
+    "provider_options",
     "warning",
     "error",
     "cancellation_acknowledged",

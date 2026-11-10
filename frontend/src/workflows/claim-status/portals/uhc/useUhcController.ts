@@ -1,5 +1,4 @@
 import { useMemo, useState, type Dispatch, type FormEvent, type SetStateAction } from "react";
-import ExcelJS from "exceljs";
 import {
   isAwsWorkflowMode, startScrapeJob,
   submitScrapeJobInput, subscribeToScrapeJobEvents,
@@ -18,80 +17,6 @@ import type { UhcProviderPrompt } from "./UhcResultView";
 import type { PortalId } from "../../shared/model";
 
 type Setter<T> = Dispatch<SetStateAction<T>>;
-
-type UhcProviderMapping = {
-  group: string;
-  corporateTaxIdOwner: string;
-  taxIdNumber: string;
-  careProvider: string;
-};
-
-const UHC_PROVIDER_MAPPING_URL = "/provider-mappings/uhc-provider-mappings.xlsx";
-
-function cellText(value: unknown): string {
-  if (value === null || value === undefined) return "";
-  if (value instanceof Date) return value.toISOString();
-  if (typeof value === "object" && "text" in value) {
-    return String((value as { text?: unknown }).text ?? "").trim();
-  }
-  return String(value).trim();
-}
-
-function normalizeHeader(value: string): string {
-  return value.toLowerCase().replace(/[^a-z0-9]/g, "");
-}
-
-function findColumn(headerRow: ExcelJS.Row, aliases: string[]): number {
-  const normalizedAliases = aliases.map(normalizeHeader);
-  let found = 0;
-  headerRow.eachCell((cell, colNum) => {
-    if (found) return;
-    const normalized = normalizeHeader(cellText(cell.value));
-    if (normalizedAliases.some((alias) => normalized === alias || normalized.includes(alias))) {
-      found = colNum;
-    }
-  });
-  return found;
-}
-
-async function loadUhcProviderMappings(): Promise<UhcProviderMapping[]> {
-  const response = await fetch(UHC_PROVIDER_MAPPING_URL, { cache: "no-store" });
-  if (!response.ok) {
-    throw new Error(`Unable to load UHC provider mapping workbook (${response.status}).`);
-  }
-
-  const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.load(await response.arrayBuffer());
-  const worksheet = workbook.worksheets[0];
-  if (!worksheet) throw new Error("UHC provider mapping workbook does not contain a worksheet.");
-
-  const headerRow = worksheet.getRow(1);
-  const groupCol = findColumn(headerRow, ["group", "group name", "medical group", "medical group name"]);
-  const corporateCol = findColumn(headerRow, ["corporate tax id owner", "corporate taxid owner", "corporate owner"]);
-  const taxIdCol = findColumn(headerRow, ["tax id number", "tax id", "taxid", "tin"]);
-  const careProviderCol = findColumn(headerRow, ["care provider", "provider", "provider name"]);
-
-  if (!groupCol || !corporateCol || !careProviderCol) {
-    throw new Error("UHC provider mapping workbook requires Group, Corporate Tax ID Owner, and Care Provider columns.");
-  }
-
-  const mappings: UhcProviderMapping[] = [];
-  worksheet.eachRow((row, rowNumber) => {
-    if (rowNumber === 1) return;
-    const group = cellText(row.getCell(groupCol).value);
-    const corporateTaxIdOwner = cellText(row.getCell(corporateCol).value);
-    const careProvider = cellText(row.getCell(careProviderCol).value);
-    const taxIdNumber = taxIdCol ? cellText(row.getCell(taxIdCol).value) : "";
-    if (!group || (!corporateTaxIdOwner && !careProvider && !taxIdNumber)) return;
-    mappings.push({ group, corporateTaxIdOwner, taxIdNumber, careProvider });
-  });
-
-  if (mappings.length === 0) {
-    throw new Error("UHC provider mapping workbook does not contain usable mapping rows.");
-  }
-
-  return mappings;
-}
 
 async function downloadUhcWorkbook(filename: string, workbookBundle: UhcWorkbookBundle): Promise<void> {
   postProcessUhcWorksheet(workbookBundle.worksheet);
@@ -181,10 +106,8 @@ export function useUhcController(p: {
     setSelectedPortalId("uhc");
 
     let workbookBundle: UhcWorkbookBundle;
-    let providerMappings: UhcProviderMapping[];
     try {
       workbookBundle = await loadUhcWorkbookBundle(uhcClaimFile, clientType);
-      providerMappings = await loadUhcProviderMappings();
     } catch (error) {
       setStatus(`Unable to read UHC input files: ${getErrorMessage(error)}`);
       setIsProcessing(false);
@@ -198,7 +121,6 @@ export function useUhcController(p: {
     formData.append("loginFileName", uhcLoginFile.name);
     formData.append("claimFileName", uhcClaimFile.name);
     formData.append("claimRows", JSON.stringify(workbookBundle.claimRows));
-    formData.append("providerMappings", JSON.stringify(providerMappings));
     formData.append("startIndex", "0");
     formData.append("attempt", "1");
     formData.append("browserType", uhcBrowserType);
@@ -247,7 +169,13 @@ export function useUhcController(p: {
         });
         setUhcOtpValue("");
         setStatus(eventData.message || "Enter the UHC verification code.");
+      } else if (eventData.type === "input_consumed") {
+        setUhcOtpRequest(null);
+        setUhcProviderPrompt(null);
+        setStatus("Verification response received. Processing resumed.");
+        setLogs(prev => [...prev, "Verification response received. Processing resumed."]);
       } else if (eventData.type === "provider_options" && eventData.inputName) {
+        setUhcOtpRequest(null);
         const providerStage = eventData.providerStage === "care" ? "care" : "corporate";
         const options = providerStage === "corporate" ? eventData.corporateTaxIdOwners ?? [] : eventData.careProviders ?? [];
         setUhcProviderPrompt({

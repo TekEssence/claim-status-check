@@ -108,7 +108,7 @@ function optional(name: string): string {
 }
 
 function parseCloudWatchJobLog(jobId: string, message: string | undefined): string | null {
-  const raw = String(message || "").trim();
+  const raw = String(message || "").replace(/\x1b\[[0-9;]*[A-Za-z]/g, "").trim();
   if (!raw) return null;
   try {
     const parsed = JSON.parse(raw) as { jobId?: unknown; message?: unknown };
@@ -129,7 +129,7 @@ async function listCloudWatchJobLogs(job: Awaited<ReturnType<typeof getWorkflowJ
     logGroupName,
     filterPattern: `"${job.jobId}"`,
     startTime: Number.isFinite(startMs) ? Math.max(0, startMs - 5 * 60 * 1000) : undefined,
-    endTime: Number.isFinite(endMs) ? endMs + 5 * 60 * 1000 : undefined,
+    endTime: !isActiveJobStatus(job.status) && Number.isFinite(endMs) ? endMs + 5 * 60 * 1000 : undefined,
     limit: 200,
   }));
   return (result.events ?? [])
@@ -359,7 +359,7 @@ export async function getJob(event: ApiEvent) {
     const jobId = getJobId(event);
     const job = await reconcileAwsJobRuntime(hasFullWorkflowAccess(event) ? await getWorkflowJobById(jobId) : await getWorkflowJobForUser(jobId, userId));
     if (!job) return jsonResponse(404, { error: "Job not found." });
-    const events = await listWorkflowEvents(jobId, Number(event.queryStringParameters?.after || 0));
+    const events = await listWorkflowEvents(jobId, Number(event.queryStringParameters?.after || 0), event.queryStringParameters?.includeLogs === "true");
     const artifacts = await listArtifactsForJob(jobId);
     const logs = event.queryStringParameters?.includeLogs === "true"
       ? await listCloudWatchJobLogs(job).catch(() => [])

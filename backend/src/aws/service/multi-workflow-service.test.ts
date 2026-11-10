@@ -8,6 +8,7 @@ import { buildWaystarOutputWorkbook } from "../../workflows/eligibility-verifica
 import { normalizeEligibilityServiceWorkbook } from "./eligibility-results";
 import { pageServiceResults } from "./iehp-results";
 import { serviceSubmissionFingerprint } from "./service-submission";
+import { claimStatusServicePortalConfigs } from "./generic-claim-status-input";
 import { getServiceWorkflow, getServiceWorkflowForJob, resolveServiceWorkflowRoute, SERVICE_WORKFLOW_IDS, ServiceWorkflowDispatchError, supportedServiceWorkflowIds } from "./workflow-registry";
 
 const eligibility = {
@@ -19,10 +20,11 @@ const eligibility = {
   ],
 };
 
-test("one registry retains the existing Claim Status service dispatch and names runner workflows", () => {
+test("one registry includes every Claim Status portal and names runner workflows", () => {
   const claimStatus = getServiceWorkflow(SERVICE_WORKFLOW_IDS.CLAIM_STATUS)!;
   assert.equal(claimStatus.runnerWorkflowId, "claim-status");
-  assert.deepEqual(Object.keys(claimStatus.portals).sort(), ["availity", "iehp"]);
+  assert.deepEqual(Object.keys(claimStatus.portals).sort(),
+    [...Object.keys(claimStatusServicePortalConfigs), "availity", "iehp"].sort());
   assert.equal(getServiceWorkflowForJob("claim-status"), claimStatus);
   assert.equal(getServiceWorkflow(SERVICE_WORKFLOW_IDS.ELIGIBILITY)?.runnerWorkflowId, "eligibility-verification");
   assert.equal(getServiceWorkflow(SERVICE_WORKFLOW_IDS.EOB_DOWNLOAD)?.runnerWorkflowId, "payment-eob-download");

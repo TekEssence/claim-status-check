@@ -2,6 +2,8 @@ import { generateAvailityServiceInput, validateAvailityServiceInput } from "./av
 import { loadAvailityServiceSnapshot } from "./availity-snapshot";
 import { generateIehpServiceInput, maskIehpAccountLabel, validateIehpServiceInput } from "./iehp-input";
 import { loadIehpServiceSnapshot } from "./iehp-snapshot";
+import { claimStatusServicePortalConfigs, prepareGenericClaimStatusServiceInput, type GenericClaimStatusServicePortalId } from "./generic-claim-status-input";
+import { loadGenericClaimStatusSnapshot } from "./generic-claim-status-results";
 
 type ServiceJob = Parameters<typeof loadIehpServiceSnapshot>[0];
 type InputFile = { field: string; filename: string; buffer: Buffer };
@@ -20,7 +22,18 @@ export type PortalAdapter = {
   loadSnapshot: typeof loadIehpServiceSnapshot;
 };
 
+const genericServicePortals = Object.fromEntries(
+  (Object.keys(claimStatusServicePortalConfigs) as GenericClaimStatusServicePortalId[]).map((portalId) => [
+    portalId,
+    {
+      prepare: (body: unknown) => prepareGenericClaimStatusServiceInput(portalId, body),
+      loadSnapshot: (job: ServiceJob) => loadGenericClaimStatusSnapshot(portalId, job),
+    },
+  ]),
+) as Record<GenericClaimStatusServicePortalId, PortalAdapter>;
+
 export const servicePortals = {
+  ...genericServicePortals,
   iehp: {
     prepare: async (body: unknown) => {
       const input = validateIehpServiceInput(body);
@@ -49,6 +62,7 @@ export const servicePortals = {
         files: [
           { field: "inputExcel", filename: "availity_claims.xlsx", buffer: generated.claimWorkbook },
           { field: "credentialExcel", filename: "availity_credentials.xlsx", buffer: generated.credentialWorkbook },
+          ...(generated.selectionRulesWorkbook ? [{ field: "selectionRulesFile", filename: "availity-selection-rules.xlsx", buffer: generated.selectionRulesWorkbook }] : []),
         ],
         claimRowsJson: generated.claimRowsJson,
         formFields: { integrationMode: "service", projectId: input.projectId },

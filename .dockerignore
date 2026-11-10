@@ -40,6 +40,13 @@ yarn-error.log*
 *.pem
 ~$*.xlsx
 
+# The UHC worker uses the same provider configuration as manual submissions.
+!public/
+public/*
+!public/provider-mappings/
+public/provider-mappings/*
+!public/provider-mappings/uhc-provider-mappings.xlsx
+
 
 # sst
 .sst

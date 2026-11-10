@@ -12,7 +12,7 @@ import type {
 import { blueShieldConfig } from "./config";
 
 const MAIL_CONFIGURATION_SHEET_NAME = "mailconfigurations";
-const MAIL_CONFIGURATION_KEYS = new Set([
+export const MAIL_CONFIGURATION_KEYS = new Set([
   "SHARED_MFA_MAILBOX",
   "PORTAL_BLUE_SHIELD_IUMG_MFA_OWNER_MAILBOXES",
   "PORTAL_BLUE_SHIELD_POSADA_MFA_OWNER_MAILBOXES",

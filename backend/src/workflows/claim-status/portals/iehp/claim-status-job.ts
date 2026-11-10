@@ -6,7 +6,7 @@ import { processCoveredRaDownloads, extractCheckNumbersFromClaimDetailText } fro
 import { processReferToRaDownloads } from "./refer-ra";
 import { completeIehpLoginAfterCredentials, detectLoginStatus, logoutIehp } from "./auth";
 import { launchIehpBrowser } from "./browser";
-import { parseIehpClaimStatusInput } from "./input";
+import { getIehpClaimSearchFields, parseIehpClaimStatusInput } from "./input";
 import { navigateToClaimStatusWithRetry } from "./claim-status";
 import {
   buildExpandedDetailSummary,
@@ -150,8 +150,7 @@ export async function runIehpClaimStatusJob(jobId: string, formData: FormData, c
             const row = claimRows[i];
             const originalIndex = (row as { __original_index?: unknown }).__original_index;
             const rowIndex = typeof originalIndex === "number" ? originalIndex : i;
-            const memberPolicyId = asText(row["Member Policy ID"] ?? row["member policy id"] ?? row["Member ID"] ?? row["member id"]);
-            const dosValue = row["Date Of Service"] ?? row["DOS"] ?? row["date of service"] ?? row["dos"];
+            const { memberPolicyId, dosValue } = getIehpClaimSearchFields(row);
             const claimCpt = getClaimCptValue(row);
             const claimModifiers = getClaimModifierValues(row);
 

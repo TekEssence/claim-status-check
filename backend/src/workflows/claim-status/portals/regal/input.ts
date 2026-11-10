@@ -1,7 +1,8 @@
 import * as XLSX from "xlsx";
 import { loadRegalEnvironment } from "./env";
+import type { RegalMfaPreferences } from "./mfa-preferences";
 
-export type RegalCredentials = {
+export type RegalCredentials = RegalMfaPreferences & {
   loginUrl: string;
   username: string;
   password: string;
@@ -199,6 +200,9 @@ export function readRegalCredentialsFromBuffer(buffer: ArrayBuffer): RegalCreden
         loginUrl: normalizeLoginUrl(rawLoginUrl),
         username,
         password,
+        preferredPhone: findValue(row, ["Preferred Phone", "preferred_phone"]) || undefined,
+        preferredPhoneSuffix: findValue(row, ["Preferred Phone Suffix", "preferred_phone_suffix"]) || undefined,
+        verificationMethod: findValue(row, ["Verification Method", "verification_method"]) || undefined,
       };
     }
   }

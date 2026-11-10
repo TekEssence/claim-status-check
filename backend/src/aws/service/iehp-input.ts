@@ -1,4 +1,5 @@
 import ExcelJS from "exceljs";
+import { getIehpClaimSearchFields } from "../../workflows/claim-status/portals/iehp/input";
 
 export type PreparedClaim = {
   client_row_ref: string;
@@ -69,7 +70,8 @@ export function validateServiceClaims(value: unknown): PreparedClaim[] {
 
 function validateIehpClaims(value: unknown): PreparedClaim[] {
   return validateServiceClaims(value).map((claim, index) => {
-    if (!String(claim.data["Member Policy ID"] ?? "").trim() || !String(claim.data["Date Of Service"] ?? "").trim()) {
+    const { memberPolicyId, dosValue } = getIehpClaimSearchFields(claim.data);
+    if (!memberPolicyId || !String(dosValue ?? "").trim()) {
       throw new Error(`Claim ${index + 1} requires Member Policy ID and Date Of Service.`);
     }
     return claim;

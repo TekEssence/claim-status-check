@@ -1362,7 +1362,7 @@ async function login(
   // because the site may clear the field if the first click is slow or fails.
   //
   // DEBUG LOGGING:
-  //   • Logs the exact password string on every attempt (prefixed ⚠️ DEBUG).
+  //   • Logs the password submission attempt without credential values.
   //   • Attaches a Playwright response listener to capture network traces.
   //     On each failed attempt the accumulated traces are flushed to the log.
   //   Remove / gate these logs behind an env-flag once the issue is resolved.
@@ -1394,8 +1394,8 @@ async function login(
         await page.fill(SEL.STEP2_PASSWORD, '');  // clear any previous value
         await page.type(SEL.STEP2_PASSWORD, password, { delay: 80 });
 
-        // ── ⚠️ DEBUG — log the exact credential being submitted ──────────────
-        await log(`  ⚠️ DEBUG Step 2 attempt ${attempt}/${maxAttempts}: username="${username}" password="${password}"`);
+        // Record the stage without exposing credentials.
+        await log(`  Step 2 password submission attempt ${attempt}/${maxAttempts}.`);
         // ─────────────────────────────────────────────────────────────────────
 
         // Wait for Akamai's sensor JS to fully build its payload before submitting.
@@ -1748,7 +1748,7 @@ function isMemberFoundNoClaimFoundMessage(message: string): boolean {
 }
 
 // ── Fill and submit claim search form ─────────────────────────────────────────
-function normalizeUhcInputDate(value: unknown, options: { allowHistoricalSerial?: boolean } = {}): string {
+export function normalizeUhcInputDate(value: unknown, options: { allowHistoricalSerial?: boolean } = {}): string {
   if (value instanceof Date) {
     const month = String(value.getUTCMonth() + 1).padStart(2, '0');
     const day = String(value.getUTCDate()).padStart(2, '0');
@@ -1774,7 +1774,12 @@ function normalizeUhcInputDate(value: unknown, options: { allowHistoricalSerial?
     return normalizeUhcInputDate(serial, options);
   }
 
-  const match = text.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{2}|\d{4})$/);
+  // Service dates are calendar dates: preserve the supplied date, not its UTC equivalent.
+  const iso = text.match(/^(\d{4})-(\d{2})-(\d{2})(?:T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?)?$/i);
+  if (iso && text.includes('T') && !Number.isFinite(Date.parse(text))) return '';
+  const match = iso
+    ? [iso[0], iso[2], iso[3], iso[1]]
+    : text.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{2}|\d{4})$/);
   if (!match) return '';
 
   const month = Number(match[1]);
@@ -1794,7 +1799,7 @@ async function searchClaim(page: Page, claim: ClaimRow, searchMode: 'memberId' |
   const patientDOB = normalizeUhcInputDate(claim.patientDOB, { allowHistoricalSerial: true });
 
   if (!serviceDate) {
-    throw new Error(`Missing or invalid DOS "${String(claim.serviceDate ?? '')}". Use the DOS column in m/d/yyyy or mm/dd/yyyy format.`);
+    throw new Error(`Missing or invalid DOS "${String(claim.serviceDate ?? '')}". Use the DOS column in m/d/yyyy, mm/dd/yyyy, or ISO date format.`);
   }
 
   // Close Claims & Payments dropdown if it is open/expanded and blocking UI

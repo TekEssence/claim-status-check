@@ -2,6 +2,7 @@ import { waitForScrapeJobInput } from "@/backend/src/jobs/job-store";
 import type { ScraperContext } from "../../types";
 import { readLoginExcel } from "./excel";
 import { runAutomation, type ProviderSelection, type SseEvent, type UhcProviderMapping } from "./automation";
+import { loadDefaultUhcProviderMappings, prepareUhcRuntimeClaims } from "./runtime-input";
 
 function getRequiredFile(formData: FormData, key: string): File {
   const value = formData.get(key);
@@ -9,14 +10,6 @@ function getRequiredFile(formData: FormData, key: string): File {
     throw new Error(`Missing ${key} file.`);
   }
   return value;
-}
-
-function getRequiredString(formData: FormData, key: string): string {
-  const value = formData.get(key);
-  if (typeof value !== "string" || !value.trim()) {
-    throw new Error(`${key} is required.`);
-  }
-  return value.trim();
 }
 
 function getOptionalString(formData: FormData, key: string, fallback = ""): string {
@@ -58,13 +51,8 @@ function parseProviderMappings(value: string): UhcProviderMapping[] {
   });
 }
 
-export async function runUhcClaimStatusJob(formData: FormData, context: ScraperContext): Promise<void> {
+export async function prepareUhcAutomationRun(formData: FormData, context: ScraperContext): Promise<Parameters<typeof runAutomation>[0]> {
   const loginExcel = getRequiredFile(formData, "loginExcel");
-  const claimRowsJson = getRequiredString(formData, "claimRows");
-  const claims = JSON.parse(claimRowsJson);
-  if (!Array.isArray(claims)) {
-    throw new Error("claimRows must be a JSON array.");
-  }
 
   const credentials = await readLoginExcel(await loginExcel.arrayBuffer());
   const startIndex = Number(getOptionalString(formData, "startIndex", "0"));
@@ -76,7 +64,11 @@ export async function runUhcClaimStatusJob(formData: FormData, context: ScraperC
     getOptionalString(formData, "groupId", "minimax"),
   ).toLowerCase();
   const clientType = rawClientType === "medrevenu" ? "medrevenu" : "minimax";
-  const providerMappings = parseProviderMappings(getOptionalString(formData, "providerMappings", ""));
+  const claims = await prepareUhcRuntimeClaims(formData, clientType);
+  const providedMappings = getOptionalString(formData, "providerMappings", "");
+  const providerMappings = providedMappings
+    ? parseProviderMappings(providedMappings)
+    : await loadDefaultUhcProviderMappings();
 
   const sendEvent = async (event: SseEvent) => {
     await context.emit(event as unknown as Record<string, unknown>);
@@ -87,7 +79,7 @@ export async function runUhcClaimStatusJob(formData: FormData, context: ScraperC
     message: `UHC input loaded: ${claims.length} row(s). Group: ${clientType} (received clientType="${rawClientType || "<empty>"}"). Provider mappings: ${providerMappings.length}.`,
   });
 
-  await runAutomation({
+  return {
     username: credentials.username,
     password: credentials.password,
     baseUrl: credentials.url,
@@ -103,6 +95,7 @@ export async function runUhcClaimStatusJob(formData: FormData, context: ScraperC
         inputName,
         label: clientType === "medrevenu" ? "MedRevenu OTP" : "UHC OTP",
         message: "Enter the verification code to continue UHC login.",
+        timeoutMs: 10 * 60 * 1000,
       });
       return waitForScrapeJobInput(context.jobId, inputName, 10 * 60 * 1000);
     },
@@ -110,6 +103,7 @@ export async function runUhcClaimStatusJob(formData: FormData, context: ScraperC
       const inputName = `uhc_provider_${stage}_${crypto.randomUUID()}`;
       await context.emit({
         type: "provider_options",
+        timeoutMs: 10 * 60 * 1000,
         inputName,
         providerStage: stage,
         corporateTaxIdOwners: options.corporateTaxIdOwners,
@@ -125,5 +119,9 @@ export async function runUhcClaimStatusJob(formData: FormData, context: ScraperC
     attempt: Number.isFinite(attempt) && attempt > 0 ? attempt : 1,
     batchSize: Math.max(claims.length, 50),
     sendEvent,
-  });
+  };
+}
+
+export async function runUhcClaimStatusJob(formData: FormData, context: ScraperContext): Promise<void> {
+  await runAutomation(await prepareUhcAutomationRun(formData, context));
 }

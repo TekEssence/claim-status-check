@@ -272,11 +272,12 @@ export async function getServiceJobResult(event: ApiEvent) {
     let actionRequired: Record<string, unknown> | null = null;
     if (job.status === "waiting_otp") {
       const challenge = await getLatestWorkflowInputRequest(job.jobId);
-      const payload = challenge?.payload as { inputName?: unknown; label?: unknown; message?: unknown; timeoutMs?: unknown } | undefined;
+      const payload = challenge?.payload as { type?: unknown; inputName?: unknown; label?: unknown; message?: unknown; timeoutMs?: unknown;
+        providerStage?: unknown; corporateTaxIdOwners?: unknown; careProviders?: unknown } | undefined;
       const timeoutMs = typeof payload?.timeoutMs === "number" && Number.isFinite(payload.timeoutMs) && payload.timeoutMs > 0
         ? payload.timeoutMs : null;
       actionRequired = {
-        type: "OTP_REQUIRED", portal: job.portalId, job_id: job.jobId,
+        type: payload?.type === "provider_options" ? "PROVIDER_SELECTION_REQUIRED" : "OTP_REQUIRED", portal: job.portalId, job_id: job.jobId,
         input_name: typeof payload?.inputName === "string" ? payload.inputName : "otp",
         label: typeof payload?.label === "string" ? payload.label : "Verification code",
         message: typeof payload?.message === "string" ? payload.message : "Verification is required to continue.",
@@ -284,6 +285,10 @@ export async function getServiceJobResult(event: ApiEvent) {
         account_label: typeof (job.metadata as { accountLabel?: unknown } | null)?.accountLabel === "string"
           ? (job.metadata as { accountLabel: string }).accountLabel : null,
         action_url: null,
+        ...(payload?.type === "provider_options" ? {
+          provider_stage: payload.providerStage,
+          options: payload.providerStage === "care" ? payload.careProviders : payload.corporateTaxIdOwners,
+        } : {}),
       };
     }
     const rowFailureCategory = job.status === "failed" && summary

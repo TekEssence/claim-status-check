@@ -261,7 +261,7 @@ function parseSelectionRules(rows: Record<string, string>[]): AvailitySelectionR
   return Array.from(grouped.values()).filter((rule) => Object.keys(rule.when).length && Object.keys(rule.use).length);
 }
 
-async function readOptionalSelectionRules(formData: FormData, projectId: string): Promise<AvailitySelectionRule[] | undefined> {
+export async function readOptionalSelectionRules(formData: FormData, projectId: string): Promise<AvailitySelectionRule[] | undefined> {
   const file = formData.get("selectionRulesFile");
   if (!(file instanceof File) || file.size === 0) {
     return undefined;

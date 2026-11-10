@@ -85,6 +85,28 @@ test("Availity service validation enforces project claim fields and TOTP credent
   assert.throws(() => validateAvailityServiceInput({ ...request, claims: [request.claims[0], { ...request.claims[0] }] }), /Duplicate client_row_ref/);
 });
 
+test("Charm custom selection rules reach the same parser as manual rule uploads", async () => {
+  const selectionRules = [{ Practice: "Open Mind", "Organization to select": "Test organization", "Provider Mode": "groupNameOnly", "Tab to use": "HIPAA Standard" }];
+  const prepared = await getServicePortal("availity")!.adapter.prepare({
+    ...request, projectId: "charm", selection_rules: selectionRules,
+    claims: [{ client_row_ref: "ar-1", data: { ...request.claims[0].data, Practice: "Open Mind", "Provider NPI": "1234567890", "Portal Payer Name": "Aetna", "Portal State": "CA" } }],
+  });
+  const serviceForm = new FormData();
+  serviceForm.set("projectId", "charm");
+  for (const file of prepared.files) serviceForm.set(file.field, new File([new Uint8Array(file.buffer)], file.filename));
+  const serviceParsed = await parseAvailityInput(serviceForm);
+  const manualForm = new FormData();
+  for (const [key, value] of serviceForm.entries()) if (key !== "selectionRulesFile") manualForm.set(key, value);
+  const manualBook = new ExcelJS.Workbook();
+  const sheet = manualBook.addWorksheet("Manual rules");
+  sheet.addRow(["Practice", "Organization to select", "Provider Mode", "Tab to use"]);
+  sheet.addRow(["Open Mind", "Test organization", "groupNameOnly", "HIPAA Standard"]);
+  manualForm.set("selectionRulesFile", new File([new Uint8Array(await manualBook.xlsx.writeBuffer())], "manual-rules.xlsx"));
+  assert.deepEqual(serviceParsed.selectionRules, (await parseAvailityInput(manualForm)).selectionRules);
+  assert.equal(serviceParsed.selectionRules![0].use.organization, "Test organization");
+  assert.throws(() => validateAvailityServiceInput({ ...request, selection_rules: selectionRules }), /only for Charm/);
+});
+
 test("Charm aliases and project preprocessing retain the submitted references", async () => {
   const charmData = {
     "Master Payer Name": "Aetna",

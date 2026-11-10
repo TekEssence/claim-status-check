@@ -32,9 +32,12 @@ import {
   listArtifactsForJob,
   consumePendingWorkflowCommands,
   updateWorkflowJob,
+  resumeWorkflowJobAfterInput,
   type AwsWorkflowJobStatus,
 } from "@/backend/src/aws/runtime/workflow-db";
 import { publishWorkflowEvent } from "@/backend/src/aws/runtime/websocket-publisher";
+import { isInputRequest, isPersistentWorkflowEvent, persistentWorkflowEventType, persistentWorkflowEventPayload } from "@/backend/src/aws/runtime/job-event-policy";
+import { deliverWorkerInput } from "./input-delivery";
 import { createIehpBundle } from "@/backend/src/aws/http/iehp-bundle";
 import { loadIehpServiceSnapshot, serviceOutputWorkbookLocation } from "@/backend/src/aws/service/iehp-snapshot";
 import { loadIntegratedServiceSnapshot } from "@/backend/src/aws/service/workflow-registry";
@@ -358,7 +361,7 @@ async function persistEvent(jobId: string, data: Record<string, unknown>, option
     return;
   }
 
-  if (data.type === "input_request" || data.type === "otp_request") {
+  if (isInputRequest(data)) {
     await updateWorkflowJob({ jobId, status: "waiting_otp" }).catch(() => {});
     return;
   }
@@ -437,7 +440,7 @@ async function persistAutomationEvent(jobId: string, workflowId: AutomationWorkf
     }).catch(() => {});
   }
 
-  if (data.type === "input_request" || data.type === "otp_request") {
+  if (isInputRequest(data)) {
     await updateWorkflowJob({ jobId, status: "waiting_otp" }).catch(() => {});
   }
 
@@ -560,57 +563,6 @@ function isArtifactEvent(data: Record<string, unknown>): boolean {
   );
 }
 
-function isPersistentWorkflowEvent(data: Record<string, unknown>): boolean {
-  const type = String(data.type ?? "");
-  return (
-    type === "job_started" ||
-    type === "task_starting" ||
-    type === "progress" ||
-    type === "row_progress" ||
-    type === "input_request" ||
-    type === "otp_request" ||
-    type === "input_submitted" ||
-    type === "cancellation_acknowledged" ||
-    type === "cancelled" ||
-    type === "completed" ||
-    type === "partial_success" ||
-    type === "failed" ||
-    type === "output_ready"
-  );
-}
-
-function persistentWorkflowEventType(data: Record<string, unknown>): string {
-  const type = String(data.type ?? "event");
-  if (type === "otp_request") return "input_request";
-  return type;
-}
-
-function persistentWorkflowEventPayload(data: Record<string, unknown>): Record<string, unknown> {
-  const type = String(data.type ?? "event");
-  if (type === "progress") {
-    const payload: Record<string, unknown> = { type };
-    if (typeof data.completed === "number") payload.completed = data.completed;
-    if (typeof data.total === "number") payload.total = data.total;
-    if (typeof data.currentRow === "number") payload.currentRow = data.currentRow;
-    return payload;
-  }
-  if (type === "row_progress") {
-    const payload: Record<string, unknown> = { type };
-    if (typeof data.completed === "number") payload.completed = data.completed;
-    if (typeof data.current === "number") payload.current = data.current;
-    if (typeof data.total === "number") payload.total = data.total;
-    return payload;
-  }
-  if (type === "input_request" || type === "otp_request") {
-    const payload = { ...data };
-    delete payload.value;
-    delete payload.otp;
-    delete payload.secret;
-    return payload;
-  }
-  return data;
-}
-
 function artifactFilename(data: Record<string, unknown>): string {
   const type = String(data.type ?? "artifact");
   const row = typeof data.index === "number" ? `row_${data.index + 1}_` : "";
@@ -711,17 +663,21 @@ function startCancellationPoll(jobId: string): CancellationPoll {
           markCancelled();
         }
       }),
-      consumePendingWorkflowCommands(jobId).then((commands) => {
+      consumePendingWorkflowCommands(jobId).then(async (commands) => {
         for (const command of commands) {
           if (command.commandType === "cancel") {
             markCancelled();
             continue;
           }
-          const payload = command.payload as { value?: unknown };
-          if (typeof payload.value === "string" && payload.value.trim()) {
-            submitScrapeJobInput(jobId, command.commandType, payload.value.trim());
-            submitScrapeJobInput(jobId, "otp", payload.value.trim());
-            submitScrapeJobInput(jobId, "regalOtp", payload.value.trim());
+          if (deliverWorkerInput(jobId, command, submitScrapeJobInput)) {
+            console.log(JSON.stringify({ timestamp: new Date().toISOString(), source: "workflow-worker", jobId,
+              message: "Verification response delivered to the active worker input waiter.", inputName: command.commandType }));
+            await resumeWorkflowJobAfterInput(jobId, command.commandType);
+            const resumed = { type: "input_consumed", inputName: command.commandType, message: "Verification response received by worker. Processing resumed." };
+            const id = await appendWorkflowEvent(jobId, "input_consumed", resumed);
+            await publishWorkflowEvent(jobId, resumed, id).catch(() => {});
+          } else {
+            console.warn(JSON.stringify({ jobId, message: "Submitted input had no matching active waiter.", inputName: command.commandType }));
           }
         }
       }),
@@ -800,6 +756,10 @@ async function runAutomationWorkflow(params: {
     projectId: stringField(params.formData, "projectId") || undefined,
     isCancelled: cancellation.isCancelled,
     emit: async (event) => {
+      if ((event.type === "log" || event.type === "warning" || event.type === "error") && typeof event.message === "string") {
+        writeCloudWatchLog({ jobId: params.jobId, workflowId: params.workflowId, portalId: params.portalId,
+          message: event.message, level: event.type === "error" ? "error" : "info" });
+      }
       emitScrapeJobEvent(job.id, event);
       if (
         typeof event === "object" &&
@@ -938,6 +898,10 @@ export async function main(): Promise<void> {
     isCancelled: cancellation.isCancelled,
     emit: async (event) => {
       if (portalId === "iehp" && event.type === "done") return;
+      if ((event.type === "log" || event.type === "warning" || event.type === "error") && typeof event.message === "string") {
+        writeCloudWatchLog({ jobId, workflowId, portalId, message: event.message,
+          level: typeof event.level === "string" ? event.level : event.type === "error" ? "error" : "info" });
+      }
       emitScrapeJobEvent(job.id, event);
       if (
         typeof event === "object" &&
@@ -960,7 +924,8 @@ export async function main(): Promise<void> {
       }
       try {
         await persistEvent(job.id, event, {
-          requireArtifactUpload: isServiceJob && portalId === "availity" && (event.type === "output_snapshot" || event.type === "file_download"),
+          requireArtifactUpload: isServiceJob && (event.type === "output_snapshot" ||
+            (event.type === "file_download" && typeof event.filename === "string" && event.filename.toLowerCase().endsWith(".xlsx"))),
         });
       } catch (error) {
         if (portalId === "iehp" && event.type === "pdf_download") {
@@ -1070,12 +1035,12 @@ export async function main(): Promise<void> {
         portalId: "uhc", finalize: runResult !== "cancelled", recordOnce: true,
       });
     }
-    const serviceJob = isServiceJob && (portalId === "availity" || (portalId === "iehp" && uploadedIehpOutput))
+    const serviceJob = isServiceJob && (portalId !== "iehp" || uploadedIehpOutput)
       ? await getWorkflowJobById(jobId) : null;
     const serviceSummary = serviceJob
       ? (await loadIntegratedServiceSnapshot(serviceJob, { requireStatusColumns: true })).summary
       : null;
-    if (isServiceJob && (portalId === "availity" || uploadedIehpOutput) && !serviceSummary) {
+    if (isServiceJob && !serviceSummary) {
       throw new Error("Integrated output workbook could not be validated.");
     }
     const status: PersistentScrapeJobStatus = runResult === "cancelled" || cancellation.isCancelled()
@@ -1123,12 +1088,12 @@ export async function main(): Promise<void> {
         console.error("IEHP partial ZIP upload failed", bundleError);
       });
     }
-    if (isServiceJob && portalId === "availity") {
+    if (isServiceJob && portalId !== "iehp") {
       const summary = await (async () => {
         const serviceJob = await getWorkflowJobById(jobId);
         return serviceJob ? (await loadIntegratedServiceSnapshot(serviceJob, { requireStatusColumns: false })).summary : null;
       })().catch((resultError) => {
-        console.error("Integrated Availity partial result storage failed", resultError);
+        console.error("Integrated claim status partial result storage failed", resultError);
         return null;
       });
       partialServiceResult = Boolean(summary && summary.counts.success > 0);
