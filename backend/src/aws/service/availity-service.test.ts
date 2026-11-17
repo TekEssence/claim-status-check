@@ -4,6 +4,7 @@ import ExcelJS from "exceljs";
 import { generateAvailityServiceInput, validateAvailityServiceInput } from "./availity-input";
 import { normalizeAvailityServiceWorkbook } from "./availity-results";
 import { pageServiceResults } from "./iehp-results";
+import { publishedResults } from "./result-publication-test-helpers";
 import { getServicePortal } from "./portal-dispatch";
 import { parseAvailityInput } from "../../workflows/claim-status/portals/availity/input";
 import { createAvailityOutputWorkbookBuffer } from "../../workflows/claim-status/portals/availity/output-writer";
@@ -47,7 +48,7 @@ test("Availity result normalization keeps all 10000 submitted claims", { timeout
   assert.equal(summary.row_results.length, 10000);
   assert.equal(summary.finalized_count, 10000);
   assert.equal(summary.row_results.at(-1)?.client_row_ref, "ar-10000");
-  assert.equal(pageServiceResults(summary, 9999, 100, true).nextCursor, 10000);
+  assert.equal(pageServiceResults(publishedResults(summary), 9999, 100).nextCursor, 10000);
 });
 
 function makeOutput(rows: Array<[string, string, string, string]>) {
@@ -79,8 +80,8 @@ test("Availity service dispatch generates the existing claim and credential work
   assert.equal(parsed.credentials.password, request.credentials.password);
 });
 
-test("Availity service validation enforces project claim fields and TOTP credentials", () => {
-  assert.throws(() => validateAvailityServiceInput({ ...request, claims: [{ client_row_ref: "x", data: { "Payer Name": "Aetna" } }] }), /missing/);
+test("Availity service validation leaves claim business rules to the worker and enforces the service contract", () => {
+  assert.equal(validateAvailityServiceInput({ ...request, claims: [{ client_row_ref: "x", data: { "Payer Name": "Aetna" } }] }).claims.length, 1);
   assert.throws(() => validateAvailityServiceInput({ ...request, credentials: { ...request.credentials, totp_secret: "" } }), /totp_secret/);
   assert.throws(() => validateAvailityServiceInput({ ...request, claims: [request.claims[0], { ...request.claims[0] }] }), /Duplicate client_row_ref/);
 });
@@ -104,7 +105,10 @@ test("Charm custom selection rules reach the same parser as manual rule uploads"
   manualForm.set("selectionRulesFile", new File([new Uint8Array(await manualBook.xlsx.writeBuffer())], "manual-rules.xlsx"));
   assert.deepEqual(serviceParsed.selectionRules, (await parseAvailityInput(manualForm)).selectionRules);
   assert.equal(serviceParsed.selectionRules![0].use.organization, "Test organization");
-  assert.throws(() => validateAvailityServiceInput({ ...request, selection_rules: selectionRules }), /only for Charm/);
+  const unsupported = await getServicePortal("availity")!.adapter.prepare({ ...request, selection_rules: selectionRules });
+  const unsupportedForm = new FormData();
+  for (const file of unsupported.files) unsupportedForm.set(file.field, new File([new Uint8Array(file.buffer)], file.filename));
+  await assert.rejects(parseAvailityInput(unsupportedForm), /only for Charm/);
 });
 
 test("Charm aliases and project preprocessing retain the submitted references", async () => {
@@ -173,20 +177,20 @@ test("Availity output preserves submitted claim order and advances once per clai
   assert.deepEqual(summary.row_results.map((row) => [row.client_row_ref, row.status]), [["ar-101", "SUCCESS"], ["ar-102", "NO_MATCH"]]);
   assert.equal(summary.row_results[0].result.detail_rows?.length, 2);
   assert.equal(summary.outcome, "PARTIAL_SUCCESS");
-  const first = pageServiceResults(summary, 0, 1, false);
-  const repeated = pageServiceResults(await normalizeAvailityServiceWorkbook(bytes, refs), 0, 1, false);
+  const first = pageServiceResults(publishedResults(summary), 0, 1);
+  const repeated = pageServiceResults(publishedResults(await normalizeAvailityServiceWorkbook(bytes, refs)), 0, 1);
   assert.deepEqual(first, repeated);
   assert.equal(first.nextCursor, 1);
-  assert.deepEqual(pageServiceResults(summary, 1, 1, false).results.map((row) => row.client_row_ref), ["ar-102"]);
+  assert.deepEqual(pageServiceResults(publishedResults(summary), 1, 1).results.map((row) => row.client_row_ref), ["ar-102"]);
 });
 
-test("Availity partial output only exposes a completed prefix", async () => {
+test("Availity partial output finalizes later claims despite an earlier unfinished claim", async () => {
   const bytes = await makeOutput([["ar-102", "success", "Second claim done", ""]]);
   const summary = await normalizeAvailityServiceWorkbook(bytes, ["ar-101", "ar-102"]);
   assert.deepEqual(summary.row_results.map((row) => row.status), ["INCOMPLETE", "SUCCESS"]);
-  assert.equal(summary.finalized_count, 0);
-  assert.deepEqual(pageServiceResults(summary, 0, 100, false).results, []);
-  assert.equal(pageServiceResults(summary, 0, 100, true).nextCursor, 2);
+  assert.equal(summary.finalized_count, 1);
+  assert.deepEqual(pageServiceResults(publishedResults(summary), 0, 100).results.map(row => row.client_row_ref), ["ar-102"]);
+  assert.equal(pageServiceResults(publishedResults(summary), 0, 100).nextCursor, 1);
 });
 
 test("Availity output rejects unexpected claim references", async () => {

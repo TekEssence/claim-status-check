@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { resolveClaimCredentialScopes } from "../../credential-scopes";
 import path from "node:path";
 import { loadAerialEnvironment } from "./env";
 import { loadCredentialsForAerialSubportal } from "./common/credential-workbook";
@@ -111,8 +112,12 @@ export async function parseAerialInput(formData: FormData): Promise<AerialInput>
   const subportal = resolveAerialSubportal(formData.get("aerialSubportal")).id;
   const credentialExcel = formData.get("credentialExcel");
   const inputExcel = formData.get("inputExcel");
-  const credentialWorkbookBuffer = await loadOptionalWorkbookBuffer(credentialExcel);
+  let credentialWorkbookBuffer = await loadOptionalWorkbookBuffer(credentialExcel);
   const inputWorkbook = await loadInputWorkbookBuffer(inputExcel);
+  if (credentialWorkbookBuffer) {
+    credentialWorkbookBuffer = resolveClaimCredentialScopes(credentialWorkbookBuffer, () =>
+      readAerialInputWorkbookFromBuffer(inputWorkbook.buffer).map(row => ({ group: row.Group })));
+  }
   const groups = Array.from(new Set(readAerialInputWorkbookFromBuffer(inputWorkbook.buffer).map((row) => row.Group.trim()).filter(Boolean)));
   if (credentialWorkbookBuffer && groups.length) {
     const credentialGroups = groups.map((group) => {

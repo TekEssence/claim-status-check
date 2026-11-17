@@ -47,7 +47,10 @@ function normalizeHeader(value: unknown): string {
     .replace(/\u00a0/g, " ")
     .replace(/\s+/g, " ")
     .trim()
-    .toLowerCase();
+    .toLowerCase()
+    // Retain JSON's previously accepted separator/casing aliases in the
+    // shared workbook parser rather than renaming columns only for service.
+    .replace(/[^a-z0-9]+/g, "");
 }
 
 function findHeaderIndex(headerRow: unknown[], aliases: string[], fallbackIndex: number): number {
@@ -72,7 +75,13 @@ export function readAerialInputWorkbookFromBuffer(buffer: ArrayBuffer): AerialIn
     raw: false,
     blankrows: false,
   }) as unknown[][];
-  const headerRow = matrix[0] ?? [];
+  // Correlation columns are transport metadata. Ignore them before positional
+  // fallback so adding Client Row Ref cannot change a portal claim's meaning.
+  // Both manual and generated workbooks use this same parser.
+  const metadataColumns = new Set((matrix[0] ?? []).flatMap((header, index) =>
+    ["clientrowref", "originalindex"].includes(normalizeHeader(header)) ? [index] : []));
+  const claimMatrix = matrix.map(row => Array.from({ length: row.length }, (_, index) => row[index]).filter((_, index) => !metadataColumns.has(index)));
+  const headerRow = claimMatrix[0] ?? [];
   const columns = {
     group: findHeaderIndex(headerRow, AERIAL_INPUT_COLUMN_ALIASES.Group, FALLBACK_EXCEL_COLUMNS.group),
     claimNo: findHeaderIndex(headerRow, AERIAL_INPUT_COLUMN_ALIASES["Claim No"], FALLBACK_EXCEL_COLUMNS.claimNo),
@@ -80,7 +89,7 @@ export function readAerialInputWorkbookFromBuffer(buffer: ArrayBuffer): AerialIn
     serviceDate: findHeaderIndex(headerRow, AERIAL_INPUT_COLUMN_ALIASES["Service Date"], FALLBACK_EXCEL_COLUMNS.serviceDate),
   };
 
-  return matrix
+  return claimMatrix
     .slice(1)
     .map((row, index) => ({
       input_row_id: index + 2,

@@ -29,6 +29,8 @@ export type AutomationContext = {
   log: (event: LogEvent) => Promise<void>;
   emit: (event: JobEvent) => Promise<void>;
   isCancelled?: () => boolean;
+  /** Worker-owned publication for the existing Eligibility service integration. */
+  saveServiceResults?: (workbook: Uint8Array) => Promise<void>;
 };
 
 export interface AutomationRunner<TInput = unknown> {

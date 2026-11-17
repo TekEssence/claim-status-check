@@ -103,6 +103,7 @@ export async function runMedpointLoginHandoffJob(formData: FormData, context: Sc
         if (resultHrefs.length == 0) {
           outputRows.push({
             input_row_number: row.inputRowNumber,
+            BotStatus: "No Match",
             input_member_last_name: row.memberLastName,
             input_member_first_name: row.memberFirstName,
             input_service_from_date: row.serviceFromDate,

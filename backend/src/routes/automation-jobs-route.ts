@@ -14,7 +14,6 @@ import { getSessionFromCookies } from "@/lib/auth/session";
 import { isAuthDbConnectionError } from "@/lib/auth/db";
 import {
   appendAutomationJobArtifact,
-  appendAutomationJobLog,
   createPersistentAutomationJob,
   getAutomationJobForUser,
   updateAutomationJob,
@@ -226,16 +225,7 @@ export async function DELETE(req: Request) {
 }
 
 async function persistEvent(jobId: string, event: Record<string, unknown>) {
-  if (event.type === "log" && typeof event.message === "string") {
-    await appendAutomationJobLog({
-      jobId,
-      level: typeof event.level === "string" ? event.level : "info",
-      message: event.message,
-      eventName: typeof event.eventName === "string" ? event.eventName : undefined,
-      rowIndex: typeof event.rowIndex === "number" ? event.rowIndex : undefined,
-      metadata: isRecord(event.meta) ? event.meta : undefined,
-    }).catch(() => {});
-  } else if (event.type === "progress") {
+  if (event.type === "progress") {
     await updateAutomationJob({
       jobId,
       status: "running",

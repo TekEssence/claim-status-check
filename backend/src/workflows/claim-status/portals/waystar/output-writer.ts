@@ -28,6 +28,7 @@ const OUTPUT_COLUMNS: Array<{ key: keyof WaystarOutputRow; header: string; width
   { key: "status", header: "status", width: 12 },
   { key: "finalStatus", header: "Final Status", width: 72 },
   { key: "remarks", header: "Remarks", width: 34 },
+  { key: "workerOutcome", header: "Worker Outcome", width: 20 },
 ];
 
 const ERROR_COLUMNS: Array<{ key: keyof WaystarErrorRow; header: string; width: number }> = [

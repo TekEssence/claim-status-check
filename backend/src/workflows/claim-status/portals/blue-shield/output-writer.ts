@@ -19,6 +19,7 @@ type ColumnDef<T> = {
 };
 
 const outputColumns: Array<ColumnDef<Omit<BlueShieldOutputRow, "inputData">>> = [
+  { key: "workerOutcome", header: "Worker Outcome", width: 20 },
   { key: "inputRowId", header: "Input Row", width: 12 },
   { key: "botStatus", header: "Bot Status", width: 16 },
   { key: "botMessage", header: "Bot Message", width: 36 },

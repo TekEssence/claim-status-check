@@ -45,7 +45,6 @@ const tables = [
   { name: "workflow_job_commands", key: "id" },
   { name: "workflow_job_artifacts", key: "id" },
   { name: "automation_jobs", key: "job_id", updated: true, workflow: "workflow_id", portal: "portal_id" },
-  { name: "automation_job_logs", key: "id" },
   { name: "automation_job_artifacts", key: "id" },
   { name: "iehp_scrape_jobs", key: "job_id", updated: true, portal: "portal_id" },
   { name: "iehp_scrape_job_logs", key: "id" },

@@ -327,6 +327,10 @@ export async function parseAvailityInput(formData: FormData): Promise<AvailityIn
 
   const credentialRows = await readWorkbookRows(await credentialExcel.arrayBuffer());
   const inputWorkbook = await readWorkbookRows(await inputExcel.arrayBuffer());
+  // Manual upload and service JSON (encoded as a workbook) converge here into
+  // the same flat claim rows. Portal mapping, defaults and batch preprocessing
+  // run once here; the worker's row validator and selection logic own business
+  // failures. Submission source must never select different portal rules.
   const mappedInputRows = inputWorkbook.rows.map((data, index) => ({
     input_row_id: index + 1,
     source_row_number: index + 2,

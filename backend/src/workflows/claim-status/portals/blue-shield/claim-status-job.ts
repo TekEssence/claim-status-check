@@ -176,7 +176,7 @@ function addMemberFailureOutput(
 ): void {
   for (const rowId of member.rowIds) {
     const row = rows.find((candidate) => candidate.inputRowId === rowId);
-    if (row) state.outputRows.push(outputRowWithoutClaim(row, message));
+    if (row) state.outputRows.push(outputRowWithoutClaim(row, message, "Failed"));
   }
 }
 
@@ -234,6 +234,7 @@ function outputRowForClaim(row: BlueShieldInputRow, claim: BlueShieldClaimSummar
     inputRowId: row.inputRowId,
     inputData: inputData(row),
     botStatus,
+    workerOutcome: "SUCCESS",
     botMessage: message,
     botPlanType: claim.planType || claim.ipaMedGroup,
     botClaimNumber: claim.claimNumber,
@@ -253,11 +254,12 @@ function outputRowForClaim(row: BlueShieldInputRow, claim: BlueShieldClaimSummar
   };
 }
 
-function outputRowWithoutClaim(row: BlueShieldInputRow, message: string): BlueShieldOutputRow {
+function outputRowWithoutClaim(row: BlueShieldInputRow, message: string, outcome = "Not Found"): BlueShieldOutputRow {
   return {
     inputRowId: row.inputRowId,
     inputData: inputData(row),
-    botStatus: "Not Found",
+    botStatus: outcome,
+    workerOutcome: outcome === "Failed" ? "FAILED" : "NO_MATCH",
     botMessage: message,
     botPlanType: "",
     botClaimNumber: "",
@@ -431,7 +433,7 @@ export async function runBlueShieldClaimStatusJob(formData: FormData, context: S
   }
 
   invalidRows.forEach((row) => {
-    state.outputRows.push(outputRowWithoutClaim(row, row.validationMessage));
+    state.outputRows.push(outputRowWithoutClaim(row, row.validationMessage, "Failed"));
     state.errorRows.push({
       timestamp: nowIso(),
       member_id: row.memberId,
@@ -443,7 +445,7 @@ export async function runBlueShieldClaimStatusJob(formData: FormData, context: S
   });
   routing.unmappedRows.forEach((row) => {
     const message = `Missing Blue Shield credentials for group ${row.group}.`;
-    state.outputRows.push(outputRowWithoutClaim(row, message));
+    state.outputRows.push(outputRowWithoutClaim(row, message, "Failed"));
     state.errorRows.push({
       timestamp: nowIso(),
       member_id: row.memberId,

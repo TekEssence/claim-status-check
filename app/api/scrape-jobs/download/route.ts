@@ -8,6 +8,7 @@ import { getScrapeJob } from "@/backend/src/jobs/job-store";
 import { getSessionFromCookies } from "@/lib/auth/session";
 import { getScrapeJobById, getScrapeJobByIdForUser, isScrapeJobDbConnectionError } from "@/lib/scrape-jobs/db";
 import { getAutomationJobForUser } from "@/lib/automation-jobs/db";
+import { getLocalArtifactManifest, listLocalArtifactFiles } from "@/lib/automation-jobs/artifacts";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -30,6 +31,39 @@ export async function GET(req: Request) {
     const job = scrapeJob ?? await getAutomationJobForUser(jobId, session.userId);
     if (!job) {
       return Response.json({ error: "Run not found for this user." }, { status: 404 });
+    }
+
+    const manifest = await getLocalArtifactManifest(jobId);
+    if (manifest) {
+      const files = await listLocalArtifactFiles(jobId, manifest);
+      if (!files.length) return Response.json({ error: "No artifact files are available yet." }, { status: 404 });
+      const output = new PassThrough();
+      const archive = (archiver as (format: "zip", options: { store: boolean }) => {
+        append(source: Readable, options: { name: string }): void;
+        pipe(stream: PassThrough): void;
+        finalize(): Promise<void>;
+        on(event: "error" | "warning", listener: (error: Error) => void): void;
+      })("zip", { store: true });
+      archive.on("error", error => output.destroy(error));
+      archive.on("warning", error => output.destroy(error));
+      archive.pipe(output);
+      const streams = files.map((file, index) => {
+        const source = file.bucket === "local" ? fs.createReadStream(file.s3Key) : Readable.from((async function* () {
+          const object = await new S3Client({}).send(new GetObjectCommand({ Bucket: file.bucket, Key: file.s3Key }));
+          if (!object.Body) throw new Error("Stored artifact is empty.");
+          for await (const chunk of object.Body as AsyncIterable<Uint8Array>) yield chunk;
+        })());
+        source.on("error", (error: Error) => output.destroy(error));
+        const name = file.filename.replace(/\\/g, "/").split("/").pop()!.replace(/[^a-zA-Z0-9._-]/g, "_");
+        archive.append(source, { name: `${file.artifactType}/${index + 1}-${name}` });
+        return source;
+      });
+      output.on("close", () => streams.forEach(stream => stream.destroy()));
+      void archive.finalize().catch(error => output.destroy(error));
+      const filename = `${jobId.replace(/[^a-zA-Z0-9._-]/g, "_")}-artifacts.zip`;
+      return new Response(Readable.toWeb(output) as ReadableStream<Uint8Array>, { headers: {
+        "Content-Type": "application/zip", "Content-Disposition": `attachment; filename="${filename}"`,
+      } });
     }
 
     if (scrapeJob?.portalId === "iehp") {

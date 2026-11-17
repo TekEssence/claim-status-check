@@ -53,6 +53,11 @@ export async function parseIehpClaimStatusInput(formData: FormData): Promise<Ieh
 
   const claimWorkbook = claimFile instanceof File
     ? XLSX.read(await claimFile.arrayBuffer(), { type: "array", cellDates: false }) : null;
+  // Manual upload and service submission intentionally converge on the same
+  // workbook-to-row parser. Prefer it over the legacy JSON sidecar so cell
+  // types, blank cells, aliases and row indexes reach identical worker rules.
+  // Missing member IDs or bad service dates are row failures in the worker,
+  // never reasons for the service adapter to reject an entire batch.
   const claimRows = claimFile instanceof File
     ? (() => {
         const rows = XLSX.utils.sheet_to_json<IehpGenericRow>(claimWorkbook!.Sheets[claimWorkbook!.SheetNames[0]]);

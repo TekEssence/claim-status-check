@@ -21,6 +21,7 @@ export type MedpointParsedInput = {
 };
 
 export type MedpointOutputRow = {
+  BotStatus?: string;
   input_row_number: number;
   input_member_last_name: string;
   input_member_first_name: string;

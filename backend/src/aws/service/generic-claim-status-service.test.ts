@@ -16,6 +16,7 @@ import { parseOptumProInput } from "../../scrapers/optum-pro/input";
 import { parsePhysiciansInput } from "../../workflows/claim-status/portals/physicians/input";
 import { parseRegalInput } from "../../workflows/claim-status/portals/regal/input";
 import { readClaimsExcel, readLoginExcel } from "../../workflows/claim-status/portals/uhc/excel";
+import { readAllCareCredentials, readAllCareInputRows, routeAllCareRows } from "../../workflows/claim-status/portals/all-care/input";
 import { parseWaystarInput } from "../../workflows/claim-status/portals/waystar/input";
 
 const account = { login_url: "https://example.test/login", username: "test-user", password: "test-password" };
@@ -37,8 +38,7 @@ const parseInput: Record<Exclude<keyof typeof claimStatusServicePortalConfigs, "
 for (const portalId of Object.keys(claimStatusServicePortalConfigs) as Array<keyof typeof claimStatusServicePortalConfigs>) {
   test(`${portalId} service adapter creates worker input files and keeps claim references`, async () => {
     const config = claimStatusServicePortalConfigs[portalId];
-    const data = Object.fromEntries([...config.requiredClaims, ...("oneOfClaims" in config ? config.oneOfClaims.flat() : [])]
-      .map((field) => [field, fieldValue[field] ?? "test"]));
+    const data = { ...fieldValue };
     const result = await prepareGenericClaimStatusServiceInput(portalId, {
       projectId: portalId === "aerial" ? "pmg" : "minimax",
       claims: [{ client_row_ref: "claim-1", data }],
@@ -67,11 +67,15 @@ for (const portalId of Object.keys(claimStatusServicePortalConfigs) as Array<key
   });
 }
 
-test("group and payer credential accounts must match each claim", async () => {
+test("group and payer credential mismatches reach the shared row router without rejecting ingestion", async () => {
   const claims = [{ client_row_ref: "one", data: { Group: "PMG", "Responsible Payer": "Aetna", "Member ID": "M1" } }];
-  await assert.rejects(() => prepareGenericClaimStatusServiceInput("all-care", {
+  const unmatched = await prepareGenericClaimStatusServiceInput("all-care", {
     claims, credentials: { accounts: [{ ...account, group: "OTHER", payer: "Aetna" }] },
-  }), /no matching all-care credential account/);
+  });
+  const form = new FormData();
+  for (const file of unmatched.files) form.set(file.field, new File([new Uint8Array(file.buffer)], file.filename));
+  const native = await parseAllCareInput(form);
+  assert.equal(routeAllCareRows(readAllCareInputRows(native.inputWorkbookBuffer), readAllCareCredentials(native.credentialWorkbookBuffer)).unmappedRows.length, 1);
   const prepared = await prepareGenericClaimStatusServiceInput("all-care", {
     claims, credentials: { accounts: [{ ...account, group: "PMG", payer: "Aetna" }] },
   });
@@ -152,3 +156,26 @@ test("portal no_data result is a finalized no-match claim", async () => {
   assert.equal(summary.row_results[0].status, "NO_MATCH");
   assert.equal(summary.finalized_count, 1);
 });
+
+for (const portal of Object.keys(claimStatusServicePortalConfigs) as Array<keyof typeof claimStatusServicePortalConfigs>) {
+  test(`${portal}: mixed row results retain client references, detail grouping and partial success`, async () => {
+    const book = new ExcelJS.Workbook();
+    const output = book.addWorksheet(portal === "uhc" ? "Claims" : "Output");
+    const rowHeader = portal === "uhc" ? "Client Row Ref" : portal === "waystar" ? "sno"
+      : ["medpoint", "regal"].includes(portal) ? "input_row_number"
+        : ["aerial", "all-care", "astrona"].includes(portal) ? "input_row_id" : "Input Row";
+    const identity = (index: number) => portal === "uhc" ? `R${index + 1}` : index + (portal === "waystar" ? 1 : 2);
+    output.addRow([rowHeader, "Bot Status", "Final Status"]);
+    output.addRow([identity(2), "Success", "Third claim paid"]);
+    output.addRow([identity(0), "Success", "First claim detail 1"]);
+    output.addRow([identity(0), "Success", "First claim detail 2"]);
+    const errors = book.addWorksheet("Error");
+    errors.addRow([portal === "waystar" ? "Input Row" : rowHeader, "Error Message"]);
+    errors.addRow([identity(1), "Missing required portal claim fields"]);
+    const summary = await normalizeGenericClaimStatusWorkbook(new Uint8Array(await book.xlsx.writeBuffer()), ["R1", "R2", "R3"], portal);
+    assert.deepEqual(summary.row_results.map(row => [row.client_row_ref, row.status]), [["R1", "SUCCESS"], ["R2", "FAILED"], ["R3", "SUCCESS"]]);
+    assert.equal(summary.row_results[0].result.detail_rows?.length, 2);
+    assert.equal(summary.finalized_count, 3);
+    assert.equal(summary.outcome, "PARTIAL_SUCCESS");
+  });
+}

@@ -32,6 +32,6 @@ test("does not fall back to credentials for another portal", async () => {
     readUhcEligibilityCredentials(await credentialFile([
       ["TPM", "Availity", "availity.example", "user", "pass", "secret"],
     ])),
-    /Portal UHC/,
+    /Missing Minimax\/TPM UHC login details/,
   );
 });

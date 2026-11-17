@@ -6,6 +6,7 @@ import { parseEligibilityProjectId } from "../../projects";
 import { healthnetOutputValues, buildHealthNetOutput, readHealthNetCredentials, readHealthNetInput } from "./data";
 import { HealthNetMemberMismatchError, loginHealthNet, verifyHealthNetRow } from "./portal";
 import { startHealthNetLoginDiagnostics } from './login-diagnostics';
+import { createEligibilityServiceSnapshots } from "../../partial-output";
 
 export function createHealthNetEligibilityRunner(): AutomationRunner<EligibilityRunInput> {
   return {
@@ -27,6 +28,7 @@ export function createHealthNetEligibilityRunner(): AutomationRunner<Eligibility
       const rows = new Map(inputRows.map((row) => [row.originalIndex, row]));
       const results = new Map<number, EligibilityResult>();
       const errors = new Map<number, string>();
+      const publishSnapshot = createEligibilityServiceSnapshots(context, { inputFile: input.inputFile, rows, results, errors }, buildHealthNetOutput);
       await context.emit({ type: "progress", completed: 0, total: rows.size });
       const launched = await launchHealthNetBrowser();
       const browser = launched.browser;
@@ -90,6 +92,7 @@ export function createHealthNetEligibilityRunner(): AutomationRunner<Eligibility
           const result = results.get(rowIndex);
           await context.emit({ type: "eligibility_healthnet_result", rowIndex, update: { __rowKey: String(rowIndex), ...healthnetOutputValues(result, errors.get(rowIndex)) } });
           await context.emit({ type: "progress", completed: ++completed, total: rows.size, currentRow: rowIndex });
+          await publishSnapshot();
         }
         const output = await buildHealthNetOutput({ inputFile: input.inputFile, rows, results, errors });
         await context.emit({ type: "file_download", filename: "medrevenue-healthnet-eligibility-output.xlsx", mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", base64: output.toString("base64") });

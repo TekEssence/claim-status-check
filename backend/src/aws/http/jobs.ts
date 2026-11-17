@@ -1,12 +1,14 @@
 import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
-import { CloudWatchLogsClient, FilterLogEventsCommand } from "@aws-sdk/client-cloudwatch-logs";
+import { CloudWatchLogsClient, GetLogEventsCommand } from "@aws-sdk/client-cloudwatch-logs";
 import { WORKFLOW_IDS, type WorkflowId } from "@/backend/src/workflows/types";
 import { jsonResponse, parseJsonBody, getAuthUserId, getAuthUserSnapshot, getJobId, createJobId, hasFullWorkflowAccess, type ApiEvent } from "../runtime/http";
 import { describeWorkerTask, findWorkerTaskByJobId, runWorkerTask, stopWorkerTask, WorkerTaskLaunchRejectedError } from "../runtime/ecs";
 import { buildWorkflowKey, createDownloadUrl, createUploadUrl } from "../runtime/s3";
-import { createIehpBundle } from "./iehp-bundle";
+import { createIehpBundle, createJobArtifactBundle } from "./iehp-bundle";
 import { loadIntegratedServiceSnapshot } from "../service/workflow-registry";
 import { cancelServiceExecution } from "../service/service-cancellation";
+import { finalizeCancelledServiceJob, finalizeStoppedServiceJob, type StoppedWorkerTask } from "../service/service-cancellation-finalizer";
+import { isEligibilityServicePortal } from "../service/eligibility-portals";
 import {
   appendWorkflowEvent,
   appendWorkflowArtifact,
@@ -16,6 +18,7 @@ import {
   createWorkflowJob,
   getWorkflowJobForUser,
   getWorkflowJobById,
+  getArtifactManifest,
   listArtifactsForJob,
   listArWorkflowOutputJobs,
   listRecentOutputArtifactsForJob,
@@ -112,25 +115,26 @@ function parseCloudWatchJobLog(jobId: string, message: string | undefined): stri
   if (!raw) return null;
   try {
     const parsed = JSON.parse(raw) as { jobId?: unknown; message?: unknown };
-    if (parsed.jobId !== jobId) return null;
-    return typeof parsed.message === "string" && parsed.message.trim() ? parsed.message.trim() : null;
+    if (parsed.jobId && parsed.jobId !== jobId) return null;
+    return typeof parsed.message === "string" && parsed.message.trim() ? parsed.message.trim() : raw;
   } catch {
-    return raw.includes(jobId) ? raw : null;
+    return raw;
   }
 }
 
-async function listCloudWatchJobLogs(job: Awaited<ReturnType<typeof getWorkflowJobById>>): Promise<string[]> {
-  if (!job) return [];
+export async function listCloudWatchJobLogs(
+  job: Pick<NonNullable<Awaited<ReturnType<typeof getWorkflowJobById>>>, "jobId" | "ecsTaskArn"> | null,
+  client: Pick<CloudWatchLogsClient, "send"> = cloudWatchLogs(),
+): Promise<string[]> {
+  if (!job?.ecsTaskArn) return [];
   const logGroupName = optional("WORKER_LOG_GROUP");
   if (!logGroupName) return [];
-  const startMs = Date.parse(String(job.startedAt || job.createdAt || ""));
-  const endMs = Date.parse(String(job.finishedAt || job.updatedAt || ""));
-  const result = await cloudWatchLogs().send(new FilterLogEventsCommand({
+  const taskId = job.ecsTaskArn.split("/").pop();
+  const result = await client.send(new GetLogEventsCommand({
     logGroupName,
-    filterPattern: `"${job.jobId}"`,
-    startTime: Number.isFinite(startMs) ? Math.max(0, startMs - 5 * 60 * 1000) : undefined,
-    endTime: !isActiveJobStatus(job.status) && Number.isFinite(endMs) ? endMs + 5 * 60 * 1000 : undefined,
+    logStreamName: `/service/${optional("WORKER_CONTAINER_NAME") || "worker"}/${taskId}`,
     limit: 200,
+    startFromHead: false,
   }));
   return (result.events ?? [])
     .sort((left, right) => (left.timestamp ?? 0) - (right.timestamp ?? 0))
@@ -138,8 +142,33 @@ async function listCloudWatchJobLogs(job: Awaited<ReturnType<typeof getWorkflowJ
     .filter((line): line is string => Boolean(line));
 }
 
-export async function reconcileAwsJobRuntime(job: Awaited<ReturnType<typeof getWorkflowJobForUser>>) {
-  if (!job || !isActiveJobStatus(job.status)) return job;
+export async function reconcileAwsJobRuntime(job: Awaited<ReturnType<typeof getWorkflowJobForUser>>, stoppedTask?: StoppedWorkerTask) {
+  if (!job) return job;
+  const integratedResults = job.clientSystem && (job.workflowId === "claim-status"
+    || (job.workflowId === "eligibility-verification" && isEligibilityServicePortal(job.portalId)));
+  if (stoppedTask?.lastStatus === "STOPPED" && integratedResults) {
+    return finalizeStoppedServiceJob(job, stoppedTask);
+  }
+  const metadata = job.metadata as { serviceCancelledBeforeLaunch?: boolean; serviceCancellationTaskAbsent?: boolean;
+    serviceCancellationFinalizedAt?: unknown; serviceTaskFinalizedAt?: unknown; expectedRowCount?: number;
+    workerResultState?: { finalized?: boolean; countsVersion?: number } };
+  if (job.clientSystem && job.status === "cancelling"
+    && (metadata.serviceCancelledBeforeLaunch || metadata.serviceCancellationTaskAbsent) && !job.ecsTaskArn) {
+    if (integratedResults) return finalizeCancelledServiceJob(job,
+      { kind: metadata.serviceCancelledBeforeLaunch ? "before-launch" : "task-absent" });
+    await updateWorkflowJob({ jobId: job.jobId, status: "cancelled" });
+    return getWorkflowJobById(job.jobId);
+  }
+  if (job.clientSystem && job.workflowId === "claim-status" && job.status === "cancelled" && !metadata.serviceCancellationFinalizedAt
+    && job.currentCompleted < (metadata.expectedRowCount ?? job.totalRows)) {
+    // Legacy CANCELLED already means stop was confirmed (or launch was blocked).
+    return finalizeCancelledServiceJob(job, { kind: "already-cancelled" });
+  }
+  const eligibilityRecovery = integratedResults && job.workflowId === "eligibility-verification" && job.ecsTaskArn
+    && !metadata.serviceTaskFinalizedAt && !metadata.serviceCancellationFinalizedAt
+    && !(metadata.workerResultState?.finalized && metadata.workerResultState.countsVersion === 1
+      && job.currentCompleted === metadata.expectedRowCount);
+  if (!isActiveJobStatus(job.status) && !eligibilityRecovery) return job;
 
   const updatedAtMs = Date.parse(String(job.updatedAt));
   const ageMs = Number.isFinite(updatedAtMs) ? Date.now() - updatedAtMs : 0;
@@ -151,7 +180,8 @@ export async function reconcileAwsJobRuntime(job: Awaited<ReturnType<typeof getW
     }
   }
   if (!job.ecsTaskArn) {
-    if (job.clientSystem && (job.metadata as { deadlineStopRequestedAt?: string } | null)?.deadlineStopRequestedAt && job.status !== "starting") {
+    if (job.clientSystem && (job.metadata as { deadlineStopRequestedAt?: string } | null)?.deadlineStopRequestedAt
+      && job.status !== "starting" && job.status !== "cancelling") {
       const message = "Execution deadline exceeded before the worker started.";
       await updateWorkflowJob({ jobId: job.jobId, status: "failed", errorMessage: message });
       return await getWorkflowJobById(job.jobId);
@@ -165,11 +195,15 @@ export async function reconcileAwsJobRuntime(job: Awaited<ReturnType<typeof getW
     return job;
   }
 
-  const task = await describeWorkerTask(job.ecsTaskArn).catch(() => null);
+  const task = stoppedTask ?? await describeWorkerTask(job.ecsTaskArn).catch(() => null);
   if (!task) return job;
   if (task.lastStatus === "STOPPED") {
+    if (integratedResults && job.status === "cancelling") {
+      return finalizeCancelledServiceJob(job, { kind: "stopped", lastStatus: task.lastStatus, taskArn: task.taskArn });
+    }
+    if (integratedResults) return finalizeStoppedServiceJob(job, task);
     const stoppedReason = task.stoppedReason || task.containers?.find((container) => container.reason)?.reason || "";
-    const exitCode = task.containers?.find((container) => typeof container.exitCode === "number")?.exitCode;
+    const exitCode = task.containers?.find(container => container.name === (process.env.WORKER_CONTAINER_NAME || "worker"))?.exitCode;
     const deadlineExceeded = Boolean((job.metadata as { deadlineStopRequestedAt?: string } | null)?.deadlineStopRequestedAt);
     let status: "cancelled" | "completed" | "partial_success" | "failed" = job.status === "cancelling" && !deadlineExceeded ? "cancelled" : exitCode === 0 ? "completed" : "failed";
     let outputError = "";
@@ -434,7 +468,7 @@ export async function submitOtp(event: ApiEvent) {
       commandType,
       payload: { value: inputValue },
       createdBy: userId,
-      ttlMs: 2 * 60 * 1000,
+      ttlMs: 6 * 60 * 1000,
     });
     await appendWorkflowEvent(jobId, "input_submitted", { type: "input_submitted", inputName: commandType });
     return jsonResponse(200, { ok: true });
@@ -456,7 +490,10 @@ export async function cancelIntegratedWorkflowJob(jobId: string, clientSystem: s
     },
     cancelBeforeLaunch: async (job) => {
       const cancelled = await cancelUnstartedServiceJob(job.jobId, clientSystem);
-      if (cancelled) await appendWorkflowEvent(job.jobId, "cancel_requested", { type: "cancellation_acknowledged" }).catch(() => {});
+      if (cancelled) {
+        await reconcileAwsJobRuntime(await getWorkflowJobById(job.jobId));
+        await appendWorkflowEvent(job.jobId, "cancel_requested", { type: "cancellation_acknowledged" }).catch(() => {});
+      }
       return cancelled;
     },
     markCancelling: (job) => requestServiceJobCancellation(job.jobId, clientSystem),
@@ -522,6 +559,13 @@ export async function downloadJob(event: ApiEvent) {
     const jobId = getJobId(event);
     const job = hasFullWorkflowAccess(event) ? await getWorkflowJobById(jobId) : await getWorkflowJobForUser(jobId, userId);
     if (!job) return jsonResponse(404, { error: "Job not found." });
+    const manifest = await getArtifactManifest(jobId);
+    if (manifest) {
+      const bundle = await createJobArtifactBundle({ jobId, manifest });
+      if (!bundle) return jsonResponse(404, { error: "No artifact files are available yet." });
+      const downloadUrl = await createDownloadUrl({ bucket: bundle.bucket, key: bundle.s3Key, filename: bundle.filename, contentType: "application/zip" });
+      return jsonResponse(200, { filename: bundle.filename, downloadUrl });
+    }
     const artifacts = await listArtifactsForJob(jobId);
     if (job.workflowId === "claim-status" && job.portalId === "iehp") {
       const bundle = await createIehpBundle({

@@ -209,12 +209,12 @@ async function waitForNextAuthStep(page: Page, timeout = 60000): Promise<"verify
 }
 
 async function requestOptumOtp(context: ScraperContext): Promise<string> {
-  const timeoutMs = 300000;
+  const timeoutMs = 360000;
   await context.emit({
     type: "input_request",
     inputName: "optum_pro_otp",
     label: "Optum Pro text message OTP",
-    message: "Enter the One Healthcare ID access code sent by text message within 5 minutes.",
+    message: "Enter the One Healthcare ID access code sent by text message within 6 minutes.",
     timeoutMs,
   });
   return waitForScrapeJobInput(context.jobId, "optum_pro_otp", timeoutMs);

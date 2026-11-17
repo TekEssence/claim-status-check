@@ -182,9 +182,9 @@ async function requestOtp(context: ScraperContext, log: (message: string) => Pro
     inputName: OTP_INPUT_NAME,
     label: "Medpoint OTP",
     message: "Enter the Medpoint OTP code to continue.",
-    timeoutMs: 300000,
+    timeoutMs: 360000,
   });
-  return waitForScrapeJobInput(context.jobId, OTP_INPUT_NAME, 300000);
+  return waitForScrapeJobInput(context.jobId, OTP_INPUT_NAME, 360000);
 }
 
 export async function loginToMedpoint(options: {
@@ -360,6 +360,7 @@ export function buildOutputRows(row: MedpointInputRow, ipaContext: string, resul
     const finalStatus = parseMoney(netAmount) > 0 ? 'Paid' : (descriptionValue || codeValue ? 'Denied' : (rawStatus || 'Pending'));
     return {
       input_row_number: row.inputRowNumber,
+      BotStatus: "Success",
       input_member_last_name: row.memberLastName,
       input_member_first_name: row.memberFirstName,
       input_service_from_date: row.serviceFromDate,

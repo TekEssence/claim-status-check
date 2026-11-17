@@ -8,12 +8,14 @@ import {
   updateWorkflowJob,
 } from "../runtime/workflow-db";
 import { cancelIntegratedWorkflowJob, launchQueuedWorkflowJob, reconcileAwsJobRuntime } from "./jobs";
-import { pageServiceResults } from "../service/iehp-results";
-import { getServiceWorkflowForJob, loadIntegratedServiceSnapshot, resolveServiceWorkflowRoute, ServiceWorkflowDispatchError } from "../service/workflow-registry";
+import { readWorkerServiceResultPage, readWorkerServiceResultBatch } from "../service/result-publication-store";
+import { ServicePublicationError, validateServiceResultPage } from "../service/result-publication";
+import { getServiceWorkflowForJob, resolveServiceWorkflowRoute, ServiceWorkflowDispatchError } from "../service/workflow-registry";
 import { lookupServiceSubmission, reserveServiceSubmission, ServiceSubmissionConflict } from "../service/service-submission";
 import { ServiceCancellationConflict } from "../service/service-cancellation";
 import type { ServiceSubmitBody } from "../service/service-contract";
 import { submissionValidationLog } from "../service/submission-validation-log";
+import { isEligibilityServicePortal } from "../service/eligibility-portals";
 
 class ServiceRequestError extends Error {
   constructor(public readonly statusCode: number, message: string) { super(message); }
@@ -53,7 +55,7 @@ function errorResponse(error: unknown) {
   if (hasPostgresCode(error, "42703")) {
     return jsonResponse(503, { error: "Claim Status service database migration 0007 has not been applied." });
   }
-  const status = error instanceof ServiceAuthError || error instanceof ServiceRequestError || error instanceof ServiceWorkflowDispatchError ? error.statusCode
+  const status = error instanceof ServiceAuthError || error instanceof ServiceRequestError || error instanceof ServiceWorkflowDispatchError || error instanceof ServicePublicationError ? error.statusCode
     : error instanceof ServiceSubmissionConflict ? 409
       : error instanceof ServiceCancellationConflict ? 503 : error instanceof SyntaxError ? 400 : 500;
   const message = error instanceof Error ? error.message : "Claim Status service request failed.";
@@ -90,6 +92,7 @@ function statusName(status: string): string {
 }
 
 function errorCategory(message: string | null, status: string): string | null {
+  if (status === "cancelled") return "CANCELLED";
   if (status === "waiting_otp") return "OTP_REQUIRED";
   if (!message) return null;
   if (/deadline exceeded/i.test(message)) return "DEADLINE_EXCEEDED";
@@ -156,6 +159,8 @@ export async function submitServiceJob(event: ApiEvent) {
           metadata: {
             integrationMode: "service", requestHash: fingerprint, requestHashVersion: 3, requestHashSalt: salt,
             deadlineAt, expectedRowCount: generated.claimCount, inputKeys,
+            // Retain correlation even if an input upload fails before claimRows.json is saved.
+            serviceClaimRefs: JSON.parse(generated.claimRowsJson).map((row: Record<string, string>) => row["Client Row Ref"]),
             accountLabel: generated.accountLabel, formFields: generated.formFields,
           },
         });
@@ -231,8 +236,20 @@ export async function cancelServiceJob(event: ApiEvent) {
 }
 
 export async function getServiceJobResult(event: ApiEvent) {
+  if (event.pathParameters?.jobId === "batch") return getServiceJobResultBatch(event);
   try {
-    const job = await ownedJob(event);
+    return jsonResponse(200, await buildServiceJobResult(event));
+  } catch (error) { return errorResponse(error); }
+}
+
+type ResultContext = {
+  job: NonNullable<Awaited<ReturnType<typeof getWorkflowJobById>>>;
+  stored: Awaited<ReturnType<typeof readWorkerServiceResultPage>>;
+  challenge: Awaited<ReturnType<typeof getLatestWorkflowInputRequest>> | null;
+};
+
+async function buildServiceJobResult(event: ApiEvent, context?: ResultContext) {
+    const job = context?.job ?? await ownedJob(event);
     const resultLabel = getServiceWorkflowForJob(job.workflowId)?.resultLabel ?? "Claim Status";
     const rawCursor = event.queryStringParameters?.cursor ?? "0";
     const rawLimit = event.queryStringParameters?.limit ?? "100";
@@ -245,35 +262,26 @@ export async function getServiceJobResult(event: ApiEvent) {
       throw new ServiceRequestError(400, "cursor must be a safe integer and limit must be at most 200.");
     }
     const terminal = ["completed", "partial_success", "failed", "cancelled"].includes(job.status);
-    let snapshot: Awaited<ReturnType<typeof loadIntegratedServiceSnapshot>> | null = null;
-    let total = 0;
-    try {
-      snapshot = await loadIntegratedServiceSnapshot(job, { requireStatusColumns: false });
-      total = snapshot.expectedRefs.length;
-    } catch {
-      const artifacts = await listArtifactsForJob(job.jobId);
-      const noOutput = !artifacts.some((item) => item.artifactType === "output_snapshot" || (item.artifactType === "file_download" && item.filename.endsWith(".xlsx")));
-      const expectedRowCount = (job.metadata as { expectedRowCount?: unknown } | null)?.expectedRowCount;
-      if (!terminal || !["failed", "cancelled"].includes(job.status) || !noOutput || typeof expectedRowCount !== "number") {
-        throw new ServiceRequestError(503, `Current ${resultLabel} workbook is unavailable or invalid; retry this poll.`);
-      }
-      total = expectedRowCount;
+    const workerOutcomesOnly = job.workflowId === "claim-status";
+    if (!workerOutcomesOnly && !(job.workflowId === "eligibility-verification" && isEligibilityServicePortal(job.portalId))) {
+      throw new ServiceRequestError(422, "Service results are not supported for this workflow and portal.");
     }
-    const summary = snapshot?.summary ?? null;
-    const artifact = snapshot?.artifact ?? null;
+    const stored = context?.stored ?? await readWorkerServiceResultPage(job.jobId, cursor, limit);
+    const expectedRefs = stored.expectedRefs;
+    const total = expectedRefs.length;
+    const summary = stored.summary;
+    const artifact = stored.artifact;
     if (cursor > total) throw new ServiceRequestError(400, "cursor exceeds the submitted claim count.");
-    if ((job.status === "completed" || job.status === "partial_success") && (!summary || !artifact)) {
-      throw new ServiceRequestError(503, `Final ${resultLabel} workbook is missing; retry this poll.`);
-    }
-    if (job.status === "completed" && summary?.outcome !== "SUCCESS") {
+    if (job.status === "completed" && summary && summary.outcome !== "SUCCESS") {
       throw new ServiceRequestError(503, `Final ${resultLabel} workbook does not match job status; retry this poll.`);
     }
-    if (!summary && cursor > 0) throw new ServiceRequestError(503, `Previously visible ${resultLabel} workbook is unavailable; retry this poll.`);
-    const { available, nextCursor, results } = pageServiceResults(summary, cursor, limit, terminal);
-    if (cursor > available) throw new ServiceRequestError(503, `Previously finalized ${resultLabel} rows are unavailable; retry this poll.`);
+    const { available, nextCursor, results, processed, pending, unsupported } = stored;
+    if (workerOutcomesOnly && (job.status === "completed" || job.status === "partial_success") && pending > 0) {
+      throw new ServiceRequestError(503, "This legacy job has unpublished claims without worker outcomes. An audited recovery is required; workbook fields will not be used to invent results.");
+    }
     let actionRequired: Record<string, unknown> | null = null;
     if (job.status === "waiting_otp") {
-      const challenge = await getLatestWorkflowInputRequest(job.jobId);
+      const challenge = context ? context.challenge : await getLatestWorkflowInputRequest(job.jobId);
       const payload = challenge?.payload as { type?: unknown; inputName?: unknown; label?: unknown; message?: unknown; timeoutMs?: unknown;
         providerStage?: unknown; corporateTaxIdOwners?: unknown; careProviders?: unknown } | undefined;
       const timeoutMs = typeof payload?.timeoutMs === "number" && Number.isFinite(payload.timeoutMs) && payload.timeoutMs > 0
@@ -298,20 +306,84 @@ export async function getServiceJobResult(event: ApiEvent) {
         : summary.counts.action_required > 0 ? "MANUAL_ACTION_REQUIRED"
           : summary.counts.incomplete > 0 ? "INCOMPLETE" : null
       : null;
-    return jsonResponse(200, {
+    return {
       client_system: job.clientSystem, client_execution_id: job.clientExecutionId,
       job_id: job.jobId, portal: job.portalId, status: statusName(job.status),
-      processed: summary?.finalized_count ?? 0, total,
+      // All counts are per submitted reference. Cursor counts durable
+      // publications; pending includes unfinished supported and unsupported rows.
+      processed, total, pending, unsupported,
+      ...(workerOutcomesOnly && summary ? { success: summary.counts.success, failed: summary.counts.failed,
+        no_match: summary.counts.no_match, skipped: summary.counts.skipped, action_required_count: summary.counts.action_required } : {}),
       results,
-      next_cursor: String(nextCursor), final: terminal && nextCursor === available,
+      next_cursor: String(nextCursor), final: terminal && pending === 0 && nextCursor === available,
       artifact,
       action_required: actionRequired,
       error_category: errorCategory(job.errorMessage, job.status) ?? rowFailureCategory,
       error: job.errorMessage || null,
+    };
+}
+
+const BATCH_MAX_BYTES = 4 * 1024 * 1024;
+
+/** Batch mode of the existing GET route; the reader performs one owned-job query. */
+export async function getServiceJobResultBatch(event: ApiEvent, readBatch = readWorkerServiceResultBatch) {
+  try {
+    const clientSystem = authenticateService(event);
+    const raw = event.queryStringParameters?.jobs ?? "";
+    if (Buffer.byteLength(raw) > 8192) throw new ServiceRequestError(400, "jobs query exceeds 8192 bytes.");
+    const jobs: unknown = JSON.parse(raw || "null");
+    if (!Array.isArray(jobs) || jobs.length < 1 || jobs.length > 10) throw new ServiceRequestError(400, "jobs must contain 1 to 10 entries.");
+    const seen = new Set<string>();
+    const requests = jobs.map((item: { job_id?: unknown; cursor?: unknown; limit?: unknown } | null) => {
+      if (!item || typeof item.job_id !== "string" || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$/.test(item.job_id) || seen.has(item.job_id)) {
+        throw new ServiceRequestError(400, "Each job_id must be a unique identifier of at most 100 letters, digits, underscores or hyphens.");
+      }
+      seen.add(item.job_id);
+      const cursor = item.cursor ?? "0";
+      const limit = item.limit ?? 100;
+      const parsedCursor = typeof cursor === "string" ? Number(cursor) : NaN;
+      const parsedLimit = typeof limit === "number" ? limit : NaN;
+      let error: unknown;
+      try {
+        if (typeof cursor !== "string" || !/^(0|[1-9]\d*)$/.test(cursor) || typeof limit !== "number") throw new ServicePublicationError(400, "Invalid result cursor or limit.");
+        validateServiceResultPage(parsedCursor, parsedLimit);
+      } catch (caught) { error = caught; }
+      return { job_id: item.job_id, cursor: parsedCursor, limit: Math.min(parsedLimit, Math.floor(500 / jobs.length)), error };
     });
-  } catch (error) {
-    return errorResponse(error);
-  }
+    const valid = requests.filter(request => !request.error);
+    const rows = valid.length ? await readBatch(clientSystem, valid) : [];
+    const byId = new Map(rows.map(row => [row.jobId, row]));
+    const byteShare = Math.floor((BATCH_MAX_BYTES - 8192) / requests.length);
+    const entries = await Promise.all(requests.map(async request => {
+      try {
+        if (request.error) throw request.error;
+        const row = byId.get(request.job_id);
+        if (!row) throw new ServicePublicationError(404, "Job not found.");
+        if (!row.job || !row.stored) throw row.error;
+        const body = await buildServiceJobResult({ ...event, queryStringParameters: { cursor: String(request.cursor), limit: String(request.limit) } },
+          { job: row.job, stored: row.stored, challenge: row.challenge });
+        const response = { http_status: 200, ...body, results: [] as typeof body.results, next_cursor: String(request.cursor), final: false };
+        let bytes = Buffer.byteLength(JSON.stringify(response)) + 32; // Reserve cursor growth and JSON separators.
+        for (const result of body.results) {
+          const size = Buffer.byteLength(JSON.stringify(result)) + 1;
+          if (bytes + size > byteShare) break;
+          response.results.push(result);
+          bytes += size;
+        }
+        if (Buffer.byteLength(JSON.stringify(response)) > byteShare || (body.results.length && !response.results.length)) {
+          throw new ServicePublicationError(413, "Job metadata or the next complete claim exceeds its batch byte share; use the single-job results endpoint.");
+        }
+        response.next_cursor = String(request.cursor + response.results.length);
+        response.final = body.final && response.results.length === body.results.length;
+        return [request.job_id, response] as const;
+      } catch (error) {
+        const response = errorResponse(error);
+        return [request.job_id, { http_status: response.statusCode, ...JSON.parse(response.body),
+          next_cursor: Number.isSafeInteger(request.cursor) && request.cursor >= 0 ? String(request.cursor) : null }] as const;
+      }
+    }));
+    return jsonResponse(200, { jobs: Object.fromEntries(entries) });
+  } catch (error) { return errorResponse(error); }
 }
 
 export async function submitServiceJobInput(event: ApiEvent) {
@@ -325,7 +397,7 @@ export async function submitServiceJobInput(event: ApiEvent) {
     if (!body || typeof body !== "object" || Array.isArray(body) || body.input_name !== inputName || typeof body.value !== "string" || !body.value.trim() || body.value.length > 500) {
       throw new ServiceRequestError(400, "Invalid verification response.");
     }
-    await createWorkflowCommand({ jobId: job.jobId, commandType: inputName, payload: { value: body.value.trim() }, createdBy: `service:${job.clientSystem}`, ttlMs: 2 * 60 * 1000 });
+    await createWorkflowCommand({ jobId: job.jobId, commandType: inputName, payload: { value: body.value.trim() }, createdBy: `service:${job.clientSystem}`, ttlMs: 6 * 60 * 1000 });
     await appendWorkflowEvent(job.jobId, "input_submitted", { type: "input_submitted", inputName });
     return jsonResponse(200, { ok: true });
   } catch (error) {

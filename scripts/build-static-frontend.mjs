@@ -24,6 +24,7 @@ const extraSourcePaths = [
   "backend/src/workflows/claim-status/portals/iehp/claims",
   "backend/src/workflows/claim-status/portals/uhc/workbook-output.ts",
   "backend/src/workflows/claim-status/output-columns.ts",
+  "backend/src/workflows/claim-status/worker-outcome.ts",
   "lib/auth/password-policy.ts",
 ];
 

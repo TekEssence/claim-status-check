@@ -5,6 +5,7 @@ import type { EligibilityResult, EligibilityRunInput } from "../../types";
 import { parseEligibilityProjectId } from "../../projects";
 import { buildTriZettoOutput, readTriZettoCredentials, readTriZettoInput } from "./data";
 import { loginTriZetto, verifyTriZettoRow } from "./portal";
+import { createEligibilityServiceSnapshots } from "../../partial-output";
 
 export function createTriZettoEligibilityRunner(): AutomationRunner<EligibilityRunInput> {
   return {
@@ -26,6 +27,7 @@ export function createTriZettoEligibilityRunner(): AutomationRunner<EligibilityR
       const rows = new Map(inputRows.map((row) => [row.originalIndex, row]));
       const results = new Map<number, EligibilityResult>();
       const errors = new Map<number, string>();
+      const publishSnapshot = createEligibilityServiceSnapshots(context, { inputFile: input.inputFile, rows, results, errors }, buildTriZettoOutput);
       await context.emit({ type: "progress", completed: 0, total: rows.size });
       const { browser, context: browserContext } = await launchAutomationBrowser();
       let page: Awaited<ReturnType<typeof browserContext.newPage>> | undefined;
@@ -56,6 +58,7 @@ export function createTriZettoEligibilityRunner(): AutomationRunner<EligibilityR
             "Plan Date": result?.planDate ?? "", "Service Type": String(result?.metadata?.medRevenueOutputServiceType ?? ""),
             Description: errors.get(rowIndex) || String(result?.metadata?.trizettoDescription ?? "") } });
           await context.emit({ type: "progress", completed: ++completed, total: rows.size, currentRow: rowIndex });
+          await publishSnapshot();
         }
         const output = await buildTriZettoOutput({ inputFile: input.inputFile, rows, results, errors });
         await context.emit({ type: "file_download", filename: "medrevenue-trizetto-eligibility-output.xlsx", mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", base64: output.toString("base64") });

@@ -3,6 +3,7 @@ import { servicePortals, type PortalAdapter, type PreparedServiceInput } from ".
 import { generateEligibilityServiceInput, validateEligibilityServiceInput } from "./eligibility-input";
 import { loadEligibilityServiceSnapshot } from "./eligibility-snapshot";
 import { SERVICE_WORKFLOW_IDS, type ServiceWorkflowId } from "./service-contract";
+import { ELIGIBILITY_SERVICE_PORTALS } from "./eligibility-portals";
 
 export { SERVICE_WORKFLOW_IDS } from "./service-contract";
 export type { ServiceWorkflowId } from "./service-contract";
@@ -15,11 +16,10 @@ export type ServiceWorkflowDefinition = {
   unavailableReason?: string;
 };
 
-const eligibilityPortals: Record<string, PortalAdapter> = {
-  availity: {
+const eligibilityPortals: Record<string, PortalAdapter> = Object.fromEntries(ELIGIBILITY_SERVICE_PORTALS.map(portal => [portal, {
     prepare: async (body: unknown): Promise<PreparedServiceInput> => {
-      const input = validateEligibilityServiceInput(body);
-      const generated = await generateEligibilityServiceInput(input);
+      const input = validateEligibilityServiceInput(body, portal);
+      const generated = await generateEligibilityServiceInput(input, portal);
       return {
         claimCount: input.claims.length,
         files: [
@@ -34,8 +34,7 @@ const eligibilityPortals: Record<string, PortalAdapter> = {
       };
     },
     loadSnapshot: loadEligibilityServiceSnapshot,
-  },
-};
+  }]));
 
 export const serviceWorkflowRegistry: Record<ServiceWorkflowId, ServiceWorkflowDefinition> = {
   [SERVICE_WORKFLOW_IDS.CLAIM_STATUS]: {

@@ -1,4 +1,5 @@
 import type ExcelJS from "exceljs";
+import { WORKER_OUTCOME_COLUMN, workerOutcomeForOutput } from "./worker-outcome";
 
 export const CLAIM_STATUS_OUTPUT_HEADERS = [
   "Claim Status - Denial Code",
@@ -20,7 +21,7 @@ function text(value: unknown): string {
 function value(value: unknown): OutputValue {
   if (typeof value === "number" && Number.isFinite(value)) return value;
   const normalized = text(value);
-  return normalized && !/^(?:NA|N\/A|null|undefined)$/i.test(normalized) ? normalized : null;
+  return normalized && !/^(?:NA|N\/A|null|undefined|[-–—]+)$/i.test(normalized) ? normalized : null;
 }
 
 function key(label: string): string {
@@ -59,7 +60,8 @@ function iehpCodes(row: OutputRow): { denial: OutputValue; remark: OutputValue }
   const codes = text(pick(row, "RA Reason")).split(/[,;]\s*/).map((code) => code.trim()).filter(Boolean);
   if (codes.length === 0) return { denial: null, remark: null };
   const remarks = codes.filter((code) => /^(?:MA|M|N)\d+$/i.test(code));
-  const denial = codes.filter((code) => !remarks.includes(code));
+  // Reason descriptions are not adjustment codes. Only copy identifiable codes.
+  const denial = codes.filter((code) => /^(?:(?:CO|PR|OA|PI|CR)[ -]?)?\d+$/i.test(code));
   return { denial: value(denial.join(", ")), remark: value(remarks.join(", ")) };
 }
 
@@ -85,9 +87,9 @@ export function claimStatusOutputValues(portal: string, row: OutputRow): Record<
     : portal === "iehp"
       ? iehpCodes(row).remark
       : portal === "availity"
-        ? value(text(summary).match(/\bdenial reason\s+([A-Z0-9, -]+?)(?:\s+-\s+|\.|$)/i)?.[1])
+        ? pick(row, "RARC", "Remark Codes", "BotRemarkCodes")
     : pick(row, "RARC", "Remark Codes", "BotRemarkCodes");
-  const paid = portal === "my-family"
+  const paid = portal === "iehp" ? pick(row, "RA Net Paid") : portal === "my-family"
     ? labeled(serviceLines, "Net Paid")
     : pick(row, "NetPay", "net_amount", "net", "paid", "total_paid", "detail_net_amount", "Bot Amount Paid", "Claim Amount Paid", "Payment Amount", "RA Net Paid", "Net Payable", "PROV PD", "BotPaidAmount", "Paid Amount", "line_pay_amount", "search_pay_amount");
   const copay = portal === "my-family" ? labeled(serviceLines, "Copay") : pick(row, "Copay", "CoPay", "co_pay", "RA Copay", "Bot Copay", "line_copay");
@@ -102,17 +104,25 @@ export function claimStatusOutputValues(portal: string, row: OutputRow): Record<
     ...(combinedCopayCoinsurance === null ? [] : [["Copay/Coinsurance", combinedCopayCoinsurance] as [string, OutputValue]]),
     ...(combinedDeductibleCopay === null ? [] : [["Deductible/Copay", combinedDeductibleCopay] as [string, OutputValue]]),
   ]);
-  return {
+  const projected = {
     "Claim Status - Denial Code": denialCode(portal, row),
     "Claim Status - Remark Code": remark,
     "Claim Status - Paid Amount": paid ?? (portal === "availity" ? phrase(summary, "paid amount") : null),
     "Claim Status - Copay/Coins/Ded": responsibility,
-    "Claim Status - Final Status": pick(row, "final_status", "Final Status", "Final status", "BotClaimResult", "BotClaimStatus", "bot_updated_claim_status", "bot_overall_result", "claim_outcome", "BotStatus", "result"),
+    "Claim Status - Final Status": pick(row, "final_status", "Final Status", "Final status", "RA Status", "BotClaimResult", "BotClaimStatus", "bot_updated_claim_status", "claim_outcome", "BotStatus", "result", "bot_overall_result"),
   };
+  // Existing canonical workbook values take precedence over alias projections.
+  for (const header of CLAIM_STATUS_OUTPUT_HEADERS) projected[header] = pick(row, header) ?? projected[header];
+  if (/^(?:success|failed|failure|skipped|incomplete|action_required|no_match|not[ _-](?:processed|started|checked)(?:[ .:_-].*)?)$/i.test(text(projected["Claim Status - Final Status"]))) {
+    projected["Claim Status - Final Status"] = null;
+  }
+  // IEHP's check amount covers unrelated claims; RA Net Paid is authoritative.
+  if (portal === "iehp") projected["Claim Status - Paid Amount"] = paid ?? pick(row, "Claim Status - Paid Amount");
+  return projected;
 }
 
 export function claimStatusOutputRows<T extends OutputRow>(portal: string, rows: T[]): Array<T & ReturnType<typeof claimStatusOutputValues>> {
-  return rows.map((row) => ({ ...row, ...claimStatusOutputValues(portal, row) }));
+  return rows.map((row) => ({ ...row, ...claimStatusOutputValues(portal, row), [WORKER_OUTCOME_COLUMN]: workerOutcomeForOutput(portal, row) }));
 }
 
 export function appendClaimStatusOutputColumns(worksheet: ExcelJS.Worksheet, portal: string): void {
@@ -125,7 +135,7 @@ export function appendClaimStatusOutputColumns(worksheet: ExcelJS.Worksheet, por
   const targets = new Map<string, number>();
   const lastSourceColumn = Math.max(1, ...sourceColumns.values());
   let nextColumn = Math.max(worksheet.columnCount, headerRow.cellCount);
-  for (const header of CLAIM_STATUS_OUTPUT_HEADERS) {
+  for (const header of [WORKER_OUTCOME_COLUMN, ...CLAIM_STATUS_OUTPUT_HEADERS]) {
     const existingColumn = sourceColumns.get(header);
     const column = existingColumn ?? ++nextColumn;
     const cell = headerRow.getCell(column);
@@ -137,10 +147,28 @@ export function appendClaimStatusOutputColumns(worksheet: ExcelJS.Worksheet, por
   worksheet.eachRow((excelRow, rowNumber) => {
     if (rowNumber === 1) return;
     const source: OutputRow = {};
-    for (const [header, column] of sourceColumns) source[header] = excelRow.getCell(column).value;
+    for (const [header, column] of sourceColumns) {
+      const cell = excelRow.getCell(column);
+      source[header] = cell.formula ? cell.result : cell.value;
+    }
+    // Workbook snapshots must refresh derived columns when native cells change.
+    for (const header of CLAIM_STATUS_OUTPUT_HEADERS) delete source[header];
     const projected = claimStatusOutputValues(portal, source);
     for (const header of CLAIM_STATUS_OUTPUT_HEADERS) {
       excelRow.getCell(targets.get(header)!).value = projected[header];
     }
+    excelRow.getCell(targets.get(WORKER_OUTCOME_COLUMN)!).value = workerOutcomeForOutput(portal, source);
+  });
+}
+
+/** A new execution must not inherit completion from an uploaded old workbook. */
+export function clearPreviousWorkerOutput(worksheet: ExcelJS.Worksheet): void {
+  const columns: number[] = [];
+  worksheet.getRow(1).eachCell((cell, column) => {
+    const header = String(cell.value ?? "");
+    if (/^Bot/i.test(header) || header === WORKER_OUTCOME_COLUMN || CLAIM_STATUS_OUTPUT_HEADERS.some(value => value === header)) columns.push(column);
+  });
+  worksheet.eachRow((row, index) => {
+    if (index > 1) for (const column of columns) row.getCell(column).value = null;
   });
 }

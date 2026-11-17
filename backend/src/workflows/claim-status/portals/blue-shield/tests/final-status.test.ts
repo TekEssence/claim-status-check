@@ -297,4 +297,5 @@ test("normalizes Blue Shield bot status to paid denied claim pending or not foun
     outputRows.map((row) => row.botStatus),
     ["Paid", "Denied", "Claim pending", "Not Found"],
   );
+  assert.deepEqual(outputRows.map(row => row.workerOutcome), ["SUCCESS", "SUCCESS", "SUCCESS", "NO_MATCH"]);
 });

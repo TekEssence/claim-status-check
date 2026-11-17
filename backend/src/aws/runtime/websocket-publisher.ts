@@ -20,6 +20,7 @@ function shouldPublish(event: Record<string, unknown>): boolean {
     "job_started",
     "task_starting",
     "progress",
+    "row_progress",
     "log",
     "otp_required",
     "otp_request",

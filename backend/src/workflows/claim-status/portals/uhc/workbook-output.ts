@@ -253,67 +253,7 @@ export function applyUhcRowUpdateToWorksheet(
 }
 
 export function postProcessUhcWorksheet(worksheet: ExcelJS.Worksheet): void {
-  const headerRow = worksheet.getRow(1);
-  const subscriberCol = findColumn(headerRow, [
-    "subscriber no",
-    "subscriber number",
-    "subscriber id",
-    "subscriberid",
-    "subscriber",
-    "member id",
-    "memberid",
-    "member no",
-    "member number",
-    "uhc id",
-    "policy id",
-    "policy number",
-  ]);
-  const serviceDateCol = findExactColumn(headerRow, ["dos"]) || findColumn(headerRow, [
-    "service date",
-    "date of service",
-    "dos",
-    "dos from",
-    "from dos",
-    "service from date",
-    "service start date",
-    "first service date",
-    "claim service date",
-  ]);
-  const botColumns: number[] = [];
-
-  headerRow.eachCell((cell, colNum) => {
-    if (cellText(cell.value).startsWith("Bot")) botColumns.push(colNum);
-  });
-
-  if (!subscriberCol || !serviceDateCol || botColumns.length === 0) {
-    appendClaimStatusOutputColumns(worksheet, "uhc");
-    return;
-  }
-
-  const groups = new Map<string, number[]>();
-  worksheet.eachRow((row, rowNum) => {
-    if (rowNum === 1) return;
-    const subscriberNo = cellText(row.getCell(subscriberCol).value);
-    const serviceDate = cellText(row.getCell(serviceDateCol).value);
-    if (!subscriberNo) return;
-    const key = `${subscriberNo}|${serviceDate}`;
-    groups.set(key, [...(groups.get(key) ?? []), rowNum]);
-  });
-
-  for (const rowNums of groups.values()) {
-    if (rowNums.length < 2) continue;
-    const sourceRowNum = rowNums.find((rowNum) =>
-      botColumns.some((colNum) => cellText(worksheet.getRow(rowNum).getCell(colNum).value) !== ""),
-    ) ?? rowNums[0];
-    const sourceRow = worksheet.getRow(sourceRowNum);
-    for (const rowNum of rowNums) {
-      if (rowNum === sourceRowNum) continue;
-      const targetRow = worksheet.getRow(rowNum);
-      for (const colNum of botColumns) {
-        targetRow.getCell(colNum).value = sourceRow.getCell(colNum).value;
-      }
-      targetRow.commit();
-    }
-  }
+  // A matching member/date is not proof that another submitted claim ran.
+  // Only its own row_update may populate a claim's execution fields.
   appendClaimStatusOutputColumns(worksheet, "uhc");
 }

@@ -58,7 +58,7 @@ test("IEHP OTP request waits, then resumes on the same page with the supplied co
   await requestPublished;
   assert.deepEqual(events, [{
     type: "input_request", inputName: "iehp_otp", label: "IEHP verification code",
-    message: "Enter the IEHP verification code within 5 minutes.", timeoutMs: 300000,
+    message: "Enter the IEHP verification code within 6 minutes.", timeoutMs: 360000,
   }]);
   assert.equal(getCode(), "");
   reply("493017");
@@ -95,10 +95,10 @@ test("IEHP OTP timeout has a clear error and does not expose the code in events"
   await assert.rejects(
     completeIehpLoginAfterCredentials(
       page,
-      async () => { throw new Error("OTP was not sent within 5 minutes."); },
+      async () => { throw new Error("OTP was not sent within 6 minutes."); },
       async event => { events.push(event); },
     ),
-    /IEHP OTP timed out after 5 minutes/,
+    /IEHP OTP timed out after 6 minutes/,
   );
   assert.equal(events[0].type, "input_request");
   assert.equal(Object.hasOwn(events[0], "value"), false);

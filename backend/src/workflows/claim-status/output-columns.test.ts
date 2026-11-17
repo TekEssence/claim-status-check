@@ -36,7 +36,7 @@ test("uses clearly labeled amounts in portal detail text and leaves untyped code
   assert.equal(availity["Claim Status - Copay/Coins/Ded"], "Copay: $2.00; Coinsurance: $3.00; Deductible: $4.00");
   const denied = claimStatusOutputValues("availity", { bot_updated_claim_status: "Claim denied on 04/22/2026 denial reason 97 - Included in payment." });
   assert.equal(denied["Claim Status - Denial Code"], null);
-  assert.equal(denied["Claim Status - Remark Code"], "97");
+  assert.equal(denied["Claim Status - Remark Code"], null);
 });
 
 test("splits identifiable IEHP remark codes from the RA reason field", () => {

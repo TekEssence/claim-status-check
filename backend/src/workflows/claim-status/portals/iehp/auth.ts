@@ -7,7 +7,7 @@ export type LoginStatus = {
 };
 
 export const IEHP_OTP_INPUT_NAME = "iehp_otp";
-export const IEHP_OTP_TIMEOUT_MS = 5 * 60 * 1000;
+export const IEHP_OTP_TIMEOUT_MS = 6 * 60 * 1000;
 
 type LoginDetectionOptions = { otp?: boolean; otpRejection?: boolean };
 
@@ -73,7 +73,7 @@ export async function completeIehpLoginAfterCredentials(
       type: "input_request",
       inputName: IEHP_OTP_INPUT_NAME,
       label: "IEHP verification code",
-      message: "Enter the IEHP verification code within 5 minutes.",
+      message: "Enter the IEHP verification code within 6 minutes.",
       timeoutMs: IEHP_OTP_TIMEOUT_MS,
     });
   } catch (error) {
@@ -86,7 +86,7 @@ export async function completeIehpLoginAfterCredentials(
     otp = await inputPromise;
   } catch (error) {
     if (error instanceof Error && /OTP was not sent within/i.test(error.message)) {
-      throw new Error("IEHP OTP timed out after 5 minutes.");
+      throw new Error("IEHP OTP timed out after 6 minutes.");
     }
     throw error;
   }

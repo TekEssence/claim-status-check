@@ -1,21 +1,22 @@
 import ExcelJS from "exceljs";
 import type { ServiceResultSummary, ServiceRowResult, ServiceRowStatus } from "./iehp-results";
+import { summarizeServiceResults } from "./result-summary";
+import { claimStatusResultFields } from "./claim-status-result-fields";
+import { classifyClaimCompletion } from "./claim-completion";
 
-function cellText(value: ExcelJS.CellValue): string {
+function cellText(cell: ExcelJS.Cell): string {
+  const value = cell.formula ? cell.result : cell.value;
   if (value == null) return "";
   if (typeof value === "object" && "text" in value) return String(value.text ?? "").trim();
+  if (typeof value === "object" && "result" in value) return String(value.result ?? "").trim();
   return String(value).trim();
 }
 
 function rowStatus(raw: string, notes: string): { status: ServiceRowStatus; category: string | null } {
-  if (!raw) return { status: "INCOMPLETE", category: "INCOMPLETE" };
-  if (/^success$/i.test(raw)) return { status: "SUCCESS", category: null };
-  if (/^(not[_ ]?found|no[_ ]?(?:results?|match))$/i.test(raw)) return { status: "NO_MATCH", category: "NO_MATCH" };
-  if (/otp|mfa|captcha|verification required|action required/i.test(`${raw} ${notes}`)) {
-    return { status: "ACTION_REQUIRED", category: "MANUAL_ACTION_REQUIRED" };
-  }
-  if (/^skipped$/i.test(raw)) return { status: "FAILED", category: "INVALID_INPUT" };
-  return { status: "FAILED", category: "PORTAL_ERROR" };
+  if (/^skipped$/i.test(raw) && /payer.*not supported|unsupported payer/i.test(notes)) return { status: "FAILED", category: "UNSUPPORTED_PAYER" };
+  const { status } = classifyClaimCompletion("availity", { bot_overall_result: raw, bot_notes: notes });
+  return { status, category: status === "SUCCESS" ? null : status === "ACTION_REQUIRED" ? "MANUAL_ACTION_REQUIRED"
+    : status === "FAILED" ? /^skipped$/i.test(raw) ? "INVALID_INPUT" : "PORTAL_ERROR" : status };
 }
 
 function normalizeClaim(ref: string, rows: Array<Record<string, string>>): ServiceRowResult {
@@ -59,7 +60,7 @@ export async function normalizeAvailityServiceWorkbook(
   const sheet = workbook.getWorksheet("Output");
   if (!sheet) throw new Error("Availity output workbook is missing the Output worksheet.");
   const headers = new Map<string, number>();
-  sheet.getRow(1).eachCell((cell, column) => headers.set(cellText(cell.value), column));
+  sheet.getRow(1).eachCell((cell, column) => headers.set(cellText(cell), column));
   const refColumn = headers.get("Client Row Ref");
   if (!refColumn) throw new Error("Availity output workbook is missing Client Row Ref.");
   if ((options.requireStatusColumns ?? true) && (!headers.has("bot_overall_result") || !headers.has("bot_updated_claim_status"))) {
@@ -69,33 +70,22 @@ export async function normalizeAvailityServiceWorkbook(
   const grouped = new Map<string, Array<Record<string, string>>>();
   for (let index = 2; index <= sheet.rowCount; index += 1) {
     const row = sheet.getRow(index);
-    const ref = cellText(row.getCell(refColumn).value);
+    const ref = cellText(row.getCell(refColumn));
     if (!ref) continue;
     if (!expected.has(ref)) throw new Error(`Availity output has an unexpected Client Row Ref: ${ref}.`);
     const record: Record<string, string> = {};
     for (const [header, column] of headers) {
       if (header === "Client Row Ref" || header === "input_row_id") continue;
-      const value = cellText(row.getCell(column).value);
+      const value = cellText(row.getCell(column));
       if (value) record[header] = value;
     }
     const existing = grouped.get(ref) ?? [];
     existing.push(record);
     grouped.set(ref, existing);
   }
-  const rowResults = expectedRefs.map((ref) => normalizeClaim(ref, grouped.get(ref) ?? []));
-  const firstIncomplete = rowResults.findIndex((row) => row.status === "INCOMPLETE");
-  const counts = {
-    total: rowResults.length,
-    success: rowResults.filter((row) => row.status === "SUCCESS").length,
-    no_match: rowResults.filter((row) => row.status === "NO_MATCH").length,
-    failed: rowResults.filter((row) => row.status === "FAILED").length,
-    action_required: rowResults.filter((row) => row.status === "ACTION_REQUIRED").length,
-    incomplete: rowResults.filter((row) => row.status === "INCOMPLETE").length,
-  };
-  return {
-    outcome: counts.success === counts.total ? "SUCCESS" : counts.success > 0 ? "PARTIAL_SUCCESS" : "FAILED",
-    counts,
-    row_results: rowResults,
-    finalized_count: firstIncomplete < 0 ? rowResults.length : firstIncomplete,
-  };
+  const rowResults = expectedRefs.map((ref) => {
+    const row = normalizeClaim(ref, grouped.get(ref) ?? []);
+    return { ...row, result: claimStatusResultFields("availity", row.result) };
+  });
+  return summarizeServiceResults(rowResults);
 }

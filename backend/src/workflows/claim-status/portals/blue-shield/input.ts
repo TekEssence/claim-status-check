@@ -1,4 +1,5 @@
 import * as XLSX from "xlsx";
+import { resolveClaimCredentialScopes } from "../../credential-scopes";
 import { getSharedMfaMailbox } from "@/backend/src/core/mfa-otp-service";
 import { envText, loadBlueShieldEnvironment } from "./env";
 import type {
@@ -240,7 +241,7 @@ async function loadOptionalWorkbookBuffer(file: FormDataEntryValue | null): Prom
 
 export async function parseBlueShieldInput(formData: FormData): Promise<BlueShieldInput> {
   loadBlueShieldEnvironment();
-  const credentialWorkbook = await loadOptionalWorkbookBuffer(formData.get("credentialExcel"));
+  let credentialWorkbook = await loadOptionalWorkbookBuffer(formData.get("credentialExcel"));
   const inputExcel = formData.get("inputExcel");
 
   if (!(inputExcel instanceof File)) {
@@ -251,6 +252,7 @@ export async function parseBlueShieldInput(formData: FormData): Promise<BlueShie
   }
 
   const inputWorkbookBuffer = await inputExcel.arrayBuffer();
+  credentialWorkbook = resolveClaimCredentialScopes(credentialWorkbook, () => readBlueShieldInputWorkbook(inputWorkbookBuffer));
   loadBlueShieldMailConfigurationFromWorkbook(credentialWorkbook);
   return {
     credentialWorkbookBuffer: credentialWorkbook,

@@ -3,6 +3,7 @@ import { listArtifactsForJob } from "../runtime/workflow-db";
 import { loadServiceExpectedRefs, type ServiceWorkbookArtifact } from "./iehp-snapshot";
 import { normalizeEligibilityServiceWorkbook } from "./eligibility-results";
 import type { ServiceResultSummary } from "./iehp-results";
+import { eligibilityServiceOutputFilenames } from "./eligibility-portals";
 
 type ServiceJob = Parameters<typeof loadServiceExpectedRefs>[0];
 let client: S3Client | null = null;
@@ -12,12 +13,13 @@ function s3(): S3Client {
 }
 
 export async function loadEligibilityServiceSnapshot(
-  job: ServiceJob,
+  job: ServiceJob & { portalId?: string },
+  options: { requireStatusColumns?: boolean } = {},
 ): Promise<{ expectedRefs: string[]; summary: ServiceResultSummary | null; artifact: ServiceWorkbookArtifact | null; recorded: boolean }> {
   const [expectedRefs, artifacts] = await Promise.all([loadServiceExpectedRefs(job), listArtifactsForJob(job.jobId)]);
   const output = artifacts.find((item) =>
     (item.artifactType === "output_snapshot" || item.artifactType === "file_download")
-    && item.bucket && item.s3Key && item.filename === "medrevenue-availity-eligibility-output.xlsx",
+    && item.bucket && item.s3Key && eligibilityServiceOutputFilenames(job.portalId ?? "availity").includes(item.filename),
   );
   if (!output?.bucket || !output.s3Key) return { expectedRefs, summary: null, artifact: null, recorded: false };
   const object = await s3().send(new GetObjectCommand({ Bucket: output.bucket, Key: output.s3Key }));
@@ -26,7 +28,7 @@ export async function loadEligibilityServiceSnapshot(
   if (!bytes.length) throw new Error("Eligibility output workbook is empty.");
   return {
     expectedRefs,
-    summary: await normalizeEligibilityServiceWorkbook(bytes, expectedRefs),
+    summary: await normalizeEligibilityServiceWorkbook(bytes, expectedRefs, { ...options, portal: job.portalId }),
     artifact: {
       bucket: output.bucket,
       object_key: output.s3Key,

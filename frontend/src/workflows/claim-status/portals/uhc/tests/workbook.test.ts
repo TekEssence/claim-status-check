@@ -157,7 +157,7 @@ test("UHC partial workbook keeps completed rows and leaves remaining rows open",
   assert.equal(result.getRow(3).getCell(statusCol).value, null);
 });
 
-test("UHC partial workbook keeps a completed duplicate when an earlier duplicate is pending", async () => {
+test("UHC partial workbook never copies a completed duplicate into a pending claim", async () => {
   const worksheet = await buildWorksheet(
     ["Group", "Subscriber ID", "DOS"],
     [
@@ -173,6 +173,6 @@ test("UHC partial workbook keeps a completed duplicate when an earlier duplicate
 
   const headers = worksheet.getRow(1).values as ExcelJS.CellValue[];
   const statusCol = headers.findIndex((value) => value === "BotClaimStatus");
-  assert.equal(worksheet.getRow(2).getCell(statusCol).value, "Paid");
+  assert.equal(worksheet.getRow(2).getCell(statusCol).value, null);
   assert.equal(worksheet.getRow(3).getCell(statusCol).value, "Paid");
 });

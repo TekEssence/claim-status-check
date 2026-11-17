@@ -1,7 +1,7 @@
 import ExcelJS from "exceljs";
-import { applyProjectColumnMapping, getRequiredFieldsForProject, normalizeProjectId } from "../../workflows/claim-status/portals/availity/project-config";
+import { normalizeProjectId } from "../../workflows/claim-status/portals/availity/project-config";
 import { maskIehpAccountLabel, validateServiceClaims, type PreparedClaim } from "./iehp-input";
-import { readOptionalSelectionRules } from "../../workflows/claim-status/portals/availity/input";
+import { encodeServiceClaimWorkbook } from "./claim-workbook";
 
 export type AvailityServiceInput = {
   claims: PreparedClaim[];
@@ -35,29 +35,12 @@ export function validateAvailityServiceInput(value: unknown): AvailityServiceInp
   const claims = validateServiceClaims(source.claims);
   let selectionRules: AvailityServiceInput["selectionRules"];
   if (source.selection_rules !== undefined) {
-    if (projectId !== "charm") throw new Error("Selection rules upload is currently supported only for Charm Availity.");
     if (!Array.isArray(source.selection_rules) || !source.selection_rules.length || source.selection_rules.length > 1000) {
       throw new Error("selection_rules must contain 1 to 1000 selection-rule rows.");
     }
     // Use the same scalar row validation as claims; these rows use the existing selection workbook headers.
     selectionRules = validateServiceClaims(source.selection_rules.map((data, index) => ({ client_row_ref: String(index), data })))
       .map(row => row.data);
-  }
-  const requiredFields = getRequiredFieldsForProject(projectId);
-  for (const [index, claim] of claims.entries()) {
-    const data = Object.fromEntries(Object.entries(claim.data).map(([key, field]) => [key, field == null ? "" : String(field)]));
-    const mapped = applyProjectColumnMapping(projectId, data);
-    const missing = requiredFields.filter((field) => !mapped[field]?.trim());
-    if (missing.length) throw new Error(`Claim ${index + 1} is missing ${missing.join(", ")}.`);
-    if (!/^(0[1-9]|1[0-2])\/(0[1-9]|[12]\d|3[01])\/\d{4}$/.test(mapped["Service Date"])) {
-      throw new Error(`Claim ${index + 1} Service Date must use MM/DD/YYYY.`);
-    }
-    if (projectId === "charm" && !mapped["Provider NPI"] && !mapped["Provider Tax ID"]) {
-      throw new Error(`Claim ${index + 1} requires Provider NPI or Provider Tax ID.`);
-    }
-    if (projectId === "medrevenu" && !mapped.Group) {
-      throw new Error(`Claim ${index + 1} requires Group for provider selection.`);
-    }
   }
 
   return {
@@ -75,13 +58,7 @@ export function validateAvailityServiceInput(value: unknown): AvailityServiceInp
 }
 
 export async function generateAvailityServiceInput(input: AvailityServiceInput) {
-  const headers = ["Client Row Ref", ...new Set(input.claims.flatMap((claim) => Object.keys(claim.data)))];
-  const claimWorkbook = new ExcelJS.Workbook();
-  const claimSheet = claimWorkbook.addWorksheet("Claims");
-  claimSheet.addRow(headers);
-  for (const claim of input.claims) {
-    claimSheet.addRow(headers.map((header) => header === "Client Row Ref" ? claim.client_row_ref : claim.data[header] ?? ""));
-  }
+  const claimWorkbook = await encodeServiceClaimWorkbook(input.claims);
 
   const credentialWorkbook = new ExcelJS.Workbook();
   const credentialSheet = credentialWorkbook.addWorksheet("Login");
@@ -99,13 +76,10 @@ export async function generateAvailityServiceInput(input: AvailityServiceInput) 
     sheet.addRow(columns);
     input.selectionRules.forEach(row => sheet.addRow(columns.map(column => row[column] ?? "")));
     selectionRulesWorkbook = Buffer.from(await book.xlsx.writeBuffer());
-    const form = new FormData();
-    form.set("selectionRulesFile", new File([new Uint8Array(selectionRulesWorkbook)], "selection-rules.xlsx"));
-    await readOptionalSelectionRules(form, input.projectId);
   }
 
   return {
-    claimWorkbook: Buffer.from(await claimWorkbook.xlsx.writeBuffer()),
+    claimWorkbook: claimWorkbook.buffer,
     credentialWorkbook: Buffer.from(await credentialWorkbook.xlsx.writeBuffer()),
     claimRowsJson: JSON.stringify(input.claims.map((claim, index) => ({ "Client Row Ref": claim.client_row_ref, __original_index: index }))),
     accountLabel: maskIehpAccountLabel(input.credentials.username),

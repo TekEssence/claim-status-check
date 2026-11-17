@@ -16,7 +16,8 @@ export async function cancelServiceExecution<TJob extends CancellableServiceJob>
   for (let attempt = 0; attempt < 4; attempt += 1) {
     const job = await params.find();
     if (isTerminalServiceJob(job.status)) {
-      return { jobId: job.jobId, status: job.status, terminal: true };
+      const current = job.status === "cancelled" ? await params.reconcile(job) ?? job : job;
+      return { jobId: current.jobId, status: current.status, terminal: isTerminalServiceJob(current.status) };
     }
     if (job.status === "preparing" || job.status === "queued") {
       if (!await params.cancelBeforeLaunch(job)) continue;

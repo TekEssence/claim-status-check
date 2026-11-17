@@ -565,10 +565,13 @@ export async function runAvailityClaimStatusJob(formData: FormData, context: Scr
   const automationState = { selectedOrganization: "", selectedState: "", selectedPayer: "", claimStatusOpened: false };
   const payerMapping = await readAvailityPayerMapping(input.projectId);
   const providerMappings = await readAvailityProviderMapping();
-  const runnableTotal = input.inputRows.filter((row) => isRunnableAvailityPayerName(row.data["Payer Name"] || "")).length;
+  const runnableRows = input.inputRows.filter(row => isRunnableAvailityPayerName(row.data["Payer Name"] || ""));
+  const unsupportedRows = input.inputRows.filter(row => !isRunnableAvailityPayerName(row.data["Payer Name"] || ""));
+  const runnableTotal = runnableRows.length;
+  const totalRows = input.inputRows.length;
   const locatorTimeoutFailuresByAction = new Map<string, number>();
   const selectionSkipReasons = new Map<string, { stage: "state_selection" | "organization_selection" | "payer_selection"; message: string }>();
-  let completedRunnableRows = 0;
+  let completedRows = 0;
   let session: Awaited<ReturnType<typeof initializeSession>> | null = null;
   let activeRow: AvailityInputRow | null = null;
   let outputWorkbookEmitted = false;
@@ -581,7 +584,7 @@ export async function runAvailityClaimStatusJob(formData: FormData, context: Scr
     });
   });
   await log(`Availity input loaded: ${input.inputRows.length} row(s). Project: ${input.projectId}. Runnable supported payer rows: ${runnableTotal}. Available payers: Aetna, Anthem-CA, Blue Cross Blue Shield, Regence, Carelon Behavioral Health, Wellpoint, Wellcare, Humana, Central Health Medicare Plan, Health Net, Molina, Providence Health Plan, Scan Health, TRIWEST-TRICARE, TRIWEST-VA CCN.`);
-  await context.emit({ type: "progress", completed: 0, total: runnableTotal });
+  await context.emit({ type: "progress", completed: 0, total: totalRows });
 
   const emitOutputWorkbook = async (partial: boolean): Promise<void> => {
     const workbookBuffer = await createAvailityOutputWorkbookBuffer({
@@ -607,20 +610,42 @@ export async function runAvailityClaimStatusJob(formData: FormData, context: Scr
     fs.mkdirSync(snapshotDir, { recursive: true });
     const snapshotPath = path.join(snapshotDir, "availity_output_snapshot.xlsx");
     fs.writeFileSync(snapshotPath, workbookBuffer);
-    const shouldSendWorkbookToBrowser = (completed > 0 && completed % 10 === 0) || completed === runnableTotal;
+    const shouldSendWorkbookToBrowser = (completed > 0 && completed % 10 === 0) || completed === totalRows;
     await context.emit(outputSnapshotEvent(
       "availity_output_snapshot.xlsx",
       shouldSendWorkbookToBrowser ? { buffer: workbookBuffer, path: snapshotPath } : { path: snapshotPath },
       completed,
-      runnableTotal,
+      totalRows,
       "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     ));
   };
 
   try {
+    // Unsupported payers have a finalized outcome without a portal lookup.
+    // Record them before login, include them in submitted-row progress, and
+    // keep every Client Row Ref available to the shared result publisher.
+    for (const row of unsupportedRows) {
+      const message = unsupportedAvailityPayerMessage(row.data["Payer Name"] || "");
+      inputSheetRows.push(buildInputAuditRow(row, { validation_status: "invalid", validation_message: message }));
+      const outputRow = buildBaseOutput(row);
+      markSkipped(outputRow, message);
+      outputRows.push(outputRow);
+      addError(errorRows, runId, row, { failure_stage: "unsupported_payer", failure_reason: message });
+      addAudit(auditRows, runId, row, "unsupported_payer", "skipped", message);
+    }
+    if (unsupportedRows.length) {
+      completedRows = unsupportedRows.length;
+      await context.emit({ type: "progress", completed: completedRows, total: totalRows });
+      await emitOutputSnapshot(completedRows);
+    }
+    if (!runnableRows.length) {
+      await emitOutputWorkbook(false);
+      await context.emit({ type: "warning", message: `Availity completed with ${errorRows.length} error row(s).` });
+      return;
+    }
     session = await initializeSession(input, context, log);
 
-    for (let index = 0; index < input.inputRows.length; index += 1) {
+    for (let index = 0; index < runnableRows.length; index += 1) {
       if (context.isCancelled?.()) {
         await context.emit({ type: "cancelled", message: "Availity processing cancelled." });
         break;
@@ -636,36 +661,12 @@ export async function runAvailityClaimStatusJob(formData: FormData, context: Scr
         automationState.claimStatusOpened = false;
       }
 
-      const row = input.inputRows[index];
+      const row = runnableRows[index];
       activeRow = row;
       const startedAt = Date.now();
       const outputRow = buildBaseOutput(row);
-      const payerName = row.data["Payer Name"] || "";
-      const isRunnablePayer = isRunnableAvailityPayerName(payerName);
-      if (!isRunnablePayer) {
-        const message = unsupportedAvailityPayerMessage(payerName);
-        const validation = {
-          validation_status: "invalid",
-          validation_message: message,
-        };
-        inputSheetRows.push(buildInputAuditRow(row, validation));
-        await log(`Availity row ${row.input_row_id}/${input.inputRows.length} skipped: ${message}`);
-        markSkipped(outputRow, message);
-        outputRows.push(outputRow);
-        addError(errorRows, runId, row, {
-          failure_stage: "unsupported_payer",
-          failure_reason: message,
-          current_url: safePageUrl(session.page),
-        });
-        addAudit(auditRows, runId, row, "unsupported_payer", "skipped", message, startedAt);
-        await context.emit({ type: "progress", completed: completedRunnableRows, total: runnableTotal });
-        await emitOutputSnapshot(completedRunnableRows);
-        activeRow = null;
-        continue;
-      }
-
-      const currentRunnableRow = completedRunnableRows + 1;
-      await context.emit(rowProgressEvent(row, currentRunnableRow, runnableTotal, "started"));
+      const currentRowOrdinal = completedRows + 1;
+      await context.emit(rowProgressEvent(row, currentRowOrdinal, totalRows, "started"));
       let validation: { isValid: boolean; validation_status: string; validation_message: string; mappedPayerName: string };
       let portalSelections: AvailityPortalSelections = { payer: "" };
       let providerModeForRow = "";
@@ -706,9 +707,9 @@ export async function runAvailityClaimStatusJob(formData: FormData, context: Scr
           current_url: safePageUrl(session.page),
         });
         addAudit(auditRows, runId, row, "validation", "skipped", validation.validation_message, startedAt);
-        completedRunnableRows += 1;
-        await context.emit({ type: "progress", completed: completedRunnableRows, total: runnableTotal });
-        await emitOutputSnapshot(completedRunnableRows);
+        completedRows += 1;
+        await context.emit({ type: "progress", completed: completedRows, total: totalRows });
+        await emitOutputSnapshot(completedRows);
         activeRow = null;
         continue;
       }
@@ -749,9 +750,9 @@ export async function runAvailityClaimStatusJob(formData: FormData, context: Scr
           needs_manual_review: "no",
         });
         addAudit(auditRows, runId, row, priorSelectionFailure.stage, "skipped", message, startedAt);
-        completedRunnableRows += 1;
-        await context.emit({ type: "progress", completed: completedRunnableRows, total: runnableTotal });
-        await emitOutputSnapshot(completedRunnableRows);
+        completedRows += 1;
+        await context.emit({ type: "progress", completed: completedRows, total: totalRows });
+        await emitOutputSnapshot(completedRows);
         activeRow = null;
         continue;
       }
@@ -761,7 +762,7 @@ export async function runAvailityClaimStatusJob(formData: FormData, context: Scr
       const rowRecoveryNotes: string[] = [];
       for (let rowAttempt = 1; rowAttempt <= ROW_PROCESS_MAX_ATTEMPTS && !rowHandled; rowAttempt += 1) {
         try {
-          await context.emit(rowProgressEvent(row, currentRunnableRow, runnableTotal, `attempt ${rowAttempt}`));
+          await context.emit(rowProgressEvent(row, currentRowOrdinal, totalRows, `attempt ${rowAttempt}`));
           const result = await processValidRow(session.page, row, portalSelections, automationState, {
             projectId: input.projectId,
             providerMappings,
@@ -906,9 +907,9 @@ export async function runAvailityClaimStatusJob(formData: FormData, context: Scr
         outputRows.push(outputRow);
       }
 
-      completedRunnableRows += 1;
-      await context.emit({ type: "progress", completed: completedRunnableRows, total: runnableTotal });
-      await emitOutputSnapshot(completedRunnableRows);
+      completedRows += 1;
+      await context.emit({ type: "progress", completed: completedRows, total: totalRows });
+      await emitOutputSnapshot(completedRows);
       activeRow = null;
     }
 

@@ -7,9 +7,11 @@ import { readAvailityEligibilityCredentialProfiles } from "../../workflows/eligi
 import { buildWaystarOutputWorkbook } from "../../workflows/eligibility-verification/portals/waystar/output";
 import { normalizeEligibilityServiceWorkbook } from "./eligibility-results";
 import { pageServiceResults } from "./iehp-results";
+import { publishedResults } from "./result-publication-test-helpers";
 import { serviceSubmissionFingerprint } from "./service-submission";
 import { claimStatusServicePortalConfigs } from "./generic-claim-status-input";
 import { getServiceWorkflow, getServiceWorkflowForJob, resolveServiceWorkflowRoute, SERVICE_WORKFLOW_IDS, ServiceWorkflowDispatchError, supportedServiceWorkflowIds } from "./workflow-registry";
+import { ELIGIBILITY_SERVICE_PORTALS } from "./eligibility-portals";
 
 const eligibility = {
   projectId: "medrevenue",
@@ -31,13 +33,13 @@ test("one registry includes every Claim Status portal and names runner workflows
   assert.match(getServiceWorkflow(SERVICE_WORKFLOW_IDS.EOB_DOWNLOAD)?.unavailableReason ?? "", /date range or reference\/control-log batch/);
   assert.deepEqual(supportedServiceWorkflowIds(), [SERVICE_WORKFLOW_IDS.CLAIM_STATUS, SERVICE_WORKFLOW_IDS.ELIGIBILITY]);
   assert.equal(getServiceWorkflow("eligibility-verification"), null);
-  assert.equal(getServiceWorkflow(SERVICE_WORKFLOW_IDS.ELIGIBILITY)?.portals.iehp, undefined);
+  assert.deepEqual(Object.keys(getServiceWorkflow(SERVICE_WORKFLOW_IDS.ELIGIBILITY)!.portals), [...ELIGIBILITY_SERVICE_PORTALS]);
 });
 
 test("unsupported workflow, unsupported portal and EOB batch mismatch are explicit", () => {
   assert.throws(() => resolveServiceWorkflowRoute("UNKNOWN", "availity"),
     (error: unknown) => error instanceof ServiceWorkflowDispatchError && error.statusCode === 400 && /UNKNOWN.*CLAIM_STATUS, ELIGIBILITY/.test(error.message));
-  assert.throws(() => resolveServiceWorkflowRoute(SERVICE_WORKFLOW_IDS.ELIGIBILITY, "iehp"),
+  assert.throws(() => resolveServiceWorkflowRoute(SERVICE_WORKFLOW_IDS.ELIGIBILITY, "noridian"),
     (error: unknown) => error instanceof ServiceWorkflowDispatchError && error.statusCode === 422 && /ELIGIBILITY.*availity/.test(error.message));
   assert.throws(() => resolveServiceWorkflowRoute(SERVICE_WORKFLOW_IDS.EOB_DOWNLOAD, "zelis"),
     (error: unknown) => error instanceof ServiceWorkflowDispatchError && error.statusCode === 422 && /date range or reference\/control-log batch/.test(error.message));
@@ -79,9 +81,9 @@ test("Eligibility results retain submission order, row references and cursor gra
   assert.equal(summary.row_results[0].result.coverage_status, "active");
   assert.equal(summary.finalized_count, 2);
   assert.equal(summary.outcome, "PARTIAL_SUCCESS");
-  assert.deepEqual(pageServiceResults(summary, 0, 1, false).results.map((row) => row.client_row_ref), ["ar-1"]);
-  assert.deepEqual(pageServiceResults(summary, 0, 1, false), pageServiceResults(summary, 0, 1, false));
-  assert.equal(pageServiceResults(summary, 0, 1, false).nextCursor, 1);
+  assert.deepEqual(pageServiceResults(publishedResults(summary), 0, 1).results.map((row) => row.client_row_ref), ["ar-1"]);
+  assert.deepEqual(pageServiceResults(publishedResults(summary), 0, 1), pageServiceResults(publishedResults(summary), 0, 1));
+  assert.equal(pageServiceResults(publishedResults(summary), 0, 1).nextCursor, 1);
 });
 
 test("the existing Eligibility output writer keeps service row references for normalization", async () => {

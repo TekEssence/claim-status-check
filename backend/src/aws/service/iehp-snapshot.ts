@@ -1,6 +1,5 @@
 import { GetObjectCommand, S3Client } from "@aws-sdk/client-s3";
-import { listArtifactsForJob } from "../runtime/workflow-db";
-import { normalizeIehpServiceWorkbook, type ServiceResultSummary } from "./iehp-results";
+import type { ServiceResultSummary } from "./service-contract";
 
 type ServiceJob = {
   jobId: string;
@@ -50,39 +49,10 @@ export async function loadServiceExpectedRefs(job: ServiceJob): Promise<string[]
 
 export async function loadIehpServiceSnapshot(
   job: ServiceJob,
-  options: { requireStatusColumns?: boolean } = {},
+  _options: { requireStatusColumns?: boolean } = {},
 ): Promise<{ expectedRefs: string[]; summary: ServiceResultSummary | null; artifact: ServiceWorkbookArtifact | null; recorded: boolean }> {
-  const [expectedRefs, artifacts] = await Promise.all([loadServiceExpectedRefs(job), listArtifactsForJob(job.jobId)]);
-  const output = artifacts.find((item) => item.artifactType === "output_snapshot" && item.bucket && item.s3Key && item.filename.endsWith(".xlsx"));
-  const fallback = serviceOutputWorkbookLocation(job);
-  const bucket = output?.bucket || job.outputBucket;
-  const key = output?.s3Key || fallback.key;
-  if (!bucket) return { expectedRefs, summary: null, artifact: null, recorded: false };
-  let object;
-  try {
-    object = await s3().send(new GetObjectCommand({ Bucket: bucket, Key: key }));
-  } catch (error) {
-    const missing = error as { name?: string; $metadata?: { httpStatusCode?: number } };
-    if (!output && (missing.name === "NoSuchKey" || missing.$metadata?.httpStatusCode === 404)) {
-      return { expectedRefs, summary: null, artifact: null, recorded: false };
-    }
-    throw error;
-  }
-  if (!object.Body) throw new Error("Integrated output workbook is empty.");
-  const bytes = await object.Body.transformToByteArray();
-  if (!bytes.length) throw new Error("Integrated output workbook is empty.");
-  const summary = await normalizeIehpServiceWorkbook(bytes, expectedRefs, options);
-  return {
-    expectedRefs,
-    summary,
-    artifact: {
-      bucket,
-      object_key: key,
-      artifact_type: "output_snapshot",
-      filename: output?.filename || fallback.filename,
-      size_bytes: object.ContentLength ?? bytes.length,
-      etag: object.ETag ?? null,
-    },
-    recorded: Boolean(output),
-  };
+  void _options; // Retained for callers of the former workbook reader.
+  // Compatibility export: old callers also use the single worker-only reader.
+  const { loadWorkerResultSnapshot } = await import("./worker-result-snapshot");
+  return loadWorkerResultSnapshot(job);
 }

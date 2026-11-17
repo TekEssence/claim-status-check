@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import ExcelJS from "exceljs";
 import { generateIehpServiceInput, maskIehpAccountLabel, validateIehpServiceInput, validateServiceClaims } from "./iehp-input";
 import { normalizeIehpServiceWorkbook, pageIehpServiceResults } from "./iehp-results";
+import { publishedResults } from "./result-publication-test-helpers";
 import { getServicePortal } from "./portal-dispatch";
 import { postProcessWorksheet } from "../../workflows/claim-status/portals/iehp/workbook-output";
 
@@ -58,7 +59,7 @@ test("IEHP result normalization keeps all 10000 submitted claims and pages the l
   const summary = await normalizeIehpServiceWorkbook(new Uint8Array(await workbook.xlsx.writeBuffer()), refs);
   assert.equal(summary.row_results.length, 10000);
   assert.equal(summary.finalized_count, 10000);
-  const lastPage = pageIehpServiceResults(summary, 9999, 100, true);
+  const lastPage = pageIehpServiceResults(publishedResults(summary), 9999, 100);
   assert.equal(lastPage.nextCursor, 10000);
   assert.equal(lastPage.results[0]?.client_row_ref, "ar-10000");
 });
@@ -90,7 +91,7 @@ test("service output reports successful and failed rows without losing the Excel
   worksheet.addRow(["ar-102", "Failed", "No matching rows found for DOS", ""]);
   const summary = await normalizeIehpServiceWorkbook(new Uint8Array(await workbook.xlsx.writeBuffer()), ["ar-101", "ar-102"]);
   assert.equal(summary.outcome, "PARTIAL_SUCCESS");
-  assert.deepEqual(summary.counts, { total: 2, success: 1, no_match: 1, failed: 0, action_required: 0, incomplete: 0 });
+  assert.deepEqual(summary.counts, { total: 2, success: 1, no_match: 1, failed: 0, skipped: 0, action_required: 0, incomplete: 0 });
   assert.deepEqual(summary.row_results.map((row) => [row.client_row_ref, row.status]), [["ar-101", "SUCCESS"], ["ar-102", "NO_MATCH"]]);
 });
 
@@ -116,7 +117,7 @@ test("rows without a successful claim produce a failed job summary", async () =>
   assert.deepEqual(summary.row_results.map((row) => row.status), ["NO_MATCH", "FAILED"]);
 });
 
-test("snapshot normalizer keeps submitted order and only advances through finalized rows", async () => {
+test("snapshot normalizer preserves correlation and counts every finalized row", async () => {
   const workbook = new ExcelJS.Workbook();
   const worksheet = workbook.addWorksheet("Claims");
   worksheet.addRow(["Client Row Ref", "BotClaimStatusCheck", "BotClaimStatusCheckError"]);
@@ -127,7 +128,7 @@ test("snapshot normalizer keeps submitted order and only advances through finali
     new Uint8Array(await workbook.xlsx.writeBuffer()), ["ar-101", "ar-102", "ar-103"],
   );
   assert.deepEqual(summary.row_results.map((row) => row.client_row_ref), ["ar-101", "ar-102", "ar-103"]);
-  assert.equal(summary.finalized_count, 1);
+  assert.equal(summary.finalized_count, 2);
   assert.deepEqual(summary.row_results.map((row) => row.status), ["SUCCESS", "INCOMPLETE", "SUCCESS"]);
 });
 
@@ -144,18 +145,23 @@ test("early workbook without bot columns yields zero finalized rows", async () =
   assert.equal(summary.counts.incomplete, 2);
 });
 
-test("one submitted claim with one output row keeps its original result shape", async () => {
+test("one submitted claim with one output row preserves its details and canonical fields", async () => {
   const workbook = new ExcelJS.Workbook();
   const sheet = workbook.addWorksheet("Claims");
   sheet.addRow(["Client Row Ref", "BotClaimStatusCheck", "BotClaimStatusCheckError", "BotClaimDetails"]);
   sheet.addRow(["ar-101", "Success", "", "One paid claim"]);
 
   const summary = await normalizeIehpServiceWorkbook(new Uint8Array(await workbook.xlsx.writeBuffer()), ["ar-101"]);
-  assert.deepEqual(summary.row_results, [{
-    client_row_ref: "ar-101", status: "SUCCESS",
-    result: { claim_status: "Success", claim_details: "One paid claim" },
-    error_category: null, error_message: null,
-  }]);
+  const row = summary.row_results[0];
+  assert.equal(row.client_row_ref, "ar-101");
+  assert.equal(row.status, "SUCCESS");
+  assert.equal(row.result.claim_status, "Success");
+  assert.equal(row.result.claim_details, "One paid claim");
+  assert.equal(row.result.detail_rows?.length, 1);
+  assert.equal(row.result.detail_rows?.[0].BotClaimDetails, "One paid claim");
+  assert.equal(row.result["Claim Status - Final Status"], null);
+  assert.equal(row.error_category, null);
+  assert.equal(row.error_message, null);
   assert.equal(summary.finalized_count, 1);
 });
 
@@ -206,8 +212,8 @@ test("repeating a cursor returns the same normalized claim result", async () => 
   sheet.addRow(["ar-102", "Success", "", "Second claim", "Paid"]);
   const bytes = new Uint8Array(await workbook.xlsx.writeBuffer());
 
-  const firstPoll = pageIehpServiceResults(await normalizeIehpServiceWorkbook(bytes, ["ar-101", "ar-102"]), 0, 1, true);
-  const repeatedPoll = pageIehpServiceResults(await normalizeIehpServiceWorkbook(bytes, ["ar-101", "ar-102"]), 0, 1, true);
+  const firstPoll = pageIehpServiceResults(publishedResults(await normalizeIehpServiceWorkbook(bytes, ["ar-101", "ar-102"])), 0, 1);
+  const repeatedPoll = pageIehpServiceResults(publishedResults(await normalizeIehpServiceWorkbook(bytes, ["ar-101", "ar-102"])), 0, 1);
   assert.deepEqual(repeatedPoll, firstPoll);
   assert.equal(firstPoll.nextCursor, 1);
   assert.deepEqual(firstPoll.results.map((row) => row.client_row_ref), ["ar-101"]);
@@ -222,8 +228,8 @@ test("cursor advances once per submitted claim, not per IEHP detail row", async 
   sheet.addRow(["ar-102", "Success", "", "Next claim"]);
   const summary = await normalizeIehpServiceWorkbook(new Uint8Array(await workbook.xlsx.writeBuffer()), ["ar-101", "ar-102"]);
 
-  const firstPage = pageIehpServiceResults(summary, 0, 1, true);
-  const secondPage = pageIehpServiceResults(summary, firstPage.nextCursor, 1, true);
+  const firstPage = pageIehpServiceResults(publishedResults(summary), 0, 1);
+  const secondPage = pageIehpServiceResults(publishedResults(summary), firstPage.nextCursor, 1);
   assert.deepEqual(firstPage.results.map((row) => row.client_row_ref), ["ar-101"]);
   assert.equal(firstPage.nextCursor, 1);
   assert.deepEqual(secondPage.results.map((row) => row.client_row_ref), ["ar-102"]);
@@ -240,10 +246,10 @@ test("a claim with an incomplete detail row does not advance the active cursor",
   const partial = await normalizeIehpServiceWorkbook(new Uint8Array(await workbook.xlsx.writeBuffer()), ["ar-101"]);
 
   assert.equal(partial.row_results[0].status, "INCOMPLETE");
-  assert.deepEqual(pageIehpServiceResults(partial, 0, 100, false), { available: 0, nextCursor: 0, results: [] });
+  assert.deepEqual(pageIehpServiceResults(publishedResults(partial), 0, 100), { available: 0, nextCursor: 0, results: [] });
 
   sheet.getRow(3).getCell(2).value = "Success";
   const finished = await normalizeIehpServiceWorkbook(new Uint8Array(await workbook.xlsx.writeBuffer()), ["ar-101"]);
   assert.equal(finished.row_results[0].status, "SUCCESS");
-  assert.equal(pageIehpServiceResults(finished, 0, 100, false).nextCursor, 1);
+  assert.equal(pageIehpServiceResults(publishedResults(finished), 0, 100).nextCursor, 1);
 });

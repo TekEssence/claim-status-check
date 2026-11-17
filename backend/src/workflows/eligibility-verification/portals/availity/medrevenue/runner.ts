@@ -8,6 +8,7 @@ import { readAvailityEligibilityCredentialProfiles } from "../credentials";
 import type { AvailityProjectConfig } from "../config/projects";
 import { normalize, readMemberSearchRows } from "./data";
 import { verifyMemberSearchRow } from "./portal";
+import { createEligibilityServiceSnapshots } from "../../../partial-output";
 
 export async function runAvailityMemberSearch(input: EligibilityRunInput, context: AutomationContext, config: AvailityProjectConfig) {
   if (input.projectId !== "medrevenue" || config.id !== input.projectId) throw new Error("Availity project configuration mismatch.");
@@ -20,6 +21,8 @@ export async function runAvailityMemberSearch(input: EligibilityRunInput, contex
   let session: Awaited<ReturnType<typeof launchAvailityEligibilityBrowser>> | undefined;
   let identity = "";
   let completed = 0;
+  const publishSnapshot = createEligibilityServiceSnapshots(context, { inputFile: input.inputFile, rows, results, errors },
+    options => buildWaystarOutputWorkbook({ ...options, projectId: input.projectId }));
   await context.emit({ type: "progress", completed, total: rows.size });
   try {
     for (const row of inputRows) {
@@ -74,6 +77,7 @@ export async function runAvailityMemberSearch(input: EligibilityRunInput, contex
         "IPA": result?.ipa || "-",
       } });
       await context.emit({ type: "progress", completed: ++completed, total: rows.size });
+      await publishSnapshot();
     }
   } finally {
     await session?.browser.close().catch(() => {});

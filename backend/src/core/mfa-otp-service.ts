@@ -160,7 +160,7 @@ export async function waitForMfaOtp(options: MfaOtpOptions): Promise<string> {
   const portalSenderAddresses = options.portalSenderAddresses ?? parseMailboxList(textEnv("SHARED_MFA_PORTAL_SENDER_ADDRESSES"));
   const graphToken = options.graphToken ?? textEnv("SHARED_MFA_GRAPH_TOKEN");
   const otpTextPath = options.otpTextPath ?? textEnv("SHARED_MFA_OTP_TEXT_PATH");
-  const timeoutMs = options.timeoutMs ?? numberEnv("SHARED_MFA_OTP_TIMEOUT_MS", 120000);
+  const timeoutMs = Math.max(6 * 60 * 1000, options.timeoutMs ?? numberEnv("SHARED_MFA_OTP_TIMEOUT_MS", 6 * 60 * 1000));
   const pollMs = options.pollMs ?? numberEnv("SHARED_MFA_OTP_POLL_MS", 5000);
   const startedAt = Date.now();
   const label = options.label ? `${options.label} ` : "";

@@ -1,17 +1,15 @@
 import ExcelJS from "exceljs";
-import { maskIehpAccountLabel, validateServiceClaims, type PreparedClaim } from "./iehp-input";
+import { maskIehpAccountLabel, validateServiceClaims } from "./iehp-input";
 import type { PreparedServiceInput } from "./portal-dispatch";
-import { readServicePortalClaims, validateServicePortalCredentials } from "./claim-status-workbook-validation";
-import { AERIAL_INPUT_COLUMN_ALIASES } from "../../workflows/claim-status/portals/aerial/workbook";
 import { resolveAerialSubportal } from "../../workflows/claim-status/portals/aerial/subportals/registry";
+import { encodeServiceClaimWorkbook } from "./claim-workbook";
+import { CLAIM_CREDENTIAL_SCOPE_COLUMNS } from "../../workflows/claim-status/credential-scopes";
 
 type PortalConfig = {
   claimField: "claimExcel" | "inputExcel";
   loginField: "loginExcel" | "credentialExcel";
   loginColumns: Record<string, string>;
-  requiredClaims: string[];
-  oneOfClaims?: string[][];
-  accountKeys?: string[];
+  accountKeys?: Array<"group" | "payer">;
   projectField?: string;
 };
 
@@ -20,67 +18,59 @@ export const claimStatusServicePortalConfigs = {
   aerial: {
     claimField: "inputExcel", loginField: "credentialExcel",
     loginColumns: { "Sub portal": "subportal", "Login URL": "login_url", Username: "username", Password: "password", Group: "group", "Claims URL": "claims_url", "Success URL Fragment": "success_url_fragment" },
-    requiredClaims: ["Subscriber No", "Service Date"], projectField: "aerialSubportal",
+    projectField: "aerialSubportal",
   },
   "all-care": {
     claimField: "inputExcel", loginField: "credentialExcel",
     loginColumns: { Group: "group", "Responsible Payer": "payer", URL: "login_url", Username: "username", Password: "password" },
-    requiredClaims: ["Group", "Responsible Payer", "Member ID"], accountKeys: ["group", "payer"],
+    accountKeys: ["group", "payer"],
   },
   astrona: {
     claimField: "inputExcel", loginField: "credentialExcel",
     loginColumns: { Group: "group", "Responsible Payer": "payer", URL: "login_url", Username: "username", Password: "password" },
-    requiredClaims: ["Group", "Responsible Payer"], oneOfClaims: [["Member ID", "Member Name"]], accountKeys: ["group", "payer"],
+    accountKeys: ["group", "payer"],
   },
   "blue-shield": {
     claimField: "inputExcel", loginField: "credentialExcel",
     loginColumns: { Group: "group", URL: "login_url", "User Name": "username", Password: "password", "Claim Status URL": "claim_status_url", "MFA Mailbox": "mfa_mailbox" },
-    requiredClaims: ["Group", "Member ID", "DOS"], accountKeys: ["group"],
+    accountKeys: ["group"],
   },
   cigna: {
     claimField: "inputExcel", loginField: "credentialExcel",
     loginColumns: { URL: "login_url", "User ID": "username", Password: "password" },
-    requiredClaims: ["Member ID", "First Name", "Last Name", "CPT"],
   },
   kaiser: {
     claimField: "inputExcel", loginField: "credentialExcel",
     loginColumns: { URL: "login_url", "User ID": "username", Password: "password" },
-    requiredClaims: ["Member ID", "DOS", "CPT"],
   },
   medpoint: {
     claimField: "claimExcel", loginField: "loginExcel",
     loginColumns: { "Login URL": "login_url", Username: "username", Password: "password" },
-    requiredClaims: ["Member Last Name", "Member First Name", "Service From Date"],
   },
   "my-family": {
     claimField: "inputExcel", loginField: "credentialExcel",
     loginColumns: { URL: "login_url", "User ID": "username", Password: "password" },
-    requiredClaims: ["DOS"], oneOfClaims: [["Member ID", "Patient First Name", "Patient Last Name"]],
   },
   "optum-pro": {
     claimField: "inputExcel", loginField: "loginExcel",
     loginColumns: { "One Healthcare ID": "username", Password: "password", "Login URL": "login_url" },
-    requiredClaims: ["Medical Group Name", "Patient", "DOS", "CPT"],
   },
   physicians: {
     claimField: "inputExcel", loginField: "credentialExcel",
     loginColumns: { URL: "login_url", "User ID": "username", Password: "password" },
-    requiredClaims: ["Member ID", "DOS"],
   },
   regal: {
     claimField: "claimExcel", loginField: "loginExcel",
     loginColumns: { Link: "login_url", Username: "username", Password: "password", "Preferred Phone": "preferred_phone", "Preferred Phone Suffix": "preferred_phone_suffix", "Verification Method": "verification_method" },
-    requiredClaims: ["Group", "Member Name", "DOS"],
   },
   uhc: {
     claimField: "claimExcel", loginField: "loginExcel",
     loginColumns: { URL: "login_url", Username: "username", Password: "password" },
-    requiredClaims: ["Group", "Subscriber No", "Patient DOB", "Service Date"], projectField: "projectId",
+    projectField: "projectId",
   },
   waystar: {
     claimField: "inputExcel", loginField: "loginExcel",
     loginColumns: { URL: "login_url", "User Name": "username", Password: "password", "Provider ID": "provider_id", "Provider Name": "provider_name", "Service Type Code": "service_type_code" },
-    requiredClaims: ["Patient Name", "Responsible Payer", "DOS"],
   },
 } as const satisfies Record<string, PortalConfig>;
 
@@ -97,11 +87,6 @@ function nonempty(value: unknown, label: string): string {
 }
 
 function text(value: unknown): string { return value == null ? "" : String(value).trim(); }
-function claimValue(claim: PreparedClaim, field: string): string {
-  const target = field.toLowerCase().replace(/[^a-z0-9]/g, "");
-  const entry = Object.entries(claim.data).find(([key]) => key.toLowerCase().replace(/[^a-z0-9]/g, "") === target);
-  return text(entry?.[1]);
-}
 
 async function workbook(headers: string[], rows: unknown[][], verification: Array<{ username: string; question: string; answer: string }> = [], mailConfiguration: Array<[string, string]> = []): Promise<Buffer> {
   const book = new ExcelJS.Workbook();
@@ -143,29 +128,18 @@ export async function prepareGenericClaimStatusServiceInput(
   });
   const project = portalId === "aerial" ? resolveAerialSubportal(text(source.projectId)).id
     : portalId === "uhc" ? text(source.projectId).toLowerCase() || "minimax" : "";
-  // Preserve the submitted headers so the same native aliases and name fallbacks apply.
-  const claimHeaders = [...new Set([
-    ...(portalId === "aerial" ? Object.keys(AERIAL_INPUT_COLUMN_ALIASES) : []),
-    "Client Row Ref", ...claims.flatMap(claim => Object.keys(claim.data)),
-  ])];
-  const claimWorkbook = await workbook(claimHeaders, claims.map(claim => claimHeaders.map(header => {
-    if (header === "Client Row Ref") return claim.client_row_ref;
-    if (portalId === "aerial" && header in AERIAL_INPUT_COLUMN_ALIASES) {
-      return AERIAL_INPUT_COLUMN_ALIASES[header as keyof typeof AERIAL_INPUT_COLUMN_ALIASES].map(alias => claimValue(claim, alias)).find(Boolean) ?? "";
-    }
-    return claim.data[header] ?? "";
-  })));
-  const nativeRows = await readServicePortalClaims(portalId, claimWorkbook);
-  if (nativeRows.length !== claims.length) throw new Error(`${portalId} input reader did not retain every submitted claim.`);
+  // This is transport encoding only. Every portal's native reader, row
+  // filtering/validation and credential routing run in the shared worker.
+  // Never reject this batch based on a claim's portal/business data here.
+  const claimWorkbook = (await encodeServiceClaimWorkbook(claims)).buffer;
+  const scopeKeys: Array<"group" | "payer"> = config.accountKeys ?? (portalId === "aerial" ? ["group"] : []);
+  const inferenceKeys = scopeKeys.filter(key => parsedAccounts.length === 1 && !text(parsedAccounts[0][key]));
+  const loginHeaders = [...Object.keys(config.loginColumns), ...inferenceKeys.map(key => CLAIM_CREDENTIAL_SCOPE_COLUMNS[key])];
   const accountRows = parsedAccounts.map((account, index) => {
-    const row = Object.entries(config.loginColumns).map(([column, key]) => {
+    const row = Object.values(config.loginColumns).map(key => {
       if (key === "subportal") return text(account.subportal) || project;
-      let value = text(account[key]);
-      if (!value && (config.accountKeys?.includes(key) || (portalId === "aerial" && key === "group")) && parsedAccounts.length === 1) {
-        const values = [...new Set(nativeRows.map(row => text(key === "payer" ? row.payer : row.group ?? row.Group)))];
-        if (values.length === 1) value = values[0];
-      }
-      if (!value && (key === "username" || key === "password" || config.accountKeys?.includes(key) || (portalId === "aerial" && project.toLowerCase().includes("citrus") && key === "group"))) {
+      const value = text(account[key]);
+      if (!value && !inferenceKeys.some(scope => scope === key) && (key === "username" || key === "password" || config.accountKeys?.some(scope => scope === key) || (portalId === "aerial" && project.toLowerCase().includes("citrus") && key === "group"))) {
         throw new Error(`credentials.accounts[${index}].${key} is required for ${portalId}.`);
       }
       if (!value && key === "login_url" && ["aerial", "all-care", "astrona", "blue-shield", "regal"].includes(portalId)) {
@@ -173,7 +147,7 @@ export async function prepareGenericClaimStatusServiceInput(
       }
       return value;
     });
-    return row;
+    return [...row, ...inferenceKeys.map(() => true)];
   });
   const verification: Array<{ username: string; question: string; answer: string }> = [];
   if (portalId === "waystar") {
@@ -200,7 +174,7 @@ export async function prepareGenericClaimStatusServiceInput(
       mailConfiguration.push([key, nonempty(value, `credentials.mail_configuration.${key}`)]);
     }
   }
-  const loginWorkbook = await workbook(Object.keys(config.loginColumns), accountRows, verification, mailConfiguration);
+  const loginWorkbook = await workbook(loginHeaders, accountRows, verification, mailConfiguration);
   const claimFileName = `${portalId}-claims.xlsx`;
   const loginFileName = `${portalId}-login.xlsx`;
   const formFields: Record<string, string> = {
@@ -209,18 +183,13 @@ export async function prepareGenericClaimStatusServiceInput(
     ...(portalId === "uhc" ? { clientType: project } : {}),
     ...(portalId === "blue-shield" ? { checkpointId: claimFileName, resetCheckpoint: "false" } : {}),
   };
-  const nativeForm = new FormData();
-  nativeForm.set(config.claimField, new File([new Uint8Array(claimWorkbook)], claimFileName));
-  nativeForm.set(config.loginField, new File([new Uint8Array(loginWorkbook)], loginFileName));
-  for (const [key, value] of Object.entries(formFields)) nativeForm.set(key, value);
-  await validateServicePortalCredentials(portalId, nativeRows, loginWorkbook, nativeForm);
   return {
     claimCount: claims.length,
     files: [
       { field: config.claimField, filename: claimFileName, buffer: claimWorkbook },
       { field: config.loginField, filename: loginFileName, buffer: loginWorkbook },
     ],
-    claimRowsJson: JSON.stringify(portalId === "uhc" ? nativeRows : claims.map((claim, index) => ({ "Client Row Ref": claim.client_row_ref, __original_index: index }))),
+    claimRowsJson: JSON.stringify(claims.map((claim, index) => ({ "Client Row Ref": claim.client_row_ref, __original_index: index }))),
     formFields,
     claimFileName,
     loginFileName,

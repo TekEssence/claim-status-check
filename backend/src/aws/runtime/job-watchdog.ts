@@ -3,6 +3,7 @@ import {
   createWorkflowCommand,
   confirmUnstartedServiceCancellation,
   expirePendingWorkflowCommands,
+  getWorkflowJobById,
   listWatchdogWorkflowJobs,
   updateWorkflowJob,
   updateWorkflowJobMetadata,
@@ -94,7 +95,9 @@ async function handleServiceCancellation(job: WorkflowJob, now: number): Promise
   }
   if (!taskArn) {
     if (requestedAt && now - requestedAt >= SERVICE_UNSTARTED_CONFIRM_MS) {
-      await confirmUnstartedServiceCancellation(current.jobId, new Date(now - SERVICE_UNSTARTED_CONFIRM_MS).toISOString());
+      if (await confirmUnstartedServiceCancellation(current.jobId, new Date(now - SERVICE_UNSTARTED_CONFIRM_MS).toISOString())) {
+        await reconcileAwsJobRuntime(await getWorkflowJobById(current.jobId));
+      }
     }
     return true;
   }
@@ -165,6 +168,21 @@ export async function runStalledJobWatchdog(): Promise<WatchdogResult> {
 
   for (const job of jobs) {
     try {
+      // EventBridge is the primary stop notification. This also repairs a missed
+      // event without waiting for the stall timeout or an AR execution deadline.
+      if (job.ecsTaskArn) {
+        const task = await describeWorkerTask(job.ecsTaskArn);
+        if (task?.lastStatus === "STOPPED") {
+          await reconcileAwsJobRuntime(job, task);
+          result.skipped += 1;
+          continue;
+        }
+      }
+      if (job.clientSystem && job.workflowId === "claim-status" && job.status === "cancelled") {
+        await reconcileAwsJobRuntime(job);
+        result.skipped += 1;
+        continue;
+      }
       if (terminalStatus(job.status)) {
         result.skipped += 1;
         continue;

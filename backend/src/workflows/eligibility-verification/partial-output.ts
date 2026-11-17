@@ -1,4 +1,36 @@
 import * as XLSX from "xlsx";
+import type { AutomationContext } from "../types";
+import type { EligibilityInputRow, EligibilityResult } from "./types";
+
+type NativeEligibilityOutput = { inputFile: File; rows: Map<number, EligibilityInputRow>;
+  results: Map<number, EligibilityResult>; errors: Map<number, string> };
+
+/** Reuse each portal's native writer; only finalized rows enter service snapshots. */
+export function createEligibilityServiceSnapshots(context: AutomationContext, input: NativeEligibilityOutput,
+  build: (input: NativeEligibilityOutput) => Promise<Uint8Array>) {
+  const publish = createEligibilityServiceSnapshotPublisher(context, () => {
+    const rows = new Map([...input.rows].filter(([index]) => input.results.has(index) || input.errors.has(index)));
+    return build({ ...input, rows });
+  });
+  return () => !input.results.size && !input.errors.size ? Promise.resolve() : publish();
+}
+
+/** UHC updates its workbook directly; map-based portals use the same throttle above. */
+export function createEligibilityServiceSnapshotPublisher(context: AutomationContext, build: () => Promise<Uint8Array>) {
+  let publishedAt = 0;
+  return async () => {
+    if (!context.saveServiceResults || Date.now() - publishedAt < 10_000) return;
+    try {
+      await context.saveServiceResults(await build());
+      publishedAt = Date.now();
+    } catch {
+      // A storage outage must not become a portal/payer failure. The next
+      // snapshot and the existing stop recovery can retry the saved outcomes.
+      await context.log({ level: "warn", eventName: "eligibility_service_publication_retry",
+        message: "Eligibility result publication failed; the next snapshot or stopped-task recovery will retry." });
+    }
+  };
+}
 
 type EligibilityRowEvent = {
   type?: unknown;

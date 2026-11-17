@@ -2,10 +2,10 @@ import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { runDbWithRetry } from "@/db";
 import {
   automationJobArtifacts,
-  automationJobLogs,
   automationJobs,
 } from "@/db/schema/automation-jobs";
 import type { WorkflowId } from "@/backend/src/workflows/types";
+import { appendLocalArtifact, expandLocalArtifacts } from "./artifacts";
 
 export type AutomationJobStatus =
   | "running"
@@ -53,22 +53,13 @@ export type PersistentAutomationJob = {
 type AutomationJobRow = typeof automationJobs.$inferSelect;
 
 async function hydrateJob(row: AutomationJobRow): Promise<PersistentAutomationJob> {
-  const [logs, artifacts] = await Promise.all([
-    runDbWithRetry((db) =>
-      db
-        .select()
-        .from(automationJobLogs)
-        .where(eq(automationJobLogs.jobId, row.jobId))
-        .orderBy(asc(automationJobLogs.id)),
-    ),
-    runDbWithRetry((db) =>
-      db
-        .select()
-        .from(automationJobArtifacts)
-        .where(eq(automationJobArtifacts.jobId, row.jobId))
-        .orderBy(asc(automationJobArtifacts.id)),
-    ),
-  ]);
+  const artifacts = await runDbWithRetry((db) =>
+    db
+      .select()
+      .from(automationJobArtifacts)
+      .where(eq(automationJobArtifacts.jobId, row.jobId))
+      .orderBy(asc(automationJobArtifacts.id)),
+  );
 
   return {
     jobId: row.jobId,
@@ -85,15 +76,8 @@ async function hydrateJob(row: AutomationJobRow): Promise<PersistentAutomationJo
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     finishedAt: row.finishedAt,
-    logs: logs.map((log) => ({
-      level: log.level,
-      message: log.message,
-      eventName: log.eventName,
-      rowIndex: log.rowIndex,
-      metadata: log.metadataJson,
-      createdAt: log.createdAt,
-    })),
-    artifacts: artifacts.map((artifact) => ({
+    logs: [],
+    artifacts: artifacts.flatMap(expandLocalArtifacts).map((artifact) => ({
       id: artifact.id,
       rowIndex: artifact.rowIndex,
       artifactType: artifact.artifactType,
@@ -197,27 +181,6 @@ export async function listAutomationJobsForUser(
   return Promise.all(rows.map((row) => hydrateJob(row)));
 }
 
-export async function appendAutomationJobLog(params: {
-  jobId: string;
-  level?: string;
-  message: string;
-  eventName?: string;
-  rowIndex?: number;
-  metadata?: Record<string, unknown>;
-}): Promise<void> {
-  await runDbWithRetry((db) =>
-    db.insert(automationJobLogs).values({
-      jobId: params.jobId,
-      level: params.level ?? "info",
-      message: params.message,
-      eventName: params.eventName ?? null,
-      rowIndex: params.rowIndex ?? null,
-      metadataJson: params.metadata ?? {},
-      createdAt: new Date().toISOString(),
-    }),
-  );
-}
-
 export async function appendAutomationJobArtifact(params: {
   jobId: string;
   rowIndex?: number;
@@ -227,18 +190,7 @@ export async function appendAutomationJobArtifact(params: {
   pathOrKey?: string;
   metadata?: Record<string, unknown>;
 }): Promise<void> {
-  await runDbWithRetry((db) =>
-    db.insert(automationJobArtifacts).values({
-      jobId: params.jobId,
-      rowIndex: params.rowIndex ?? null,
-      artifactType: params.artifactType,
-      filename: params.filename ?? null,
-      mimeType: params.mimeType ?? null,
-      pathOrKey: params.pathOrKey ?? null,
-      metadataJson: params.metadata ?? {},
-      createdAt: new Date().toISOString(),
-    }),
-  );
+  await appendLocalArtifact(params);
 }
 
 export async function updateAutomationJob(params: {

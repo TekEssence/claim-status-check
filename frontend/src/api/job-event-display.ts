@@ -13,13 +13,6 @@ export function jobEventLog(payload: unknown): string {
   return "";
 }
 
-export function mergeJobLogs(events: Array<{ payload?: unknown }>, cloudWatchLogs: string[] = []): string[] {
-  const saved = events.map(event => jobEventLog(event.payload)).filter(Boolean);
-  // Preserve repeated stage messages within event history; add only missing CloudWatch messages.
-  const known = new Set(saved);
-  return [...saved, ...cloudWatchLogs.filter(line => {
-    if (!line.trim() || known.has(line)) return false;
-    known.add(line);
-    return true;
-  })];
+export function mergeJobLogs(_events: Array<{ payload?: unknown }>, cloudWatchLogs: string[] = []): string[] {
+  return cloudWatchLogs.filter(line => line.trim()).slice(-200);
 }

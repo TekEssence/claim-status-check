@@ -1,15 +1,24 @@
 import ExcelJS from "exceljs";
 import type { ServiceResultSummary, ServiceRowResult, ServiceRowStatus } from "./service-contract";
+import { incompleteServiceResult, summarizeServiceResults } from "./result-summary";
+import { claimStatusResultFields } from "./claim-status-result-fields";
+import { CLAIM_STATUS_OUTPUT_HEADERS } from "../../workflows/claim-status/output-columns";
+import { classifyClaimCompletion } from "./claim-completion";
+export { pageServiceResults, pageServiceResults as pageIehpServiceResults } from "./result-publication";
 export type { ServiceOutcome, ServiceResultSummary, ServiceRowResult, ServiceRowStatus } from "./service-contract";
 
-function cellText(value: ExcelJS.CellValue): string {
+function cellText(cell: ExcelJS.Cell): string {
+  // ExcelJS omits cached zero from cell.value for formulas; cell.result retains it.
+  const value = cell.formula ? cell.result : cell.value;
   if (value === null || value === undefined) return "";
   if (typeof value === "object" && "text" in value) return String(value.text ?? "").trim();
+  if (typeof value === "object" && "result" in value) return String(value.result ?? "").trim();
   return String(value).trim();
 }
 
 const detailHeaders = new Set([
-  "BotClaimStatusCheck", "BotClaimStatusCheckError", "BotReferRA",
+  ...CLAIM_STATUS_OUTPUT_HEADERS,
+  "BotClaimDetails", "BotClaimStatusCheck", "BotClaimStatusCheckError", "BotReferRA",
   "SummaryBlockDOS", "SummaryBlockDate", "Check Number", "Bot CIN", "Received Date", "Check Date",
   "Bot Plan Type", "Billed Amount", "Other related payment details", "RA Proc Code", "RA Check Amount",
   "RA Amount Billed", "RA Amount Allowed", "RA Copay", "RA Coins", "RA Deduct Amount", "RA Net Paid",
@@ -17,7 +26,7 @@ const detailHeaders = new Set([
 ]);
 
 type ClaimServiceRowResult = ServiceRowResult & {
-  result: { claim_status: string; claim_details: string; detail_rows?: Array<Record<string, string>> };
+  result: ServiceRowResult["result"] & { claim_status: string; claim_details: string };
 };
 type ParsedDetailRow = { normalized: ClaimServiceRowResult; detail: Record<string, string> };
 
@@ -26,8 +35,6 @@ function uniqueNonempty(values: Array<string | null>): string[] {
 }
 
 function groupClaimRows(ref: string, rows: ParsedDetailRow[]): ClaimServiceRowResult {
-  if (rows.length === 1) return rows[0].normalized;
-
   const statuses = new Set(rows.map((row) => row.normalized.status));
   const status: ServiceRowStatus = statuses.size === 1 ? rows[0].normalized.status
     : statuses.has("INCOMPLETE") ? "INCOMPLETE"
@@ -64,7 +71,7 @@ export async function normalizeIehpServiceWorkbook(
   const worksheet = workbook.worksheets[0];
   if (!worksheet) throw new Error("Output workbook has no worksheet.");
   const headers = new Map<string, number>();
-  worksheet.getRow(1).eachCell((cell, number) => headers.set(cellText(cell.value), number));
+  worksheet.getRow(1).eachCell((cell, number) => headers.set(cellText(cell), number));
   const refColumn = headers.get("Client Row Ref");
   if (!refColumn) throw new Error("Output workbook is missing Client Row Ref.");
   if ((options.requireStatusColumns ?? true) && (!headers.has("BotClaimStatusCheck") || !headers.has("BotClaimStatusCheckError"))) {
@@ -74,33 +81,19 @@ export async function normalizeIehpServiceWorkbook(
   const rowsByRef = new Map<string, ParsedDetailRow[]>();
   for (let index = 2; index <= worksheet.rowCount; index += 1) {
     const row = worksheet.getRow(index);
-    const ref = cellText(row.getCell(refColumn).value);
+    const ref = cellText(row.getCell(refColumn));
     if (!ref) continue;
     if (!expected.has(ref)) throw new Error(`Output workbook has an unexpected row reference: ${ref}.`);
     const read = (header: string) => {
       const column = headers.get(header);
-      return column ? cellText(row.getCell(column).value) : "";
+      return column ? cellText(row.getCell(column)) : "";
     };
     const claimStatus = read("BotClaimStatusCheck");
     const errorMessage = read("BotClaimStatusCheckError");
     const claimDetails = read("BotClaimDetails");
-    let status: ServiceRowStatus;
-    let errorCategory: string | null = null;
-    if (/^success$/i.test(claimStatus)) {
-      status = "SUCCESS";
-    } else if (/no matching|no claim found|not found for/i.test(errorMessage)) {
-      status = "NO_MATCH";
-      errorCategory = "NO_MATCH";
-    } else if (/otp|mfa|captcha|verification required|action required/i.test(errorMessage)) {
-      status = "ACTION_REQUIRED";
-      errorCategory = "MANUAL_ACTION_REQUIRED";
-    } else if (/^failed$|^skipped$/i.test(claimStatus)) {
-      status = "FAILED";
-      errorCategory = /^skipped$/i.test(claimStatus) ? "INVALID_INPUT" : "PORTAL_ERROR";
-    } else {
-      status = "INCOMPLETE";
-      errorCategory = "INCOMPLETE";
-    }
+    const { status } = classifyClaimCompletion("iehp", { BotClaimStatusCheck: claimStatus, BotClaimStatusCheckError: errorMessage });
+    const errorCategory = status === "SUCCESS" ? null : status === "ACTION_REQUIRED" ? "MANUAL_ACTION_REQUIRED"
+      : status === "FAILED" ? /^skipped$/i.test(claimStatus) ? "INVALID_INPUT" : "PORTAL_ERROR" : status;
     const normalized: ClaimServiceRowResult = {
       client_row_ref: ref,
       status,
@@ -111,37 +104,17 @@ export async function normalizeIehpServiceWorkbook(
     const detail: Record<string, string> = {};
     for (const [header, column] of headers) {
       if (!detailHeaders.has(header)) continue;
-      const value = cellText(row.getCell(column).value);
+      const value = cellText(row.getCell(column));
       if (value) detail[header] = value;
     }
     const grouped = rowsByRef.get(ref) ?? [];
     grouped.push({ normalized, detail });
     rowsByRef.set(ref, grouped);
   }
-  if (rowsByRef.size !== expected.size) throw new Error(`Output workbook contains ${rowsByRef.size} of ${expected.size} expected claim rows.`);
-  const rowResults = expectedRefs.map((ref) => groupClaimRows(ref, rowsByRef.get(ref)!));
-  const firstIncomplete = rowResults.findIndex((row) => row.status === "INCOMPLETE");
-  const finalizedCount = firstIncomplete < 0 ? rowResults.length : firstIncomplete;
-  const counts = {
-    total: rowResults.length,
-    success: rowResults.filter((row) => row.status === "SUCCESS").length,
-    no_match: rowResults.filter((row) => row.status === "NO_MATCH").length,
-    failed: rowResults.filter((row) => row.status === "FAILED").length,
-    action_required: rowResults.filter((row) => row.status === "ACTION_REQUIRED").length,
-    incomplete: rowResults.filter((row) => row.status === "INCOMPLETE").length,
-  };
-  return {
-    outcome: counts.success === counts.total ? "SUCCESS" : counts.success > 0 ? "PARTIAL_SUCCESS" : "FAILED",
-    counts,
-    row_results: rowResults,
-    finalized_count: finalizedCount,
-  };
+  if ((options.requireStatusColumns ?? true) && rowsByRef.size !== expected.size) throw new Error(`Output workbook contains ${rowsByRef.size} of ${expected.size} expected claim rows.`);
+  const rowResults = expectedRefs.map(ref => {
+    const row = rowsByRef.has(ref) ? groupClaimRows(ref, rowsByRef.get(ref)!) : incompleteServiceResult(ref);
+    return { ...row, result: claimStatusResultFields("iehp", row.result) };
+  });
+  return summarizeServiceResults(rowResults);
 }
-
-export function pageServiceResults(summary: ServiceResultSummary | null, cursor: number, limit: number, terminal: boolean) {
-  const available = summary ? terminal ? summary.row_results.length : summary.finalized_count : 0;
-  const nextCursor = Math.min(available, cursor + limit);
-  return { available, nextCursor, results: summary?.row_results.slice(cursor, nextCursor) ?? [] };
-}
-
-export const pageIehpServiceResults = pageServiceResults;

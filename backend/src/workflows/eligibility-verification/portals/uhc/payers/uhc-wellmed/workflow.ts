@@ -5,6 +5,7 @@ import type { BrowserContext, Frame, Locator, Page } from "playwright-core";
 import type { AutomationContext } from "../../../../../types";
 import { applyUhcResultLayout } from "./result-parser";
 import { isAllowedPlanType, isMedicaidPlanType, selectPolicy, type SelectPolicyResult } from "./policy-selector";
+import { createEligibilityServiceSnapshotPublisher } from "../../../../partial-output";
 
 export const UHC_OUTPUT_HEADERS = [
   "Coverage Status",
@@ -1451,6 +1452,8 @@ export async function runUhcWellmedEligibilityWorkflow(options: {
   const routing = readUhcEligibilityInputRows(sheet);
   const { rows, skippedRows, totalRows } = routing;
   const outputStart = addOutputColumns(sheet);
+  const publishSnapshot = createEligibilityServiceSnapshotPublisher(options.context, async () =>
+    new Uint8Array(await workbook.xlsx.writeBuffer()));
 
   for (const skipped of skippedRows) {
     const result = outputTemplate();
@@ -1467,6 +1470,7 @@ export async function runUhcWellmedEligibilityWorkflow(options: {
   }
 
   await options.context.emit({ type: "progress", completed: skippedRows.length, total: totalRows });
+  if (skippedRows.length) await publishSnapshot();
   if (!rows.length) {
     await options.context.log({
       level: "warn",
@@ -1535,6 +1539,7 @@ export async function runUhcWellmedEligibilityWorkflow(options: {
         if (!validationPassed) {
           // Validation failed - row should be skipped, don't proceed with selection
           // The validateAndSelectUhcRow already emitted the error and result
+          result.Error = "UHC eligibility result did not pass portal validation.";
           break;
         }
 
@@ -1599,6 +1604,7 @@ export async function runUhcWellmedEligibilityWorkflow(options: {
       total: totalRows,
       currentRow: row.worksheetRow,
     });
+    await publishSnapshot();
     if (processedRows % UHC_SAVE_INTERVAL === 0) {
       const checkpoint = await saveUhcWorkbook(
         workbook,

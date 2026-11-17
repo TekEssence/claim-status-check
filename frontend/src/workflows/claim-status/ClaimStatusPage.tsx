@@ -1019,7 +1019,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     let cancelled = false;
     const load = async () => {
       if (cancelled) return;
-      await loadWorkflowRunDetails(selectedRun, { mergeLogs: true });
+      await loadWorkflowRunDetails(selectedRun);
     };
 
     void load();
@@ -1375,20 +1375,36 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     setPendingBlueShieldRestoreJob(null);
   }
 
-  async function loadWorkflowRunDetails(job: ScrapeJobSummary, options?: { mergeLogs?: boolean }) {
+  useEffect(() => {
+    if (awsWorkflowMode || !selectedWorkflowRunId) return;
+    // The run's existing SSE connection already handles its live logs.
+    if (isProcessing && activeJobId === selectedWorkflowRunId) return;
+    const controller = new AbortController();
+    setLogs([]);
+    void subscribeToScrapeJobEvents({
+      jobId: selectedWorkflowRunId,
+      signal: controller.signal,
+      onEvent(event) {
+        if (controller.signal.aborted) return;
+        if ((event.type === "log" || event.type === "warning" || event.type === "error") && event.message) {
+          const message = event.type === "error" ? `ERROR: ${event.message}` : event.message;
+          setLogs((previous) => [...previous, message]);
+        }
+        if (event.type === "done") controller.abort();
+      },
+      onStreamError(error) {
+        if (!controller.signal.aborted) setStatus(`Log stream error: ${getErrorMessage(error)}`);
+      },
+    }).catch((error) => {
+      if (!controller.signal.aborted) setStatus(`Log stream error: ${getErrorMessage(error)}`);
+    });
+    return () => controller.abort();
+  }, [awsWorkflowMode, selectedWorkflowRunId, activeJobId, isProcessing]);
+
+  async function loadWorkflowRunDetails(job: ScrapeJobSummary) {
     try {
       const details = await getScrapeJobDetails(job.jobId);
-      if (options?.mergeLogs) {
-        setLogs((previous) => {
-          const merged = [...previous];
-          for (const logLine of details.logs) {
-            if (logLine && !merged.includes(logLine)) {
-              merged.push(logLine);
-            }
-          }
-          return merged;
-        });
-      } else {
+      if (awsWorkflowMode) {
         setLogs(details.logs);
       }
       setProgress(details.totalRows > 0 ? { completed: details.currentCompleted, total: details.totalRows } : null);
@@ -1408,7 +1424,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     if (isPortalId(job.portalId)) {
       navigateToPortalRoute(job.portalId);
     }
-    setActiveJobId(job.jobId);
+    if (awsWorkflowMode) setActiveJobId(job.jobId);
     setProgress(job.totalRows > 0 ? { completed: job.currentCompleted, total: job.totalRows } : null);
     setStatus(
       `${job.portalId.toUpperCase()} run ${formatShortJobId(job.jobId)} is ${job.status.replace(/_/g, " ")}.`,

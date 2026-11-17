@@ -1,5 +1,5 @@
 import ExcelJS from "exceljs";
-import { getIehpClaimSearchFields } from "../../workflows/claim-status/portals/iehp/input";
+import { encodeServiceClaimWorkbook } from "./claim-workbook";
 
 export type PreparedClaim = {
   client_row_ref: string;
@@ -40,6 +40,9 @@ function requiredString(value: unknown, label: string, maxLength = 500): string 
   return value.trim();
 }
 
+// Service-envelope checks only: correlation, JSON shape, scalar cells and input
+// limits. Never add required portal fields here: the shared worker owns those
+// checks so an invalid claim cannot reject an otherwise processable batch.
 export function validateServiceClaims(value: unknown): PreparedClaim[] {
   if (!Array.isArray(value) || value.length === 0 || value.length > MAX_SERVICE_CLAIMS_PER_JOB) {
     throw new Error(`claims must contain between 1 and ${MAX_SERVICE_CLAIMS_PER_JOB} rows.`);
@@ -68,16 +71,6 @@ export function validateServiceClaims(value: unknown): PreparedClaim[] {
   });
 }
 
-function validateIehpClaims(value: unknown): PreparedClaim[] {
-  return validateServiceClaims(value).map((claim, index) => {
-    const { memberPolicyId, dosValue } = getIehpClaimSearchFields(claim.data);
-    if (!memberPolicyId || !String(dosValue ?? "").trim()) {
-      throw new Error(`Claim ${index + 1} requires Member Policy ID and Date Of Service.`);
-    }
-    return claim;
-  });
-}
-
 export function validateIehpServiceInput(value: unknown): IehpServiceInput {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Request body must be an object.");
   const source = value as Record<string, unknown>;
@@ -87,7 +80,7 @@ export function validateIehpServiceInput(value: unknown): IehpServiceInput {
   }
   const credentials = credentialSource as Record<string, unknown>;
   return {
-    claims: validateIehpClaims(source.claims),
+    claims: validateServiceClaims(source.claims),
     credentials: {
       login_url: requiredString(credentials.login_url, "credentials.login_url", 2048),
       username: requiredString(credentials.username, "credentials.username"),
@@ -98,12 +91,7 @@ export function validateIehpServiceInput(value: unknown): IehpServiceInput {
 }
 
 export async function generateIehpServiceInput(input: IehpServiceInput): Promise<GeneratedIehpInput> {
-  const rows: Array<Record<string, string | number | boolean | null>> = input.claims.map((claim, index) => ({ ...claim.data, "Client Row Ref": claim.client_row_ref, __original_index: index }));
-  const headers = ["Client Row Ref", ...new Set(input.claims.flatMap((claim) => Object.keys(claim.data)))];
-  const claimWorkbook = new ExcelJS.Workbook();
-  const claimSheet = claimWorkbook.addWorksheet("Claims");
-  claimSheet.addRow(headers);
-  for (const row of rows) claimSheet.addRow(headers.map((header) => row[header] ?? ""));
+  const claimWorkbook = await encodeServiceClaimWorkbook(input.claims);
 
   const loginWorkbook = new ExcelJS.Workbook();
   const loginSheet = loginWorkbook.addWorksheet("Login");
@@ -115,8 +103,8 @@ export async function generateIehpServiceInput(input: IehpServiceInput): Promise
     input.credentials.claim_status_url ?? "",
   ]);
   return {
-    claimWorkbook: Buffer.from(await claimWorkbook.xlsx.writeBuffer()),
+    claimWorkbook: claimWorkbook.buffer,
     loginWorkbook: Buffer.from(await loginWorkbook.xlsx.writeBuffer()),
-    claimRowsJson: JSON.stringify(rows),
+    claimRowsJson: JSON.stringify(claimWorkbook.rows),
   };
 }

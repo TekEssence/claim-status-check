@@ -16,6 +16,8 @@
     "lint": "eslint",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
+    "db:transfer": "node scripts/db-transfer.mjs",
+    "db:transfer:test": "node --test scripts/db-transfer.test.mjs",
     "db:studio": "drizzle-kit studio",
     "auth:migrate": "node --env-file=.env.local --import tsx ./scripts/migrate-better-auth.ts"
   },

@@ -1,4 +1,5 @@
-import { bigserial, index, integer, jsonb, pgTable, text, timestamp, uniqueIndex, varchar } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
+import { bigserial, check, index, integer, jsonb, pgTable, primaryKey, text, timestamp, unique, uniqueIndex, varchar } from "drizzle-orm/pg-core";
 
 export const workflowJobs = pgTable(
   "workflow_jobs",
@@ -50,6 +51,19 @@ export const workflowJobEvents = pgTable(
   }),
 );
 
+/** Immutable normalized claim results, indexed by their append-only publication cursor. */
+export const workflowServiceResults = pgTable("workflow_service_results", {
+  jobId: varchar("job_id", { length: 100 }).notNull().references(() => workflowJobs.jobId, { onDelete: "cascade" }),
+  sequence: integer("sequence").notNull(),
+  clientRowRef: varchar("client_row_ref", { length: 160 }).notNull(),
+  result: jsonb("result").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true, mode: "string" }).notNull().defaultNow(),
+}, table => ({
+  jobRefPk: primaryKey({ columns: [table.jobId, table.clientRowRef], name: "workflow_service_results_job_ref_pk" }),
+  jobSequenceUnique: unique("workflow_service_results_job_sequence_unique").on(table.jobId, table.sequence),
+  positiveSequence: check("workflow_service_results_sequence_positive", sql`${table.sequence} > 0`),
+}));
+
 export const workflowJobCommands = pgTable(
   "workflow_job_commands",
   {
@@ -97,9 +111,12 @@ export const workflowJobArtifacts = pgTable(
     rowIndex: integer("row_index"),
     metadataJson: jsonb("metadata_json").notNull().default({}),
     metadata: jsonb("metadata").notNull().default({}),
+    manifest: jsonb("manifest").$type<import("@/backend/src/aws/runtime/artifact-manifest").ArtifactManifest>().notNull(),
     createdAt: timestamp("created_at", { withTimezone: true, mode: "string" }).notNull(),
   },
   (table) => ({
     jobIdIdx: index("workflow_job_artifacts_job_id_idx").on(table.jobId, table.id),
+    jobUnique: uniqueIndex("workflow_job_artifacts_job_unique").on(table.jobId),
+    manifestVersion: check("workflow_artifact_manifest_version", sql`${table.manifest} @> '{"version":1}'::jsonb`),
   }),
 );

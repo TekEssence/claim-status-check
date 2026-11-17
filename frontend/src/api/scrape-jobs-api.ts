@@ -519,6 +519,7 @@ async function subscribeToAwsScrapeJobEvents(options: {
   let socketErrorAlreadyHandled = false;
   let downloadableEventSeen = false;
   let terminal = false;
+  let loadRecentLogs = true;
 
   const clearReconnectTimer = () => {
     if (reconnectTimer !== null) {
@@ -567,6 +568,7 @@ async function subscribeToAwsScrapeJobEvents(options: {
     socketErrorAlreadyHandled = false;
     socket.onopen = () => {
       reconnectAttempt = 0;
+      loadRecentLogs = true;
     };
     socket.onmessage = async (message) => {
       try {
@@ -629,20 +631,30 @@ async function subscribeToAwsScrapeJobEvents(options: {
 
   while (!options.signal.aborted) {
     try {
-      const response = await fetch(`${apiUrl}/jobs/${encodeURIComponent(options.jobId)}?after=${after}`, {
+      const includeLogs = loadRecentLogs;
+      const response = await fetch(`${apiUrl}/jobs/${encodeURIComponent(options.jobId)}?after=${after}${includeLogs ? "&includeLogs=true" : ""}`, {
         headers: { ...requireAwsAuthHeaders() },
         signal: options.signal,
       });
       await throwForAwsAuthResponse(response);
       if (response.ok) {
         const body = await response.json() as {
-          job?: { status?: string; errorMessage?: string | null; portalId?: string };
+          job?: { status?: string; errorMessage?: string | null; portalId?: string; currentCompleted?: number; totalRows?: number };
           events?: Array<{ id: number; payload: ScrapeJobEvent }>;
+          logs?: string[];
           artifacts?: Array<{ artifactType: string; filename: string; mimeType?: string; bucket?: string; s3Key?: string }>;
         };
         const jobStatus = body.job?.status;
+        if (includeLogs) {
+          loadRecentLogs = false;
+          for (const message of body.logs ?? []) await options.onEvent({ type: "log", message });
+        }
+        if (typeof body.job?.currentCompleted === "number" && typeof body.job.totalRows === "number") {
+          await options.onEvent({ type: "progress", completed: body.job.currentCompleted, total: body.job.totalRows });
+        }
         for (const event of body.events ?? []) {
           after = Math.max(after, event.id);
+          if (!isOtpReplayEvent(event.payload) && !["input_submitted", "input_consumed"].includes(String(event.payload.type))) continue;
           if (deliveredEventIds.has(event.id)) continue;
           deliveredEventIds.add(event.id);
           if (isOtpReplayEvent(event.payload) && jobStatus !== "waiting_otp") {
@@ -665,7 +677,7 @@ async function subscribeToAwsScrapeJobEvents(options: {
           const savedOutputAvailable = (body.artifacts ?? []).some((artifact) =>
             Boolean(artifact.bucket && artifact.s3Key) && (
               isDownloadableOutputEvent({ type: artifact.artifactType, filename: artifact.filename, mimeType: artifact.mimeType } as ScrapeJobEvent) ||
-              (body.job?.portalId === "iehp" && artifact.artifactType === "pdf_download")
+              (body.job?.portalId === "iehp" && artifact.artifactType === "pdf_download") || artifact.artifactType === "artifact_folder"
             ));
           if (savedOutputAvailable && (jobStatus === "cancelled" || !downloadableEventSeen)) {
             try {

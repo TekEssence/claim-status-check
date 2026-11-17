@@ -138,7 +138,8 @@ export function hasExcelOutput(job: ScrapeJobSummary): boolean {
 }
 
 export function hasDownloadableOutput(job: ScrapeJobSummary): boolean {
-  return hasExcelOutput(job) || (job.portalId === "iehp" && (job.artifacts ?? []).some((artifact) =>
+  return (job.artifacts ?? []).some(artifact => artifact.artifactType === "artifact_folder")
+    || hasExcelOutput(job) || (job.portalId === "iehp" && (job.artifacts ?? []).some((artifact) =>
     artifact.artifactType === "pdf_download" ||
     (artifact.artifactType === "file_download" && artifact.filename.toLowerCase().endsWith(".zip"))));
 }

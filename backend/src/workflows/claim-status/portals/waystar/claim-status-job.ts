@@ -104,6 +104,7 @@ function splitDenialSlots(line: WaystarClaimExtraction["procedureLines"][number]
 
 function buildWaystarMissingEobOutputRow(row: WaystarClaimInputRow): WaystarOutputRow {
   return {
+    workerOutcome: "NO_MATCH",
     sno: `${row.inputRowId}.`,
     name: row.patientName,
     group: normalizeWaystarOutputValue(row.group),
@@ -140,6 +141,7 @@ function buildOutputRows(row: WaystarClaimInputRow, extraction: WaystarClaimExtr
   return procedureLines.map((line, index) => {
     const denialSlots = splitDenialSlots(line);
     return {
+      workerOutcome: "SUCCESS",
       sno: index === 0 ? `${row.inputRowId}.` : "",
       name: normalizeWaystarOutputValue(row.patientName),
       group: normalizeWaystarOutputValue(row.group),

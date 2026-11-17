@@ -13,6 +13,7 @@ type RowTimingLog = (label: string, startedAt: number) => Promise<void>;
 type CancellationCheck = () => void;
 
 type OptumProSearchResult = {
+  workerOutcome?: "SUCCESS";
   input: OptumProInputRow;
   rowNumber: number;
   medicalGroupName: string;
@@ -1038,6 +1039,7 @@ async function findMatchingClaimDetails(
         clickedRowText: candidate.text,
         status: candidate.resultStatus || "In Progress",
         details: {
+          workerOutcome: "SUCCESS",
           claimNumber: candidate.claimNumber,
           lineStatus: candidate.resultStatus || "In Progress",
         },
@@ -1240,7 +1242,7 @@ function buildOptumProJobMetadata(
   };
 }
 
-function completeResultsForWorkbook(
+export function completeResultsForWorkbook(
   rows: OptumProInputRow[],
   results: Array<OptumProSearchResult | null>,
   stopped: boolean,
@@ -2078,7 +2080,7 @@ export async function runOptumProClaimSearch(
   await context.emit(downloadableWorkbookEvent(completedAllRows ? "optum_pro_output.xlsx" : "optum_pro_output_partial.xlsx", finalWorkbook.buffer));
 }
 
-async function createOptumProOutputWorkbookBuffer(results: OptumProSearchResult[]): Promise<Buffer> {
+export async function createOptumProOutputWorkbookBuffer(results: OptumProSearchResult[]): Promise<Buffer> {
   const workbook = new ExcelJS.Workbook();
   workbook.creator = "Claim Status Check";
   const inputHeaders = Array.from(new Set(results.flatMap((result) => Object.keys(result.input.raw))));
@@ -2106,7 +2108,7 @@ async function createOptumProOutputWorkbookBuffer(results: OptumProSearchResult[
       cptCode: result.input.cpt,
       validationStatus: "valid",
       validationMessage: "",
-      "Bot Status": success ? "Success" : result.status,
+      "Bot Status": success || result.workerOutcome === "SUCCESS" ? "Success" : result.status,
       "Bot Message": success ? "Claim found." : (result.notes || result.status),
       "Search Result Claim Number": outputValue(result.searchClaimNumber || result.claimNumber),
       "Account Number": outputValue(result.accountNumber),

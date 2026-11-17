@@ -100,6 +100,7 @@ export type BlueShieldClaimSummary = {
 };
 
 export type BlueShieldOutputRow = {
+  workerOutcome?: "SUCCESS" | "NO_MATCH" | "FAILED";
   inputRowId: number;
   inputData: Record<string, unknown>;
   botStatus: string;

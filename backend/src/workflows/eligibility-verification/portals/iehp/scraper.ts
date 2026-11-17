@@ -5,6 +5,7 @@ import type { EligibilityResult, EligibilityRunInput } from "../../types";
 import { parseEligibilityProjectId } from "../../projects";
 import { iehpOutputValues, buildIehpOutput, readIehpCredentials, readIehpInput } from "./data";
 import { loginIehp, verifyIehpRow } from "./portal";
+import { createEligibilityServiceSnapshots } from "../../partial-output";
 
 export function createIehpEligibilityRunner(): AutomationRunner<EligibilityRunInput> {
   return {
@@ -26,6 +27,7 @@ export function createIehpEligibilityRunner(): AutomationRunner<EligibilityRunIn
       const rows = new Map(inputRows.map((row) => [row.originalIndex, row]));
       const results = new Map<number, EligibilityResult>();
       const errors = new Map<number, string>();
+      const publishSnapshot = createEligibilityServiceSnapshots(context, { inputFile: input.inputFile, rows, results, errors }, buildIehpOutput);
       await context.emit({ type: "progress", completed: 0, total: rows.size });
       const { browser, context: browserContext } = await launchAutomationBrowser();
       let page: Awaited<ReturnType<typeof browserContext.newPage>> | undefined;
@@ -53,6 +55,7 @@ export function createIehpEligibilityRunner(): AutomationRunner<EligibilityRunIn
           const result = results.get(rowIndex);
           await context.emit({ type: "eligibility_iehp_result", rowIndex, update: { __rowKey: String(rowIndex), ...iehpOutputValues(result, errors.get(rowIndex)) } });
           await context.emit({ type: "progress", completed: ++completed, total: rows.size, currentRow: rowIndex });
+          await publishSnapshot();
         }
         const output = await buildIehpOutput({ inputFile: input.inputFile, rows, results, errors });
         await context.emit({ type: "file_download", filename: "medrevenue-iehp-eligibility-output.xlsx", mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", base64: output.toString("base64") });

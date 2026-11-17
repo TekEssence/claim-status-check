@@ -1,9 +1,11 @@
 import path from "node:path";
 import { PassThrough, Readable } from "node:stream";
-import { AbortMultipartUploadCommand, CompleteMultipartUploadCommand, CreateMultipartUploadCommand, GetObjectCommand, S3Client, UploadPartCommand } from "@aws-sdk/client-s3";
+import { AbortMultipartUploadCommand, CompleteMultipartUploadCommand, CreateMultipartUploadCommand, GetObjectCommand, HeadObjectCommand, S3Client, UploadPartCommand } from "@aws-sdk/client-s3";
 import archiver from "archiver";
 import { buildWorkflowKey } from "../runtime/s3-key";
 import { appendWorkflowArtifact } from "../runtime/workflow-db";
+import { listManifestFiles } from "../runtime/artifact-files";
+import type { ArtifactManifest } from "../runtime/artifact-manifest";
 
 export type IehpArtifact = {
   id: number;
@@ -104,6 +106,34 @@ export async function createIehpBundle(params: {
 
   const client = params.client ?? new S3Client({});
   const s3Key = buildWorkflowKey({ workflowId: "claim-status", jobId: params.jobId, area: "output", filename });
+  const result = await uploadArtifactZip({ entries, filename, bucket, s3Key, client });
+  await (params.recordArtifact ?? appendWorkflowArtifact)({ jobId: params.jobId, artifactType: "file_download", filename, bucket, s3Key, mimeType: "application/zip" });
+  return result;
+}
+
+export async function createJobArtifactBundle(params: { jobId: string; manifest: ArtifactManifest; client?: S3Client }) {
+  const folders = Object.values(params.manifest.folders);
+  if (!folders.length || params.manifest.count === 0) return null;
+  const bucket = folders[0].bucket;
+  const filename = `${safeName(params.jobId)}-artifacts.zip`;
+  // Generated bundles live outside the source folders, preventing nested ZIP growth.
+  const s3Key = `download-bundles/${params.jobId}/${params.manifest.revision}.zip`;
+  const client = params.client ?? new S3Client({});
+  try {
+    await client.send(new HeadObjectCommand({ Bucket: bucket, Key: s3Key }));
+    return { filename, bucket, s3Key };
+  } catch (error) {
+    const missing = error as { name?: string; $metadata?: { httpStatusCode?: number } };
+    if (missing.$metadata?.httpStatusCode !== 404 && !["NotFound", "NoSuchKey"].includes(missing.name ?? "")) throw error;
+  }
+  const files = await listManifestFiles(params.jobId, params.manifest, client);
+  const entries = files.map((artifact, index) => ({ artifact,
+    name: `${safeName(artifact.artifactType)}/${index + 1}-${safeName(artifact.filename)}` }));
+  return uploadArtifactZip({ entries, filename, bucket, s3Key, client });
+}
+
+async function uploadArtifactZip(params: { entries: BundleEntry[]; filename: string; bucket: string; s3Key: string; client: S3Client }) {
+  const { entries, filename, bucket, s3Key, client } = params;
   const multipart = await client.send(new CreateMultipartUploadCommand({ Bucket: bucket, Key: s3Key, ContentType: "application/zip" }));
   if (!multipart.UploadId) throw new Error("S3 did not start the IEHP ZIP upload.");
   let completed = false;
@@ -134,7 +164,6 @@ export async function createIehpBundle(params: {
       MultipartUpload: { Parts: parts },
     }));
     completed = true;
-    await (params.recordArtifact ?? appendWorkflowArtifact)({ jobId: params.jobId, artifactType: "file_download", filename, bucket, s3Key, mimeType: "application/zip" });
     return { filename, bucket, s3Key };
   } finally {
     if (!completed) {

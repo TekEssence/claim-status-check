@@ -534,7 +534,7 @@ async function submitOtp(page: Page, context: ScraperContext): Promise<void> {
   }
 
   const timeoutMs = cignaConfig.timing.mfaWaitMs;
-  let promptMessage = "Enter the 6-digit Cigna email verification code within 3 minutes.";
+  let promptMessage = "Enter the 6-digit Cigna email verification code within 6 minutes.";
 
   for (let attempt = 1; attempt <= OTP_MAX_ATTEMPTS; attempt += 1) {
     if (context.isCancelled?.()) return;

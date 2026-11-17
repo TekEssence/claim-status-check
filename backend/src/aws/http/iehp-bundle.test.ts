@@ -1,11 +1,42 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { Readable } from "node:stream";
-import { AbortMultipartUploadCommand, CompleteMultipartUploadCommand, CreateMultipartUploadCommand, GetObjectCommand, UploadPartCommand, type S3Client } from "@aws-sdk/client-s3";
-import { createIehpBundle, selectIehpBundleEntries, type IehpArtifact } from "./iehp-bundle";
+import { AbortMultipartUploadCommand, CompleteMultipartUploadCommand, CreateMultipartUploadCommand, GetObjectCommand, HeadObjectCommand, ListObjectsV2Command, UploadPartCommand, type S3Client } from "@aws-sdk/client-s3";
+import { createIehpBundle, createJobArtifactBundle, selectIehpBundleEntries, type IehpArtifact } from "./iehp-bundle";
+import { emptyArtifactManifest, recordArtifact } from "../runtime/artifact-manifest";
 
 const artifact = (id: number, artifactType: string, filename: string): IehpArtifact => ({
   id, artifactType, filename, bucket: "outputs", s3Key: `claim-status/run/output/${filename}`,
+});
+
+test("folder ZIP includes registered files and refreshes after overwriting a file without changing counts", async () => {
+  const manifest = emptyArtifactManifest();
+  const source = { id: 1, artifactType: "pdf_download", filename: "claim.pdf", bucket: "outputs",
+    s3Key: "claim-status/job-A/output/claim.pdf", mimeType: "application/pdf", rowIndex: null, createdAt: "2026-11-17T00:00:00Z" };
+  recordArtifact(manifest, source, "job-A");
+  const cached = new Set<string>();
+  let downloads = 0, zip = Buffer.alloc(0);
+  const client = { async send(command: HeadObjectCommand | ListObjectsV2Command | GetObjectCommand | CreateMultipartUploadCommand | UploadPartCommand | CompleteMultipartUploadCommand) {
+    if (command instanceof HeadObjectCommand) {
+      if (cached.has(command.input.Key!)) return {};
+      throw Object.assign(new Error("missing"), { name: "NotFound" });
+    }
+    if (command instanceof ListObjectsV2Command) return { Contents: [{ Key: source.s3Key }] };
+    if (command instanceof CreateMultipartUploadCommand) return { UploadId: "folder-zip" };
+    if (command instanceof GetObjectCommand) { downloads += 1; return { Body: Readable.from([Buffer.from("PDF contents")]) }; }
+    if (command instanceof UploadPartCommand) { zip = Buffer.concat([zip, Buffer.from(command.input.Body as Buffer)]); return { ETag: "part-1" }; }
+    cached.add(command.input.Key!); return {};
+  } } as unknown as S3Client;
+  await createJobArtifactBundle({ jobId: "job-A", manifest, client });
+  assert.equal(downloads, 1);
+  assert.ok(zip.includes(Buffer.from("pdf_download/1-claim.pdf")));
+  await createJobArtifactBundle({ jobId: "job-A", manifest, client });
+  assert.equal(downloads, 1);
+  recordArtifact(manifest, { ...source, id: 2 }, "job-A");
+  assert.equal(manifest.count, 1);
+  await createJobArtifactBundle({ jobId: "job-A", manifest, client });
+  assert.equal(downloads, 2);
+  assert.deepEqual([...cached], ["download-bundles/job-A/1.zip", "download-bundles/job-A/2.zip"]);
 });
 
 test("IEHP bundle selects the latest workbook and all distinct RA PDFs", () => {

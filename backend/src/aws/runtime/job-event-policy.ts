@@ -1,17 +1,17 @@
 /** Shared by deployed manual jobs and service jobs. No credential/input values are retained. */
 export function isPersistentWorkflowEvent(data: Record<string, unknown>): boolean {
-  return ["job_started", "task_starting", "progress", "row_progress", "log", "warning", "error",
-    "input_request", "otp_request", "provider_options", "input_submitted", "input_consumed",
+  return ["job_started", "task_starting",
+    "input_request", "otp_request", "otp_required", "provider_options", "input_submitted", "input_consumed",
     "cancellation_acknowledged", "cancelled", "completed", "partial_success", "failed", "output_ready"]
     .includes(String(data.type ?? ""));
 }
 
 export function persistentWorkflowEventType(data: Record<string, unknown>): string {
-  return data.type === "otp_request" || data.type === "provider_options" ? "input_request" : String(data.type ?? "event");
+  return isInputRequest(data) ? "input_request" : String(data.type ?? "event");
 }
 
 export function isInputRequest(data: Record<string, unknown>): boolean {
-  return data.type === "input_request" || data.type === "otp_request" || data.type === "provider_options";
+  return data.type === "input_request" || data.type === "otp_request" || data.type === "otp_required" || data.type === "provider_options";
 }
 
 export function persistentWorkflowEventPayload(data: Record<string, unknown>): Record<string, unknown> {

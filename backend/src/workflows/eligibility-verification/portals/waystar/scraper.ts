@@ -10,6 +10,7 @@ import { readWaystarEligibilityWorkbook } from "./input";
 import { getWaystarPayer } from "./payer-registry";
 import { loginToWaystar, submitWaystarInquiry } from "./portal";
 import { buildWaystarOutputWorkbook, formatWaystarCoverageStatus, formatWaystarInsuranceType, sanitizeWaystarErrorMessage } from "./output";
+import { createEligibilityServiceSnapshots } from "../../partial-output";
 import { parseEligibilityProjectId, scopeEligibilityInputFile } from "../../projects";
 import { getWaystarPayerProjectConfig, getWaystarProjectConfig } from "./config/projects";
 
@@ -88,6 +89,9 @@ export function createWaystarRunner(): AutomationRunner<EligibilityRunInput> {
           `Unsupported or empty payer "${row.insuranceName || "blank"}".`,
         ]),
       );
+      const publishSnapshot = createEligibilityServiceSnapshots(context,
+        { inputFile: scopedInputFile, rows: inputRows, results, errors: rowErrors },
+        options => buildWaystarOutputWorkbook({ ...options, projectId: input.projectId }));
       const errorReportLines = routing.unsupportedRows.map((row) =>
         `Row ${row.rowIndex}: unsupported or empty payer "${row.insuranceName || "blank"}".`,
       );
@@ -112,6 +116,7 @@ export function createWaystarRunner(): AutomationRunner<EligibilityRunInput> {
       }
       if (completed > 0) {
         await context.emit({ type: "progress", completed, total: routing.totalRows });
+        await publishSnapshot();
       }
       let browser: Browser | null = null;
       let browserContext: BrowserContext | null = null;
@@ -148,6 +153,7 @@ export function createWaystarRunner(): AutomationRunner<EligibilityRunInput> {
             });
             errorReportLines.push(`${payer.name}: no matching credential row. Expected ${expectedCredential}.`);
             await context.emit({ type: "progress", completed, total: routing.totalRows });
+            await publishSnapshot();
             continue;
           }
 
@@ -420,6 +426,7 @@ export function createWaystarRunner(): AutomationRunner<EligibilityRunInput> {
               completed = Math.min(completed + 1, routing.totalRows);
               await context.emit({ type: "progress", completed, total: routing.totalRows, payerName: payer.name,
                 pendingRetries: [...retryRows].filter((index) => !results.has(index) && !rowErrors.has(index)).length });
+              await publishSnapshot();
               await closeWaystarInquiryWindows(page);
             }
           } catch (error) {
@@ -449,6 +456,7 @@ export function createWaystarRunner(): AutomationRunner<EligibilityRunInput> {
               await context.emit({ type: "error_screenshot", index: -1, filename: `waystar-${payer.id}-login-error.jpg`, path: artifact.path, image: artifact.image, mimeType: "image/jpeg" });
             }
             await context.emit({ type: "progress", completed: Math.min(completed, routing.totalRows), total: routing.totalRows });
+            await publishSnapshot();
           }
 
         }

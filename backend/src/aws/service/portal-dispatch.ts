@@ -1,11 +1,9 @@
 import { generateAvailityServiceInput, validateAvailityServiceInput } from "./availity-input";
-import { loadAvailityServiceSnapshot } from "./availity-snapshot";
 import { generateIehpServiceInput, maskIehpAccountLabel, validateIehpServiceInput } from "./iehp-input";
-import { loadIehpServiceSnapshot } from "./iehp-snapshot";
 import { claimStatusServicePortalConfigs, prepareGenericClaimStatusServiceInput, type GenericClaimStatusServicePortalId } from "./generic-claim-status-input";
-import { loadGenericClaimStatusSnapshot } from "./generic-claim-status-results";
+import { loadWorkerResultSnapshot } from "./worker-result-snapshot";
+type ServiceJob = Parameters<typeof loadWorkerResultSnapshot>[0];
 
-type ServiceJob = Parameters<typeof loadIehpServiceSnapshot>[0];
 type InputFile = { field: string; filename: string; buffer: Buffer };
 export type PreparedServiceInput = {
   claimCount: number;
@@ -19,7 +17,7 @@ export type PreparedServiceInput = {
 
 export type PortalAdapter = {
   prepare: (body: unknown) => Promise<PreparedServiceInput>;
-  loadSnapshot: typeof loadIehpServiceSnapshot;
+  loadSnapshot: (job: Parameters<typeof loadWorkerResultSnapshot>[0], options?: { requireStatusColumns?: boolean }) => ReturnType<typeof loadWorkerResultSnapshot>;
 };
 
 const genericServicePortals = Object.fromEntries(
@@ -27,7 +25,7 @@ const genericServicePortals = Object.fromEntries(
     portalId,
     {
       prepare: (body: unknown) => prepareGenericClaimStatusServiceInput(portalId, body),
-      loadSnapshot: (job: ServiceJob) => loadGenericClaimStatusSnapshot(portalId, job),
+      loadSnapshot: loadWorkerResultSnapshot,
     },
   ]),
 ) as Record<GenericClaimStatusServicePortalId, PortalAdapter>;
@@ -51,7 +49,7 @@ export const servicePortals = {
         accountLabel: maskIehpAccountLabel(input.credentials.username),
       };
     },
-    loadSnapshot: loadIehpServiceSnapshot,
+    loadSnapshot: loadWorkerResultSnapshot,
   },
   availity: {
     prepare: async (body: unknown) => {
@@ -71,7 +69,7 @@ export const servicePortals = {
         accountLabel: generated.accountLabel,
       };
     },
-    loadSnapshot: loadAvailityServiceSnapshot,
+    loadSnapshot: loadWorkerResultSnapshot,
   },
 } satisfies Record<string, PortalAdapter>;
 

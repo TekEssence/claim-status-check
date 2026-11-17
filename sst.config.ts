@@ -238,7 +238,7 @@
                 resources: [inputsBucket.arn, outputsBucket.arn],
               },
               {
-                actions: ["logs:FilterLogEvents"],
+                actions: ["logs:FilterLogEvents", "logs:GetLogEvents"],
                 resources: [$interpolate`arn:aws:logs:${aws.getRegionOutput({}).name}:${aws.getCallerIdentityOutput({}).accountId}:log-group:/claim-status/${$app.stage}/worker:*`],
               },
             );
@@ -278,6 +278,34 @@
     httpApi.route("POST /service/jobs/{jobId}/input", "backend/src/aws/http/service-submit-input.handler");
     httpApi.route("GET /service/jobs/{jobId}/download", "backend/src/aws/http/service-download-job.handler");
 
+    sst.aws.Bus.get("EcsEvents", "default").subscribe("WorkerTaskStopped", {
+      handler: "backend/src/aws/events/ecs-task-stopped.handler",
+      memory: "1024 MB",
+      timeout: "2 minutes",
+      environment: {
+        DATABASE_URL: databaseUrl,
+        DB_SSL: dbSsl,
+        WORKER_CLUSTER_ARN: cluster.nodes.cluster.arn,
+        WORKER_TASK_DEFINITION_ARN: workerTask.nodes.taskDefinition.arn,
+        WORKER_CONTAINER_NAME: "worker",
+      },
+      permissions: [
+        { actions: ["ecs:DescribeTasks"], resources: ["*"] },
+        { actions: ["s3:GetObject"], resources: [$interpolate`${inputsBucket.arn}/*`, $interpolate`${outputsBucket.arn}/*`] },
+        { actions: ["s3:ListBucket"], resources: [outputsBucket.arn] },
+      ],
+    }, {
+      pattern: {
+        source: ["aws.ecs"],
+        detailType: ["ECS Task State Change"],
+        detail: {
+          lastStatus: ["STOPPED"],
+          clusterArn: [cluster.nodes.cluster.arn],
+          taskDefinitionArn: [{ prefix: workerTask.nodes.taskDefinition.arn.apply(arn => arn.slice(0, arn.lastIndexOf(":") + 1)) }],
+        },
+      },
+    });
+
     new sst.aws.Cron("StalledJobWatchdog", {
       schedule: "rate(1 minute)",
       function: {
@@ -305,6 +333,10 @@
               $interpolate`${inputsBucket.arn}/*`,
               $interpolate`${outputsBucket.arn}/*`,
             ],
+          },
+          {
+            actions: ["s3:ListBucket"],
+            resources: [outputsBucket.arn],
           },
         ],
       },

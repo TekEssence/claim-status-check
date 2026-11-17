@@ -1,4 +1,5 @@
 import * as XLSX from "xlsx";
+import { resolveClaimCredentialScopes } from "../../credential-scopes";
 import type { AstronaCredentialBatch, AstronaCredentials, AstronaInput, AstronaInputRow } from "./types";
 
 function asText(value: unknown): string {
@@ -99,8 +100,9 @@ export async function parseAstronaInput(formData: FormData): Promise<AstronaInpu
   const inputExcel = formData.get("inputExcel");
   if (!(credentialExcel instanceof File)) throw new Error("Missing Astrona login Excel file.");
   if (!(inputExcel instanceof File)) throw new Error("Missing Astrona claim Excel file.");
+  const inputWorkbookBuffer = await inputExcel.arrayBuffer();
   return {
-    credentialWorkbookBuffer: await credentialExcel.arrayBuffer(),
-    inputWorkbookBuffer: await inputExcel.arrayBuffer(),
+    credentialWorkbookBuffer: resolveClaimCredentialScopes(await credentialExcel.arrayBuffer(), () => readAstronaInputRows(inputWorkbookBuffer)),
+    inputWorkbookBuffer,
   };
 }

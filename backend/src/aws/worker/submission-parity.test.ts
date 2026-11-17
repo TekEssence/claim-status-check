@@ -89,12 +89,13 @@ test("IEHP service accepts the worker's Member ID and DOS header aliases", async
   assert.deepEqual(getIehpClaimSearchFields(input.claims[0].data), { memberPolicyId: "00123", dosValue: "08/31/2026" });
 });
 
-test("manual and service job events persist logs, OTP and provider prompts without input values", () => {
-  for (const type of ["log", "warning", "error", "otp_request", "input_request", "provider_options", "input_consumed"]) {
+test("manual and service jobs persist input prompts and acknowledgements without log history or input values", () => {
+  for (const type of ["otp_request", "otp_required", "input_request", "provider_options", "input_submitted", "input_consumed"]) {
     const event = { type, message: "Stage message", inputName: "input-1", value: "secret-otp", password: "secret-password" };
     assert.equal(isPersistentWorkflowEvent(event), true);
     assert.equal(JSON.stringify(persistentWorkflowEventPayload(event)).includes("secret-"), false);
   }
+  for (const type of ["log", "warning", "error", "progress", "row_progress"]) assert.equal(isPersistentWorkflowEvent({ type }), false);
   assert.equal(isInputRequest({ type: "provider_options" }), true);
   assert.equal(persistentWorkflowEventType({ type: "provider_options" }), "input_request");
 });

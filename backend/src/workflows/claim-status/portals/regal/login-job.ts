@@ -478,16 +478,16 @@ async function selectRegalOtpIfNeeded(page: Page, context: ScraperContext, stage
 }
 
 async function requestRegalOtpFromUser(context: ScraperContext, stageLog: (level: RegalLogEntry["level"], stage: string, message: string, currentPage?: Page) => Promise<void>, page: Page, otpLabel: string): Promise<string> {
-  await stageLog("info", "mfa", `Waiting for user to enter ${otpLabel} in frontend. Timeout: 3 minutes.`, page);
+  await stageLog("info", "mfa", `Waiting for user to enter ${otpLabel} in frontend. Timeout: 6 minutes.`, page);
   await context.emit({
     type: "input_request",
     inputName: "regal_otp",
     label: otpLabel,
-    message: `Enter the ${otpLabel} within 3 minutes.`,
-    timeoutMs: 180000,
+    message: `Enter the ${otpLabel} within 6 minutes.`,
+    timeoutMs: 360000,
   });
   await stageLog("info", "mfa", "Regal OTP input request sent to frontend.", page);
-  return waitForScrapeJobInput(context.jobId, "regal_otp", 180000);
+  return waitForScrapeJobInput(context.jobId, "regal_otp", 360000);
 }
 
 async function submitRegalOtp(page: Page, code: string): Promise<void> {
@@ -858,6 +858,7 @@ function createRegalNoClaimsOutputRow(claimInput: { rowNumber: number; accountNu
   return {
     "Account Number": claimInput.accountNumber ?? "",
     input_row_number: claimInput.rowNumber,
+    BotStatus: "No Match",
     input_group: claimInput.group,
     input_member_name: claimInput.memberName,
     input_dos: claimInput.dos,
@@ -1476,6 +1477,7 @@ export async function runRegalLoginJob(formData: FormData, context: ScraperConte
           outputRows.push({
             "Account Number": claimInput.accountNumber,
             input_row_number: claimInput.rowNumber,
+            BotStatus: "Success",
             input_group: claimInput.group,
             input_member_name: claimInput.memberName,
             input_dos: claimInput.dos,

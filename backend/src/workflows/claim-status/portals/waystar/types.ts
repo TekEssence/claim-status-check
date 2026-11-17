@@ -62,6 +62,7 @@ export type WaystarClaimExtraction = {
 };
 
 export type WaystarOutputRow = {
+  workerOutcome?: "SUCCESS" | "NO_MATCH";
   sno: string;
   name: string;
   group: string;

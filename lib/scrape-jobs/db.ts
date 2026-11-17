@@ -1,8 +1,8 @@
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { isRetryableDbError, runDbWithRetry } from "@/db";
+import { appendLocalArtifact, expandLocalArtifacts } from "@/lib/automation-jobs/artifacts";
 import {
   automationJobArtifacts,
-  automationJobLogs,
   automationJobs,
 } from "@/db/schema/automation-jobs";
 
@@ -102,11 +102,8 @@ function mapPersistentScrapeJob(
 }
 
 async function hydrateScrapeJob(row: AutomationJobRow): Promise<PersistentScrapeJob> {
-  const [logs, artifacts] = await Promise.all([
-    getScrapeJobLogs(row.jobId),
-    getScrapeJobArtifacts(row.jobId),
-  ]);
-  return mapPersistentScrapeJob(row, logs, artifacts);
+  const artifacts = await getScrapeJobArtifacts(row.jobId);
+  return mapPersistentScrapeJob(row, [], artifacts);
 }
 
 export async function createPersistentScrapeJob(params: {
@@ -252,17 +249,6 @@ export async function listRunningScrapeJobs(limit = 50): Promise<PersistentScrap
   return rows.map((row) => mapPersistentScrapeJob(row, [], artifacts.get(row.jobId) ?? []));
 }
 
-async function getScrapeJobLogs(jobId: string): Promise<string[]> {
-  const rows = await runDbWithRetry((db) =>
-    db
-      .select({ message: automationJobLogs.message })
-      .from(automationJobLogs)
-      .where(eq(automationJobLogs.jobId, jobId))
-      .orderBy(asc(automationJobLogs.id)),
-  );
-  return rows.map((row) => row.message);
-}
-
 async function getScrapeJobArtifacts(jobId: string): Promise<PersistentScrapeJobArtifact[]> {
   return (await getScrapeJobArtifactsForJobs([jobId])).get(jobId) ?? [];
 }
@@ -279,31 +265,18 @@ async function getScrapeJobArtifactsForJobs(jobIds: string[]): Promise<Map<strin
       filename: automationJobArtifacts.filename,
       mimeType: automationJobArtifacts.mimeType,
       pathOrKey: automationJobArtifacts.pathOrKey,
+      metadataJson: automationJobArtifacts.metadataJson,
       createdAt: automationJobArtifacts.createdAt,
     }).from(automationJobArtifacts)
       .where(inArray(automationJobArtifacts.jobId, jobIds))
       .orderBy(asc(automationJobArtifacts.id)),
   );
-  for (const row of rows) {
+  for (const row of rows.flatMap(expandLocalArtifacts)) {
     const artifacts = grouped.get(row.jobId) ?? [];
     artifacts.push({ ...row, filename: row.filename ?? "", mimeType: row.mimeType ?? "", pathOrKey: row.pathOrKey ?? "" });
     grouped.set(row.jobId, artifacts);
   }
   return grouped;
-}
-
-export async function appendScrapeJobLog(jobId: string, message: string): Promise<void> {
-  await runDbWithRetry((db) =>
-    db.insert(automationJobLogs).values({
-      jobId,
-      level: "info",
-      message,
-      eventName: null,
-      rowIndex: null,
-      metadataJson: {},
-      createdAt: new Date().toISOString(),
-    }),
-  );
 }
 
 export async function appendScrapeJobArtifact(params: {
@@ -314,18 +287,7 @@ export async function appendScrapeJobArtifact(params: {
   mimeType?: string;
   pathOrKey?: string;
 }): Promise<void> {
-  await runDbWithRetry((db) =>
-    db.insert(automationJobArtifacts).values({
-      jobId: params.jobId,
-      rowIndex: params.rowIndex ?? null,
-      artifactType: params.artifactType,
-      filename: params.filename ?? null,
-      mimeType: params.mimeType ?? null,
-      pathOrKey: params.pathOrKey ?? null,
-      metadataJson: {},
-      createdAt: new Date().toISOString(),
-    }),
-  );
+  await appendLocalArtifact(params);
 }
 
 export async function updateScrapeJobSnapshot(params: {

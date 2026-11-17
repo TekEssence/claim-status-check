@@ -82,6 +82,7 @@ test("Waystar output workbook matches the sample output structure", async () => 
     "status",
     "Final Status",
     "Remarks",
+    "Worker Outcome",
     ...CLAIM_STATUS_OUTPUT_HEADERS,
   ]);
 
@@ -112,6 +113,7 @@ test("Waystar output workbook matches the sample output structure", async () => 
     "denial",
     "DOS 06/15/2026: Checked waystar portal denied on 06/16/26 denial reason Charge exceeds fee schedule.. Acnt# 269048.",
     "EOB extracted with denial codes.",
+    "INCOMPLETE",
     "CO-45; PR-3",
     "",
     "100.00",

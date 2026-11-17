@@ -26,6 +26,23 @@ node_modules/
 *.pem
 ~$*.xlsx
 
+# Database credentials and transfer archives belong outside this repository.
+.env
+.env.*
+!.env.example
+*.dump
+*.backup
+*.sql.gz
+/migration-backups/
+/database-backups/
+/.db-migration/
+
+# Local database migration tooling and documentation.
+/scripts/db-transfer*.mjs
+/scripts/consolidate-aws-artifacts.mjs
+/docs/rds-database-transfer.md
+/docs/aws-artifact-consolidation.md
+
 # debug
 npm-debug.log*
 yarn-debug.log*

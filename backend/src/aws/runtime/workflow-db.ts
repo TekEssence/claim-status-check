@@ -1,5 +1,8 @@
-import { and, asc, desc, eq, exists, getTableColumns, isNull, lte, or, sql } from "drizzle-orm";
-import { runDbWithRetry } from "@/db";
+import { and, asc, desc, eq, exists, getTableColumns, inArray, isNull, lte, or, sql } from "drizzle-orm";
+import { ELIGIBILITY_SERVICE_PORTALS } from "../service/eligibility-portals";
+import { getPool, runDbWithRetry } from "@/db";
+import { manifestOutputs, persistArtifact, type ArtifactWrite } from "./artifact-manifest";
+import { isPersistentWorkflowEvent } from "./job-event-policy";
 import {
   workflowJobArtifacts,
   workflowJobCommands,
@@ -125,7 +128,8 @@ export async function markWorkflowJobReady(jobId: string): Promise<boolean> {
 export async function cancelUnstartedServiceJob(jobId: string, clientSystem: string): Promise<boolean> {
   const now = new Date().toISOString();
   const rows = await runDbWithRetry((db) => db.update(workflowJobs)
-    .set({ status: "cancelled", updatedAt: now, finishedAt: now })
+    .set({ status: "cancelling", updatedAt: now,
+      metadata: sql`${workflowJobs.metadata} || ${JSON.stringify({ serviceCancelledBeforeLaunch: true, serviceCancellationRequestedAt: now })}::jsonb` })
     .where(and(eq(workflowJobs.jobId, jobId), eq(workflowJobs.clientSystem, clientSystem),
       or(eq(workflowJobs.status, "preparing"), eq(workflowJobs.status, "queued"))))
     .returning({ jobId: workflowJobs.jobId }));
@@ -148,7 +152,8 @@ export async function requestServiceJobCancellation(jobId: string, clientSystem:
 export async function confirmUnstartedServiceCancellation(jobId: string, requestedBefore: string): Promise<boolean> {
   const now = new Date().toISOString();
   const rows = await runDbWithRetry((db) => db.update(workflowJobs)
-    .set({ status: "cancelled", updatedAt: now, finishedAt: now })
+    .set({ updatedAt: now,
+      metadata: sql`${workflowJobs.metadata} || ${JSON.stringify({ serviceCancellationTaskAbsent: true })}::jsonb` })
     .where(and(eq(workflowJobs.jobId, jobId), eq(workflowJobs.status, "cancelling"),
       isNull(workflowJobs.ecsTaskArn),
       sql`(${workflowJobs.metadata}->>'serviceCancellationRequestedAt')::timestamptz <= ${requestedBefore}::timestamptz`))
@@ -231,6 +236,9 @@ export async function listArWorkflowOutputJobs(limit = 50) {
           .where(and(
             eq(workflowJobArtifacts.jobId, workflowJobs.jobId),
             or(
+              sql`jsonb_path_exists(${workflowJobArtifacts.manifest}, '$.folders.*.counts."output_snapshot"')`,
+              sql`jsonb_path_exists(${workflowJobArtifacts.manifest}, '$.folders.*.counts."file_download"')`,
+              sql`jsonb_path_exists(${workflowJobArtifacts.manifest}, '$.folders.*.counts."pdf_download"')`,
               eq(workflowJobArtifacts.artifactType, "file_download"),
               eq(workflowJobArtifacts.artifactType, "output_snapshot"),
               eq(workflowJobArtifacts.artifactType, "pdf_download"),
@@ -244,14 +252,22 @@ export async function listArWorkflowOutputJobs(limit = 50) {
 
 export async function listWatchdogWorkflowJobs(limit = 100) {
   const safeLimit = Math.max(1, Math.min(limit, 500));
-  return runDbWithRetry((db) =>
+  const [active, unfinishedTerminal] = await Promise.all([runDbWithRetry((db) =>
     db
       .select(workflowJobReadColumns)
       .from(workflowJobs)
       .where(or(eq(workflowJobs.status, "preparing"), eq(workflowJobs.status, "queued"), eq(workflowJobs.status, "starting"), eq(workflowJobs.status, "running"), eq(workflowJobs.status, "waiting_otp"), eq(workflowJobs.status, "cancelling")))
       .orderBy(asc(workflowJobs.updatedAt))
       .limit(safeLimit),
-  );
+  ), runDbWithRetry(db => db.select(workflowJobReadColumns).from(workflowJobs)
+    .where(and(or(eq(workflowJobs.status, "cancelled"), eq(workflowJobs.status, "failed"),
+      eq(workflowJobs.status, "completed"), eq(workflowJobs.status, "partial_success")),
+      or(eq(workflowJobs.workflowId, "claim-status"), and(eq(workflowJobs.workflowId, "eligibility-verification"), inArray(workflowJobs.portalId, [...ELIGIBILITY_SERVICE_PORTALS]))),
+      sql`${workflowJobs.clientSystem} IS NOT NULL`,
+      or(sql`${workflowJobs.currentCompleted} < COALESCE((${workflowJobs.metadata}->>'expectedRowCount')::integer, ${workflowJobs.totalRows})`,
+        and(eq(workflowJobs.workflowId, "eligibility-verification"), sql`${workflowJobs.metadata} #>> '{workerResultState,countsVersion}' IS DISTINCT FROM '1'`))))
+    .orderBy(asc(workflowJobs.updatedAt)).limit(Math.min(safeLimit, 25)))]);
+  return [...active, ...unfinishedTerminal];
 }
 
 export async function updateWorkflowJobMetadata(jobId: string, metadata: Record<string, unknown>) {
@@ -316,6 +332,7 @@ export async function updateWorkflowJob(params: {
 }
 
 export async function appendWorkflowEvent(jobId: string, eventType: string, payload: Record<string, unknown>) {
+  if (!isPersistentWorkflowEvent(payload)) return null;
   const rows = await runDbWithRetry((db) =>
     db.insert(workflowJobEvents).values({
       jobId,
@@ -332,7 +349,8 @@ export async function listWorkflowEvents(jobId: string, afterId = 0, latest = fa
     db
       .select()
       .from(workflowJobEvents)
-      .where(and(eq(workflowJobEvents.jobId, jobId), sql`${workflowJobEvents.id} > ${afterId}`))
+      .where(and(eq(workflowJobEvents.jobId, jobId), sql`${workflowJobEvents.id} > ${afterId}`,
+        inArray(workflowJobEvents.eventType, ["input_request", "input_submitted", "input_consumed"])))
       .orderBy(latest ? desc(workflowJobEvents.id) : asc(workflowJobEvents.id))
       .limit(500),
   );
@@ -492,64 +510,43 @@ export async function listConnectionsForJob(jobId: string) {
   );
 }
 
+export async function getArtifactManifest(jobId: string) {
+  const rows = await runDbWithRetry(db => db.select({ manifest: workflowJobArtifacts.manifest })
+    .from(workflowJobArtifacts).where(eq(workflowJobArtifacts.jobId, jobId)));
+  return rows[0]?.manifest ?? null;
+}
+
 export async function listArtifactsForJob(jobId: string) {
   const rows = await runDbWithRetry((db) =>
     db.select().from(workflowJobArtifacts).where(eq(workflowJobArtifacts.jobId, jobId)).orderBy(desc(workflowJobArtifacts.id)),
   );
-  return rows.map((row) => ({
-    ...row,
-    bucket: row.bucket || row.s3Bucket,
-  }));
+  const artifacts = rows.map(row => {
+    const { manifest, ...base } = row;
+    if (!manifest) return [{ ...base, bucket: row.bucket || row.s3Bucket }];
+    const files = manifestOutputs(manifest);
+    const mapped = files.map(file => ({ ...base, ...file, s3Bucket: file.bucket }));
+    if (manifest.count > 0) mapped.push({ ...base,
+      artifactType: "artifact_folder", filename: `${jobId}-artifacts.zip`, mimeType: "application/zip", bucket: row.bucket || row.s3Bucket,
+      metadata: { count: manifest.count, folders: Object.values(manifest.folders).map(({ objects, ...folder }) => folder) } });
+    return mapped;
+  });
+  return artifacts.flat().sort((a, b) => b.id - a.id);
 }
 
 export async function listRecentOutputArtifactsForJob(jobId: string, limit = 10) {
   const safeLimit = Math.max(1, Math.min(limit, 20));
-  return runDbWithRetry((db) =>
-    db
-      .select({
-        id: workflowJobArtifacts.id,
-        rowIndex: workflowJobArtifacts.rowIndex,
-        artifactType: workflowJobArtifacts.artifactType,
-        filename: workflowJobArtifacts.filename,
-        mimeType: workflowJobArtifacts.mimeType,
-        createdAt: workflowJobArtifacts.createdAt,
-      })
-      .from(workflowJobArtifacts)
-      .where(
-        and(
-          eq(workflowJobArtifacts.jobId, jobId),
-          or(
-            eq(workflowJobArtifacts.artifactType, "file_download"),
-            eq(workflowJobArtifacts.artifactType, "output_snapshot"),
-            eq(workflowJobArtifacts.artifactType, "pdf_download"),
-          ),
-        ),
-      )
-      .orderBy(desc(workflowJobArtifacts.id))
-      .limit(safeLimit),
-  );
+  return (await listArtifactsForJob(jobId)).filter(file =>
+    ["file_download", "output_snapshot", "pdf_download", "artifact_folder"].includes(file.artifactType)).slice(0, safeLimit);
 }
 
-export async function appendWorkflowArtifact(params: {
-  jobId: string;
-  artifactType: string;
-  filename: string;
-  bucket: string;
-  s3Key: string;
-  mimeType?: string;
-}) {
-  await runDbWithRetry((db) =>
-    db.insert(workflowJobArtifacts).values({
-      jobId: params.jobId,
-      artifactType: params.artifactType,
-      filename: params.filename,
-      s3Bucket: params.bucket,
-      bucket: params.bucket,
-      s3Key: params.s3Key,
-      mimeType: params.mimeType ?? "application/octet-stream",
-      metadataJson: {},
-      metadata: {},
-      createdAt: new Date().toISOString(),
-    }),
-  );
+export async function appendWorkflowArtifact(params: ArtifactWrite) {
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    await persistArtifact(client, params);
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally { client.release(); }
 }
