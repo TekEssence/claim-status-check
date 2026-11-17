@@ -1,5 +1,6 @@
 ﻿import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
+import { createSecretPool } from "./secret-pool";
 import * as betterAuthSchema from "./schema/better-auth";
 import * as automationJobsSchema from "./schema/automation-jobs";
 import * as scrapeJobsSchema from "./schema/scrape-jobs";
@@ -30,17 +31,19 @@ export function getPool(): Pool {
     db = null;
     poolVersion += 1;
   }
-  if (!process.env.DATABASE_URL) {
-    throw new Error("DATABASE_URL must be configured for database access.");
+  if (!process.env.DATABASE_URL && !process.env.DATABASE_SECRET_ARN) {
+    throw new Error("DATABASE_URL or DATABASE_SECRET_ARN must be configured for database access.");
   }
 
-  pool = new Pool({
-    connectionString: process.env.DATABASE_URL,
-    ssl: process.env.DB_SSL === "false" ? undefined : { rejectUnauthorized: false },
+  const options = {
     connectionTimeoutMillis: DB_CONNECT_TIMEOUT_MS,
     idleTimeoutMillis: 10000,
     query_timeout: DB_QUERY_TIMEOUT_MS,
     statement_timeout: DB_QUERY_TIMEOUT_MS,
+  };
+  pool = process.env.DATABASE_SECRET_ARN ? createSecretPool(options) : new Pool({ ...options,
+    connectionString: process.env.DATABASE_URL,
+    ssl: process.env.DB_SSL === "false" ? undefined : { rejectUnauthorized: false },
   });
   poolVersion += 1;
 

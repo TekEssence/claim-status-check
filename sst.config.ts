@@ -47,11 +47,28 @@
     const deployEnv = loadDeployEnv();
     const databaseUrl = process.env.DATABASE_URL || deployEnv.DATABASE_URL || "";
     const dbSsl = process.env.DB_SSL || deployEnv.DB_SSL || "true";
+    const setting = (name: string) => process.env[name] || deployEnv[name] || "";
+    const databaseSecretArn = setting("DATABASE_SECRET_ARN");
+    const proxyEndpoint = setting("RDS_PROXY_ENDPOINT");
+    const dbSubnetIds = setting("DATABASE_PRIVATE_SUBNET_IDS").split(",").map(value => value.trim()).filter(Boolean);
+    const dbSecurityGroupIds = setting("DATABASE_SECURITY_GROUP_IDS").split(",").map(value => value.trim()).filter(Boolean);
+    if (databaseSecretArn && (!proxyEndpoint || !dbSubnetIds.length || !dbSecurityGroupIds.length)) {
+      throw new Error("Secret-based RDS requires RDS_PROXY_ENDPOINT, DATABASE_PRIVATE_SUBNET_IDS and DATABASE_SECURITY_GROUP_IDS. Use Claim Status-region private subnets with a route to the RDS Proxy.");
+    }
+    const databaseVpc = databaseSecretArn ? { privateSubnets: dbSubnetIds, securityGroups: dbSecurityGroupIds } : undefined;
+    const databaseEnvironment: Record<string, string> = databaseSecretArn ? {
+      DATABASE_SECRET_ARN: databaseSecretArn, RDS_PROXY_ENDPOINT: proxyEndpoint,
+      DATABASE_NAME: setting("DATABASE_NAME") || "claim_status", DATABASE_PORT: setting("DATABASE_PORT") || "5432",
+    } : { DATABASE_URL: databaseUrl, DB_SSL: dbSsl };
+    const databasePermissions = databaseSecretArn ? [
+      { actions: ["secretsmanager:GetSecretValue"], resources: [databaseSecretArn] },
+      ...(setting("DATABASE_SECRET_KMS_KEY_ARN") ? [{ actions: ["kms:Decrypt"], resources: [setting("DATABASE_SECRET_KMS_KEY_ARN")] }] : []),
+    ] : [];
     const workerImageUriOverride = process.env.WORKER_IMAGE_URI || deployEnv.WORKER_IMAGE_URI || "";
     const serviceTokensJson = process.env.CLAIM_STATUS_SERVICE_TOKENS_JSON || deployEnv.CLAIM_STATUS_SERVICE_TOKENS_JSON || "";
     const skipFrontendBuild = (process.env.SST_SKIP_FRONTEND_BUILD || deployEnv.SST_SKIP_FRONTEND_BUILD || "").toLowerCase() === "true";
-    if (!databaseUrl) {
-      throw new Error("DATABASE_URL must be set in the shell or .env.local before deploying AWS workflow APIs.");
+    if (!databaseUrl && !databaseSecretArn) {
+      throw new Error("DATABASE_URL or DATABASE_SECRET_ARN must be set in the shell or .env.local before deploying AWS workflow APIs.");
     }
 
     const inputsBucket = new sst.aws.Bucket("WorkflowInputs", {
@@ -134,11 +151,13 @@
       transform: {
         route: {
           handler: (args) => {
-            args.environment ??= {};
-            args.environment.DATABASE_URL = databaseUrl;
-            args.environment.DB_SSL = dbSsl;
-            args.environment.COGNITO_ISSUER = $interpolate`https://cognito-idp.${aws.getRegionOutput({}).name}.amazonaws.com/${userPool.id}`;
-            args.environment.COGNITO_CLIENT_ID = userPoolClient.id;
+            args.environment = $output(args.environment ?? {}).apply(environment => ({
+              ...environment, ...databaseEnvironment,
+              COGNITO_ISSUER: $interpolate`https://cognito-idp.${aws.getRegionOutput({}).name}.amazonaws.com/${userPool.id}`,
+              COGNITO_CLIENT_ID: userPoolClient.id,
+            }));
+            args.vpc = databaseVpc;
+            args.permissions = $output(args.permissions ?? []).apply(permissions => [...permissions, ...databasePermissions]);
           },
         },
       },
@@ -157,8 +176,7 @@
           environment: {
             NODE_ENV: "production",
             NEXT_TELEMETRY_DISABLED: "1",
-            DATABASE_URL: databaseUrl,
-            DB_SSL: dbSsl,
+            ...databaseEnvironment,
             BROWSER_HEADLESS: "true",
             OPTUM_PRO_CUSTOM_USER_AGENT: "true",
             BROWSER_KEEP_OPEN: "false",
@@ -175,6 +193,7 @@
         },
       ],
       permissions: [
+        ...databasePermissions,
         {
           actions: ["s3:ListBucket"],
           resources: [inputsBucket.arn, outputsBucket.arn],
@@ -202,22 +221,24 @@
       transform: {
         route: {
           handler: (args) => {
-            args.environment ??= {};
-            args.environment.DATABASE_URL = databaseUrl;
-            args.environment.DB_SSL = dbSsl;
-            args.environment.WORKFLOW_INPUTS_BUCKET = inputsBucket.name;
-            args.environment.WORKFLOW_OUTPUTS_BUCKET = outputsBucket.name;
-            args.environment.CLAIM_STATUS_SERVICE_TOKENS_JSON = serviceTokensJson;
-            args.environment.WORKER_CLUSTER_ARN = cluster.id;
-            args.environment.WORKER_TASK_DEFINITION_ARN = workerTask.nodes.taskDefinition.arn;
-            args.environment.WORKER_CONTAINER_NAME = "worker";
-            args.environment.WORKER_LOG_GROUP = $interpolate`/claim-status/${$app.stage}/worker`;
-            args.environment.COGNITO_CLIENT_ID = userPoolClient.id;
-            args.environment.COGNITO_USER_POOL_ID = userPool.id;
-            args.environment.WORKER_SUBNET_IDS = $jsonStringify(workerTask.subnets);
-            args.environment.WORKER_SECURITY_GROUP_IDS = $jsonStringify(workerTask.securityGroups);
-            args.permissions ??= [];
-            args.permissions.push(
+            args.environment = $output(args.environment ?? {}).apply(environment => ({
+              ...environment, ...databaseEnvironment,
+              WORKFLOW_INPUTS_BUCKET: inputsBucket.name,
+              WORKFLOW_OUTPUTS_BUCKET: outputsBucket.name,
+              CLAIM_STATUS_SERVICE_TOKENS_JSON: serviceTokensJson,
+              WORKER_CLUSTER_ARN: cluster.id,
+              WORKER_TASK_DEFINITION_ARN: workerTask.nodes.taskDefinition.arn,
+              WORKER_CONTAINER_NAME: "worker",
+              WORKER_LOG_GROUP: $interpolate`/claim-status/${$app.stage}/worker`,
+              COGNITO_CLIENT_ID: userPoolClient.id,
+              COGNITO_USER_POOL_ID: userPool.id,
+              WORKER_SUBNET_IDS: $jsonStringify(workerTask.subnets),
+              WORKER_SECURITY_GROUP_IDS: $jsonStringify(workerTask.securityGroups),
+            }));
+            args.vpc = databaseVpc;
+            args.permissions = $output(args.permissions ?? []).apply(permissions => [
+              ...permissions,
+              ...databasePermissions,
               {
                 actions: ["ecs:RunTask", "ecs:StopTask", "ecs:DescribeTasks", "ecs:ListTasks", "ecs:TagResource"],
                 resources: ["*"],
@@ -241,7 +262,7 @@
                 actions: ["logs:FilterLogEvents", "logs:GetLogEvents"],
                 resources: [$interpolate`arn:aws:logs:${aws.getRegionOutput({}).name}:${aws.getCallerIdentityOutput({}).accountId}:log-group:/claim-status/${$app.stage}/worker:*`],
               },
-            );
+            ]);
           },
         },
       },
@@ -282,14 +303,15 @@
       handler: "backend/src/aws/events/ecs-task-stopped.handler",
       memory: "1024 MB",
       timeout: "2 minutes",
+      vpc: databaseVpc,
       environment: {
-        DATABASE_URL: databaseUrl,
-        DB_SSL: dbSsl,
+        ...databaseEnvironment,
         WORKER_CLUSTER_ARN: cluster.nodes.cluster.arn,
         WORKER_TASK_DEFINITION_ARN: workerTask.nodes.taskDefinition.arn,
         WORKER_CONTAINER_NAME: "worker",
       },
       permissions: [
+        ...databasePermissions,
         { actions: ["ecs:DescribeTasks"], resources: ["*"] },
         { actions: ["s3:GetObject"], resources: [$interpolate`${inputsBucket.arn}/*`, $interpolate`${outputsBucket.arn}/*`] },
         { actions: ["s3:ListBucket"], resources: [outputsBucket.arn] },
@@ -312,9 +334,9 @@
         handler: "backend/src/aws/cron/stalled-job-watchdog.handler",
         memory: "512 MB",
         timeout: "60 seconds",
+        vpc: databaseVpc,
         environment: {
-          DATABASE_URL: databaseUrl,
-          DB_SSL: dbSsl,
+          ...databaseEnvironment,
           WORKER_CLUSTER_ARN: cluster.id,
           WORKER_TASK_DEFINITION_ARN: workerTask.nodes.taskDefinition.arn,
           WORKER_CONTAINER_NAME: "worker",
@@ -323,6 +345,7 @@
           WORKFLOW_STALL_CANCEL_ATTEMPTS: "3",
         },
         permissions: [
+          ...databasePermissions,
           {
             actions: ["ecs:StopTask", "ecs:DescribeTasks", "ecs:ListTasks"],
             resources: ["*"],

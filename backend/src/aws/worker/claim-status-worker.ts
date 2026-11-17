@@ -170,7 +170,7 @@ function writeCloudWatchLog(event: {
 }
 
 function hasDatabase(): boolean {
-  return Boolean(optionalEnv("DATABASE_URL"));
+  return Boolean(optionalEnv("DATABASE_URL") || optionalEnv("DATABASE_SECRET_ARN"));
 }
 
 function getInputBucket(): string {

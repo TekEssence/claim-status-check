@@ -8,6 +8,7 @@
   "dependencies": {
     "@aws-sdk/client-apigatewaymanagementapi": "3.1094.0",
     "@aws-sdk/client-s3": "3.1094.0",
+    "@aws-sdk/client-secrets-manager": "^3.1170.0",
     "@sparticuz/chromium": "148.0.0",
     "archiver": "5.3.2",
     "drizzle-orm": "0.45.2",
