@@ -83,7 +83,7 @@ function toJobListSummary(job: WorkflowJobSummarySource, artifacts: ReturnType<t
 }
 
 function s3(): S3Client {
-  if (!s3Client) s3Client = new S3Client({});
+  if (!s3Client) s3Client = new S3Client({ region: process.env.WORKFLOW_S3_REGION });
   return s3Client;
 }
 
@@ -391,7 +391,9 @@ export async function getJob(event: ApiEvent) {
   try {
     const userId = getAuthUserId(event);
     const jobId = getJobId(event);
-    const job = await reconcileAwsJobRuntime(hasFullWorkflowAccess(event) ? await getWorkflowJobById(jobId) : await getWorkflowJobForUser(jobId, userId));
+    // Display polling reads saved state; ECS-stop handling and the watchdog
+    // own recovery, so a refresh never reads or republishes worker files.
+    const job = hasFullWorkflowAccess(event) ? await getWorkflowJobById(jobId) : await getWorkflowJobForUser(jobId, userId);
     if (!job) return jsonResponse(404, { error: "Job not found." });
     const events = await listWorkflowEvents(jobId, Number(event.queryStringParameters?.after || 0), event.queryStringParameters?.includeLogs === "true");
     const artifacts = await listArtifactsForJob(jobId);
@@ -412,13 +414,13 @@ export async function listJobs(event: ApiEvent) {
     if ((scope === "all-running" || scope === "ar-workflow-outputs") && !hasFullWorkflowAccess(event)) {
       return jsonResponse(403, { error: "Admin or developer access is required." });
     }
-    const jobs = await reconcileAwsJobsRuntime(
-      scope === "all-running"
+    const listedJobs = scope === "all-running"
         ? await listRunningWorkflowJobs(Number.isFinite(rawLimit) ? rawLimit : 50)
         : scope === "ar-workflow-outputs"
           ? await listArWorkflowOutputJobs(Number.isFinite(rawLimit) ? rawLimit : 50)
-          : await listWorkflowJobsForUser(userId, Number.isFinite(rawLimit) ? rawLimit : 25),
-    );
+          : await listWorkflowJobsForUser(userId, Number.isFinite(rawLimit) ? rawLimit : 25);
+    // Browsing saved AR files must not recover claims or rewrite job results.
+    const jobs = scope === "ar-workflow-outputs" ? listedJobs : await reconcileAwsJobsRuntime(listedJobs);
     const jobsWithArtifacts = await Promise.all(
       jobs.map(async (job) => {
         const outputArtifacts = await listRecentOutputArtifactsForJob(job.jobId).catch(() => []);

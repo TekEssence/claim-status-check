@@ -41,7 +41,11 @@ export function getPool(): Pool {
     query_timeout: DB_QUERY_TIMEOUT_MS,
     statement_timeout: DB_QUERY_TIMEOUT_MS,
   };
-  pool = process.env.DATABASE_SECRET_ARN ? createSecretPool(options) : new Pool({ ...options,
+  // Next dev shares .env.local with deployment settings. Its existing URL must
+  // not accidentally opt local login into the west deployment's AWS secret.
+  const useSecret = process.env.DATABASE_SECRET_ARN
+    && !(process.env.NODE_ENV === "development" && process.env.DATABASE_URL);
+  pool = useSecret ? createSecretPool(options) : new Pool({ ...options,
     connectionString: process.env.DATABASE_URL,
     ssl: process.env.DB_SSL === "false" ? undefined : { rejectUnauthorized: false },
   });

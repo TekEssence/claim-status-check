@@ -19,7 +19,7 @@ export type CancellationConfirmation = { kind: "before-launch" } | { kind: "task
 let s3: S3Client | undefined;
 async function readWorkbook(artifact: ServiceWorkbookArtifact): Promise<Uint8Array | null> {
   try {
-    s3 ??= new S3Client({});
+    s3 ??= new S3Client({ region: process.env.WORKFLOW_S3_REGION });
     const object = await s3.send(new GetObjectCommand({ Bucket: artifact.bucket, Key: artifact.object_key }));
     if (!object.Body) throw new Error("Saved worker workbook is empty.");
     return object.Body.transformToByteArray();
@@ -41,7 +41,7 @@ async function discoverWorkbooks(job: Job): Promise<ServiceWorkbookArtifact[]> {
       jobId: job.jobId, area: "output", filename: "recovery", now: new Date(date) });
     prefixes.add(key.slice(0, key.lastIndexOf("/") + 1));
   }
-  s3 ??= new S3Client({});
+  s3 ??= new S3Client({ region: process.env.WORKFLOW_S3_REGION });
   // An upload can finish immediately before the task dies, before its JSON or
   // artifact row is saved. Discover those objects too, including midnight rollover.
   const found = await Promise.all([...prefixes].map(async prefix => {

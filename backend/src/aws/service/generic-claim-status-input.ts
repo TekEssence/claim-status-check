@@ -61,7 +61,7 @@ export const claimStatusServicePortalConfigs = {
   },
   regal: {
     claimField: "claimExcel", loginField: "loginExcel",
-    loginColumns: { Link: "login_url", Username: "username", Password: "password", "Preferred Phone": "preferred_phone", "Preferred Phone Suffix": "preferred_phone_suffix", "Verification Method": "verification_method" },
+    loginColumns: { Link: "login_url", Username: "username", Password: "password", "Preferred Email": "preferred_email", "Preferred Phone": "preferred_phone", "Preferred Phone Suffix": "preferred_phone_suffix", "Verification Method": "verification_method" },
   },
   uhc: {
     claimField: "claimExcel", loginField: "loginExcel",

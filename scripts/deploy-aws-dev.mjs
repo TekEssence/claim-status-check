@@ -2,6 +2,8 @@ import { spawnSync } from "node:child_process";
 
 const validTargets = new Set(["worker", "frontend", "both", "all"]);
 const target = (process.argv[2] || "both").toLowerCase();
+const stage = process.argv[3] || "dev";
+if (!["dev", "dev-west"].includes(stage)) throw new Error("Supported deployment stages: dev, dev-west.");
 
 if (!validTargets.has(target)) {
   console.error("Usage: npm.cmd run deploy:aws:dev -- [worker|frontend|both]");
@@ -29,6 +31,15 @@ function run(command, args, options = {}) {
 }
 
 console.log(`AWS dev deploy target: ${target === "all" ? "both" : target}`);
+
+if (stage === "dev-west") {
+  // Create the west-region ECR repository and API before pushing the first image.
+  // Let SST build the frontend with the new API/WebSocket URLs.
+  const env = { ...process.env, AWS_REGION: "us-west-2", SST_STAGE: stage, WORKER_ECR_REPOSITORY: `claim-status-${stage}-worker`, SST_SKIP_FRONTEND_BUILD: "false" };
+  run(npxCommand, ["sst", "deploy", "--stage", stage], { env });
+  if (shouldPushWorker) run(npmCommand, ["run", "worker:push:dev"], { env });
+  process.exit(0);
+}
 
 if (shouldPushWorker) {
   run(npmCommand, ["run", "worker:push:dev"]);

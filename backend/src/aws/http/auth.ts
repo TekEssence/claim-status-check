@@ -45,7 +45,7 @@ function normalizeDisplayUsername(value: unknown): string {
 }
 
 function cognitoEndpoint(): string {
-  const region = process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION || "us-east-1";
+  const region = process.env.COGNITO_REGION || process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION || "us-east-1";
   return `https://cognito-idp.${region}.amazonaws.com/`;
 }
 

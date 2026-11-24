@@ -14,7 +14,7 @@ export async function loadWorkerResultSnapshot(job: ServiceJob, _options: { requ
   void _options; // Retained for registry callers; execution outcomes come from the worker manifest.
   const expectedRefs = expectedRefsOverride ?? await loadServiceExpectedRefs(job);
   if (!job.outputBucket) throw new Error("Worker result bucket is missing.");
-  client ??= new S3Client({});
+  client ??= new S3Client({ region: process.env.WORKFLOW_S3_REGION });
   let object;
   try {
     object = await client.send(new GetObjectCommand({ Bucket: job.outputBucket, Key: workerResultManifestKey(job.outputPrefix) }));

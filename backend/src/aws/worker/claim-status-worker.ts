@@ -131,7 +131,7 @@ const fileInputs: FileInputSpec[] = [
 let s3Client: S3Client | null = null;
 
 function getS3Client(): S3Client {
-  if (!s3Client) s3Client = new S3Client({});
+  if (!s3Client) s3Client = new S3Client({ region: process.env.WORKFLOW_S3_REGION });
   return s3Client;
 }
 

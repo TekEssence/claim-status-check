@@ -1,16 +1,23 @@
-import { jsonResponse, type ApiEvent } from "../runtime/http";
-import { getUserIdFromVerifiedJwt, verifyCognitoJwt } from "../runtime/cognito-jwt";
-import { getWorkflowJobForUser, registerConnection, removeConnection } from "../runtime/workflow-db";
+import { getAuthUserId, hasFullWorkflowAccess, jsonResponse, type ApiEvent } from "../runtime/http";
+import { verifyCognitoJwt } from "../runtime/cognito-jwt";
+import { getWorkflowJobById, getWorkflowJobForUser, registerConnection, removeConnection } from "../runtime/workflow-db";
 
-async function userIdFromWebSocket(event: ApiEvent): Promise<string> {
+async function authenticateWebSocket(event: ApiEvent): Promise<ApiEvent> {
   const claims = event.requestContext?.authorizer?.jwt?.claims;
   if (claims?.sub || claims?.username || claims?.["cognito:username"]) {
-    return claims.sub || claims.username || claims["cognito:username"] || "";
+    return event;
   }
 
   const token = event.queryStringParameters?.token?.trim();
   if (!token) throw new Error("Missing WebSocket token.");
-  return getUserIdFromVerifiedJwt(await verifyCognitoJwt(token));
+  const verifiedClaims = await verifyCognitoJwt(token);
+  return {
+    ...event,
+    requestContext: {
+      ...event.requestContext,
+      authorizer: { jwt: { claims: verifiedClaims as Record<string, string | undefined> } },
+    },
+  };
 }
 
 export async function connect(event: ApiEvent) {
@@ -19,10 +26,11 @@ export async function connect(event: ApiEvent) {
 
   let userId = "";
   try {
-    userId = await userIdFromWebSocket(event);
+    event = await authenticateWebSocket(event);
+    userId = getAuthUserId(event);
     const jobId = event.queryStringParameters?.jobId?.trim() || undefined;
     if (jobId) {
-      const job = await getWorkflowJobForUser(jobId, userId);
+      const job = hasFullWorkflowAccess(event) ? await getWorkflowJobById(jobId) : await getWorkflowJobForUser(jobId, userId);
       if (!job) return jsonResponse(403, { error: "WebSocket job access denied." });
     }
 

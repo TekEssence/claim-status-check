@@ -1,9 +1,10 @@
 import { spawnSync } from "node:child_process";
 
 const accountId = process.env.AWS_ACCOUNT_ID || "033995042643";
-const region = process.env.AWS_REGION || "us-east-1";
+const stage = process.env.SST_STAGE || "dev";
+const region = stage === "dev-west" ? "us-west-2" : stage === "dev" ? "us-east-1" : process.env.AWS_REGION || "us-east-1";
 const profile = process.env.AWS_PROFILE || "claim-status";
-const repository = process.env.WORKER_ECR_REPOSITORY || "claim-status-dev-worker";
+const repository = process.env.WORKER_ECR_REPOSITORY || `claim-status-${stage}-worker`;
 const localImage = "claim-status-worker:dev";
 const registry = `${accountId}.dkr.ecr.${region}.amazonaws.com`;
 const remoteImage = `${registry}/${repository}:dev`;
@@ -49,7 +50,7 @@ const repositoryCheck = spawnSync("aws", [
   shell: process.platform === "win32",
 });
 if (repositoryCheck.status !== 0) {
-  console.error(`ECR repository "${repository}" was not found. Run "npx sst deploy --stage dev" once so SST creates it, then run this command again.`);
+  console.error(`ECR repository "${repository}" was not found. Run "npx sst deploy --stage ${stage}" once so SST creates it, then run this command again.`);
   process.exit(repositoryCheck.status ?? 1);
 }
 

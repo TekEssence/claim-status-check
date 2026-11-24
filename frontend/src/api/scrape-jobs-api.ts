@@ -79,6 +79,12 @@ export class ScrapeJobAuthError extends Error {
 
 const AWS_API_URL = process.env.NEXT_PUBLIC_WORKFLOW_API_URL?.replace(/\/+$/, "") || "";
 const AWS_WS_URL = process.env.NEXT_PUBLIC_WORKFLOW_WS_URL || "";
+const awsSubscriptions = new Map<string, AbortSignal>();
+
+export function hasAwsJobSubscription(jobId: string): boolean {
+  const signal = awsSubscriptions.get(jobId);
+  return Boolean(signal && !signal.aborted);
+}
 
 export function isAwsWorkflowMode(): boolean {
   if (typeof window !== "undefined") {
@@ -388,11 +394,17 @@ export async function forceStopScrapeJob(jobId: string, reason = "Force stop req
 export async function subscribeToScrapeJobEvents(options: {
   jobId: string;
   signal: AbortSignal;
+  autoDownload?: boolean;
   onEvent: (event: ScrapeJobEvent) => Promise<void> | void;
   onStreamError: (error: unknown) => void;
 }): Promise<void> {
   if (isAwsMode()) {
-    return subscribeToAwsScrapeJobEvents(options);
+    awsSubscriptions.set(options.jobId, options.signal);
+    try {
+      return await subscribeToAwsScrapeJobEvents(options);
+    } finally {
+      if (awsSubscriptions.get(options.jobId) === options.signal) awsSubscriptions.delete(options.jobId);
+    }
   }
 
   await fetchEventSource(`/api/scrape-jobs?jobId=${encodeURIComponent(options.jobId)}`, {
@@ -507,6 +519,7 @@ export async function getScrapeJobDownload(jobId: string): Promise<{ filename: s
 async function subscribeToAwsScrapeJobEvents(options: {
   jobId: string;
   signal: AbortSignal;
+  autoDownload?: boolean;
   onEvent: (event: ScrapeJobEvent) => Promise<void> | void;
   onStreamError: (error: unknown) => void;
 }): Promise<void> {
@@ -519,7 +532,6 @@ async function subscribeToAwsScrapeJobEvents(options: {
   let socketErrorAlreadyHandled = false;
   let downloadableEventSeen = false;
   let terminal = false;
-  let loadRecentLogs = true;
 
   const clearReconnectTimer = () => {
     if (reconnectTimer !== null) {
@@ -568,7 +580,6 @@ async function subscribeToAwsScrapeJobEvents(options: {
     socketErrorAlreadyHandled = false;
     socket.onopen = () => {
       reconnectAttempt = 0;
-      loadRecentLogs = true;
     };
     socket.onmessage = async (message) => {
       try {
@@ -576,6 +587,8 @@ async function subscribeToAwsScrapeJobEvents(options: {
         // Keep the polling cursor independent: a later socket event must not skip
         // earlier saved events during reconnect or polling.
         const event = parsed.payload ?? parsed;
+        // Displayed progress comes from the DB poll, never the live transport.
+        if (options.signal.aborted || event.type === "progress" || event.type === "row_progress") return;
         if (typeof parsed.id === "number") {
           if (deliveredEventIds.has(parsed.id)) return;
           deliveredEventIds.add(parsed.id);
@@ -631,8 +644,7 @@ async function subscribeToAwsScrapeJobEvents(options: {
 
   while (!options.signal.aborted) {
     try {
-      const includeLogs = loadRecentLogs;
-      const response = await fetch(`${apiUrl}/jobs/${encodeURIComponent(options.jobId)}?after=${after}${includeLogs ? "&includeLogs=true" : ""}`, {
+      const response = await fetch(`${apiUrl}/jobs/${encodeURIComponent(options.jobId)}?after=${after}`, {
         headers: { ...requireAwsAuthHeaders() },
         signal: options.signal,
       });
@@ -645,10 +657,7 @@ async function subscribeToAwsScrapeJobEvents(options: {
           artifacts?: Array<{ artifactType: string; filename: string; mimeType?: string; bucket?: string; s3Key?: string }>;
         };
         const jobStatus = body.job?.status;
-        if (includeLogs) {
-          loadRecentLogs = false;
-          for (const message of body.logs ?? []) await options.onEvent({ type: "log", message });
-        }
+        if (options.signal.aborted) break;
         if (typeof body.job?.currentCompleted === "number" && typeof body.job.totalRows === "number") {
           await options.onEvent({ type: "progress", completed: body.job.currentCompleted, total: body.job.totalRows });
         }
@@ -679,7 +688,7 @@ async function subscribeToAwsScrapeJobEvents(options: {
               isDownloadableOutputEvent({ type: artifact.artifactType, filename: artifact.filename, mimeType: artifact.mimeType } as ScrapeJobEvent) ||
               (body.job?.portalId === "iehp" && artifact.artifactType === "pdf_download") || artifact.artifactType === "artifact_folder"
             ));
-          if (savedOutputAvailable && (jobStatus === "cancelled" || !downloadableEventSeen)) {
+          if (options.autoDownload !== false && savedOutputAvailable && (jobStatus === "cancelled" || !downloadableEventSeen)) {
             try {
               const filename = await autoDownloadTerminalJobOutput(options.jobId);
               if (filename) {
@@ -690,7 +699,7 @@ async function subscribeToAwsScrapeJobEvents(options: {
               await options.onEvent({ type: "log", message: `Automatic output download did not start: ${error instanceof Error ? error.message : "Unknown error"}` });
             }
           }
-          await options.onEvent({ type: "done" });
+          await options.onEvent({ type: "done", message: jobStatus });
           cleanup();
           return;
         }

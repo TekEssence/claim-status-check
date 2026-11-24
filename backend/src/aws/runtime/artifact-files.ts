@@ -2,7 +2,7 @@ import { ListObjectsV2Command, S3Client } from "@aws-sdk/client-s3";
 import { artifactLocationId, type ArtifactFile, type ArtifactManifest } from "./artifact-manifest";
 
 /** S3 listing happens on downloads/bundling, never on ordinary job polling. */
-export async function listManifestFiles(jobId: string, manifest: ArtifactManifest, client = new S3Client({})): Promise<ArtifactFile[]> {
+export async function listManifestFiles(jobId: string, manifest: ArtifactManifest, client = new S3Client({ region: process.env.WORKFLOW_S3_REGION })): Promise<ArtifactFile[]> {
   const files: ArtifactFile[] = [];
   for (const folder of Object.values(manifest.folders)) {
     if (!folder.prefix.endsWith("/") || !folder.prefix.split("/").includes(jobId)) {

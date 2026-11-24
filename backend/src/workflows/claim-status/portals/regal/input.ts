@@ -200,6 +200,7 @@ export function readRegalCredentialsFromBuffer(buffer: ArrayBuffer): RegalCreden
         loginUrl: normalizeLoginUrl(rawLoginUrl),
         username,
         password,
+        preferredEmail: findValue(row, ["Preferred Email", "preferred_email"]) || undefined,
         preferredPhone: findValue(row, ["Preferred Phone", "preferred_phone"]) || undefined,
         preferredPhoneSuffix: findValue(row, ["Preferred Phone Suffix", "preferred_phone_suffix"]) || undefined,
         verificationMethod: findValue(row, ["Verification Method", "verification_method"]) || undefined,

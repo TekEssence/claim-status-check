@@ -85,7 +85,7 @@ export async function runWorkerTask(params: {
       awsvpcConfiguration: {
         subnets: subnetIds,
         securityGroups: securityGroupIds.length ? securityGroupIds : undefined,
-        assignPublicIp: "ENABLED",
+        assignPublicIp: process.env.WORKER_ASSIGN_PUBLIC_IP === "DISABLED" ? "DISABLED" : "ENABLED",
       },
     },
     overrides: {

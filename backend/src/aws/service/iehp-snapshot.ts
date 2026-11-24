@@ -28,7 +28,7 @@ export type ServiceWorkbookArtifact = {
 
 let client: S3Client | null = null;
 function s3(): S3Client {
-  if (!client) client = new S3Client({});
+  if (!client) client = new S3Client({ region: process.env.WORKFLOW_S3_REGION });
   return client;
 }
 

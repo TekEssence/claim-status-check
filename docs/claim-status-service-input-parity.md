@@ -17,6 +17,31 @@ The following optional settings are carried into the existing login workbook fie
 | Waystar | `login_url`, `provider_id`, `provider_name`, `service_type_code`, `verification_answers` |
 | IEHP | `claim_status_url` |
 | Availity | `totp_secret` (required), `success_url_fragment` |
+| Regal | `preferred_email`, `preferred_phone`, `preferred_phone_suffix`, `verification_method` |
+
+Regal email verification accepts these optional keys on the existing `credentials`
+object (the required `login_url`, `username`, and `password` are unchanged):
+
+```json
+{ "verification_method": "email", "preferred_email": "person@example.com" }
+```
+
+The corresponding login Excel columns are **Verification Method** and
+**Preferred Email**. The aliases `verification_method` and `preferred_email`
+are also accepted in Excel; column names and matching are case-insensitive.
+Service JSON uses the exact snake_case keys above.
+
+Only one enabled Email option compatible with the full preferred address is
+auto-selected. `*` and bullet masks can hide multiple characters; visible local
+and domain characters must still match. Duplicate matches, fully hidden
+mailboxes, invalid/missing preferred addresses, and conflicting phone/email
+preferences without an explicit method use the existing manual-selection flow.
+`preferred_email` alone may select a unique match if no phone preference is set.
+SMS/call preferences and runtime OTP entry are unchanged. Logs contain only
+generic selection/fallback messages, never the supplied address or OTP.
+
+Deploy the API and push the worker image for this addition. No frontend change
+or database migration is required.
 
 Waystar `verification_answers` is an array of `{ "question": "...", "answer": "..." }` entries. These become the existing Verification sheet, scoped to the supplied username.
 

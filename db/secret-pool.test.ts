@@ -90,13 +90,13 @@ test("RDS configuration selects the secret's region, correct database and verifi
   assert.throws(() => createSecretPool({}, { DATABASE_SECRET_ARN: "not-an-arn" }), /Configure/);
 });
 
-test("secret configuration takes priority over the old DATABASE_URL without leaking/falling back to its password", async () => {
-  const names = ["DATABASE_SECRET_ARN", "DATABASE_URL", "RDS_PROXY_ENDPOINT", "DATABASE_NAME"] as const;
+test("deployed secret configuration takes priority over the old DATABASE_URL without leaking/falling back to its password", async () => {
+  const names = ["DATABASE_SECRET_ARN", "DATABASE_URL", "RDS_PROXY_ENDPOINT", "DATABASE_NAME", "NODE_ENV"] as const;
   const previous = Object.fromEntries(names.map(name => [name, process.env[name]]));
   await resetDbPool();
   Object.assign(process.env, { DATABASE_SECRET_ARN: "arn:aws:secretsmanager:us-west-2:123456789012:secret:fixture",
     RDS_PROXY_ENDPOINT: "fixture.proxy-example.us-west-2.rds.amazonaws.com", DATABASE_NAME: "claim_status",
-    DATABASE_URL: "postgres://old-user:old-password@old-host/old-database" });
+    DATABASE_URL: "postgres://old-user:old-password@old-host/old-database", NODE_ENV: "production" });
   try {
     const pool = getPool();
     assert.equal(pool.options.host, process.env.RDS_PROXY_ENDPOINT);
@@ -104,7 +104,24 @@ test("secret configuration takes priority over the old DATABASE_URL without leak
   } finally {
     await resetDbPool();
     for (const name of names) {
-      if (previous[name] === undefined) delete process.env[name]; else process.env[name] = previous[name];
+      if (previous[name] === undefined) delete process.env[name]; else Object.assign(process.env, { [name]: previous[name] });
+    }
+  }
+});
+
+test("Next development uses its existing DATABASE_URL even when west deployment secret settings are present", async () => {
+  const names = ["DATABASE_SECRET_ARN", "DATABASE_URL", "NODE_ENV"] as const;
+  const previous = Object.fromEntries(names.map(name => [name, process.env[name]]));
+  await resetDbPool();
+  Object.assign(process.env, { NODE_ENV: "development", DATABASE_URL: "postgres://local-user:fixture@localhost/local-db",
+    DATABASE_SECRET_ARN: "unused-deployment-setting" });
+  try {
+    const pool = getPool();
+    assert.equal(pool.options.connectionString, process.env.DATABASE_URL);
+  } finally {
+    await resetDbPool();
+    for (const name of names) {
+      if (previous[name] === undefined) delete process.env[name]; else Object.assign(process.env, { [name]: previous[name] });
     }
   }
 });

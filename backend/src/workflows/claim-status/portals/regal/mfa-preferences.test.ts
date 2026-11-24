@@ -21,6 +21,51 @@ test('Regal uniquely matches a preferred full phone or suffix without selecting 
   }
 });
 
+test('Regal email selection matches exact and masked addresses without selecting phone or other authenticators', () => {
+  for (const address of ['alice@example.test', 'AL***@EXAMPLE.TEST', 'a*@example.test', 'a***e@e***.test', 'a\u2022\u2022\u2022e@example.test']) {
+    const choices = [
+      ...options,
+      { value: 'matching-email', methodKey: 'okta_email', label: 'Email', description: address },
+      { value: 'totp', methodKey: 'okta_verify-totp', label: 'Authenticator', description: address },
+      { value: 'other-email', methodKey: 'okta_email', label: 'Email', description: 'b***@example.test' },
+    ];
+    const preferences = { preferredEmail: ' Alice@Example.Test ', verificationMethod: 'EMAIL', preferredPhoneSuffix: '0053' };
+    assert.equal(matchRegalPreference(choices, preferences, 'authenticator').option?.value, 'matching-email');
+    assert.equal(matchRegalPreference(choices, { preferredEmail: 'alice@example.test' }, 'authenticator').option?.value, 'matching-email');
+  }
+});
+
+test('Regal masked email matching anchors visible characters and treats regex punctuation literally', () => {
+  const choice = { value: 'email', methodKey: 'okta_email', label: 'Email', description: 'a+***@example.test' };
+  assert.equal(matchRegalPreference([choice], { preferredEmail: 'a+smith@example.test', verificationMethod: 'email' }, 'authenticator').option?.value, 'email');
+  for (const preferredEmail of ['axsmith@example.test', 'a+smith@other.test', 'a+smith@example.test.evil']) {
+    assert.equal(matchRegalPreference([choice], { preferredEmail, verificationMethod: 'email' }, 'authenticator').option, undefined);
+  }
+});
+
+test('Regal ambiguous, disabled, unreadable and invalid email matches fall back to manual selection without exposing addresses', () => {
+  const email = { value: 'email', methodKey: 'okta_email', label: 'Email', description: 'a***@example.test' };
+  for (const choices of [
+    [email, { ...email, value: 'second-email' }],
+    [{ ...email, disabled: true }],
+    [{ ...email, description: '***@example.test' }],
+    [{ ...email, description: 'b***@example.test' }],
+    [{ ...email, description: 'a***@example.test or another@example.test' }],
+    [{ ...email, description: '' }],
+    options.filter(option => option.methodKey === 'phone_number'),
+  ]) {
+    const result = matchRegalPreference(choices, { preferredEmail: 'alice@example.test', verificationMethod: 'email' }, 'authenticator');
+    assert.equal(result.option, undefined);
+    assert.match(result.message!, /Select an option manually/);
+    assert.doesNotMatch(result.message!, /alice|example\.test/);
+  }
+  for (const preferredEmail of ['', 'not-an-email', 'a***@example.test']) {
+    assert.equal(matchRegalPreference([email], { preferredEmail, verificationMethod: 'email' }, 'authenticator').option, undefined);
+  }
+  assert.equal(matchRegalPreference([email, ...options], { preferredEmail: 'alice@example.test', preferredPhoneSuffix: '0053' }, 'authenticator').option, undefined);
+  assert.equal(matchRegalPreference([email, ...options], { preferredEmail: 'alice@example.test', preferredPhoneSuffix: '0053', verificationMethod: 'call' }, 'authenticator').option?.value, 'phone_number__0');
+});
+
 test('Regal missing, ambiguous, unmatched and invalid preferences require manual selection without leaking values', () => {
   assert.deepEqual(matchRegalPreference(options, {}, 'authenticator'), {});
   assert.match(matchRegalPreference([...options, options[0]], { preferredPhoneSuffix: '0053' }, 'authenticator').message!, /multiple/);
@@ -44,6 +89,7 @@ test('Regal legacy login workbooks remain compatible', () => {
   const parsed = readRegalCredentialsFromBuffer(XLSX.write(workbook, { type: 'array', bookType: 'xlsx' }));
   assert.equal(parsed?.username, 'dummy');
   assert.equal(parsed?.preferredPhone, undefined);
+  assert.equal(parsed?.preferredEmail, undefined);
   assert.equal(parsed?.verificationMethod, undefined);
 });
 
@@ -58,6 +104,35 @@ test('Regal service preferences survive workbook generation and native credentia
   assert.equal(parsed?.preferredPhoneSuffix, '0053');
   assert.equal(parsed?.verificationMethod, 'call');
 });
+
+test('Regal service email preferences reach the native reader and the existing MFA matcher', async () => {
+  const prepared = await prepareGenericClaimStatusServiceInput('regal', {
+    credentials: { login_url: 'https://example.test', username: 'dummy', password: 'dummy', preferred_email: 'alice@example.test', verification_method: 'email' },
+    claims: [{ client_row_ref: 'claim-1', data: { Group: 'IUMG', 'Member Name': 'Test, Person', DOS: '08/25/2026' } }],
+  });
+  const file = prepared.files.find(file => file.field === 'loginExcel')!;
+  const book = XLSX.read(file.buffer, { type: 'buffer' });
+  const rows = XLSX.utils.sheet_to_json<Record<string, string>>(book.Sheets[book.SheetNames[0]]);
+  assert.equal(rows[0]['Preferred Email'], 'alice@example.test');
+  assert.equal(rows[0]['Verification Method'], 'email');
+  const parsed = readRegalCredentialsFromBuffer(Uint8Array.from(file.buffer).buffer)!;
+  assert.equal(parsed.preferredEmail, 'alice@example.test');
+  assert.equal(parsed.verificationMethod, 'email');
+  assert.equal(matchRegalPreference([{ value: 'email', methodKey: 'okta_email', label: 'Email', description: 'a***@example.test' }], parsed, 'authenticator').option?.value, 'email');
+});
+
+for (const columns of [
+  { 'Preferred Email': 'alice@example.test', 'Verification Method': 'email' },
+  { preferred_email: 'alice@example.test', verification_method: 'EMAIL' },
+]) {
+  test(`Regal login Excel supports ${Object.keys(columns).join(' / ')}`, () => {
+    const book = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(book, XLSX.utils.json_to_sheet([{ Link: 'https://example.test', Username: 'dummy', Password: 'dummy', ...columns }]), 'Login');
+    const parsed = readRegalCredentialsFromBuffer(XLSX.write(book, { type: 'array', bookType: 'xlsx' }));
+    assert.equal(parsed?.preferredEmail, 'alice@example.test');
+    assert.equal(parsed?.verificationMethod?.toLowerCase(), 'email');
+  });
+}
 
 for (const variant of ['radio', 'buttons']) {
   test(`Regal phone page selects the requested call method using ${variant} before requesting the runtime OTP`, async () => {

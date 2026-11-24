@@ -14,7 +14,8 @@
       providers: {
         aws: {
           profile: "claim-status",
-          region: process.env.AWS_REGION || "us-east-1",
+          // A separate stage preserves the existing east-region deployment.
+          region: input.stage === "dev-west" ? "us-west-2" : input.stage === "dev" ? "us-east-1" : process.env.AWS_REGION || "us-east-1",
           defaultTags: {
             tags,
           },
@@ -45,17 +46,49 @@
     }
 
     const deployEnv = loadDeployEnv();
+    const isWest = $app.stage === "dev-west";
     const databaseUrl = process.env.DATABASE_URL || deployEnv.DATABASE_URL || "";
     const dbSsl = process.env.DB_SSL || deployEnv.DB_SSL || "true";
     const setting = (name: string) => process.env[name] || deployEnv[name] || "";
-    const databaseSecretArn = setting("DATABASE_SECRET_ARN");
+    function requiredSetting(name: string) {
+      const value = setting(name).trim();
+      if (!value) throw new Error(`${name} must be set in the shell or .env.local for dev-west.`);
+      return value;
+    }
+    // The original Virginia stage keeps its existing DATABASE_URL. West's RDS
+    // settings can coexist in .env.local without changing the live east app.
+    const databaseSecretArn = $app.stage === "dev" ? "" : setting("DATABASE_SECRET_ARN");
     const proxyEndpoint = setting("RDS_PROXY_ENDPOINT");
     const dbSubnetIds = setting("DATABASE_PRIVATE_SUBNET_IDS").split(",").map(value => value.trim()).filter(Boolean);
     const dbSecurityGroupIds = setting("DATABASE_SECURITY_GROUP_IDS").split(",").map(value => value.trim()).filter(Boolean);
-    if (databaseSecretArn && (!proxyEndpoint || !dbSubnetIds.length || !dbSecurityGroupIds.length)) {
-      throw new Error("Secret-based RDS requires RDS_PROXY_ENDPOINT, DATABASE_PRIVATE_SUBNET_IDS and DATABASE_SECURITY_GROUP_IDS. Use Claim Status-region private subnets with a route to the RDS Proxy.");
+    if (databaseSecretArn && (!proxyEndpoint || !dbSubnetIds.length || (!isWest && !dbSecurityGroupIds.length))) {
+      throw new Error("Secret-based RDS requires RDS_PROXY_ENDPOINT and DATABASE_PRIVATE_SUBNET_IDS. East-region deployments also require DATABASE_SECURITY_GROUP_IDS.");
     }
-    const databaseVpc = databaseSecretArn ? { privateSubnets: dbSubnetIds, securityGroups: dbSecurityGroupIds } : undefined;
+    const existingVpcId = isWest ? requiredSetting("CLAIM_STATUS_VPC_ID") : "";
+    const proxySecurityGroupId = isWest ? requiredSetting("RDS_PROXY_SECURITY_GROUP_ID") : "";
+    if (isWest) requiredSetting("DATABASE_SECRET_ARN");
+    const databasePort = Number(setting("DATABASE_PORT") || "5432");
+    const applicationSecurityGroup = isWest ? new aws.ec2.SecurityGroup("ApplicationSecurityGroup", {
+      vpcId: existingVpcId,
+      description: "Claim Status Lambda and workers; no inbound connections",
+      ingress: [],
+      egress: [
+        { protocol: "tcp", fromPort: 443, toPort: 443, cidrBlocks: ["0.0.0.0/0"] },
+        { protocol: "tcp", fromPort: 80, toPort: 80, cidrBlocks: ["0.0.0.0/0"] },
+        { protocol: "tcp", fromPort: databasePort, toPort: databasePort, securityGroups: [proxySecurityGroupId] },
+      ],
+    }) : undefined;
+    if (applicationSecurityGroup) new aws.vpc.SecurityGroupIngressRule("ClaimStatusProxyAccess", {
+      securityGroupId: proxySecurityGroupId,
+      referencedSecurityGroupId: applicationSecurityGroup.id,
+      ipProtocol: "tcp",
+      fromPort: databasePort,
+      toPort: databasePort,
+      description: "Claim Status backend and workers only",
+    });
+    const applicationSecurityGroups = applicationSecurityGroup ? [applicationSecurityGroup.id] : dbSecurityGroupIds;
+    const databaseVpc = databaseSecretArn ? { privateSubnets: dbSubnetIds, securityGroups: applicationSecurityGroups } : undefined;
+    const storageEnvironment = { WORKFLOW_S3_REGION: setting("WORKFLOW_S3_REGION") || (isWest ? "us-east-1" : aws.getRegionOutput({}).name) };
     const databaseEnvironment: Record<string, string> = databaseSecretArn ? {
       DATABASE_SECRET_ARN: databaseSecretArn, RDS_PROXY_ENDPOINT: proxyEndpoint,
       DATABASE_NAME: setting("DATABASE_NAME") || "claim_status", DATABASE_PORT: setting("DATABASE_PORT") || "5432",
@@ -64,14 +97,17 @@
       { actions: ["secretsmanager:GetSecretValue"], resources: [databaseSecretArn] },
       ...(setting("DATABASE_SECRET_KMS_KEY_ARN") ? [{ actions: ["kms:Decrypt"], resources: [setting("DATABASE_SECRET_KMS_KEY_ARN")] }] : []),
     ] : [];
-    const workerImageUriOverride = process.env.WORKER_IMAGE_URI || deployEnv.WORKER_IMAGE_URI || "";
+    const workerImageUriOverride = isWest ? "" : process.env.WORKER_IMAGE_URI || deployEnv.WORKER_IMAGE_URI || "";
     const serviceTokensJson = process.env.CLAIM_STATUS_SERVICE_TOKENS_JSON || deployEnv.CLAIM_STATUS_SERVICE_TOKENS_JSON || "";
-    const skipFrontendBuild = (process.env.SST_SKIP_FRONTEND_BUILD || deployEnv.SST_SKIP_FRONTEND_BUILD || "").toLowerCase() === "true";
+    const skipFrontendBuild = !isWest && (process.env.SST_SKIP_FRONTEND_BUILD || deployEnv.SST_SKIP_FRONTEND_BUILD || "").toLowerCase() === "true";
     if (!databaseUrl && !databaseSecretArn) {
       throw new Error("DATABASE_URL or DATABASE_SECRET_ARN must be set in the shell or .env.local before deploying AWS workflow APIs.");
     }
 
-    const inputsBucket = new sst.aws.Bucket("WorkflowInputs", {
+    const inputsBucket = isWest ? {
+      name: requiredSetting("WORKFLOW_INPUTS_BUCKET"),
+      arn: `arn:aws:s3:::${requiredSetting("WORKFLOW_INPUTS_BUCKET")}`,
+    } : new sst.aws.Bucket("WorkflowInputs", {
       cors: {
         allowOrigins: ["*"],
         allowMethods: ["PUT", "GET", "HEAD"],
@@ -79,7 +115,10 @@
       },
     });
 
-    const outputsBucket = new sst.aws.Bucket("WorkflowOutputs", {
+    const outputsBucket = isWest ? {
+      name: requiredSetting("WORKFLOW_OUTPUTS_BUCKET"),
+      arn: `arn:aws:s3:::${requiredSetting("WORKFLOW_OUTPUTS_BUCKET")}`,
+    } : new sst.aws.Bucket("WorkflowOutputs", {
       cors: {
         allowOrigins: ["*"],
         allowMethods: ["GET", "HEAD"],
@@ -87,7 +126,7 @@
       },
     });
 
-    const userPool = new aws.cognito.UserPool("InternalUsers", {
+    const userPool = isWest ? { id: requiredSetting("COGNITO_USER_POOL_ID") } : new aws.cognito.UserPool("InternalUsers", {
       usernameAttributes: ["email"],
       autoVerifiedAttributes: ["email"],
       passwordPolicy: {
@@ -104,7 +143,7 @@
       },
     });
 
-    const userPoolClient = new aws.cognito.UserPoolClient("WebClient", {
+    const userPoolClient = isWest ? { id: requiredSetting("COGNITO_CLIENT_ID") } : new aws.cognito.UserPoolClient("WebClient", {
       userPoolId: userPool.id,
       generateSecret: false,
       explicitAuthFlows: [
@@ -126,12 +165,21 @@
       supportedIdentityProviders: ["COGNITO"],
     });
 
-    const userPoolDomain = new aws.cognito.UserPoolDomain("InternalUsersDomain", {
+    const userPoolDomain = isWest ? undefined : new aws.cognito.UserPoolDomain("InternalUsersDomain", {
       userPoolId: userPool.id,
       domain: $interpolate`claim-status-${$app.stage}-${aws.getCallerIdentityOutput({}).accountId}`,
     });
 
-    const vpc = new sst.aws.Vpc("Vpc", {
+    const cognitoRegion = $output(userPool.id).apply(id => id.split("_")[0]);
+    const cognitoIssuer = $interpolate`https://cognito-idp.${cognitoRegion}.amazonaws.com/${userPool.id}`;
+    const cognitoDomain = isWest ? requiredSetting("COGNITO_DOMAIN") : $interpolate`https://${userPoolDomain!.domain}.auth.${cognitoRegion}.amazoncognito.com`;
+
+    const vpc = isWest ? {
+      id: existingVpcId,
+      containerSubnets: dbSubnetIds,
+      loadBalancerSubnets: dbSubnetIds,
+      securityGroups: applicationSecurityGroups,
+    } : new sst.aws.Vpc("Vpc", {
       nat: undefined,
     });
 
@@ -153,7 +201,7 @@
           handler: (args) => {
             args.environment = $output(args.environment ?? {}).apply(environment => ({
               ...environment, ...databaseEnvironment,
-              COGNITO_ISSUER: $interpolate`https://cognito-idp.${aws.getRegionOutput({}).name}.amazonaws.com/${userPool.id}`,
+              COGNITO_ISSUER: cognitoIssuer,
               COGNITO_CLIENT_ID: userPoolClient.id,
             }));
             args.vpc = databaseVpc;
@@ -168,7 +216,7 @@
       cpu: "2 vCPU",
       memory: "4 GB",
       storage: "50 GB",
-      public: true,
+      public: !isWest,
       containers: [
         {
           name: "worker",
@@ -177,6 +225,7 @@
             NODE_ENV: "production",
             NEXT_TELEMETRY_DISABLED: "1",
             ...databaseEnvironment,
+            ...storageEnvironment,
             BROWSER_HEADLESS: "true",
             OPTUM_PRO_CUSTOM_USER_AGENT: "true",
             BROWSER_KEEP_OPEN: "false",
@@ -222,7 +271,7 @@
         route: {
           handler: (args) => {
             args.environment = $output(args.environment ?? {}).apply(environment => ({
-              ...environment, ...databaseEnvironment,
+              ...environment, ...databaseEnvironment, ...storageEnvironment,
               WORKFLOW_INPUTS_BUCKET: inputsBucket.name,
               WORKFLOW_OUTPUTS_BUCKET: outputsBucket.name,
               CLAIM_STATUS_SERVICE_TOKENS_JSON: serviceTokensJson,
@@ -232,6 +281,8 @@
               WORKER_LOG_GROUP: $interpolate`/claim-status/${$app.stage}/worker`,
               COGNITO_CLIENT_ID: userPoolClient.id,
               COGNITO_USER_POOL_ID: userPool.id,
+              COGNITO_REGION: cognitoRegion,
+              WORKER_ASSIGN_PUBLIC_IP: isWest ? "DISABLED" : "ENABLED",
               WORKER_SUBNET_IDS: $jsonStringify(workerTask.subnets),
               WORKER_SECURITY_GROUP_IDS: $jsonStringify(workerTask.securityGroups),
             }));
@@ -271,7 +322,7 @@
     const httpAuthorizer = httpApi.addAuthorizer({
       name: "Cognito",
       jwt: {
-        issuer: $interpolate`https://cognito-idp.${aws.getRegionOutput({}).name}.amazonaws.com/${userPool.id}`,
+        issuer: cognitoIssuer,
         audiences: [userPoolClient.id],
       },
     });
@@ -306,6 +357,7 @@
       vpc: databaseVpc,
       environment: {
         ...databaseEnvironment,
+        ...storageEnvironment,
         WORKER_CLUSTER_ARN: cluster.nodes.cluster.arn,
         WORKER_TASK_DEFINITION_ARN: workerTask.nodes.taskDefinition.arn,
         WORKER_CONTAINER_NAME: "worker",
@@ -337,6 +389,7 @@
         vpc: databaseVpc,
         environment: {
           ...databaseEnvironment,
+          ...storageEnvironment,
           WORKER_CLUSTER_ARN: cluster.id,
           WORKER_TASK_DEFINITION_ARN: workerTask.nodes.taskDefinition.arn,
           WORKER_CONTAINER_NAME: "worker",
@@ -377,7 +430,7 @@
         NEXT_PUBLIC_WORKFLOW_WS_URL: webSocketApi.url,
         NEXT_PUBLIC_COGNITO_USER_POOL_ID: userPool.id,
         NEXT_PUBLIC_COGNITO_CLIENT_ID: userPoolClient.id,
-        NEXT_PUBLIC_COGNITO_DOMAIN: $interpolate`https://${userPoolDomain.domain}.auth.${aws.getRegionOutput({}).name}.amazoncognito.com`,
+        NEXT_PUBLIC_COGNITO_DOMAIN: cognitoDomain,
       },
       build: {
         command: skipFrontendBuild ? "npm run build:static:verify" : "npm run build:static",
@@ -391,7 +444,8 @@
       webSocketApiUrl: webSocketApi.url,
       cognitoUserPoolId: userPool.id,
       cognitoClientId: userPoolClient.id,
-      cognitoDomain: $interpolate`https://${userPoolDomain.domain}.auth.${aws.getRegionOutput({}).name}.amazoncognito.com`,
+      cognitoDomain,
+      applicationSecurityGroupId: applicationSecurityGroup?.id,
       inputBucketName: inputsBucket.name,
       outputBucketName: outputsBucket.name,
       workerRepositoryUrl: workerRepository.repositoryUrl,

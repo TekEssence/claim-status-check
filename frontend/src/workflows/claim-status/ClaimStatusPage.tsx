@@ -25,6 +25,7 @@ import {
   getCurrentScrapeJob,
   getScrapeJobDetails,
   getScrapeJobDownload,
+  hasAwsJobSubscription,
   isAwsWorkflowMode,
   listScrapeJobs,
   startScrapeJob,
@@ -834,7 +835,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
   }, [authUser, selectedPortalId, forcedPortalId, pathname]);
 
   useEffect(() => {
-    if (!isProcessing || !activeJobId) return;
+    if (awsWorkflowMode || !isProcessing || !activeJobId) return;
 
     let cancelled = false;
     const synchronizeActiveJobProgress = async () => {
@@ -876,7 +877,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [activeJobId, isProcessing]);
+  }, [activeJobId, isProcessing, awsWorkflowMode]);
 
   async function refreshWorkflowRuns(options?: { silent?: boolean }) {
     if (!workflowRunTrackingEnabled) {
@@ -1012,7 +1013,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
   }, [canViewOperationsRunningJobs, authUser?.userId]);
 
   useEffect(() => {
-    if (!selectedWorkflowRunId) return;
+    if (awsWorkflowMode || !selectedWorkflowRunId) return;
     const selectedRun = [...workflowRuns, ...operationsRunningJobs].find((job) => job.jobId === selectedWorkflowRunId);
     if (!selectedRun || !isLiveWorkflowStatus(selectedRun.status)) return;
 
@@ -1031,7 +1032,38 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [selectedWorkflowRunId, workflowRuns, operationsRunningJobs]);
+  }, [selectedWorkflowRunId, workflowRuns, operationsRunningJobs, awsWorkflowMode]);
+
+  useEffect(() => {
+    if (!awsWorkflowMode || !selectedWorkflowRunId || hasAwsJobSubscription(selectedWorkflowRunId)) return;
+    const controller = new AbortController();
+    const jobId = selectedWorkflowRunId;
+    // Portal runners already subscribe to jobs started here. Runs opened from
+    // history use the same live connection and single DB poll instead.
+    void subscribeToScrapeJobEvents({
+      jobId,
+      signal: controller.signal,
+      autoDownload: false,
+      onEvent(event) {
+        if (controller.signal.aborted || !shouldDisplayWorkflowJob(jobId)) return;
+        if (event.type === "progress" && typeof event.completed === "number" && typeof event.total === "number") {
+          setProgress({ completed: event.completed, total: event.total });
+        } else if (["log", "warning", "error"].includes(String(event.type)) && event.message) {
+          const message = event.type === "error" ? `ERROR: ${event.message}` : event.message;
+          setLogs(previous => [...previous, message]);
+          if (event.type === "error") setStatus(message);
+        } else if (event.type === "done" && event.message && event.message !== "failed") {
+          setStatus(`Run ${formatShortJobId(jobId)} is ${event.message.replace(/_/g, " ")}.`);
+        }
+      },
+      onStreamError(error) {
+        if (!controller.signal.aborted && shouldDisplayWorkflowJob(jobId)) setStatus(`Log stream error: ${getErrorMessage(error)}`);
+      },
+    }).catch(error => {
+      if (!controller.signal.aborted && shouldDisplayWorkflowJob(jobId)) setStatus(`Log stream error: ${getErrorMessage(error)}`);
+    });
+    return () => controller.abort();
+  }, [selectedWorkflowRunId, awsWorkflowMode]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -1404,32 +1436,36 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
   async function loadWorkflowRunDetails(job: ScrapeJobSummary) {
     try {
       const details = await getScrapeJobDetails(job.jobId);
+      if (!shouldDisplayWorkflowJob(job.jobId)) return;
       if (awsWorkflowMode) {
-        setLogs(details.logs);
+        // Initial history only: keep lines received while the request ran.
+        setLogs(previous => [...details.logs, ...previous]);
+      } else {
+        setProgress(details.totalRows > 0 ? { completed: details.currentCompleted, total: details.totalRows } : null);
       }
-      setProgress(details.totalRows > 0 ? { completed: details.currentCompleted, total: details.totalRows } : null);
       setStatus(
         `${details.portalId.toUpperCase()} run ${formatShortJobId(details.jobId)} is ${details.status.replace(/_/g, " ")}.`,
       );
     } catch (error) {
-      setStatus(`Failed to load run ${formatShortJobId(job.jobId)}: ${getErrorMessage(error)}`);
+      if (shouldDisplayWorkflowJob(job.jobId)) setStatus(`Failed to load run ${formatShortJobId(job.jobId)}: ${getErrorMessage(error)}`);
     }
   }
 
   async function selectWorkflowRun(job: ScrapeJobSummary) {
+    const sameJob = selectedWorkflowRunIdRef.current === job.jobId;
     selectedWorkflowRunIdRef.current = job.jobId;
     setSelectedWorkflowRunId(job.jobId);
     setSelectedPortalId(isPortalId(job.portalId) ? job.portalId : null);
-    setLogs([]);
+    if (!sameJob) setLogs([]);
     if (isPortalId(job.portalId)) {
       navigateToPortalRoute(job.portalId);
     }
     if (awsWorkflowMode) setActiveJobId(job.jobId);
-    setProgress(job.totalRows > 0 ? { completed: job.currentCompleted, total: job.totalRows } : null);
+    if (!sameJob) setProgress(job.totalRows > 0 ? { completed: job.currentCompleted, total: job.totalRows } : null);
     setStatus(
       `${job.portalId.toUpperCase()} run ${formatShortJobId(job.jobId)} is ${job.status.replace(/_/g, " ")}.`,
     );
-    await loadWorkflowRunDetails(job);
+    if (!sameJob || !awsWorkflowMode) await loadWorkflowRunDetails(job);
   }
 
   async function cancelWorkflowRun(job: ScrapeJobSummary) {
@@ -2353,7 +2389,7 @@ export function ClaimStatusPage({ forcedPortalId = null }: { forcedPortalId?: Po
     } else if (eventData.type === "job_metadata") {
       const metadata = eventData as Record<string, unknown>;
       if (typeof metadata.processedRows !== "number" || typeof metadata.totalRows !== "number") return;
-      setProgress({ completed: metadata.processedRows, total: metadata.totalRows });
+      if (!awsWorkflowMode) setProgress({ completed: metadata.processedRows, total: metadata.totalRows });
       if (Boolean(metadata.stopped) && Boolean(metadata.partialOutputAvailable)) {
         setStatus(`Stopped. Partial Excel ready for ${metadata.processedRows} of ${metadata.totalRows} rows.`);
       }

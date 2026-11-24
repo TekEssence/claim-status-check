@@ -1,5 +1,6 @@
 import * as XLSX from "xlsx";
 import { CLAIM_STATUS_OUTPUT_HEADERS, claimStatusOutputRows } from "../../output-columns";
+import { WORKER_OUTCOME_COLUMN } from "../../worker-outcome";
 
 type WorkbookLogEntry = {
   timestamp: string;
@@ -78,7 +79,7 @@ export function createRegalOutputWorkbookBuffer(rows: Record<string, unknown>[],
   const extraHeaders = Array.from(
     new Set(rows.flatMap((row) => Object.keys(row)).filter((header) => !REGAL_OUTPUT_HEADERS.includes(header))),
   );
-  const headers = [...REGAL_OUTPUT_HEADERS, ...extraHeaders, ...CLAIM_STATUS_OUTPUT_HEADERS];
+  const headers = [...REGAL_OUTPUT_HEADERS, ...extraHeaders, ...CLAIM_STATUS_OUTPUT_HEADERS, WORKER_OUTCOME_COLUMN];
   appendSheet(workbook, "Output", claimStatusOutputRows("regal", rows), [...new Set(headers)]);
 
   const auditRows = createAuditRows(options.auditLog);

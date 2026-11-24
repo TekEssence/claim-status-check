@@ -74,5 +74,9 @@ test("reads Regal login credentials from workbook", () => {
     loginUrl: "https://regalmed.okta.com/login",
     username: "excel-user@example.com",
     password: "excel-password",
+    preferredEmail: undefined,
+    preferredPhone: undefined,
+    preferredPhoneSuffix: undefined,
+    verificationMethod: undefined,
   });
 });

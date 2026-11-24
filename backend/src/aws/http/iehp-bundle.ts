@@ -104,7 +104,7 @@ export async function createIehpBundle(params: {
     item.artifactType === "file_download" && item.filename === filename && item.bucket && item.s3Key && item.id > newestSourceId);
   if (cached?.bucket) return { filename, bucket: cached.bucket, s3Key: cached.s3Key };
 
-  const client = params.client ?? new S3Client({});
+  const client = params.client ?? new S3Client({ region: process.env.WORKFLOW_S3_REGION });
   const s3Key = buildWorkflowKey({ workflowId: "claim-status", jobId: params.jobId, area: "output", filename });
   const result = await uploadArtifactZip({ entries, filename, bucket, s3Key, client });
   await (params.recordArtifact ?? appendWorkflowArtifact)({ jobId: params.jobId, artifactType: "file_download", filename, bucket, s3Key, mimeType: "application/zip" });
@@ -118,7 +118,7 @@ export async function createJobArtifactBundle(params: { jobId: string; manifest:
   const filename = `${safeName(params.jobId)}-artifacts.zip`;
   // Generated bundles live outside the source folders, preventing nested ZIP growth.
   const s3Key = `download-bundles/${params.jobId}/${params.manifest.revision}.zip`;
-  const client = params.client ?? new S3Client({});
+  const client = params.client ?? new S3Client({ region: process.env.WORKFLOW_S3_REGION });
   try {
     await client.send(new HeadObjectCommand({ Bucket: bucket, Key: s3Key }));
     return { filename, bucket, s3Key };
